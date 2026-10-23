@@ -35,7 +35,8 @@ def per_million(entry):
     for field, source_field in FIELDS.items():
         if source_field not in entry:
             return source_field
-        prices[field] = round(entry[source_field] * 1_000_000, 6)
+        value = round(entry[source_field] * 1_000_000, 6)
+        prices[field] = int(value) if value.is_integer() else value
     return prices
 
 
