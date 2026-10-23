@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Checks the repo's own rules from AGENTS.md: skill layout, README rows, links, MCP secrets, script modes.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+fails=0
+
+fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
+
+# Prints the value of frontmatter key $2 in file $1.
+frontmatter() { awk -v k="$2" 'NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit} NR>1 && index($0, k": ")==1 {print substr($0, length(k)+3); exit}' "$1"; }
+
+# Skills: SKILL.md with a matching name, a description, and a README row.
+for d in skills/*/; do
+  d="${d%/}"
+  s="$(basename "$d")"
+  f="$d/SKILL.md"
+  if [ ! -f "$f" ]; then fail "$f missing"; continue; fi
+  [ "$(frontmatter "$f" name)" = "$s" ] || fail "$f: frontmatter name is not '$s'"
+  [ -n "$(frontmatter "$f" description)" ] || fail "$f: frontmatter description missing"
+  grep -q "^| \`$s\` |" README.md || fail "README.md: no row for skill '$s'"
+done
+
+# Relative markdown links resolve.
+while read -r md; do
+  dir="$(dirname "$md")"
+  while read -r target; do
+    target="${target%%#*}"
+    [ -z "$target" ] && continue
+    [ -e "$dir/$target" ] || fail "$md: broken link to $target"
+  done < <(grep -oE '\]\([^)[:space:]]+\)' "$md" | sed -E 's/^\]\((.*)\)$/\1/' | grep -vE '^(https?:|mailto:|#)' || true)
+done < <(git ls-files '*.md')
+
+# MCP: valid JSON, and every env/header value is a ${VAR} reference.
+if ! jq -e '.mcpServers | type == "object"' mcp/servers.json >/dev/null; then
+  fail "mcp/servers.json: invalid JSON or no mcpServers object"
+else
+  while read -r bad; do
+    fail "mcp/servers.json: $bad is a literal, use a \${ENV_VAR} reference"
+  done < <(jq -r '.mcpServers | to_entries[] | .key as $srv | .value | (.env // {}), (.headers // {}) | to_entries[]
+    | select(.value | test("\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}") | not) | "\($srv).\(.key)"' mcp/servers.json)
+fi
+
+# Shell scripts are committed executable.
+while read -r mode _ _ path; do
+  [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"
+done < <(git ls-files -s '*.sh')
+
+[ "$fails" -eq 0 ] || { echo "repo.test.sh: $fails failure(s)"; exit 1; }
+echo "repo.test.sh: ok"
