@@ -12,6 +12,7 @@ mcp/servers.json    MCP servers, one list for every tool
 scripts/hooks/      hook logic as plain scripts, wired up per tool
 adapters/<tool>/    tool-only pieces: Claude agents and hook config, Codex, Cursor
 install.sh          symlinks everything into place
+tests/              checks CI runs; run them locally with tests/run.sh
 ```
 
 ## Install
