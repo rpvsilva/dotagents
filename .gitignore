@@ -4,3 +4,4 @@
 *.local.md
 secrets/
 .DS_Store
+__pycache__/
