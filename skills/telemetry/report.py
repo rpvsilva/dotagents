@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render telemetry run JSON as a table; with two runs, compare them side by side."""
+"""Render a telemetry run as a table: one row per span, plus a total row."""
 import argparse
 import json
 import re
@@ -11,7 +11,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STALE_DAYS = 30
 TOKEN_KINDS = ("input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h")
-HALF_CENT = 0.005  # cost differences below this round to the same printed cents
+HEADERS = ["Span", "Time", "Turns", "Tools", "In", "Out", "Cache R", "Cache W", "Agents", "Cost"]
+KEY = "Tools = tool calls · In/Out = input/output tokens · Cache R/W = cache read/write · Agents = subagents"
+
+
+def load_run(ref):
+    return json.load(sys.stdin) if ref == "-" else json.loads(Path(ref).read_text())
 
 
 def slug(label):
@@ -24,19 +29,9 @@ def saved_runs_dir():
     return Path(top.stdout.strip() if top.returncode == 0 else ".") / ".agents" / "telemetry"
 
 
-def load_run(ref, folder):
-    """A run from stdin ('-'), a JSON file, or the label it was saved under."""
-    if ref == "-":
-        return json.load(sys.stdin)
-    path = Path(ref) if Path(ref).is_file() else folder / f"{slug(ref)}.json"
-    if not path.is_file():
-        sys.exit(f"No run file or saved label '{ref}' (looked in {folder})")
-    return json.loads(path.read_text())
-
-
-def cost(run, pricing):
+def cost(tokens_by_model, pricing):
     total = 0.0
-    for model, tokens in run["tokensByModel"].items():
+    for model, tokens in tokens_by_model.items():
         prices = pricing["models"].get(model)
         if prices is None:
             return None
@@ -44,8 +39,8 @@ def cost(run, pricing):
     return total
 
 
-def token_total(run, *kinds):
-    return sum(t[kind] for t in run["tokensByModel"].values() for kind in kinds)
+def token_total(tokens_by_model, *kinds):
+    return sum(t[kind] for t in tokens_by_model.values() for kind in kinds)
 
 
 def tokens(n):
@@ -66,60 +61,59 @@ def money(n):
     return "unknown" if n is None else f"${n:.2f}"
 
 
-FORMATS = {"seconds": seconds, "count": str, "tokens": tokens, "money": money}
+def merged_tokens(spans):
+    merged = {}
+    for span in spans:
+        for model, counts in span["tokensByModel"].items():
+            into = merged.setdefault(model, dict.fromkeys(TOKEN_KINDS, 0))
+            for kind in TOKEN_KINDS:
+                into[kind] += counts[kind]
+    return merged
 
 
-def metrics(run, pricing):
-    """(row label, raw value, unit) for each table row."""
+def row(name, wall, turns, tool_calls, subagents, tokens_by_model, pricing):
     return [
-        ("Wall clock", run["wallClockSeconds"], "seconds"),
-        ("Turns", run["turns"], "count"),
-        ("Tool calls", run["toolCalls"], "count"),
-        ("Input tokens", token_total(run, "input"), "tokens"),
-        ("Output tokens", token_total(run, "output"), "tokens"),
-        ("Cache read", token_total(run, "cacheRead"), "tokens"),
-        ("Cache write", token_total(run, "cacheWrite5m", "cacheWrite1h"), "tokens"),
-        ("Subagents", len(run["subagents"]), "count"),
-        ("Cost", cost(run, pricing), "money"),
+        name, seconds(wall), str(turns), str(tool_calls),
+        tokens(token_total(tokens_by_model, "input")),
+        tokens(token_total(tokens_by_model, "output")),
+        tokens(token_total(tokens_by_model, "cacheRead")),
+        tokens(token_total(tokens_by_model, "cacheWrite5m", "cacheWrite1h")),
+        str(subagents), money(cost(tokens_by_model, pricing)),
     ]
 
 
-def change(before, after, unit):
-    if before is None or after is None:
-        return "unknown"
-    diff = after - before
-    if abs(diff) < (HALF_CENT if unit == "money" else 1):
-        return "same"
-    sign = "+" if diff > 0 else "-"
-    amount = FORMATS[unit](abs(diff))
-    percent = f" ({sign}{abs(diff) / before * 100:.0f}%)" if before else ""
-    return f"{sign}{amount}{percent}"
+def span_row(span, pricing):
+    return row(span["name"], span["wallClockSeconds"], span["turns"], span["toolCalls"],
+               len(span["subagents"]), span["tokensByModel"], pricing)
 
 
-def header(run):
-    return run.get("label") or f"{run.get('skill') or 'session'} {run['sessionId'][:8]}"
+def total_row(run, pricing):
+    spans = run["spans"]
+    # The run's own wall clock: spans can overlap when a background subagent outlasts its span.
+    return row("Total", run["wallClockSeconds"], sum(s["turns"] for s in spans),
+               sum(s["toolCalls"] for s in spans), sum(len(s["subagents"]) for s in spans),
+               merged_tokens(spans), pricing)
 
 
-def table(headers, body):
-    widths = [max(len(row[i]) for row in [headers, *body]) + 2 for i in range(len(headers))]
+def table(body, total=None):
+    rows = [HEADERS, *body, *([total] if total else [])]
+    widths = [max(len(r[i]) for r in rows) + 2 for i in range(len(HEADERS))]
 
     def line(left, mid, right):
         return left + mid.join("─" * w for w in widths) + right
 
-    def cells(row, centre=False):
-        return "│" + "│".join(
-            (f"{c:^{w}}" if centre and i else " " + c.ljust(w - 1)) for i, (c, w) in enumerate(zip(row, widths))
-        ) + "│"
+    def cells(r):
+        return "│" + "│".join(" " + c.ljust(w - 1) for c, w in zip(r, widths)) + "│"
 
-    out = [line("┌", "┬", "┐"), cells(headers, centre=True)]
-    for row in body:
-        out += [line("├", "┼", "┤"), cells(row)]
-    out.append(line("└", "┴", "┘"))
+    out = [line("┌", "┬", "┐"), cells(HEADERS), line("├", "┼", "┤"), *(cells(r) for r in body)]
+    if total:
+        out += [line("├", "┼", "┤"), cells(total)]
+    out += [line("└", "┴", "┘"), KEY]
     return "\n".join(out)
 
 
 def tool_groups(tools):
-    """Tool counts with MCP tools ("mcp__server__tool") folded under their server."""
+    """Tool counts with MCP tools ("mcp__server__tool") folded under their server, busiest first."""
     groups = {}
     for name, count in tools.items():
         if name.startswith("mcp__"):
@@ -132,35 +126,27 @@ def tool_groups(tools):
     return sorted(groups.items(), key=lambda item: -item[1]["count"])
 
 
-def breakdown(run, pricing):
-    groups = tool_groups(run["tools"])
-    out = ["Tool calls"]
-    if groups:
-        name_width = max(len(name) for name, _ in groups)
-        count_width = max(len(str(g["count"])) for _, g in groups)
-        for name, group in groups:
-            line = f"  {name:<{name_width}}  {group['count']:>{count_width}}"
-            if group["tools"]:
-                inner = sorted(group["tools"].items(), key=lambda item: -item[1])
-                line += "  (" + ", ".join(f"{tool} {count}" for tool, count in inner) + ")"
-            out.append(line)
-    else:
-        out.append("  none")
+def breakdown(span, pricing):
+    calls = []
+    for name, group in tool_groups(span["tools"]):
+        call = f"{name} {group['count']}"
+        if group["tools"]:
+            inner = sorted(group["tools"].items(), key=lambda item: -item[1])
+            call += " (" + ", ".join(f"{tool} {count}" for tool, count in inner) + ")"
+        calls.append(call)
+    out = [span["name"], "  Tool calls: " + (", ".join(calls) or "none")]
 
-    agents = sorted(run["subagents"], key=lambda a: -(cost(a, pricing) or 0))
-    if not agents:
-        out.append("Subagents: none")
-    else:
-        out.append("Subagents (by cost)")
-        for agent in agents:
-            out.append(f"  {agent['type']} · {agent['description']} · {agent['turns']} turns"
-                       f" · {agent['toolCalls']} tool calls · {money(cost(agent, pricing))}")
+    agents = sorted(span["subagents"], key=lambda a: -(cost(a["tokensByModel"], pricing) or 0))
+    out.append("  Subagents:" + ("" if agents else " none"))
+    for agent in agents:
+        out.append(f"    {agent['type']} · {agent['description']} · {agent['turns']} turns"
+                   f" · {agent['toolCalls']} tool calls · {money(cost(agent['tokensByModel'], pricing))}")
     return "\n".join(out)
 
 
 def price_check_hint(run, pricing, today):
     """A line asking for a price check of the run's models when prices are stale or missing; else None."""
-    models = sorted(run["tokensByModel"])
+    models = sorted({model for span in run["spans"] for model in span["tokensByModel"]})
     command = "update_pricing.py " + " ".join(models)
     missing = [model for model in models if model not in pricing["models"]]
     if missing:
@@ -175,55 +161,35 @@ def price_check_hint(run, pricing, today):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("runs", nargs="+", help="one or two runs: JSON file, saved label, or '-' for stdin")
+    parser.add_argument("run", help="run JSON file, or '-' for stdin")
     parser.add_argument("--pricing", default=HERE / "pricing.json")
-    parser.add_argument("--save", metavar="LABEL", help="save the last run as JSON under this label")
+    parser.add_argument("--save", metavar="LABEL", help="save the run as JSON under this label")
     parser.add_argument("--dir", type=Path, help="saved runs folder (default: <repo root>/.agents/telemetry)")
     parser.add_argument("--today", type=date.fromisoformat, default=date.today(), help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if len(args.runs) > 2:
-        parser.error("give one run, or two to compare")
 
-    folder = args.dir or saved_runs_dir()
     pricing = json.loads(Path(args.pricing).read_text())
-    runs = [load_run(ref, folder) for ref in args.runs]
-    if args.save:
-        at_save = cost(runs[-1], pricing)
-        runs[-1] = {**runs[-1], "label": args.save,
-                    "createdAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "costAtSave": None if at_save is None else round(at_save, 2),
-                    "pricingAsOf": pricing.get("asOf")}
-    columns = [metrics(run, pricing) for run in runs]
-    headers = ["", *(header(run) for run in runs)]
-    body = [[label, *(FORMATS[unit](col[i][1]) for col in columns)]
-            for i, (label, _, unit) in enumerate(columns[0])]
-    if len(runs) == 2:
-        headers.append("Change")
-        for row, before, after in zip(body, *columns):
-            row.append(change(before[1], after[1], before[2]))
-    print(table(headers, body))
-
-    # Saved runs are repriced at today's rates so columns compare like for like.
-    for run in runs:
-        now = cost(run, pricing)
-        if run.get("costAtSave") is not None and now is not None and abs(now - run["costAtSave"]) >= HALF_CENT:
-            print(f"{header(run)} cost {money(run['costAtSave'])} at {run.get('pricingAsOf')} prices;"
-                  f" the table uses {pricing.get('asOf')} prices.")
-
-    for run in runs:
+    run = load_run(args.run)
+    body = [span_row(span, pricing) for span in run["spans"]]
+    print(table(body, total_row(run, pricing) if len(body) > 1 else None))
+    for span in run["spans"]:
         print()
-        if len(runs) > 1:
-            print(header(run))
-        print(breakdown(run, pricing))
+        print(breakdown(span, pricing))
 
-    hint = price_check_hint(runs[-1], pricing, args.today)
+    hint = price_check_hint(run, pricing, args.today)
     if hint:
         print(f"\n{hint}")
 
     if args.save:
+        total = cost(merged_tokens(run["spans"]), pricing)
+        run = {**run, "label": args.save,
+               "createdAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "cost": None if total is None else round(total, 2),
+               "pricingAsOf": pricing.get("asOf")}
+        folder = args.dir or saved_runs_dir()
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{slug(args.save)}.json"
-        path.write_text(json.dumps(runs[-1], indent=2) + "\n")
+        path.write_text(json.dumps(run, indent=2) + "\n")
         print(f"\nSaved {path}")
 
 
