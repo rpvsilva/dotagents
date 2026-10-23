@@ -32,3 +32,4 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 | Skill | What it does |
 |---|---|
 | `renovate-prs` | Fix, verify and merge open Renovate PRs, one isolated subagent per PR |
+| `telemetry` | Measure a finished run (time, turns, tool calls, tokens, cost), compare runs, save JSON baselines |

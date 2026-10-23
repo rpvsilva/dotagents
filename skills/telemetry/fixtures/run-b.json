@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "tool": "claude-code",
+  "label": "after paging",
+  "createdAt": "2026-10-23T12:00:00.000Z",
+  "sessionId": "5678efgh-0000-0000-0000-000000000000",
+  "skill": "renovate-prs",
+  "start": "2026-10-23T11:00:00.000Z",
+  "end": "2026-10-23T11:01:55.000Z",
+  "wallClockSeconds": 115,
+  "turns": 7,
+  "toolCalls": 12,
+  "tools": {"Bash": 9, "mcp__datadog-mcp__search_logs": 2, "Read": 1},
+  "tokensByModel": {
+    "model-a": {"input": 100000, "output": 40000, "cacheRead": 1200000, "cacheWrite5m": 0, "cacheWrite1h": 200000}
+  },
+  "subagents": [{
+    "type": "general-purpose",
+    "description": "Check PR",
+    "turns": 2,
+    "toolCalls": 1,
+    "tools": {"Read": 1},
+    "tokensByModel": {"model-a": {"input": 0, "output": 10000, "cacheRead": 0, "cacheWrite5m": 0, "cacheWrite1h": 0}}
+  }]
+}
