@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 2,
+  "tool": "claude-code",
+  "sessionId": "1234abcd-0000-0000-0000-000000000000",
+  "skill": null,
+  "start": "2026-10-23T10:00:00.000Z",
+  "end": "2026-10-23T10:03:00.000Z",
+  "wallClockSeconds": 180,
+  "spans": [
+    {
+      "name": "grill-with-docs",
+      "skill": "mattpocock-skills:grill-with-docs",
+      "start": "2026-10-23T10:00:00.000Z",
+      "end": "2026-10-23T10:01:56.000Z",
+      "wallClockSeconds": 116,
+      "turns": 10,
+      "toolCalls": 15,
+      "tools": {
+        "Bash": 12,
+        "mcp__datadog-mcp__search_logs": 2,
+        "mcp__datadog-mcp__get_trace": 1
+      },
+      "tokensByModel": {
+        "model-a": {
+          "input": 100000,
+          "output": 50000,
+          "cacheRead": 1200000,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 100000
+        }
+      },
+      "subagents": []
+    },
+    {
+      "name": "renovate-prs",
+      "skill": "renovate-prs",
+      "start": "2026-10-23T10:02:00.000Z",
+      "end": "2026-10-23T10:03:00.000Z",
+      "wallClockSeconds": 60,
+      "turns": 7,
+      "toolCalls": 12,
+      "tools": {
+        "Bash": 9,
+        "Agent": 2,
+        "Read": 1
+      },
+      "tokensByModel": {
+        "model-a": {
+          "input": 100000,
+          "output": 40000,
+          "cacheRead": 1200000,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 200000
+        }
+      },
+      "subagents": [
+        {
+          "type": "general-purpose",
+          "description": "Fix PR 731",
+          "turns": 2,
+          "toolCalls": 1,
+          "tools": {
+            "Read": 1
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 0,
+              "output": 10000,
+              "cacheRead": 0,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 0
+            }
+          }
+        },
+        {
+          "type": "Explore",
+          "description": "Find lock files",
+          "turns": 1,
+          "toolCalls": 0,
+          "tools": {},
+          "tokensByModel": {
+            "model-a": {
+              "input": 0,
+              "output": 30000,
+              "cacheRead": 0,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 0
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
