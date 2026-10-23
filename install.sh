@@ -33,7 +33,7 @@ install_shared() {
 install_claude() {
   echo "claude"
   for s in $(skills); do link "$SHARED_SKILLS/$s" "$HOME/.claude/skills/$s"; done
-  link "$REPO/AGENTS.md" "$HOME/.claude/CLAUDE.md"
+  link "$REPO/global/AGENTS.md" "$HOME/.claude/CLAUDE.md"
   for a in "$REPO"/adapters/claude/agents/*.md; do
     [ -e "$a" ] && link "$a" "$HOME/.claude/agents/$(basename "$a")"
   done
@@ -45,7 +45,7 @@ install_claude() {
 install_codex() {
   [ -d "$HOME/.codex" ] || { echo "codex: ~/.codex not found, skipping"; return; }
   echo "codex"
-  link "$REPO/AGENTS.md" "$HOME/.codex/AGENTS.md"
+  link "$REPO/global/AGENTS.md" "$HOME/.codex/AGENTS.md"
 }
 
 install_cursor() {
