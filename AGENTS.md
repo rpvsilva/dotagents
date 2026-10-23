@@ -36,6 +36,10 @@ Done when the skill loads in Claude Code by name and the README row exists.
 - **Hook**: the script in `scripts/hooks/<name>.sh`, then the wiring per tool in `adapters/<tool>/hooks/`.
 - **MCP server**: add it to `mcp/servers.json` with credentials as `${ENV_VAR}` references only.
 
+### Checks
+
+Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, `tests/install.test.sh` (install.sh in a throwaway `$HOME`, run twice) and `tests/repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, `${ENV_VAR}`-only MCP credentials, executable scripts). When you add a rule to this file, add its check to `tests/repo.test.sh`.
+
 ## Commits
 
 Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`), scoped by area when useful: `feat(skills): add renovate-prs`.
