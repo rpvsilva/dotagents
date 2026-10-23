@@ -3,7 +3,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO"
+cd "$REPO" || exit 1
 status=0
 
 step() { echo "== $1"; shift; "$@" || status=1; }
