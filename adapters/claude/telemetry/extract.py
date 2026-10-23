@@ -2,6 +2,7 @@
 """Extract one telemetry run from a Claude Code session log as neutral run JSON."""
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -19,6 +20,7 @@ def blocks(entry):
 
 
 COMMAND = re.compile(r"<command-name>/([^<]+)</command-name>")
+LOADED = "Base directory for this skill:"
 
 
 def same_skill(name, skill):
@@ -36,6 +38,20 @@ def invoked_skill(entry):
         if block.get("type") == "tool_use" and block.get("name") == "Skill":
             return block.get("input", {}).get("skill")
     return None
+
+
+def loaded_skill(entry):
+    """The skill whose instructions this entry loads ("Base directory for this skill: .../<name>"); else None."""
+    for block in blocks(entry):
+        text = block.get("text", "") if block.get("type") == "text" else ""
+        if text.startswith(LOADED):
+            return Path(text[len(LOADED):].splitlines()[0].strip()).name
+    return None
+
+
+def typed(entry):
+    """A message the user typed (a prompt or a command), as opposed to tool results and loaded text."""
+    return entry.get("type") == "user" and isinstance(entry.get("message", {}).get("content"), str)
 
 
 def invokes_skill(entry, skill):
@@ -114,9 +130,10 @@ def add(totals, counts):
 
 
 def find_session(ref, cwd):
-    """A session path from a path or ID; with no ref, the newest session of the project in cwd."""
+    """A session path from a path or ID; with no ref, the session Claude Code is running, else the newest."""
     if ref and Path(ref).is_file():
         return Path(ref)
+    ref = ref or os.environ.get("CLAUDE_CODE_SESSION_ID")
     project = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(cwd))
     if ref:
         return project / f"{ref}.jsonl"
@@ -137,16 +154,26 @@ def main():
     entries = load(args.session)
     calls = [i for i, e in enumerate(entries) if invokes_skill(e, "telemetry")]
     end = calls[-1] if calls else len(entries)
-    start = calls[-2] + 1 if len(calls) > 1 else 0
+    start = 0
+    if len(calls) > 1:
+        # The previous report's own reply belongs to it; this run starts at the next typed message.
+        start = next((i for i in range(calls[-2] + 1, end) if typed(entries[i])), end)
     if args.skill:
         found = [i for i, e in enumerate(entries[:end]) if invokes_skill(e, args.skill)]
         if not found:
-            ran = sorted({invoked_skill(e) for e in entries[:end]} - {None, "telemetry"})
+            # Built-in commands (/clear, /model) load no skill instructions, which sets them apart.
+            loaded = {loaded_skill(e) for e in entries[:end]} - {None}
+            invoked = {invoked_skill(e) for e in entries[:end]} - {None}
+            ran = sorted(n for n in invoked
+                         if any(same_skill(n, l) for l in loaded) and not same_skill(n, "telemetry"))
             print(f"Skill '{args.skill}' did not run in this session. Skills that ran: "
                   + (", ".join(ran) or "none"), file=sys.stderr)
             sys.exit(2)
         start = found[-1]
     window = entries[start:end]
+    if not any(e.get("timestamp") for e in window):
+        print("Nothing to measure: no activity since the previous telemetry report.", file=sys.stderr)
+        sys.exit(2)
 
     totals, tool_ids = measure(window)
     timed = list(window)

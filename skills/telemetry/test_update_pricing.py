@@ -58,6 +58,13 @@ class PriceCheck(unittest.TestCase):
         self.assertNotIn("model-z", self.prices()["models"])
         self.assertEqual(self.prices()["asOf"], "2026-01-01")
 
+    def test_keeps_the_old_date_when_any_model_went_unchecked(self):
+        out = self.check("model-a", "model-z", "--apply").stdout
+        prices = self.prices()
+        self.assertEqual(prices["models"]["model-a"]["cacheRead"], 0.05)
+        self.assertEqual(prices["asOf"], "2026-01-01")
+        self.assertIn("asOf kept at 2026-01-01: model-z not checked", out)
+
     def test_leaves_a_model_without_a_one_hour_cache_price(self):
         out = self.check("model-c", "--apply").stdout
         self.assertIn("model-c: LiteLLM has no 1-hour cache write price; prices unchanged", out)

@@ -3,6 +3,7 @@
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -10,10 +11,27 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 STALE_DAYS = 30
 TOKEN_KINDS = ("input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h")
+HALF_CENT = 0.005  # cost differences below this round to the same printed cents
 
 
-def load_run(path):
-    return json.load(sys.stdin) if path == "-" else json.loads(Path(path).read_text())
+def slug(label):
+    return re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+
+
+def saved_runs_dir():
+    """.agents/telemetry at the root of the repo containing the current folder, else under it."""
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    return Path(top.stdout.strip() if top.returncode == 0 else ".") / ".agents" / "telemetry"
+
+
+def load_run(ref, folder):
+    """A run from stdin ('-'), a JSON file, or the label it was saved under."""
+    if ref == "-":
+        return json.load(sys.stdin)
+    path = Path(ref) if Path(ref).is_file() else folder / f"{slug(ref)}.json"
+    if not path.is_file():
+        sys.exit(f"No run file or saved label '{ref}' (looked in {folder})")
+    return json.loads(path.read_text())
 
 
 def cost(run, pricing):
@@ -70,11 +88,10 @@ def change(before, after, unit):
     if before is None or after is None:
         return "unknown"
     diff = after - before
-    if abs(diff) < (0.005 if unit == "money" else 1):
+    if abs(diff) < (HALF_CENT if unit == "money" else 1):
         return "same"
     sign = "+" if diff > 0 else "-"
-    amount = {"seconds": seconds(abs(diff)), "count": str(abs(diff)),
-              "tokens": tokens(abs(diff)), "money": f"${abs(diff):.2f}"}[unit]
+    amount = FORMATS[unit](abs(diff))
     percent = f" ({sign}{abs(diff) / before * 100:.0f}%)" if before else ""
     return f"{sign}{amount}{percent}"
 
@@ -141,9 +158,9 @@ def breakdown(run, pricing):
     return "\n".join(out)
 
 
-def price_check_hint(runs, pricing, today):
-    """A line asking for a price check when prices are stale or a model has none; else None."""
-    models = sorted({model for run in runs for model in run["tokensByModel"]})
+def price_check_hint(run, pricing, today):
+    """A line asking for a price check of the run's models when prices are stale or missing; else None."""
+    models = sorted(run["tokensByModel"])
     command = "update_pricing.py " + " ".join(models)
     missing = [model for model in models if model not in pricing["models"]]
     if missing:
@@ -158,17 +175,18 @@ def price_check_hint(runs, pricing, today):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("runs", nargs="+", help="one or two run JSON files ('-' reads stdin)")
+    parser.add_argument("runs", nargs="+", help="one or two runs: JSON file, saved label, or '-' for stdin")
     parser.add_argument("--pricing", default=HERE / "pricing.json")
     parser.add_argument("--save", metavar="LABEL", help="save the last run as JSON under this label")
-    parser.add_argument("--dir", default=".agents/telemetry", help="where --save writes")
+    parser.add_argument("--dir", type=Path, help="saved runs folder (default: <repo root>/.agents/telemetry)")
     parser.add_argument("--today", type=date.fromisoformat, default=date.today(), help=argparse.SUPPRESS)
     args = parser.parse_args()
     if len(args.runs) > 2:
         parser.error("give one run, or two to compare")
 
+    folder = args.dir or saved_runs_dir()
     pricing = json.loads(Path(args.pricing).read_text())
-    runs = [load_run(path) for path in args.runs]
+    runs = [load_run(ref, folder) for ref in args.runs]
     if args.save:
         at_save = cost(runs[-1], pricing)
         runs[-1] = {**runs[-1], "label": args.save,
@@ -188,7 +206,7 @@ def main():
     # Saved runs are repriced at today's rates so columns compare like for like.
     for run in runs:
         now = cost(run, pricing)
-        if run.get("costAtSave") is not None and now is not None and abs(now - run["costAtSave"]) >= 0.005:
+        if run.get("costAtSave") is not None and now is not None and abs(now - run["costAtSave"]) >= HALF_CENT:
             print(f"{header(run)} cost {money(run['costAtSave'])} at {run.get('pricingAsOf')} prices;"
                   f" the table uses {pricing.get('asOf')} prices.")
 
@@ -198,14 +216,13 @@ def main():
             print(header(run))
         print(breakdown(run, pricing))
 
-    hint = price_check_hint(runs, pricing, args.today)
+    hint = price_check_hint(runs[-1], pricing, args.today)
     if hint:
         print(f"\n{hint}")
 
     if args.save:
-        folder = Path(args.dir)
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / (re.sub(r"[^a-z0-9]+", "-", args.save.lower()).strip("-") + ".json")
+        path = folder / f"{slug(args.save)}.json"
         path.write_text(json.dumps(runs[-1], indent=2) + "\n")
         print(f"\nSaved {path}")
 

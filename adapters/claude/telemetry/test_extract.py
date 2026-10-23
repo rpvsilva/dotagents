@@ -1,6 +1,10 @@
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -97,16 +101,29 @@ class SkillTypedTwice(unittest.TestCase):
 
 
 class NoSkillNamed(unittest.TestCase):
-    def test_run_starts_after_the_previous_telemetry_call(self):
+    def test_run_starts_at_the_first_typed_message_after_the_previous_telemetry_call(self):
+        # The previous /telemetry's own reply (r3) belongs to that report, not to this run.
         run_ = run("--session", str(FIXTURES / "run-twice.jsonl"))
-        self.assertEqual(run_["start"], "2026-10-23T10:02:05.000Z")
-        # Main thread r3-r7 plus the subagent's two.
-        self.assertEqual(run_["turns"], 7)
+        self.assertEqual(run_["start"], "2026-10-23T10:03:00.000Z")
+        # Main thread r4-r7 plus the subagent's two.
+        self.assertEqual(run_["turns"], 6)
 
     def test_run_covers_the_whole_session_without_an_earlier_telemetry_call(self):
         run_ = run("--session", str(FIXTURES / "model-invoked.jsonl"))
         self.assertEqual(run_["start"], "2026-10-23T11:00:00.000Z")
         self.assertEqual(run_["wallClockSeconds"], 30)
+
+
+class NothingToMeasure(unittest.TestCase):
+    def test_says_so_when_telemetry_runs_twice_in_a_row(self):
+        lines = (FIXTURES / "run-twice.jsonl").read_text().splitlines()
+        report_call = next(line for line in lines if "/telemetry</command-name>" in line)
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_text("\n".join([*lines, report_call, report_call]) + "\n")
+            proc = extract("--session", str(session))
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("Nothing to measure", proc.stderr)
 
 
 class SkillNotFound(unittest.TestCase):
@@ -116,6 +133,28 @@ class SkillNotFound(unittest.TestCase):
         self.assertEqual(proc.stdout, "")
         self.assertIn("deploy", proc.stderr)
         self.assertIn("renovate-prs", proc.stderr)
+
+    def test_leaves_built_in_commands_out_of_the_list(self):
+        proc = extract("--session", str(FIXTURES / "run-twice.jsonl"), "--skill", "deploy")
+        self.assertNotIn("clear", proc.stderr)
+
+
+class DefaultSession(unittest.TestCase):
+    """With no --session, measure the session Claude Code says is running, not the newest log."""
+
+    def test_uses_the_session_id_from_the_environment(self):
+        with tempfile.TemporaryDirectory() as home:
+            project_dir = Path(home) / "work" / "app"
+            project_dir.mkdir(parents=True)
+            logs = Path(home) / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(project_dir.resolve()))
+            logs.mkdir(parents=True)
+            shutil.copy(FIXTURES / "model-invoked.jsonl", logs / "this-session.jsonl")
+            shutil.copy(FIXTURES / "run-twice.jsonl", logs / "other-session.jsonl")
+            os.utime(logs / "other-session.jsonl")  # the other session wrote last
+            env = {**os.environ, "HOME": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--cwd", str(project_dir)],
+                                  capture_output=True, text=True, env=env)
+            self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session", proc.stderr)
 
 
 if __name__ == "__main__":

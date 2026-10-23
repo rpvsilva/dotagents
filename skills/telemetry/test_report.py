@@ -10,10 +10,10 @@ FIXTURES = HERE / "fixtures"
 PRICING = str(FIXTURES / "pricing.json")
 
 
-def report(*args, stdin=None):
+def report(*args, stdin=None, cwd=None):
     proc = subprocess.run(
         [sys.executable, str(HERE / "report.py"), "--pricing", PRICING, *args],
-        capture_output=True, text=True, input=stdin,
+        capture_output=True, text=True, input=stdin, cwd=cwd,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
@@ -122,6 +122,20 @@ class Save(unittest.TestCase):
             self.assertEqual(run["pricingAsOf"], "2026-01-01")
 
 
+    def test_saves_at_the_repo_root_from_any_folder(self):
+        with tempfile.TemporaryDirectory() as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            (Path(repo) / "src").mkdir()
+            report(str(FIXTURES / "run-a.json"), "--save", "base", cwd=Path(repo) / "src")
+            self.assertTrue((Path(repo) / ".agents" / "telemetry" / "base.json").is_file())
+
+    def test_a_saved_run_is_found_by_its_label_as_typed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            report(str(FIXTURES / "run-b.json"), "--save", "Before fix", "--dir", folder)
+            out = report("Before fix", str(FIXTURES / "run-a.json"), "--dir", folder)
+            self.assertIn("│ Before fix │", out)
+
+
 class Repriced(unittest.TestCase):
     def test_notes_a_baseline_whose_cost_has_changed_since_it_was_saved(self):
         old = (FIXTURES / "run-b.json").read_text().replace(
@@ -144,6 +158,11 @@ class PriceCheckHint(unittest.TestCase):
 
     def test_stays_quiet_when_prices_are_recent(self):
         out = report(str(FIXTURES / "run-a.json"), "--today", "2026-01-15")
+        self.assertNotIn("update_pricing.py", out)
+
+    def test_checks_only_this_runs_models_not_the_baselines(self):
+        baseline = (FIXTURES / "run-b.json").read_text().replace('"model-a"', '"model-z"')
+        out = report("-", str(FIXTURES / "run-a.json"), "--today", "2026-01-15", stdin=baseline)
         self.assertNotIn("update_pricing.py", out)
 
     def test_offers_a_check_for_a_model_with_no_price(self):

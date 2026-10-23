@@ -55,17 +55,18 @@ def main():
     pricing_path = Path(args.pricing)
     pricing = json.loads(pricing_path.read_text())
     updates = {}
-    compared = 0
+    unchecked = []
     for model in args.models:
         if model not in catalog:
             print(f"{model}: not in LiteLLM; prices unchanged")
+            unchecked.append(model)
             continue
         new = per_million(catalog[model])
         if isinstance(new, str):
             label = "1-hour cache write" if new == FIELDS["cacheWrite1h"] else new
             print(f"{model}: LiteLLM has no {label} price; prices unchanged")
+            unchecked.append(model)
             continue
-        compared += 1
         old = pricing["models"].get(model)
         if old is None:
             print(f"{model}: new (" + ", ".join(f"{k} {v:g}" for k, v in new.items()) + ")")
@@ -77,11 +78,16 @@ def main():
             print(f"{model}: " + ", ".join(changed))
         updates[model] = new
 
-    if args.apply and compared:
-        pricing["models"].update(updates)
+    if not args.apply or len(unchecked) == len(args.models):
+        return
+    pricing["models"].update(updates)
+    # asOf vouches for every price, so it moves only when every model was checked.
+    if unchecked:
+        print(f"asOf kept at {pricing.get('asOf')}: {', '.join(unchecked)} not checked")
+    else:
         pricing["asOf"] = date.today().isoformat()
-        pricing_path.write_text(json.dumps(pricing, indent=2) + "\n")
-        print(f"Updated {pricing_path}")
+    pricing_path.write_text(json.dumps(pricing, indent=2) + "\n")
+    print(f"Updated {pricing_path}")
 
 
 if __name__ == "__main__":
