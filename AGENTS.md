@@ -38,7 +38,16 @@ Done when the skill loads in Claude Code by name and the README row exists.
 
 ### Checks
 
-Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, `tests/install.test.sh` (install.sh in a throwaway `$HOME`, run twice) and `tests/repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, `${ENV_VAR}`-only MCP credentials, executable scripts). When you add a rule to this file, add its check to `tests/repo.test.sh`.
+Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, `tests/install.test.sh` (install.sh in a throwaway `$HOME`, run twice) and `tests/repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, `${ENV_VAR}`-only MCP credentials, executable scripts, high tier matching CODEOWNERS). When you add a rule to this file, add its check to `tests/repo.test.sh`.
+
+### Pull requests
+
+`agent-pr-gate` decides what a PR needs before it may merge; its rules are in `.review-gate.yml`.
+
+- Fill in `Testing`, `Risk` and `How to revert` from `.github/pull_request_template.md`. Under `Testing`, write what you ran and its result; `TODO` or `N/A` counts as empty.
+- An agent opening a PR under Rui's account adds the `agent` label.
+- A PR touching a **high-tier** path (`.review-gate.yml`, mirrored in `CODEOWNERS`) needs Rui's approval. To make a path high-tier, add it to both files.
+- Merge only with `gh pr merge --auto`, so GitHub enforces the required checks; never bypass them.
 
 ## Commits
 
