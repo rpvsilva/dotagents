@@ -53,6 +53,12 @@ install_codex() {
   for a in "$REPO"/adapters/codex/agents/*.toml; do
     [ -e "$a" ] && link "$a" "$HOME/.codex/agents/$(basename "$a")"
   done
+  for r in "$REPO"/adapters/codex/rules/*.rules; do
+    [ -e "$r" ] && link "$r" "$HOME/.codex/rules/$(basename "$r")"
+  done
+  if ls "$REPO"/adapters/codex/hooks/*.json >/dev/null 2>&1; then
+    echo "  hooks: merge adapters/codex/hooks/*.json into ~/.codex/hooks.json by hand, then trust them with /hooks (see adapters/codex/README.md)"
+  fi
 }
 
 install_cursor() {
@@ -61,6 +67,9 @@ install_cursor() {
   for a in "$REPO"/adapters/cursor/agents/*.md; do
     [ -e "$a" ] && link "$a" "$HOME/.cursor/agents/$(basename "$a")"
   done
+  if ls "$REPO"/adapters/cursor/hooks/*.json >/dev/null 2>&1; then
+    echo "  hooks: merge adapters/cursor/hooks/*.json into ~/.cursor/hooks.json by hand (see adapters/cursor/README.md)"
+  fi
 }
 
 case "${1:-all}" in
