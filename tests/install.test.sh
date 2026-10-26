@@ -44,6 +44,16 @@ for r in "$REPO"/adapters/codex/rules/*.rules; do assert_link "$home/.codex/rule
 for a in "$REPO"/adapters/cursor/agents/*.md; do assert_link "$home/.cursor/agents/$(basename "$a")" "$a"; done
 grep -rqx "old instructions" "$home/.dotagents-backup" 2>/dev/null || fail "replaced CLAUDE.md was not backed up"
 
+# Hook and settings snippets are merged into each tool's config, next to what is already there.
+echo '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' >"$home/.cursor/hooks.json"
+run "$home" all >/dev/null
+has_guard() { jq -e '[.. | .command? | strings | select(test("guard-merge"))] | length == 1' "$1" >/dev/null || fail "$1: guard-merge hook missing or doubled"; }
+has_guard "$home/.claude/settings.json"
+has_guard "$home/.codex/hooks.json"
+has_guard "$home/.cursor/hooks.json"
+jq -e '.hooks.Stop[0].hooks[0].command == "orca"' "$home/.cursor/hooks.json" >/dev/null || fail "existing Cursor hook lost"
+jq -e '.permissions.deny | index("Bash(gh auth token:*)") != null' "$home/.claude/settings.json" >/dev/null || fail "Claude deny rules not merged"
+
 # Second run: same links, nothing backed up.
 before="$(snapshot "$home")"
 out="$(run "$home" all)"
