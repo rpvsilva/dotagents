@@ -42,6 +42,20 @@ for a in adapters/*/agents/*; do
   done
 done
 
+# Hook snippets are valid JSON and call a hook script that exists.
+for h in adapters/*/hooks/*.json adapters/*/settings/*.json; do
+  [ -f "$h" ] || continue
+  jq -e . "$h" >/dev/null 2>&1 || { fail "$h: invalid JSON"; continue; }
+  for s in $(jq -r '.. | .command? | strings' "$h" | grep -oE '\.agents/hooks/[^"'"'"' ]+' || true); do
+    script="scripts/hooks/${s#.agents/hooks/}"
+    [ -f "$script" ] || fail "$h: calls $s but $script does not exist"
+  done
+done
+for h in adapters/*/hooks/*.json; do
+  [ -f "$h" ] || continue
+  jq -e '[.. | .command? | strings | select(test("\\.agents/hooks/"))] | length > 0' "$h" >/dev/null 2>&1 || fail "$h: calls no script in ~/.agents/hooks/"
+done
+
 # MCP: valid JSON, and every env/header value is a ${VAR} reference.
 if ! jq -e '.mcpServers | type == "object"' mcp/servers.json >/dev/null; then
   fail "mcp/servers.json: invalid JSON or no mcpServers object"
