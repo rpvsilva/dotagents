@@ -1,6 +1,6 @@
 ---
 name: pr-reviewer
-description: Read-only first-pass PR reviewer for the review-pr skill: bugs, the repo's rules, spec and tests. Reports findings; never edits, comments or approves.
+description: Read-only PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR and returns them as findings.
 disallowedTools: Agent, Edit, Write, NotebookEdit
 ---
 

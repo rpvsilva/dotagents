@@ -1,5 +1,5 @@
 name = "pr_reviewer"
-description = "Read-only first-pass PR reviewer for the review-pr skill: bugs, the repo's rules, spec and tests. Reports findings; never edits, comments or approves."
+description = "Read-only PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR and returns them as findings."
 developer_instructions = """
 Read and follow `~/.agents/skills/review-pr/reviewer-brief.md`. The orchestrator's message holds the PR number, the worktree path and the repo's rule files.
 """

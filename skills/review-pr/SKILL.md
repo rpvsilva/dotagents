@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: First-pass review of a PR by a fresh reviewer: bugs, the repo's written rules, and whether it does what it says; verified findings posted as one comment-only review. Never approves.
+description: First-pass PR review by a fresh subagent; verified findings posted as one comment-only review.
 disable-model-invocation: true
 ---
 

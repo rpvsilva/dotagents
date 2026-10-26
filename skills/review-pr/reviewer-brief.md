@@ -1,6 +1,6 @@
 # PR reviewer brief
 
-You review one PR, **read-only**: you report findings and change nothing (no edits, commits, pushes or GitHub comments). Whoever started you gave you: the PR number, a worktree checked out at the PR head, and the repo's rule files.
+You review one PR, **read-only**: your one output is the findings report below. Whoever started you gave you: the PR number, a worktree checked out at the PR head, and the repo's rule files.
 
 1. **Read the intent**: `gh pr view <n>` (title, description, linked issue). Done when you can say in one sentence what the PR claims to do.
 2. **Read the change**: `gh pr diff <n>`, then each changed file in full in the worktree, plus the callers and tests of what changed. Done when every changed hunk has been read in context.
@@ -10,7 +10,7 @@ You review one PR, **read-only**: you report findings and change nothing (no edi
    - **Spec**: the PR does less, more, or something else than it claims.
    - **Tests**: changed behaviour that no test exercises, when the repo tests that kind of code.
 
-   Style, naming and taste are out of scope unless a rule file asks for them. Done when every changed hunk has been checked on all four axes.
+   Done when every changed hunk has been checked on all four axes.
 
 ## Report
 
