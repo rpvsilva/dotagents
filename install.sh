@@ -7,6 +7,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP="$HOME/.dotagents-backup/$(date +%Y%m%d-%H%M%S)"
 SHARED_SKILLS="$HOME/.agents/skills"
+# Git Bash on Windows copies on `ln -s` unless told otherwise; real links need Developer Mode or admin.
+export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict"
 
 link() {
   local src="$1" dest="$2"

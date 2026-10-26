@@ -16,7 +16,7 @@ KEY = "Tools = tool calls · In/Out = input/output tokens · Cache R/W = cache r
 
 
 def load_run(ref):
-    return json.load(sys.stdin) if ref == "-" else json.loads(Path(ref).read_text())
+    return json.load(sys.stdin) if ref == "-" else json.loads(Path(ref).read_text(encoding="utf-8"))
 
 
 def slug(label):
@@ -167,8 +167,11 @@ def main():
     parser.add_argument("--dir", type=Path, help="saved runs folder (default: <repo root>/.agents/telemetry)")
     parser.add_argument("--today", type=date.fromisoformat, default=date.today(), help=argparse.SUPPRESS)
     args = parser.parse_args()
+    # The table uses non-ASCII characters; Windows consoles default to a legacy code page.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
 
-    pricing = json.loads(Path(args.pricing).read_text())
+    pricing = json.loads(Path(args.pricing).read_text(encoding="utf-8"))
     run = load_run(args.run)
     body = [span_row(span, pricing) for span in run["spans"]]
     print(table(body, total_row(run, pricing) if len(body) > 1 else None))
@@ -189,7 +192,7 @@ def main():
         folder = args.dir or saved_runs_dir()
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{slug(args.save)}.json"
-        path.write_text(json.dumps(run, indent=2) + "\n")
+        path.write_text(json.dumps(run, indent=2) + "\n", encoding="utf-8")
         print(f"\nSaved {path}")
 
 

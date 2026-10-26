@@ -27,7 +27,7 @@ class PriceCheck(unittest.TestCase):
         proc = subprocess.run(
             [sys.executable, str(HERE / "update_pricing.py"), "--source", source,
              "--pricing", str(self.pricing), *args],
-            capture_output=True, text=True,
+            capture_output=True, encoding="utf-8",
         )
         return proc
 
