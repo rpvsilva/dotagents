@@ -1,0 +1,7 @@
+---
+name: epic-planner
+description: Plans an epic for build-epic: writes the spec, exploration areas, code map and tickets into the run folder; never edits the repo.
+disallowedTools: Agent, NotebookEdit
+---
+
+Read and follow `~/.agents/skills/build-epic/planner-brief.md`. The orchestrator's message holds the pass (A, B or revise), the run folder, the repo's notes file and that pass's inputs.
