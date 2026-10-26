@@ -26,7 +26,7 @@ for d in "$REPO"/skills/*/; do skills+=("$(basename "$d")"); done
 
 # all: a pre-existing real file is backed up, then everything is linked.
 home="$SANDBOX/all"
-mkdir -p "$home/.claude" "$home/.codex"
+mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
 echo "old instructions" >"$home/.claude/CLAUDE.md"
 run "$home" all >/dev/null
 
@@ -37,6 +37,9 @@ for s in "${skills[@]}"; do
 done
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
 assert_link "$home/.codex/AGENTS.md" "$REPO/global/AGENTS.md"
+for a in "$REPO"/adapters/claude/agents/*.md; do assert_link "$home/.claude/agents/$(basename "$a")" "$a"; done
+for a in "$REPO"/adapters/codex/agents/*.toml; do assert_link "$home/.codex/agents/$(basename "$a")" "$a"; done
+for a in "$REPO"/adapters/cursor/agents/*.md; do assert_link "$home/.cursor/agents/$(basename "$a")" "$a"; done
 grep -rqx "old instructions" "$home/.dotagents-backup" 2>/dev/null || fail "replaced CLAUDE.md was not backed up"
 
 # Second run: same links, nothing backed up.
@@ -52,6 +55,7 @@ run "$home" claude >/dev/null
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
 [ ! -e "$home/.codex" ] || fail "install.sh claude touched ~/.codex"
 run "$home" codex | grep -q "skipping" || fail "codex without ~/.codex did not skip"
+run "$home" cursor | grep -q "skipping" || fail "cursor without ~/.cursor did not skip"
 
 # Unknown target exits non-zero.
 if run "$SANDBOX/bad" nope >/dev/null 2>&1; then fail "unknown target exited 0"; fi

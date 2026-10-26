@@ -32,6 +32,16 @@ while read -r md; do
   done < <(grep -oE '\]\([^)[:space:]]+\)' "$md" | sed -E 's/^\]\((.*)\)$/\1/' | grep -vE '^(https?:|mailto:|#)' || true)
 done < <(git ls-files '*.md')
 
+# Adapter agents point at a brief that exists in skills/.
+for a in adapters/*/agents/*; do
+  [ -f "$a" ] || continue
+  refs="$(grep -oE '[~]/\.agents/skills/[^`" ]+' "$a" || true)"
+  [ -n "$refs" ] || fail "$a: no ~/.agents/skills/... brief referenced"
+  for r in $refs; do
+    [ -f "skills/${r#\~/.agents/skills/}" ] || fail "$a: $r does not exist in skills/"
+  done
+done
+
 # MCP: valid JSON, and every env/header value is a ${VAR} reference.
 if ! jq -e '.mcpServers | type == "object"' mcp/servers.json >/dev/null; then
   fail "mcp/servers.json: invalid JSON or no mcpServers object"
