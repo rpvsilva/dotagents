@@ -37,14 +37,15 @@ Done when the skill loads in Claude Code by name and the README row exists.
 2. Add an `install_<tool>` function and a `case` entry in `install.sh`, linking through the `link` helper so existing files get backed up to `~/.dotagents-backup/`.
 3. Run `bash -n install.sh`, then `./install.sh <tool>` twice: the second run must change nothing but re-create links.
 
-### Add a hook or MCP server
+### Add a hook, Claude plugin or MCP server
 
 - **Hook**: the script in `scripts/hooks/<name>.sh`, then the wiring per tool in `adapters/<tool>/hooks/`, calling it as `$HOME/.agents/hooks/<name>.sh` (`install.sh` links that folder). `install.sh` merges each snippet into the tool's config with `scripts/merge-json.sh`, keeping what is already there.
+- **Claude plugin**: add a line to `adapters/claude/plugins.txt`; `install.sh claude` installs it.
 - **MCP server**: add it to `mcp/servers.json` with credentials as `${ENV_VAR}` references only.
 
 ### Checks
 
-Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, every `tests/*.test.sh`: `install.test.sh` (install.sh in a throwaway `$HOME`, run twice), `python.test.sh` (each folder's `test_*.py`), `merge-pr.test.sh` (`scripts/merge-pr.sh` against a stub `gh`), `gh-app-token.test.sh` (`scripts/gh-app-token.sh` against a stub GitHub API), `guard-merge.test.sh` (`scripts/hooks/guard-merge.sh` in throwaway repos), `merge-json.test.sh` (`scripts/merge-json.sh` on throwaway configs) and `repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, hook snippets calling a script that exists, `${ENV_VAR}`-only MCP credentials, executable scripts, high tier matching CODEOWNERS). When you add a rule to this file, add its check to `tests/repo.test.sh`.
+Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, every `tests/*.test.sh`: `install.test.sh` (install.sh in a throwaway `$HOME`, run twice), `python.test.sh` (each folder's `test_*.py`), `merge-pr.test.sh` (`scripts/merge-pr.sh` against a stub `gh`), `gh-app-token.test.sh` (`scripts/gh-app-token.sh` against a stub GitHub API), `guard-merge.test.sh` (`scripts/hooks/guard-merge.sh` in throwaway repos), `merge-json.test.sh` (`scripts/merge-json.sh` on throwaway configs), `claude-plugins.test.sh` (`scripts/claude-plugins.sh` against a stub `claude`) and `repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, hook snippets calling a script that exists, `${ENV_VAR}`-only MCP credentials, executable scripts, high tier matching CODEOWNERS). When you add a rule to this file, add its check to `tests/repo.test.sh`.
 
 ### Pull requests
 

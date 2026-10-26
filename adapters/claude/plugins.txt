@@ -1,0 +1,4 @@
+# Claude Code plugins install.sh installs (scripts/claude-plugins.sh), one per line:
+# <plugin>@<marketplace> <marketplace source, as `claude plugin marketplace add` takes it>
+mattpocock-skills@claude-plugins-official anthropics/claude-plugins-official
+claude-code-setup@claude-plugins-official anthropics/claude-plugins-official
