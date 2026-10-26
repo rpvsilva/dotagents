@@ -42,6 +42,14 @@ else
     | select(.value | test("\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}") | not) | "\($srv).\(.key)"' mcp/servers.json)
 fi
 
+# The high tier in .review-gate.yml and the paths in CODEOWNERS list the same paths.
+high="$(awk '/^  high:/ {on=1; next} on && /^    - / {print $2; next} on {exit}' .review-gate.yml | sort)"
+owned="$(awk '!/^#/ && NF {print $1}' CODEOWNERS | sort)"
+[ -n "$high" ] || fail ".review-gate.yml: no tiers.high list found"
+while read -r p; do
+  fail "$p is in only one of .review-gate.yml (high tier) and CODEOWNERS"
+done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
+
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"
