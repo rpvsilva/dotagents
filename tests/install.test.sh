@@ -19,7 +19,7 @@ assert_link() {
 # Prints the target of every symlink under $1, so two runs can be compared.
 snapshot() { find "$1" -type l | sort | while read -r l; do echo "$l -> $(readlink "$l")"; done; }
 
-run() { HOME="$1" "$REPO/install.sh" "${@:2}"; }
+run() { HOME="$1" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" "${@:2}"; }
 
 skills=()
 for d in "$REPO"/skills/*/; do skills+=("$(basename "$d")"); done
