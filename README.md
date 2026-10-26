@@ -10,7 +10,7 @@ global/AGENTS.md    my global instructions, linked into every tool
 skills/             tool-neutral skills (SKILL.md format)
 mcp/servers.json    MCP servers, one list for every tool
 scripts/hooks/      hook logic as plain scripts, wired up per tool
-adapters/<tool>/    tool-only pieces: Claude agents and hook config, Codex, Cursor
+adapters/<tool>/    tool-only pieces: per-tool agent wrappers, hook config
 install.sh          symlinks everything into place
 tests/              checks CI runs; run them locally with tests/run.sh
 ```
