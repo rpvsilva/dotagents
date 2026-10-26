@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "\"$HOME/.agents/hooks/guard-merge.sh\" && echo '{\"permission\":\"allow\"}'" }
+    ]
+  }
+}
