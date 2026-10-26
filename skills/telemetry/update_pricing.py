@@ -24,7 +24,7 @@ def fetch(source):
         if source.startswith("https://"):
             with urllib.request.urlopen(source, timeout=20) as response:
                 return json.load(response)
-        return json.loads(Path(source).read_text())
+        return json.loads(Path(source).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--pricing", default=HERE / "pricing.json")
     parser.add_argument("--source", default=LITELLM, help="LiteLLM price list URL or file")
     args = parser.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")  # prints "→"; Windows consoles default to a legacy code page
 
     catalog = fetch(args.source)
     if catalog is None:
@@ -54,7 +55,7 @@ def main():
         sys.exit(3)
 
     pricing_path = Path(args.pricing)
-    pricing = json.loads(pricing_path.read_text())
+    pricing = json.loads(pricing_path.read_text(encoding="utf-8"))
     updates = {}
     unchecked = []
     for model in args.models:
@@ -87,7 +88,7 @@ def main():
         print(f"asOf kept at {pricing.get('asOf')}: {', '.join(unchecked)} not checked")
     else:
         pricing["asOf"] = date.today().isoformat()
-    pricing_path.write_text(json.dumps(pricing, indent=2) + "\n")
+    pricing_path.write_text(json.dumps(pricing, indent=2) + "\n", encoding="utf-8")
     print(f"Updated {pricing_path}")
 
 
