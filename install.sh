@@ -25,13 +25,15 @@ link() {
   echo "  $dest -> $src"
 }
 
-# Merges every *.json snippet in folder $1 into JSON file $2.
+# Merges every *.json snippet in folder $1 into JSON file $2. A failure is reported at the end,
+# so one broken config does not stop the other tools from installing.
+merge_failed=0
 merge() {
   local f
   for f in "$1"/*.json; do
-    [ -e "$f" ] && "$REPO/scripts/merge-json.sh" "$f" "$2" "$BACKUP"
+    [ -e "$f" ] || continue
+    "$REPO/scripts/merge-json.sh" "$f" "$2" "$BACKUP" || merge_failed=1
   done
-  return 0
 }
 
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
@@ -86,3 +88,5 @@ case "${1:-all}" in
   all)    install_shared; install_claude; install_codex; install_cursor ;;
   *) echo "usage: $0 [all|shared|claude|codex|cursor]"; exit 1 ;;
 esac
+
+[ "$merge_failed" -eq 0 ] || { echo "some config snippets were not merged, see above"; exit 1; }
