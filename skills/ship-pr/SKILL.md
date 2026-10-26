@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Take the current changes from working tree to merged PR, following the repo's own PR rules: branch, commit, checks, open the PR, get it green, merge when the repo lets an agent merge.
+description: Take the current changes to a merged PR by the repo's own branch, commit, check and merge rules.
 disable-model-invocation: true
 ---
 
@@ -24,9 +24,9 @@ Ship the current changes as one PR, the way this repo wants PRs shipped. The rep
 
 5. **Open the PR** with the identity from step 1. Fill every section of the template: under testing, the commands you ran and their results. Done when the PR URL exists and no template section is empty.
 
-6. **Get it green.** `gh pr checks <n> --watch`. On a failure, fix it (with the fix-pr skill if available), push and watch again. Done when every check passes, or a failure remains that needs a human (a secret, an approval).
+6. **Get it green.** `gh pr checks <n> --watch`. On a **red** check, start the PR fixer agent if your harness defines one, otherwise follow [fix-pr](../fix-pr/SKILL.md) yourself; then watch again. Done when every check passes, or a failure remains that needs a human (a secret, an approval).
 
-7. **Merge** only when the merge rule from step 1 lets an agent merge this PR, using exactly the method it names. A PR that needs a human approval or a high-risk tier waits for that human. Done when the PR shows `MERGED`, or is green and waiting on a named person.
+7. **Merge** only when the merge rule from step 1 lets an agent merge this PR, using exactly the method it names. Done when the PR shows `MERGED`, or is green and waiting on a named person.
 
 8. **Clean up** after a merge: `git switch <default-branch> && git pull --ff-only`, delete the local branch.
 
