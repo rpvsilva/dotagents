@@ -35,6 +35,7 @@ for s in "${skills[@]}"; do
   assert_link "$home/.claude/skills/$s" "$home/.agents/skills/$s"
   [ -f "$home/.claude/skills/$s/SKILL.md" ] || fail "$s/SKILL.md not reachable through ~/.claude/skills"
 done
+assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
 assert_link "$home/.codex/AGENTS.md" "$REPO/global/AGENTS.md"
 for a in "$REPO"/adapters/claude/agents/*.md; do assert_link "$home/.claude/agents/$(basename "$a")" "$a"; done
