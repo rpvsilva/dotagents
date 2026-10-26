@@ -32,5 +32,6 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 
 | Skill | What it does |
 |---|---|
+| `fix-pr` | Make one PR's failing checks pass and push; also the brief for the `pr-fixer` subagent |
 | `renovate-prs` | Fix, verify and merge open Renovate PRs, one isolated subagent per PR |
 | `telemetry` | Show what a finished run cost, one row per skill (time, turns, tool calls, tokens, cost); save it as JSON |
