@@ -27,9 +27,11 @@ link() {
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
+# Hook scripts go to ~/.agents/hooks, the one path every adapter's hook config calls.
 install_shared() {
   echo "shared"
   for s in $(skills); do link "$REPO/skills/$s" "$SHARED_SKILLS/$s"; done
+  link "$REPO/scripts/hooks" "$HOME/.agents/hooks"
 }
 
 install_claude() {
