@@ -19,6 +19,7 @@ tiers:
     - /CLAUDE.md
     - /adapters/claude/hooks/
     - /adapters/claude/settings/
+    - /adapters/claude/plugins.txt
     - /adapters/codex/hooks/
     - /adapters/codex/rules/
     - /adapters/cursor/hooks/

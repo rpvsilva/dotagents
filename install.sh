@@ -25,14 +25,15 @@ link() {
   echo "  $dest -> $src"
 }
 
-# Merges every *.json snippet in folder $1 into JSON file $2. A failure is reported at the end,
-# so one broken config does not stop the other tools from installing.
-merge_failed=0
+# A failed merge or plugin install is reported at the end, so it does not stop the other tools.
+failed=0
+
+# Merges every *.json snippet in folder $1 into JSON file $2.
 merge() {
   local f
   for f in "$1"/*.json; do
     [ -e "$f" ] || continue
-    "$REPO/scripts/merge-json.sh" "$f" "$2" "$BACKUP" || merge_failed=1
+    "$REPO/scripts/merge-json.sh" "$f" "$2" "$BACKUP" || failed=1
   done
 }
 
@@ -55,6 +56,14 @@ install_claude() {
   done
   merge "$REPO/adapters/claude/hooks" "$HOME/.claude/settings.json"
   merge "$REPO/adapters/claude/settings" "$HOME/.claude/settings.json"
+  # DOTAGENTS_SKIP_PLUGINS=1 skips plugins (the tests set it, so they never install into a throwaway $HOME).
+  if [ -n "${DOTAGENTS_SKIP_PLUGINS:-}" ]; then
+    echo "  plugins: skipped (DOTAGENTS_SKIP_PLUGINS)"
+  elif ! command -v claude >/dev/null; then
+    echo "  plugins: claude not on PATH, skipped"
+  else
+    "$REPO/scripts/claude-plugins.sh" "$REPO/adapters/claude/plugins.txt" || failed=1
+  fi
 }
 
 install_codex() {
@@ -89,4 +98,4 @@ case "${1:-all}" in
   *) echo "usage: $0 [all|shared|claude|codex|cursor]"; exit 1 ;;
 esac
 
-[ "$merge_failed" -eq 0 ] || { echo "some config snippets were not merged, see above"; exit 1; }
+[ "$failed" -eq 0 ] || { echo "some config snippets or plugins were not installed, see above"; exit 1; }
