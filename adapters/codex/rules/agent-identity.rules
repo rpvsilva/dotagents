@@ -1,0 +1,15 @@
+# Codex twin of adapters/claude/settings/agent-identity.json: no PR approvals as Rui, no borrowing his GitHub login.
+# A guardrail against mistakes, not a security boundary.
+prefix_rule(
+    pattern = ["gh", "pr", "review"],
+    decision = "forbidden",
+    justification = "Approving a PR is Rui's call; an agent never reviews as him.",
+    match = ["gh pr review 7 --approve"],
+)
+
+prefix_rule(
+    pattern = ["gh", "auth", "token"],
+    decision = "forbidden",
+    justification = "Use the GitHub App token (scripts/gh-app-token.sh), never Rui's login.",
+    match = ["gh auth token"],
+)

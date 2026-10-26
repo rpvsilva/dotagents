@@ -10,3 +10,7 @@
 /AGENTS.md @rpvsilva
 /CLAUDE.md @rpvsilva
 /adapters/claude/hooks/ @rpvsilva
+/adapters/claude/settings/ @rpvsilva
+/adapters/codex/hooks/ @rpvsilva
+/adapters/codex/rules/ @rpvsilva
+/adapters/cursor/hooks/ @rpvsilva
