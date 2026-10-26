@@ -17,6 +17,20 @@ else
 fi
 [ -n "$cmd" ] || exit 0
 
+s='[[:space:]]'
+start="(^|[;&|(]|$s)"
+end="($s|[;&|)]|$)"
+same='[^;&|]*'
+
+# A command that moves into another repo (`cd <dir> && ...`) is judged by that repo.
+# Only one cd to an existing dir counts; anything less clear is judged by $cwd.
+cd_re="${start}cd$s+([^;&|[:space:]]+)"
+if [ "$(grep -cE "$cd_re" <<<"${cmd//[;&|]/$'\n'}")" -eq 1 ] && [[ "$cmd" =~ $cd_re ]]; then
+  dir="${BASH_REMATCH[2]//[\"\']/}"
+  dir="${dir/#\~/$HOME}"
+  dir="$(cd "$cwd" 2>/dev/null && cd "$dir" 2>/dev/null && pwd)" && cwd="$dir"
+fi
+
 root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
 [ -f "$root/.review-gate.yml" ] || exit 0
 
@@ -24,11 +38,6 @@ block() {
   echo "guard-merge: $1" >&2
   exit 2
 }
-
-s='[[:space:]]'
-start="(^|[;&|(]|$s)"
-end="($s|[;&|)]|$)"
-same='[^;&|]*'
 
 if [[ "$cmd" =~ ${start}gh$s+pr$s+merge$end ]] || [[ "$cmd" =~ ${start}gh$s+api$s.*pulls/[^[:space:]]+/merge ]]; then
   block "merge with scripts/merge-pr.sh <number>, which checks ci-ok and agent-pr-gate first."

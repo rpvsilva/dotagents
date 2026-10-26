@@ -63,6 +63,14 @@ expect allow on-main 'git status'
 expect allow plain 'gh pr merge 7'
 expect allow plain 'git push origin main'
 
+# A single cd into another repo is judged by that repo.
+expect block plain "cd $SANDBOX/gated && gh pr merge 7"
+expect allow gated "cd $SANDBOX/plain && gh pr merge 7"
+expect allow gated "cd \"$SANDBOX/plain\" && gh pr merge 7"
+expect allow gated 'cd ../plain; gh pr merge 7'
+expect block gated 'cd ../on-main && git push'
+expect block gated "cd $SANDBOX/plain && cd - && gh pr merge 7"
+
 # The command as an argument works too, from the current directory.
 (cd "$SANDBOX/gated" && "$HOOK" 'gh pr merge 7' 2>/dev/null) && fail "argument form did not block"
 
