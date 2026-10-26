@@ -1,0 +1,34 @@
+# Decides what a PR still needs before it may merge; rules live in .review-gate.yml.
+# Runs from the default branch (pull_request_target, workflow_run), so a PR cannot change its own gate.
+# Never check out or run PR code in this workflow.
+name: agent-pr-gate
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  # Re-run when CI finishes and after reviews (relayed by review-relay.yml).
+  workflow_run:
+    workflows: [CI, review-relay]
+    types: [completed]
+
+permissions:
+  contents: read        # .review-gate.yml and CODEOWNERS from the base branch
+  pull-requests: write  # labels, review requests
+  issues: write         # the gate comment
+  checks: read          # CI verdict
+  actions: read         # tell the gate's own job checks from CI jobs
+  statuses: write       # the agent-pr-gate commit status
+
+concurrency:
+  group: agent-pr-gate-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  # Keep this job ID: the gate recognises its own checks by it, and it must differ from the
+  # agent-pr-gate status context that branch protection requires.
+  agent-pr-gate-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: 0xgui/agent-pr-gate@b8f3228e83e7ae46fb2b74bbfe22d09de8b6c39a # v1.0.2
+        with:
+          ci-wait-seconds: '90'  # CI takes ~30s

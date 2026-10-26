@@ -1,0 +1,32 @@
+# Rules for agent-pr-gate (.github/workflows/agent-pr-gate.yml), read from the base branch.
+# Policy: an agent may merge medium (default) PRs once evidence and CI are green;
+# high PRs (anything that runs code, guards the gate, or reaches every tool's instructions) need Rui.
+
+default_tier: medium
+
+tiers:
+  # Every high entry must also be a line in CODEOWNERS (tests/repo.test.sh checks it).
+  high:
+    - /.github/
+    - /.review-gate.yml
+    - /CODEOWNERS
+    - /install.sh
+    - /tests/
+    - /scripts/
+    - /mcp/
+    - /global/
+    - /AGENTS.md
+    - /CLAUDE.md
+    - /adapters/claude/hooks/
+
+routing:
+  approvals: { low: 0, medium: 0, high: 1 }
+  high_requires_codeowners: true
+
+maintainers: [rpvsilva]
+
+# Gate PRs from bots, and agent PRs opened under Rui's account (label them "agent").
+# High-tier PRs and PRs touching gate files are gated whatever the scope says.
+scope:
+  bots: true
+  labels: [agent]
