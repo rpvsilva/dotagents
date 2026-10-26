@@ -38,14 +38,15 @@ Done when the skill loads in Claude Code by name and the README row exists.
 
 ### Checks
 
-Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, every `tests/*.test.sh`: `install.test.sh` (install.sh in a throwaway `$HOME`, run twice), `python.test.sh` (each folder's `test_*.py`), `merge-pr.test.sh` (`scripts/merge-pr.sh` against a stub `gh`) and `repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, `${ENV_VAR}`-only MCP credentials, executable scripts, high tier matching CODEOWNERS). When you add a rule to this file, add its check to `tests/repo.test.sh`.
+Run `tests/run.sh` before pushing. It runs what CI (`.github/workflows/ci.yml`) runs: shellcheck, actionlint, every `tests/*.test.sh`: `install.test.sh` (install.sh in a throwaway `$HOME`, run twice), `python.test.sh` (each folder's `test_*.py`), `merge-pr.test.sh` (`scripts/merge-pr.sh` against a stub `gh`), `gh-app-token.test.sh` (`scripts/gh-app-token.sh` against a stub GitHub API) and `repo.test.sh` (the rules above: skill frontmatter, README rows, relative links, `${ENV_VAR}`-only MCP credentials, executable scripts, high tier matching CODEOWNERS). When you add a rule to this file, add its check to `tests/repo.test.sh`.
 
 ### Pull requests
 
 `agent-pr-gate` decides what a PR needs before it may merge; its rules are in `.review-gate.yml`.
 
 - Fill in `Testing`, `Risk` and `How to revert` from `.github/pull_request_template.md`. Under `Testing`, write what you ran and its result; `TODO` or `N/A` counts as empty.
-- An agent opening a PR under Rui's account adds the `agent` label.
+- Open, update and merge PRs as the `rpvsilva-agent` GitHub App, not as Rui, so Rui can approve them: prefix each `gh` call and `scripts/merge-pr.sh` with `GH_TOKEN="$(scripts/gh-app-token.sh)"`. Setup: the App ID in `~/.config/dotagents/github-app.env` (`DOTAGENTS_APP_ID=...`) and its private key at `~/.config/dotagents/github-app.pem`. If either is missing, stop and ask Rui; never fall back to his account.
+- Never approve a PR. Approval is Rui's, and an agent approving with his login would fake it.
 - A PR touching a **high-tier** path (`.review-gate.yml`, mirrored in `CODEOWNERS`) needs Rui's approval. To make a path high-tier, add it to both files.
 - Merge only with `scripts/merge-pr.sh <number>`. It merges only when `ci-ok` and `agent-pr-gate` are green on the PR's current head commit. Never merge with `gh pr merge` or the web UI, and never push to `main`: the repo is private on GitHub Free, so GitHub enforces nothing and this script is the only gate.
 
