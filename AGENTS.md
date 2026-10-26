@@ -25,6 +25,12 @@ Write every skill and instruction file following the `writing-for-agents` skill 
 
 Done when the skill loads in Claude Code by name and the README row exists.
 
+### Add a subagent
+
+1. Write its instructions as a portable brief next to the skill that starts it: `skills/<skill>/<name>-brief.md` or similar. The skill tells the subagent to follow that file and says what to use when no matching agent exists.
+2. For each tool with agent definitions, add a thin wrapper in `adapters/<tool>/agents/`: frontmatter for that tool (model, tools, isolation) and a body that only points at `~/.agents/skills/<skill>/<file>`. Never copy the brief into a wrapper.
+3. Run `./install.sh` and confirm each wrapper is linked into the tool's agents folder.
+
 ### Wire up a tool
 
 1. Put tool-only files in `adapters/<tool>/` with a short `README.md` saying where they get linked.

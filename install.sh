@@ -48,10 +48,17 @@ install_codex() {
   [ -d "$HOME/.codex" ] || { echo "codex: ~/.codex not found, skipping"; return; }
   echo "codex"
   link "$REPO/global/AGENTS.md" "$HOME/.codex/AGENTS.md"
+  for a in "$REPO"/adapters/codex/agents/*.toml; do
+    [ -e "$a" ] && link "$a" "$HOME/.codex/agents/$(basename "$a")"
+  done
 }
 
 install_cursor() {
-  echo "cursor: not wired yet (see adapters/cursor/README.md)"
+  [ -d "$HOME/.cursor" ] || { echo "cursor: ~/.cursor not found, skipping"; return; }
+  echo "cursor"
+  for a in "$REPO"/adapters/cursor/agents/*.md; do
+    [ -e "$a" ] && link "$a" "$HOME/.cursor/agents/$(basename "$a")"
+  done
 }
 
 case "${1:-all}" in
