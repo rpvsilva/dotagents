@@ -1,6 +1,6 @@
 ---
 name: pr-fixer
-description: Makes one PR's failing checks pass (fix-pr skill): reproduces the failure, fixes the root cause, pushes. Never merges. Used by renovate-prs.
+description: Takes one PR's failing checks from red to green and pushes; never merges. Start one per PR to fix.
 model: inherit
 ---
 
