@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def load(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
 
 
@@ -101,7 +101,7 @@ def load_subagents(session):
     """(meta, log) for every subagent the session started."""
     folder = Path(session).with_suffix("") / "subagents"
     metas = sorted(folder.glob("*.meta.json")) if folder.is_dir() else []
-    return [(json.loads(m.read_text()), load(m.with_name(m.name.replace(".meta.json", ".jsonl")))) for m in metas]
+    return [(json.loads(m.read_text(encoding="utf-8")), load(m.with_name(m.name.replace(".meta.json", ".jsonl")))) for m in metas]
 
 
 def linked_subagents(pool, tool_ids):

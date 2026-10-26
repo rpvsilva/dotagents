@@ -22,7 +22,7 @@ def times(turn, n):
 def extract(*args):
     return subprocess.run(
         [sys.executable, str(HERE / "extract.py"), *args],
-        capture_output=True, text=True,
+        capture_output=True, encoding="utf-8",
     )
 
 
@@ -160,9 +160,9 @@ class DefaultSession(unittest.TestCase):
             shutil.copy(FIXTURES / "model-invoked.jsonl", logs / "this-session.jsonl")
             shutil.copy(FIXTURES / "run-twice.jsonl", logs / "other-session.jsonl")
             os.utime(logs / "other-session.jsonl")  # the other session wrote last
-            env = {**os.environ, "HOME": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
+            env = {**os.environ, "HOME": home, "USERPROFILE": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
             proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--cwd", str(project_dir)],
-                                  capture_output=True, text=True, env=env)
+                                  capture_output=True, encoding="utf-8", env=env)
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session", proc.stderr)
 
 

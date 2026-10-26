@@ -14,7 +14,7 @@ RUN = str(FIXTURES / "run.json")
 def report(*args, stdin=None, cwd=None):
     proc = subprocess.run(
         [sys.executable, str(HERE / "report.py"), "--pricing", PRICING, *args],
-        capture_output=True, text=True, input=stdin, cwd=cwd,
+        capture_output=True, encoding="utf-8", input=stdin, cwd=cwd,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
