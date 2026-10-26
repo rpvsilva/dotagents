@@ -2,6 +2,7 @@
 # Symlink this repo into each AI tool's config folders.
 # Usage: ./install.sh [all|shared|claude|codex|cursor]   (default: all)
 # Existing real files are moved to ~/.dotagents-backup/<timestamp>/ before linking.
+# Config files other tools also write to get snippets merged in instead (scripts/merge-json.sh).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +25,15 @@ link() {
   echo "  $dest -> $src"
 }
 
+# Merges every *.json snippet in folder $1 into JSON file $2.
+merge() {
+  local f
+  for f in "$1"/*.json; do
+    [ -e "$f" ] && "$REPO/scripts/merge-json.sh" "$f" "$2" "$BACKUP"
+  done
+  return 0
+}
+
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
@@ -41,9 +51,8 @@ install_claude() {
   for a in "$REPO"/adapters/claude/agents/*.md; do
     [ -e "$a" ] && link "$a" "$HOME/.claude/agents/$(basename "$a")"
   done
-  if ls "$REPO"/adapters/claude/hooks/*.json >/dev/null 2>&1; then
-    echo "  hooks: merge adapters/claude/hooks/*.json into ~/.claude/settings.json by hand (see adapters/claude/README.md)"
-  fi
+  merge "$REPO/adapters/claude/hooks" "$HOME/.claude/settings.json"
+  merge "$REPO/adapters/claude/settings" "$HOME/.claude/settings.json"
 }
 
 install_codex() {
@@ -56,9 +65,8 @@ install_codex() {
   for r in "$REPO"/adapters/codex/rules/*.rules; do
     [ -e "$r" ] && link "$r" "$HOME/.codex/rules/$(basename "$r")"
   done
-  if ls "$REPO"/adapters/codex/hooks/*.json >/dev/null 2>&1; then
-    echo "  hooks: merge adapters/codex/hooks/*.json into ~/.codex/hooks.json by hand, then trust them with /hooks (see adapters/codex/README.md)"
-  fi
+  merge "$REPO/adapters/codex/hooks" "$HOME/.codex/hooks.json"
+  echo "  codex: trust new or changed hooks with /hooks, or Codex skips them"
 }
 
 install_cursor() {
@@ -67,9 +75,7 @@ install_cursor() {
   for a in "$REPO"/adapters/cursor/agents/*.md; do
     [ -e "$a" ] && link "$a" "$HOME/.cursor/agents/$(basename "$a")"
   done
-  if ls "$REPO"/adapters/cursor/hooks/*.json >/dev/null 2>&1; then
-    echo "  hooks: merge adapters/cursor/hooks/*.json into ~/.cursor/hooks.json by hand (see adapters/cursor/README.md)"
-  fi
+  merge "$REPO/adapters/cursor/hooks" "$HOME/.cursor/hooks.json"
 }
 
 case "${1:-all}" in
