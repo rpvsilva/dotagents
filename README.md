@@ -38,3 +38,4 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 | `review-pr` | First-pass PR review by a fresh `pr-reviewer` subagent; verified findings posted as a comment-only review |
 | `ship-pr` | Take the current changes to a merged PR, following the repo's own branch, commit, check and merge rules |
 | `telemetry` | Show what a finished run cost, one row per skill (time, turns, tool calls, tokens, cost); save it as JSON |
+| `to-epic` | Turn meeting notes, docs or any source into an epic and its issues on the tracker, after one human approval of the draft |
