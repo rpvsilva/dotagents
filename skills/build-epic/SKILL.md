@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Build a whole epic as one PR. You are the **orchestrator**: you start subagents, track ticket status and talk to the human. Keep your context **thin**: you read the run folder's short files (ticket headers, the `Checks` section of `map.md`, reports), not the code or the tracker; the one exception is verifying review findings in step 7. Every heavy read happens in a subagent that writes its result to a file and returns a short report.
 
-Input: an epic or issue (link or ID, on any tracker), or plain text. Optional: `--parallel N`.
+Input: an epic or issue (link or ID, on any tracker), or plain text. Optional: `--parallel N`; `--explore` to always run the explorers.
 
 ## Run folder
 
@@ -36,13 +36,14 @@ Every subagent ends with this report, and you act on it alone:
 status: done | blocked | plan-wrong
 changed: <paths, or the last commit SHA>
 why: <one line, when status is not done>
+follow-up: <optional, implementers only: work a later ticket must pick up>
 ```
 
 ## Steps
 
 1. **Set up.** Read `.agents/build-epic-notes.md` if it exists (tracker, test commands, areas to avoid, `max_parallel`). Create the run folder, or resume it. Done when you know N and the run folder exists.
 
-2. **Plan, pass A.** Start an `epic-planner` with: pass `A`, the input, the run folder, the notes file path. Done when it reports `done` and `spec.md` and `areas.md` exist. On `blocked` (for example, no connector for the tracker), relay its `why` to the human and stop.
+2. **Plan, pass A.** Start an `epic-planner` with: pass `A`, the input, the run folder, the notes file path, and `explore: always` when `--explore` was given. Done when it reports `done` and `spec.md` and `areas.md` exist. On `blocked` (for example, no connector for the tracker), relay its `why` to the human and stop.
 
 3. **Explore.** Skip this step when `areas.md` says `no exploration needed`. Otherwise start one `epic-explorer` per area, filling free slots: the area's name, question and starting paths, the `spec.md` path, and `notes/<area>.md` as its output. Done when every area has a note.
 
@@ -52,7 +53,7 @@ why: <one line, when status is not done>
 
 6. **Build.** The working tree must be clean: if it is not, ask the human. Create `feat/<epic-slug>` from the default branch and switch to it. Then repeat until done:
    - **Dispatch** each `ready` ticket whose blockers are all `done`, while a slot is free: `git worktree add <run>/worktrees/NN -b ticket/<epic-slug>/NN feat/<epic-slug>`, set the ticket to `in-progress`, and start an `epic-implementer` with the ticket path, the run folder, the worktree path and the epic branch name.
-   - **On `done`**: `git merge --squash ticket/<epic-slug>/NN`, commit with the ticket's title in the repo's commit convention, run the commands in `map.md`'s `Checks` section. When the merge conflicts, undo it with `git reset --hard`; when a check goes **red**, drop the commit with `git reset --hard HEAD~1`. Either way, send the ticket back to its implementer with the failure (continue the same subagent if your harness can, otherwise start a new one on the same worktree). When green, set the ticket to `done` and remove its worktree and branch.
+   - **On `done`**: `git merge --squash ticket/<epic-slug>/NN`, commit with the ticket's title in the repo's commit convention, run the commands in `map.md`'s `Checks` section. When the merge conflicts, undo it with `git reset --hard`; when a check goes **red**, drop the commit with `git reset --hard HEAD~1`. Either way, send the ticket back to its implementer with the failure (continue the same subagent if your harness can, otherwise start a new one on the same worktree). When green, set the ticket to `done` and remove its worktree and branch. Add each `follow-up` as an acceptance criterion to the not-yet-started ticket it concerns, or, when none fits, keep it for step 7's review-fixes ticket.
    - **On `blocked`**: set the ticket to `blocked` and keep dispatching the rest.
    - **On `plan-wrong`**: stop dispatching and let running implementers finish. Start an `epic-planner` with pass `revise`, the ticket path and the implementer's `why`. Show the human its changed tickets as in step 5 and wait for approval, then resume dispatching.
 
