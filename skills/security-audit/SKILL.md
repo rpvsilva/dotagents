@@ -12,7 +12,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 
 ## Run folder
 
-`~/.agents/runs/<repo>/security-audit-<YYYY-MM-DD>/`. It holds `worktree/`, `map.md`, `reports/<scope>-r<round>.md` (one per reviewer per round) and `findings.md`: your ledger, one row per finding (number, status `confirmed`/`plausible`/`dropped`/`fixed`/`declined`, severity, file:line, claim, fix, report it came from). When the folder exists, **resume** at the first step whose done-condition is not met.
+`~/.agents/runs/<repo>/security-audit-<YYYY-MM-DD>/`. It holds `worktree/`, `map.md`, `reports/<scope>-r<round>.md` (one per reviewer per round), `tickets/` and `worktrees/` for fixes, and `findings.md`: your ledger, one row per finding (number, status `confirmed`/`plausible`/`dropped`/`fixed`/`declined`, severity, file:line, claim, fix, report it came from). When the folder exists, **resume** at the first step whose done-condition is not met.
 
 ## Subagents
 
@@ -20,6 +20,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 |---|---|---|
 | `security-mapper` | [mapper-brief.md](mapper-brief.md) | `map.md` |
 | `security-reviewer` | [security-brief.md](security-brief.md) | `reports/<scope>-r<round>.md` |
+| `epic-implementer` | [implementer-brief.md](../build-epic/implementer-brief.md) | fix commits on its ticket branch |
 
 Start the named agent if your harness defines it, otherwise a general-purpose subagent told to follow the brief. Hand over inputs as **paths**, never summaries, so each read is not anchored on yours. If your harness has no subagents, follow each brief yourself, one at a time, writing the same files.
 
@@ -41,9 +42,13 @@ At most **N** subagents run at once (the **slots**): `--parallel N`, else `max_p
 
 7. **Ask what to fix.** Show the kept findings as a numbered list, most severe first, one line each: severity, file:line, claim, the proposed fix, and the plausible ones marked; then the rounds run. Ask which to fix: all, some by number, or none. With no kept findings, say what was checked and stop. Done when the human has answered. Mark the rest `declined`; on "none", ask whether to record them as accepted risks: on yes, run step 8 with nothing to fix; on no, go to step 9.
 
-8. **Fix in a PR.** In the worktree, `git switch -c fix/security-<short-name>`. For each chosen finding, write a test that performs the attack and goes **red** when the repo tests that kind of code, then make the smallest fix that turns it **green**; confirm the new tests fail with the fix code reverted. With more than 10 chosen findings, start one subagent per area instead, each fixing its area's findings by this same rule on its own branch, then merge those branches into this one. Add each `declined` finding to the **accepted risks** in `.agents/security-audit-notes.md`, one line with file:line and claim, so the next audit skips it. Run the checks from step 1. Then ship the branch with the [ship-pr](../ship-pr/SKILL.md) steps, listing each fixed finding and its test in the PR body. Done when every chosen finding is `fixed` with its test on a pushed branch, and the PR URL exists.
+8. **Fix in a PR.** In the worktree, `git switch -c fix/security-<short-name>`: the **fix branch**. Append to `map.md` a `## Setup` section (what the checks need first) and a `## Checks` section (the checks from step 1). For each area, or the repo-wide lane, with chosen findings, write `<run>/tickets/NN-<scope>.md` in build-epic's ticket shape ([planner-brief.md](../build-epic/planner-brief.md), step 3): one acceptance criterion per finding, "the attack in finding #N fails", proven by a test that performs the attack and goes **red** before the fix, when the repo tests that kind of code; `Pointers` names the `findings.md` rows and their reports. Then, while a slot is free, `git worktree add <run>/worktrees/NN -b fix/security-<short-name>/NN fix/security-<short-name>` and start an `epic-implementer` with the ticket path, the run folder, that worktree path and the fix branch name.
+   - **On `done`**: `git merge --squash fix/security-<short-name>/NN`, commit, run the checks. When the merge conflicts or a check goes **red**, undo it (`git reset --hard`, or `git reset --hard HEAD~1`) and send the ticket back to its implementer with the failure. When green, mark its findings `fixed` and remove its worktree and branch.
+   - **On `blocked` or `plan-wrong`**: leave its findings open with the `why`, and show it to the human in the report.
 
-9. **Clean up**: `git worktree remove <run>/worktree`. Keep the run folder.
+   Add each `declined` finding to the **accepted risks** in `.agents/security-audit-notes.md`, one line with file:line and claim, so the next audit skips it. Then ship the fix branch with the [ship-pr](../ship-pr/SKILL.md) steps, listing each fixed finding and its test in the PR body. Done when every ticket is merged or reported, every merged finding is `fixed` with its test on a pushed branch, and the PR URL exists.
+
+9. **Clean up**: `git worktree remove` each worktree under `<run>/`. Keep the run folder.
 
 ## Report
 
