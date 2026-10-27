@@ -16,13 +16,15 @@ It may also give you **known findings** (a path or a list: already found or acce
    - **Injection**: a source reaching a sink unquoted or unescaped: shell strings, SQL, templates, paths, terminal escape codes, spreadsheet formulas, `${{ }}` expressions inside a workflow `run:` step.
    - **Secrets**: credentials in code, logs, errors, URLs, committed files or git history; secrets exposed to code an outsider controls (e.g. `pull_request_target` checking out the PR head).
    - **Authz**: an action reachable without the check its siblings make; a gate that can be skipped, raced or forged; trust given to data an outsider can write.
-   - **Privilege**: tokens, workflow `permissions`, file modes or scopes wider than the code needs.
+   - **Privilege**: tokens, workflow `permissions`, file modes or scopes wider than the code needs, where the extra width lets someone read, write or run what they should not.
    - **Supply chain**: a dependency with a known vulnerability, an action pinned to a tag instead of a commit SHA, a script piped from the network, an unpinned version.
-   - **Unsafe handling**: deserializing or loading untrusted data without checking its shape, temp files in shared folders, non-atomic writes, check-then-use races, weak randomness or crypto where security depends on it, unbounded input that crashes or hangs.
+   - **Unsafe handling**: deserializing untrusted data into code execution or a wrong trust decision, temp files in shared folders, check-then-use races an attacker can win on a default setup, weak randomness or crypto where security depends on it, input that crashes or hangs a service other people depend on.
 
    To confirm an attack by running it, work in a fresh scratch folder with `HOME` and every path the code reads or writes pointed inside it; the machine's real home, dotfiles and repos stay untouched.
 
-   Report a finding only when you traced it end to end: a named attacker who controls the source, the path to the sink, and what they gain that they could not already do. A complete coverage table with "no findings" is a full, valid answer; a hunch or a style concern stays out of the report.
+   Report a finding only when you traced it end to end: a named attacker who controls the source, the path to the sink, and their **gain**: what they can do afterwards beyond their **baseline** in `map.md`'s threat model (for a PR, write the baseline yourself first). A finding needs a gain: making the attacker's own data fail, or crashing a tool the attacker could already break by design, gives none. A complete coverage table with "no findings" is a full, valid answer; a hunch or a style concern stays out of the report.
+
+   A real bug that gives no attacker a gain (a crash on bad input, a lost file mode, an encoding error) goes under **Other bugs**, one line each, outside the findings.
 
    Done when every source-to-sink pair on your list has been traced on all six axes.
 
@@ -30,11 +32,13 @@ It may also give you **known findings** (a path or a list: already found or acce
 
 1. **Coverage**: a table with one row per source (file:line → its sinks) and one column per axis, each cell `clean` or the finding's number. No empty cells.
 2. **Findings**, most severe first, or "no findings". Each finding names a concrete **attacker**: who controls which input, and how they reach this code. Each finding:
-   - **severity**: `blocker` (exploitable as written), `should-fix` (exploitable under a plausible setup, or wider privilege than needed), or `nit`
+   - **severity**: `blocker` (exploitable as written) or `should-fix` (exploitable under a setup the repo's users plausibly run, with the OS defaults left on)
    - **axis**: injection, secrets, authz, privilege, supply chain or unsafe handling
    - **file:line** in the worktree; for a PR, on a line the diff adds or changes when possible
    - **claim**: one sentence
-   - **scenario**: the attacker, the input they send, the steps, and what they gain
-   - **fix**: one sentence on the smallest change that closes it
+   - **scenario**: the attacker, the input they send, the steps
+   - **gain**: what they can do afterwards that their baseline does not already allow
+   - **fix**: one sentence on the smallest change that closes it; when that change adds one more entry to a deny-list (paths, file names, functions), name the structural fix that closes the whole class instead (e.g. an allow-list, CODEOWNERS, a gate that checks paths)
+3. **Other bugs**: file:line and one sentence each, or "none".
 
 With a report path, write the report there and return exactly one line, nothing else: findings by severity, and whether the coverage table is complete. The details live in the file.
