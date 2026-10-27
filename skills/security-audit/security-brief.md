@@ -22,6 +22,8 @@ It may also give you **known findings** (a path or a list: already found or acce
 
    To confirm an attack by running it, work in a fresh scratch folder with `HOME` and every path the code reads or writes pointed inside it; the machine's real home, dotfiles and repos stay untouched.
 
+   Report a finding only when you traced it end to end: a named attacker who controls the source, the path to the sink, and what they gain that they could not already do. A complete coverage table with "no findings" is a full, valid answer; a hunch or a style concern stays out of the report.
+
    Done when every source-to-sink pair on your list has been traced on all six axes.
 
 ## Report
