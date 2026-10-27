@@ -23,7 +23,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 
 Start the named agent if your harness defines it, otherwise a general-purpose subagent told to follow the brief. Hand over inputs as **paths**, never summaries, so each read is not anchored on yours. If your harness has no subagents, follow each brief yourself, one at a time, writing the same files.
 
-At most **N** subagents run at once: `--parallel N`, else `max_parallel` from the notes file, else 8.
+At most **N** subagents run at once (the **slots**): `--parallel N`, else `max_parallel` from the notes file, else 4, the same default as build-epic.
 
 ## Steps
 
