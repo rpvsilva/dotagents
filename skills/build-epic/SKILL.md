@@ -39,9 +39,17 @@ why: <one line, when status is not done>
 follow-up: <optional, implementers only: work a later ticket must pick up>
 ```
 
+## Tracker
+
+Keep the tracker in step with the build, as the identity from step 1. Each ticket's `Issues` line names its issues; with plain-text input there are none, and you skip this.
+
+- **Started**, the first time any ticket of an issue is dispatched. On GitHub: `gh label create "in progress" --force` once per run, then `gh issue edit <n> --add-label "in progress"`, plus `--add-assignee @me` when the identity is a user account. On other trackers, move the issue to its in-progress state through the connector. An `in_progress` entry in the notes file (e.g. a GitHub Projects status field) replaces this default.
+- **Blocked**, when a ticket ends `blocked` or `plan-wrong`: add a `blocked` label (created the same way) and one comment naming the ticket and its `why`. Remove the label once a re-plan or fix lets the ticket run again.
+- **Done** belongs to the merge: the PR's closing references close the epic and its issues (step 7). Leave issues open and `in progress` until then.
+
 ## Steps
 
-1. **Set up.** Read `.agents/build-epic-notes.md` if it exists (tracker, test commands, areas to avoid, `max_parallel`). Create the run folder, or resume it. Done when you know N and the run folder exists.
+1. **Set up.** Read `.agents/build-epic-notes.md` if it exists (tracker, test commands, areas to avoid, `max_parallel`, `in_progress`). Learn the **identity** for tracker and GitHub calls from the repo's rules (`AGENTS.md` or `CLAUDE.md`), e.g. a `GH_TOKEN` prefix for a bot account; with none named, use the current login; if the rules name a setup that is missing, stop and ask. Create the run folder, or resume it. Done when you know N, the identity, and the run folder exists.
 
 2. **Plan, pass A.** Start an `epic-planner` with: pass `A`, the input, the run folder, the notes file path, and `explore: always` when `--explore` was given. Done when it reports `done` and `spec.md` and `areas.md` exist. On `blocked` (for example, no connector for the tracker), relay its `why` to the human and stop.
 
@@ -52,14 +60,14 @@ follow-up: <optional, implementers only: work a later ticket must pick up>
 5. **Approve.** Show the human: each ticket (number, title, blocked by, its check), the blocker graph as a short indented tree, the **gaps** (tickets whose check is not an automated test, plus `map.md`'s `Gaps` section), each of `spec.md`'s `Open questions` with the answer the planner assumed, and the paths to `spec.md` and `map.md`. Wait for the answer. On a rejection, start an `epic-planner` with pass `revise` and the human's words verbatim, then show the plan again. Done when the human approves.
 
 6. **Build.** The working tree must be clean: if it is not, ask the human. Create `feat/<epic-slug>` from the default branch and switch to it. Then repeat until done:
-   - **Dispatch** each `ready` ticket whose blockers are all `done`, while a slot is free: `git worktree add <run>/worktrees/NN -b ticket/<epic-slug>/NN feat/<epic-slug>`, set the ticket to `in-progress`, and start an `epic-implementer` with the ticket path, the run folder, the worktree path and the epic branch name.
+   - **Dispatch** each `ready` ticket whose blockers are all `done`, while a slot is free: `git worktree add <run>/worktrees/NN -b ticket/<epic-slug>/NN feat/<epic-slug>`, set the ticket to `in-progress`, mark its `Issues` as **started** (see [Tracker](#tracker)), and start an `epic-implementer` with the ticket path, the run folder, the worktree path and the epic branch name.
    - **On `done`**: `git merge --squash ticket/<epic-slug>/NN`, commit with the ticket's title in the repo's commit convention, run the commands in `map.md`'s `Checks` section. When the merge conflicts, undo it with `git reset --hard`; when a check goes **red**, drop the commit with `git reset --hard HEAD~1`. Either way, send the ticket back to its implementer with the failure (continue the same subagent if your harness can, otherwise start a new one on the same worktree). When green, set the ticket to `done` and remove its worktree and branch. Add each `follow-up` as an acceptance criterion to the not-yet-started ticket it concerns, or, when none fits, keep it for step 7's review-fixes ticket.
-   - **On `blocked`**: set the ticket to `blocked` and keep dispatching the rest.
-   - **On `plan-wrong`**: stop dispatching and let running implementers finish. Start an `epic-planner` with pass `revise`, the ticket path and the implementer's `why`. Show the human its changed tickets as in step 5 and wait for approval, then resume dispatching.
+   - **On `blocked`**: set the ticket to `blocked`, mark its `Issues` as **blocked** with the `why`, and keep dispatching the rest.
+   - **On `plan-wrong`**: mark the ticket's `Issues` as **blocked** with the `why`, stop dispatching and let running implementers finish. Start an `epic-planner` with pass `revise`, the ticket path and the implementer's `why`. Show the human its changed tickets as in step 5 and wait for approval, then resume dispatching.
 
    Done when every ticket is `done`. When the only tickets left are `blocked` or wait on a blocked one, report to the human and stop: the epic branch keeps every merged ticket.
 
-7. **Ship.** Follow [ship-pr](../ship-pr/SKILL.md) from the epic branch, through its "Get it green" step. In the PR body, also link the epic and list the tickets (title and one line each). Then follow [review-pr](../review-pr/SKILL.md) on the PR. When it kept findings, write them as one new ticket `tickets/NN-review-fixes.md` (each finding an acceptance criterion, its scenario the check), run it through step 6, push the epic branch and get it green again. Then finish ship-pr from its "Merge" step. Done when ship-pr's report is in hand.
+7. **Ship.** Follow [ship-pr](../ship-pr/SKILL.md) from the epic branch, through its "Get it green" step. In the PR body, add a closing reference (`Closes #n` on GitHub) for the epic and every issue in the tickets' `Issues`, and list the tickets (title and one line each). Then follow [review-pr](../review-pr/SKILL.md) on the PR. When it kept findings, write them as one new ticket `tickets/NN-review-fixes.md` (each finding an acceptance criterion, its scenario the check), run it through step 6, push the epic branch and get it green again. Then finish ship-pr from its "Merge" step. Done when ship-pr's report is in hand.
 
 8. **Clean up.** Remove any worktrees and ticket branches left. Keep the run folder.
 

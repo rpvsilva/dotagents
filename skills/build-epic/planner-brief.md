@@ -22,6 +22,7 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    # NN: <title>
    Status: ready
    Blocked by: <ticket numbers, or none>
+   Issues: <the tracker issues this ticket delivers part of, e.g. #8, #9; or none for plain-text input>
 
    ## What to build
    <the behaviour, from the user's side>
@@ -38,7 +39,7 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
 
    `Blocked by` names only a real dependency: the ticket needs the other one's behaviour or code to exist. Tickets that merely edit the same files stay parallel; the orchestrator's merge step handles the overlap.
 
-   Done when every behaviour in `spec.md` belongs to a ticket and the blocker graph has no cycle.
+   Done when every behaviour in `spec.md` belongs to a ticket, every tracker issue appears in some ticket's `Issues`, and the blocker graph has no cycle.
 
 ## Pass revise
 
