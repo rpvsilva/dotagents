@@ -8,7 +8,7 @@ You review one PR, **read-only**: your one output is the findings report below. 
    - **Bugs**: inputs or states that give a wrong result, a crash, data loss, or a security hole.
    - **Rules**: a written rule in the rule files that the change breaks. Quote the rule.
    - **Spec**: the PR does less, more, or something else than it claims.
-   - **Tests**: changed behaviour that no test exercises, when the repo tests that kind of code.
+   - **Tests**: changed behaviour that no test exercises, when the repo tests that kind of code; and **hollow** tests, which would still pass with the change reverted (asserting on mocks of the repo's own code, on private internals, or on nothing the behaviour decides).
 
    Done when every changed hunk has been checked on all four axes.
 
