@@ -41,7 +41,7 @@ follow-up: <optional, implementers only: work a later ticket must pick up>
 
 ## Tracker
 
-Keep the tracker in step with the build, as the identity from step 1. Each ticket's `Issues` line names its issues; with plain-text input there are none, and you skip this.
+Keep the tracker in step with the build, as the identity from step 1. Each ticket's `Issues` line names its issues; with plain-text input there are none, and you skip this. The active login can change mid-run (another session switching accounts): confirm it is still that identity (`gh api user` on GitHub) before each tracker update, and when it is not, keep building, hold the updates, and ask the human; apply the held updates once the identity is back.
 
 - **Started**, the first time any ticket of an issue is dispatched. On GitHub: `gh label create "in progress" --force` once per run, then `gh issue edit <n> --add-label "in progress"`, plus `--add-assignee @me` when the identity is a user account. On other trackers, move the issue to its in-progress state through the connector. An `in_progress` entry in the notes file (e.g. a GitHub Projects status field) replaces this default.
 - **Blocked**, when a ticket ends `blocked` or `plan-wrong`: add a `blocked` label (created the same way) and one comment naming the ticket and its `why`. Remove the label once a re-plan or fix lets the ticket run again.
@@ -69,7 +69,7 @@ Keep the tracker in step with the build, as the identity from step 1. Each ticke
 
 7. **Ship.** Follow [ship-pr](../ship-pr/SKILL.md) from the epic branch, through its "Get it green" step. In the PR body, add a closing reference (`Closes #n` on GitHub) for the epic and every issue in the tickets' `Issues`, and list the tickets (title and one line each). Then follow [review-pr](../review-pr/SKILL.md) on the PR. When it kept findings, write them as one new ticket `tickets/NN-review-fixes.md` (each finding an acceptance criterion, its scenario the check), run it through step 6, push the epic branch and get it green again. Then finish ship-pr from its "Merge" step. Done when ship-pr's report is in hand.
 
-8. **Clean up.** Remove any worktrees and ticket branches left. Keep the run folder.
+8. **Clean up.** Remove any worktrees and ticket branches left. After a merge, remove the `in progress` and `blocked` labels from the issues it closed. Keep the run folder.
 
 ## Report
 
