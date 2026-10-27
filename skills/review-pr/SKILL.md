@@ -16,7 +16,7 @@ Input: the PR number. Optional: `--dry-run` to show the findings without posting
 
 3. **Start the reviewers**, each a subagent with a fresh context, in parallel:
    - **PR reviewer**, always: the PR reviewer agent if your harness defines one, otherwise a general-purpose subagent told to follow [reviewer-brief.md](reviewer-brief.md).
-   - **Security reviewer**, unless `gh pr diff <n> --name-only` lists only prose and images (`.md`, `.txt`, image files): the security reviewer agent if your harness defines one, otherwise a general-purpose subagent told to follow [security-brief.md](security-brief.md).
+   - **Security reviewer**, unless `gh pr diff <n> --name-only` lists only prose and images (`.md`, `.txt`, image files): the security reviewer agent if your harness defines one, otherwise a general-purpose subagent told to follow [security-brief.md](../security-audit/security-brief.md).
 
    Give each the PR number, the worktree path and the rule files from step 1. Hand over **only** those: no opinion of the PR, no summary of it, so its read is not anchored on yours. If your harness has no subagents, follow each brief yourself in turn, before reading anything else about the PR. Done when every reviewer started has returned its findings.
 
