@@ -36,7 +36,7 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 | `build-epic` | Take an epic or issue from the tracker to one reviewed PR: planner, explorer and implementer subagents, one human approval of the plan |
 | `fix-pr` | Make one PR's failing checks pass and push; also the brief for the `pr-fixer` subagent |
 | `renovate-prs` | Fix, verify and merge open Renovate PRs, one isolated subagent per PR |
-| `review-pr` | First-pass PR review by a fresh `pr-reviewer` subagent; verified findings posted as a comment-only review |
+| `review-pr` | First-pass PR review by fresh `pr-reviewer` and `security-reviewer` subagents; verified findings posted as a comment-only review |
 | `ship-pr` | Take the current changes to a merged PR, following the repo's own branch, commit, check and merge rules |
 | `telemetry` | Show what a finished run cost, one row per skill (time, turns, tool calls, tokens, cost); save it as JSON |
 | `to-epic` | Turn meeting notes, docs or any source into an epic and its issues on the tracker, after one human approval of the draft |
