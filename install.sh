@@ -41,10 +41,12 @@ skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {}
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
 # Hook scripts go to ~/.agents/hooks, the one path every adapter's hook config calls.
+# gh-app-token.sh goes to ~/.agents/bin, so any repo's rules can name the App identity by one path.
 install_shared() {
   echo "shared"
   for s in $(skills); do link "$REPO/skills/$s" "$SHARED_SKILLS/$s"; done
   link "$REPO/scripts/hooks" "$HOME/.agents/hooks"
+  link "$REPO/scripts/gh-app-token.sh" "$HOME/.agents/bin/gh-app-token.sh"
 }
 
 install_claude() {
