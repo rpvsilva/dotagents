@@ -9,7 +9,7 @@ fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-# Stub gh: `pr view` prints $SANDBOX/view.json; `workflow run` and `pr merge` log their arguments;
+# Stub gh: `pr view` prints $SANDBOX/view.json; `api` (the dispatch) and `pr merge` log their arguments;
 # `run list` lists one gate run named in $SANDBOX/title, created now; `run watch` swaps in
 # $SANDBOX/after.json when present (the gate's new verdict).
 mkdir "$SANDBOX/bin"
@@ -18,7 +18,7 @@ cat >"$SANDBOX/bin/gh" <<EOF
 case "\$1 \$2" in
   "pr view") cat "$SANDBOX/view.json" ;;
   "pr merge") echo "\$*" >>"$SANDBOX/merged" ;;
-  "workflow run") echo "\$*" >>"$SANDBOX/dispatched" ;;
+  "api -X") echo "\$*" >>"$SANDBOX/dispatched" ;;
   "run list") jq -n --arg t "\$(cat "$SANDBOX/title")" '[{databaseId: 42, displayTitle: \$t, createdAt: (now | todate)}]' ;;
   "run watch") echo "\$*" >>"$SANDBOX/watched"; [ ! -e "$SANDBOX/after.json" ] || mv "$SANDBOX/after.json" "$SANDBOX/view.json" ;;
 esac
@@ -40,7 +40,7 @@ expect() {
   [ "$got" = "$want" ] || { fail "$desc: wanted $want, got $got: $(cat "$SANDBOX/out")"; return; }
   if [ "$want" = merge ]; then
     grep -q -- "--match-head-commit abc123" "$SANDBOX/merged" || fail "$desc: merged without pinning the head commit"
-    grep -qx "workflow run agent-pr-gate.yml -f pr=7" "$SANDBOX/dispatched" || fail "$desc: gate not started for PR 7"
+    grep -qx "api -X POST repos/{owner}/{repo}/dispatches -f event_type=agent-pr-gate -F client_payload\[pr\]=7" "$SANDBOX/dispatched" || fail "$desc: gate not started for PR 7"
     grep -q "run watch 42" "$SANDBOX/watched" || fail "$desc: did not wait for the gate run"
   elif [ -e "$SANDBOX/merged" ]; then
     fail "$desc: refused but still called gh pr merge"

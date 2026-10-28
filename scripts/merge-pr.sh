@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Merges a PR only when the gate passes and every check is green on its current head commit.
 # The only way an agent may merge here: GitHub Free has no rulesets on private repos, so this script is the gate.
-# It starts agent-pr-gate for the PR (workflow_dispatch, so the workflow comes from main and a PR
+# It starts agent-pr-gate for the PR (repository_dispatch, so the workflow comes from main and a PR
 # cannot change its own gate), waits for that run (the gate itself waits for CI), then judges.
 # Usage: scripts/merge-pr.sh <pr-number>
 set -euo pipefail
@@ -17,10 +17,10 @@ v="$(view)"
 # The run is found by its run-name ("agent-pr-gate #<pr>"), started at most a minute before now
 # (the margin absorbs clock skew between this machine and GitHub), polled MERGE_PR_TRIES times, 2s apart.
 since="$(jq -nr 'now - 60 | todate')"
-gh workflow run "$GATE.yml" -f pr="$pr" >/dev/null
+gh api -X POST "repos/{owner}/{repo}/dispatches" -f event_type="$GATE" -F "client_payload[pr]=$pr" >/dev/null
 run=""
 for _ in $(seq "${MERGE_PR_TRIES:-30}"); do
-  run="$(gh run list --workflow "$GATE.yml" --event workflow_dispatch --limit 20 --json databaseId,displayTitle,createdAt |
+  run="$(gh run list --workflow "$GATE.yml" --event repository_dispatch --limit 20 --json databaseId,displayTitle,createdAt |
     jq -r --arg t "$GATE #$pr" --arg s "$since" '[.[] | select(.displayTitle == $t and .createdAt >= $s)] | sort_by(.createdAt) | last | .databaseId // empty')"
   [ -n "$run" ] && break
   sleep 2

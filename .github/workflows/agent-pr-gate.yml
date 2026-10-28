@@ -1,20 +1,17 @@
 # Decides what a PR still needs before it may merge; rules live in .review-gate.yml.
-# Runs from the default branch (pull_request_target, workflow_dispatch), so a PR cannot change its own gate.
+# Runs from the default branch (pull_request_target, repository_dispatch), so a PR cannot change its own gate.
 # Never check out or run PR code in this workflow.
 # PR events keep the gate comment current for the human; the verdict that counts comes from the run
-# scripts/merge-pr.sh starts (workflow_dispatch), which waits for CI before judging.
+# scripts/merge-pr.sh starts (repository_dispatch, which the App's Contents: write allows), which waits for CI before judging.
 name: agent-pr-gate
 # scripts/merge-pr.sh finds its run by this name.
-run-name: "${{ github.event_name == 'workflow_dispatch' && format('agent-pr-gate #{0}', inputs.pr) || github.event.pull_request.title }}"
+run-name: "${{ github.event_name == 'repository_dispatch' && format('agent-pr-gate #{0}', github.event.client_payload.pr) || github.event.pull_request.title }}"
 
 on:
   pull_request_target:
     types: [opened, edited, reopened, ready_for_review, labeled, unlabeled]
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: PR number to judge
-        required: true
+  repository_dispatch:
+    types: [agent-pr-gate]  # client_payload: {"pr": <number>}
 
 permissions:
   contents: read        # .review-gate.yml and CODEOWNERS from the base branch
@@ -26,7 +23,7 @@ permissions:
 
 # Queue, never cancel: a cancelled run leaves a grey check on the PR, and merge-pr.sh waits on its run.
 concurrency:
-  group: agent-pr-gate-${{ github.event.pull_request.number || inputs.pr }}
+  group: agent-pr-gate-${{ github.event.pull_request.number || github.event.client_payload.pr }}
   cancel-in-progress: false
 
 jobs:
@@ -37,8 +34,8 @@ jobs:
     steps:
       - uses: 0xgui/agent-pr-gate@b8f3228e83e7ae46fb2b74bbfe22d09de8b6c39a # v1.0.2
         with:
-          pr-number: ${{ inputs.pr }}  # empty on PR events: the PR from the payload
+          pr-number: ${{ github.event.client_payload.pr }}  # empty on PR events: the PR from the payload
           # On a PR event, judge at once (the comment says CI is running); for merge-pr.sh, wait for CI.
-          ci-wait-seconds: ${{ github.event_name == 'workflow_dispatch' && '1800' || '0' }}
+          ci-wait-seconds: ${{ github.event_name == 'repository_dispatch' && '1800' || '0' }}
           # The verdict is the agent-pr-gate status (required by scripts/merge-pr.sh); the job only fails when the gate could not run.
           fail-on-block: 'false'
