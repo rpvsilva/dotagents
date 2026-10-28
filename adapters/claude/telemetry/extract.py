@@ -182,9 +182,12 @@ def find_session(ref, cwd):
     if ref and Path(ref).is_file():
         return Path(ref)
     ref = ref or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    project = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(cwd))
+    projects = Path.home() / ".claude" / "projects"
+    project = projects / re.sub(r"[^A-Za-z0-9-]", "-", str(cwd))
     if ref:
-        return project / f"{ref}.jsonl"
+        # The shell may have left the folder the session started in, so look in every project.
+        here = project / f"{ref}.jsonl"
+        return here if here.is_file() else next(projects.glob(f"*/{ref}.jsonl"), here)
     sessions = sorted(project.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
     if not sessions:
         sys.exit(f"No Claude Code sessions found in {project}")
