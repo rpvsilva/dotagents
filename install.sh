@@ -3,6 +3,7 @@
 # Usage: ./install.sh [all|shared|claude|codex|cursor]   (default: all)
 # Existing real files are moved to ~/.dotagents-backup/<timestamp>/ before linking.
 # Config files other tools also write to get snippets merged in instead (scripts/merge-json.sh).
+# MCP servers come from mcp/servers.json, secrets from ~/.config/dotagents/mcp.env (scripts/mcp-servers.sh).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +38,9 @@ merge() {
   done
 }
 
+# Installs mcp/servers.json into tool $1's config.
+mcp() { "$REPO/scripts/mcp-servers.sh" "$1" "$REPO/mcp/servers.json" "$BACKUP" || failed=1; }
+
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
@@ -56,13 +60,15 @@ install_claude() {
   done
   merge "$REPO/adapters/claude/hooks" "$HOME/.claude/settings.json"
   merge "$REPO/adapters/claude/settings" "$HOME/.claude/settings.json"
-  # DOTAGENTS_SKIP_PLUGINS=1 skips plugins (the tests set it, so they never install into a throwaway $HOME).
+  # DOTAGENTS_SKIP_PLUGINS=1 skips plugins and MCP servers, both set through the claude CLI
+  # (the tests set it, so they never install into a throwaway $HOME).
   if [ -n "${DOTAGENTS_SKIP_PLUGINS:-}" ]; then
-    echo "  plugins: skipped (DOTAGENTS_SKIP_PLUGINS)"
+    echo "  plugins and mcp: skipped (DOTAGENTS_SKIP_PLUGINS)"
   elif ! command -v claude >/dev/null; then
-    echo "  plugins: claude not on PATH, skipped"
+    echo "  plugins and mcp: claude not on PATH, skipped"
   else
     "$REPO/scripts/claude-plugins.sh" "$REPO/adapters/claude/plugins.txt" || failed=1
+    mcp claude
   fi
 }
 
@@ -77,6 +83,7 @@ install_codex() {
     [ -e "$r" ] && link "$r" "$HOME/.codex/rules/$(basename "$r")"
   done
   merge "$REPO/adapters/codex/hooks" "$HOME/.codex/hooks.json"
+  mcp codex
   echo "  codex: trust new or changed hooks with /hooks, or Codex skips them"
 }
 
@@ -87,6 +94,7 @@ install_cursor() {
     [ -e "$a" ] && link "$a" "$HOME/.cursor/agents/$(basename "$a")"
   done
   merge "$REPO/adapters/cursor/hooks" "$HOME/.cursor/hooks.json"
+  mcp cursor
 }
 
 case "${1:-all}" in
@@ -98,4 +106,4 @@ case "${1:-all}" in
   *) echo "usage: $0 [all|shared|claude|codex|cursor]"; exit 1 ;;
 esac
 
-[ "$failed" -eq 0 ] || { echo "some config snippets or plugins were not installed, see above"; exit 1; }
+[ "$failed" -eq 0 ] || { echo "some config snippets, plugins or MCP servers were not installed, see above"; exit 1; }

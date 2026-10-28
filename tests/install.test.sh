@@ -54,6 +54,13 @@ has_guard "$home/.cursor/hooks.json"
 jq -e '.hooks.Stop[0].hooks[0].command == "orca"' "$home/.cursor/hooks.json" >/dev/null || fail "existing Cursor hook lost"
 jq -e '.permissions.deny | index("Bash(gh auth token:*)") != null' "$home/.claude/settings.json" >/dev/null || fail "Claude deny rules not merged"
 
+# MCP servers without variables reach Codex and Cursor even with no secrets file.
+remote="$(jq -r '[.mcpServers | to_entries[] | select(tojson | test("\\$\\{") | not) | .key][0] // empty' "$REPO/mcp/servers.json")"
+if [ -n "$remote" ]; then
+  grep -qxF "[mcp_servers.\"$remote\"]" "$home/.codex/config.toml" || fail "MCP server $remote not in Codex config"
+  jq -e --arg n "$remote" '.mcpServers[$n]' "$home/.cursor/mcp.json" >/dev/null || fail "MCP server $remote not in Cursor config"
+fi
+
 # Second run: same links, nothing backed up.
 before="$(snapshot "$home")"
 out="$(run "$home" all)"
