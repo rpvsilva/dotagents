@@ -165,6 +165,21 @@ class DefaultSession(unittest.TestCase):
                                   capture_output=True, encoding="utf-8", env=env)
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session", proc.stderr)
 
+    def test_finds_the_session_by_id_when_run_from_another_folder(self):
+        # The session started in work/, then the shell moved into work/app/ (e.g. an audited repo).
+        with tempfile.TemporaryDirectory() as home:
+            started_in = Path(home) / "work"
+            run_from = started_in / "app"
+            run_from.mkdir(parents=True)
+            logs = Path(home) / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(started_in.resolve()))
+            logs.mkdir(parents=True)
+            shutil.copy(FIXTURES / "model-invoked.jsonl", logs / "this-session.jsonl")
+            env = {**os.environ, "HOME": home, "USERPROFILE": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--cwd", str(run_from)],
+                                  capture_output=True, encoding="utf-8", env=env)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session")
+
 
 if __name__ == "__main__":
     unittest.main()
