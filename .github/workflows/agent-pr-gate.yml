@@ -1,17 +1,14 @@
-# Decides what a PR still needs before it may merge; rules live in .review-gate.yml.
-# Runs from the default branch (pull_request_target, repository_dispatch), so a PR cannot change its own gate.
+# Keeps the gate comment on each PR current for the human; rules live in .review-gate.yml.
+# The verdict that decides a merge comes from scripts/merge-pr.sh, which runs the same gate
+# locally (`agent-pr-gate check`, pinned to the same commit as below), so nothing re-runs this
+# workflow after CI or reviews.
+# Runs from the default branch (pull_request_target), so a PR cannot change its own gate.
 # Never check out or run PR code in this workflow.
-# PR events keep the gate comment current for the human; the verdict that counts comes from the run
-# scripts/merge-pr.sh starts (repository_dispatch, which the App's Contents: write allows), which waits for CI before judging.
 name: agent-pr-gate
-# scripts/merge-pr.sh finds its run by this name.
-run-name: "${{ github.event_name == 'repository_dispatch' && format('agent-pr-gate #{0}', github.event.client_payload.pr) || github.event.pull_request.title }}"
 
 on:
   pull_request_target:
     types: [opened, edited, reopened, ready_for_review, labeled, unlabeled]
-  repository_dispatch:
-    types: [agent-pr-gate]  # client_payload: {"pr": <number>}
 
 permissions:
   contents: read        # .review-gate.yml and CODEOWNERS from the base branch
@@ -21,21 +18,19 @@ permissions:
   actions: read         # tell the gate's own job checks from CI jobs
   statuses: write       # the agent-pr-gate commit status
 
-# Queue, never cancel: a cancelled run leaves a grey check on the PR, and merge-pr.sh waits on its run.
+# Queue, never cancel: a cancelled run leaves a grey check on the PR. Runs take seconds, as they do not wait for CI.
 concurrency:
-  group: agent-pr-gate-${{ github.event.pull_request.number || github.event.client_payload.pr }}
+  group: agent-pr-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
-  # Keep this job ID: the gate recognises its own checks by it, and it must differ from the
-  # agent-pr-gate status context that branch protection requires.
+  # Keep this job ID: the gate recognises its own checks by it, also from merge-pr.sh (the CLI's default --gate-job).
   agent-pr-gate-job:
     runs-on: ubuntu-latest
     steps:
-      - uses: 0xgui/agent-pr-gate@b8f3228e83e7ae46fb2b74bbfe22d09de8b6c39a # v1.0.2
+      # main after v1.0.2: adds the check CLI (0xgui/agent-pr-gate#9). Bump together with GATE_REF in scripts/merge-pr.sh.
+      - uses: 0xgui/agent-pr-gate@2da570e75f377b413e19bdfc338dab7c9e881538
         with:
-          pr-number: ${{ github.event.client_payload.pr }}  # empty on PR events: the PR from the payload
-          # On a PR event, judge at once (the comment says CI is running); for merge-pr.sh, wait for CI.
-          ci-wait-seconds: ${{ github.event_name == 'repository_dispatch' && '1800' || '0' }}
-          # The verdict is the agent-pr-gate status (required by scripts/merge-pr.sh); the job only fails when the gate could not run.
+          ci-wait-seconds: '0'  # PR events judge at once; the comment says when CI is still running
+          # The comment is for the human; the job only fails when the gate could not run.
           fail-on-block: 'false'

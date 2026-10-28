@@ -1,50 +1,31 @@
 #!/usr/bin/env bash
-# Merges a PR only when the gate passes and every check is green on its current head commit.
+# Merges a PR only when agent-pr-gate passes it on its current head commit.
 # The only way an agent may merge here: GitHub Free has no rulesets on private repos, so this script is the gate.
-# It starts agent-pr-gate for the PR (repository_dispatch, so the workflow comes from main and a PR
-# cannot change its own gate), waits for that run (the gate itself waits for CI), then judges.
-# Usage: scripts/merge-pr.sh <pr-number>
+# It runs the gate's read-only CLI (`agent-pr-gate check`, pinned to GATE_REF, the commit the gate
+# workflow uses): the same rules, read from the base commit, so a PR cannot change its own gate. The
+# CLI waits for CI, judges CI, evidence, approvals and code owners, and prints the verdict as JSON.
+# Usage: scripts/merge-pr.sh <pr-number>   (needs GH_TOKEN, node and npx)
 set -euo pipefail
 
-GATE=agent-pr-gate
+GATE_REF=2da570e75f377b413e19bdfc338dab7c9e881538
 pr="${1:?usage: merge-pr.sh <pr-number>}"
+wait="${MERGE_PR_CI_WAIT:-1800}"
 
-view() { gh pr view "$pr" --json state,isDraft,headRefOid,statusCheckRollup; }
-v="$(view)"
-[ "$(jq -r .state <<<"$v")" = "OPEN" ] || { echo "PR #$pr is $(jq -r .state <<<"$v"), not merging"; exit 1; }
-[ "$(jq -r .isDraft <<<"$v")" = "false" ] || { echo "PR #$pr is a draft, not merging"; exit 1; }
+view="$(gh pr view "$pr" --json state,isDraft)"
+[ "$(jq -r .state <<<"$view")" = "OPEN" ] || { echo "PR #$pr is $(jq -r .state <<<"$view"), not merging"; exit 1; }
+[ "$(jq -r .isDraft <<<"$view")" = "false" ] || { echo "PR #$pr is a draft, not merging"; exit 1; }
 
-# The run is found by its run-name ("agent-pr-gate #<pr>"), started at most a minute before now
-# (the margin absorbs clock skew between this machine and GitHub), polled MERGE_PR_TRIES times, 2s apart.
-since="$(jq -nr 'now - 60 | todate')"
-gh api -X POST "repos/{owner}/{repo}/dispatches" -f event_type="$GATE" -F "client_payload[pr]=$pr" >/dev/null
-run=""
-for _ in $(seq "${MERGE_PR_TRIES:-30}"); do
-  run="$(gh run list --workflow "$GATE.yml" --event repository_dispatch --limit 20 --json databaseId,displayTitle,createdAt |
-    jq -r --arg t "$GATE #$pr" --arg s "$since" '[.[] | select(.displayTitle == $t and .createdAt >= $s)] | sort_by(.createdAt) | last | .databaseId // empty')"
-  [ -n "$run" ] && break
-  sleep 2
-done
-[ -n "$run" ] || { echo "PR #$pr: the $GATE run did not start, not merging"; exit 1; }
-echo "PR #$pr: waiting for $GATE run $run"
-gh run watch "$run" >/dev/null
+echo "PR #$pr: running agent-pr-gate (waits up to ${wait}s for CI)"
+code=0
+verdict="$(npx --yes "github:0xgui/agent-pr-gate#$GATE_REF" check "$pr" --ci-wait-seconds "$wait")" || code=$?
+result="$(jq -r '.result // empty' <<<"$verdict" 2>/dev/null || true)"
+# Exit 0 means pass or not in scope; anything else (blocked, could not judge) stops the merge.
+if [ "$code" -ne 0 ] || [ -z "$result" ]; then
+  echo "PR #$pr: agent-pr-gate says ${result:-no verdict} (exit $code), not merging"
+  jq -r '.problems[]? | "  - \(.what) Fix: \(.fix)"' <<<"$verdict" 2>/dev/null || true
+  exit 1
+fi
 
-v="$(view)"
-sha="$(jq -r .headRefOid <<<"$v")"
-blocked=0
-tab=$'\t'
-# Check runs carry name/conclusion (empty while running), commit statuses carry context/state;
-# the latest of each name counts.
-results="$(jq -r '.statusCheckRollup | group_by(.name // .context) | map(last | "\(.name // .context)\t\((.conclusion // .state // "") | if . == "" then "PENDING" else . end)") | .[]' <<<"$v")"
-grep -qx "$GATE${tab}SUCCESS" <<<"$results" || { echo "PR #$pr: $GATE is not green on $sha"; blocked=1; }
-# Every other check: green or skipped, and at least one ($GATE-job is the gate's own run).
-others="$(grep -v -e "^$GATE$tab" -e "^$GATE-job$tab" <<<"$results" || true)"
-[ -n "$others" ] || { echo "PR #$pr: no CI checks on $sha"; blocked=1; }
-while IFS=$'\t' read -r name result; do
-  [ -n "$name" ] || continue
-  case "$result" in SUCCESS | SKIPPED | NEUTRAL) ;; *) echo "PR #$pr: $name is $result on $sha"; blocked=1 ;; esac
-done <<<"$others"
-[ "$blocked" -eq 0 ] || { echo "not merging"; exit 1; }
-
-# --match-head-commit: GitHub refuses the merge if a commit landed after the checks above.
+# --match-head-commit: GitHub refuses the merge unless the head is still the commit the gate judged.
+sha="$(jq -r .head_sha <<<"$verdict")"
 gh pr merge "$pr" --squash --delete-branch --match-head-commit "$sha"

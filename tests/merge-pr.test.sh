@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs scripts/merge-pr.sh against a stub gh and checks when it merges.
+# Runs scripts/merge-pr.sh against a stub gh and a stub npx (agent-pr-gate check), and checks when it merges.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,67 +9,66 @@ fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-# Stub gh: `pr view` prints $SANDBOX/view.json; `api` (the dispatch) and `pr merge` log their arguments;
-# `run list` lists one gate run named in $SANDBOX/title, created now; `run watch` swaps in
-# $SANDBOX/after.json when present (the gate's new verdict).
+# Stub gh: `pr view` prints $SANDBOX/view.json, `pr merge` logs its arguments.
+# Stub npx: logs its arguments, prints $SANDBOX/verdict.json and exits with $SANDBOX/code.
 mkdir "$SANDBOX/bin"
 cat >"$SANDBOX/bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "pr view") cat "$SANDBOX/view.json" ;;
   "pr merge") echo "\$*" >>"$SANDBOX/merged" ;;
-  "api -X") echo "\$*" >>"$SANDBOX/dispatched" ;;
-  "run list") jq -n --arg t "\$(cat "$SANDBOX/title")" '[{databaseId: 42, displayTitle: \$t, createdAt: (now | todate)}]' ;;
-  "run watch") echo "\$*" >>"$SANDBOX/watched"; [ ! -e "$SANDBOX/after.json" ] || mv "$SANDBOX/after.json" "$SANDBOX/view.json" ;;
 esac
 EOF
-chmod +x "$SANDBOX/bin/gh"
+cat >"$SANDBOX/bin/npx" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >"$SANDBOX/npx"
+cat "$SANDBOX/verdict.json"
+exit "\$(cat "$SANDBOX/code")"
+EOF
+chmod +x "$SANDBOX/bin/gh" "$SANDBOX/bin/npx"
 
-check() { printf '{"__typename":"CheckRun","name":"%s","conclusion":"%s"}' "$1" "$2"; }
-gate() { printf '{"__typename":"StatusContext","context":"agent-pr-gate","state":"%s"}' "$1"; }
-green="$(check lint SUCCESS),$(check 'test (ubuntu-latest)' SUCCESS),$(check agent-pr-gate-job SUCCESS)"
-
-# Writes a PR view with state $1, draft $2 and rollup entries $3 (to file $4, default view.json).
-pr() { printf '{"state":"%s","isDraft":%s,"headRefOid":"abc123","statusCheckRollup":[%s]}' "$1" "$2" "$3" >"$SANDBOX/${4:-view.json}"; }
+# Sets the PR (state $1, draft $2) and the gate's answer: JSON $3, exit code $4.
+pr() {
+  printf '{"state":"%s","isDraft":%s}' "$1" "$2" >"$SANDBOX/view.json"
+  printf '%s' "$3" >"$SANDBOX/verdict.json"
+  echo "$4" >"$SANDBOX/code"
+}
+verdict() { printf '{"pr":7,"head_sha":"abc123","result":"%s","missing":[%s],"problems":[%s]}' "$1" "${2:-}" "${3:-}"; }
 
 # Runs merge-pr.sh on PR 7; $1 is "merge" or "refuse".
 expect() {
   local want="$1" desc="$2" got
-  rm -f "$SANDBOX/merged" "$SANDBOX/dispatched" "$SANDBOX/watched"
-  if PATH="$SANDBOX/bin:$PATH" MERGE_PR_TRIES="${MERGE_PR_TRIES:-30}" "$REPO/scripts/merge-pr.sh" 7 >"$SANDBOX/out" 2>&1; then got=merge; else got=refuse; fi
+  rm -f "$SANDBOX/merged" "$SANDBOX/npx"
+  if PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" 7 >"$SANDBOX/out" 2>&1; then got=merge; else got=refuse; fi
   [ "$got" = "$want" ] || { fail "$desc: wanted $want, got $got: $(cat "$SANDBOX/out")"; return; }
   if [ "$want" = merge ]; then
-    grep -q -- "--match-head-commit abc123" "$SANDBOX/merged" || fail "$desc: merged without pinning the head commit"
-    grep -qx "api -X POST repos/{owner}/{repo}/dispatches -f event_type=agent-pr-gate -F client_payload\[pr\]=7" "$SANDBOX/dispatched" || fail "$desc: gate not started for PR 7"
-    grep -q "run watch 42" "$SANDBOX/watched" || fail "$desc: did not wait for the gate run"
+    grep -q -- "--match-head-commit abc123" "$SANDBOX/merged" || fail "$desc: merged without pinning the judged head commit"
+    grep -qE "^--yes github:0xgui/agent-pr-gate#[0-9a-f]{40} check 7 --ci-wait-seconds [0-9]+$" "$SANDBOX/npx" || fail "$desc: gate not run as a pinned check of PR 7: $(cat "$SANDBOX/npx")"
   elif [ -e "$SANDBOX/merged" ]; then
     fail "$desc: refused but still called gh pr merge"
   fi
 }
 
-echo "agent-pr-gate #7" >"$SANDBOX/title"
-pr OPEN false "$green,$(gate SUCCESS)";                         expect merge  "all green"
-pr OPEN false "$green,$(gate FAILURE)";                         expect refuse "gate blocked"
-pr OPEN false "$(check lint FAILURE),$(gate SUCCESS)";          expect refuse "a check failed"
-pr OPEN false "$(check lint ''),$(gate SUCCESS)";               expect refuse "a check still running"
-pr OPEN false "$green,$(check portability SKIPPED),$(gate SUCCESS)"; expect merge "skipped check"
-pr OPEN false "$green,$(gate PENDING)";                         expect refuse "gate pending"
-pr OPEN false "$green";                                         expect refuse "gate never ran"
-pr OPEN false "$(check agent-pr-gate-job SUCCESS),$(gate SUCCESS)"; expect refuse "no CI checks"
-pr OPEN true "$green,$(gate SUCCESS)";                          expect refuse "draft"
-pr MERGED false "$green,$(gate SUCCESS)";                       expect refuse "already merged"
-pr OPEN false "$green,$(gate FAILURE),$(gate SUCCESS)";         expect merge  "latest gate status wins"
+problem='{"id":"approvals","what":"Needs 1 approving human review(s), has 0","fix":"Get a review."}'
+pr OPEN false "$(verdict pass)" 0;                                    expect merge  "gate passes"
+pr OPEN false "$(verdict out-of-scope)" 0;                            expect merge  "not in scope"
+pr OPEN false "$(verdict blocked '"approvals"' "$problem")" 1;        expect refuse "gate blocks"
+grep -q "Needs 1 approving human review" "$SANDBOX/out" || fail "blocked: problems not shown"
+pr OPEN false '{"pr":7,"result":"stale","missing":[]}' 2;             expect refuse "PR changed while judging"
+pr OPEN false '' 2;                                                   expect refuse "gate could not run"
+pr OPEN false 'not json' 0;                                           expect refuse "exit 0 without a verdict"
+pr OPEN true "$(verdict pass)" 0;                                     expect refuse "draft"
+[ ! -e "$SANDBOX/npx" ] || fail "draft: gate still ran"
+pr MERGED false "$(verdict pass)" 0;                                  expect refuse "already merged"
 
-# The verdict read after the gate run is the one that counts.
-pr OPEN false "$green,$(gate FAILURE)"
-pr OPEN false "$green,$(gate FAILURE),$(gate SUCCESS)" after.json
-expect merge "gate turns green during the run"
+# The CI wait is configurable, so a caller can judge at once.
+pr OPEN false "$(verdict pass)" 0
+MERGE_PR_CI_WAIT=0 PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" 7 >/dev/null
+grep -q -- "--ci-wait-seconds 0$" "$SANDBOX/npx" || fail "MERGE_PR_CI_WAIT not passed to the gate"
 
-# A gate run for another PR is never mistaken for this one.
-echo "agent-pr-gate #8" >"$SANDBOX/title"
-pr OPEN false "$green,$(gate SUCCESS)"
-MERGE_PR_TRIES=1 expect refuse "only another PR's gate run"
-grep -q "did not start" "$SANDBOX/out" || fail "missing run: reason not given"
+# The pinned gate is the one the workflow runs.
+ref="$(sed -n 's/^GATE_REF=//p' "$REPO/scripts/merge-pr.sh")"
+grep -q "uses: 0xgui/agent-pr-gate@$ref" "$REPO/.github/workflows/agent-pr-gate.yml" || fail "GATE_REF $ref differs from the gate workflow's pin"
 
 [ "$fails" -eq 0 ] || { echo "merge-pr.test.sh: $fails failure(s)"; exit 1; }
 echo "merge-pr.test.sh: ok"
