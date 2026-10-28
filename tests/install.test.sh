@@ -47,7 +47,13 @@ grep -rqx "old instructions" "$home/.dotagents-backup" 2>/dev/null || fail "repl
 # Hook and settings snippets are merged into each tool's config, next to what is already there.
 echo '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' >"$home/.cursor/hooks.json"
 run "$home" all >/dev/null
-has_guard() { jq -e '[.. | .command? | strings | select(test("guard-merge"))] | length == 1' "$1" >/dev/null || fail "$1: guard-merge hook missing or doubled"; }
+has_guard() {
+  local g
+  for g in guard-merge guard-secrets; do
+    # Once per event: Cursor runs guard-secrets on two.
+    jq -e --arg g "$g" '[.hooks[] | [.. | .command? | strings | select(test($g))] | length] | max == 1' "$1" >/dev/null || fail "$1: $g hook missing or doubled"
+  done
+}
 has_guard "$home/.claude/settings.json"
 has_guard "$home/.codex/hooks.json"
 has_guard "$home/.cursor/hooks.json"
