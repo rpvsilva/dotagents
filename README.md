@@ -36,6 +36,7 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 | `address-review` | Work through a PR's open review threads: verify each claim, fix what holds up test-first, reply to the rest; pushback and design calls go to Rui first |
 | `build-epic` | Take an epic or issue from the tracker to one reviewed PR: planner, explorer and implementer subagents, one human approval of the plan |
 | `fix-pr` | Make one PR's failing checks pass and push; also the brief for the `pr-fixer` subagent |
+| `remember` | After a skill run, save what it learned about the repo into `.agents/<skill>-notes.md`, after Rui sees the diff; repo-wide or skill-wide lessons become proposals |
 | `renovate-prs` | Fix, verify and merge open Renovate PRs, one isolated subagent per PR |
 | `review-pr` | First-pass PR review by fresh `pr-reviewer` and `security-reviewer` subagents; verified findings posted as a comment-only review |
 | `security-audit` | Security-audit a repo of any size with subagents only: a `security-mapper` splits it into areas and flows, one `security-reviewer` per piece, gap sweeps until nothing new; fix the picked findings in a PR |
