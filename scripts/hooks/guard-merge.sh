@@ -40,7 +40,7 @@ block() {
 }
 
 if [[ "$cmd" =~ ${start}gh$s+pr$s+merge$end ]] || [[ "$cmd" =~ ${start}gh$s+api$s.*pulls/[^[:space:]]+/merge ]]; then
-  block "merge with scripts/merge-pr.sh <number>, which checks ci-ok and agent-pr-gate first."
+  block "merge with scripts/merge-pr.sh <number>, which runs agent-pr-gate first."
 fi
 if [[ "$cmd" =~ ${start}gh$s+pr$s+review$s.*(--approve|-a)$end ]] ||
   { [[ "$cmd" =~ ${start}gh$s+api$s.*pulls/[^[:space:]]+/reviews ]] && [[ "$cmd" =~ APPROVE ]]; }; then

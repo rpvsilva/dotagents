@@ -1,0 +1,30 @@
+# The tests on Windows (Git Bash), only when a change can behave differently there.
+# Skill and doc changes run on Linux alone (ci.yml). macOS is covered by tests/run.sh, which every
+# change passes locally before pushing (AGENTS.md); hosted macOS runners queued for a long time here.
+name: portability
+
+on:
+  pull_request:
+    paths:
+      - install.sh
+      - scripts/**
+      - tests/**
+      - adapters/**
+      - .github/workflows/portability.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: tests/*.test.sh
+        shell: bash
+        run: for t in tests/*.test.sh; do echo "== $t"; "$t"; done
