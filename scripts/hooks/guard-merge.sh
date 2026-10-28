@@ -22,14 +22,9 @@ start="(^|[;&|(]|$s)"
 end="($s|[;&|)]|$)"
 same='[^;&|]*'
 
-# A command that moves into another repo (`cd <dir> && ...`) is judged by that repo.
-# Only one cd to an existing dir counts; anything less clear is judged by $cwd.
-cd_re="${start}cd$s+([^;&|[:space:]]+)"
-if [ "$(grep -cE "$cd_re" <<<"${cmd//[;&|]/$'\n'}")" -eq 1 ] && [[ "$cmd" =~ $cd_re ]]; then
-  dir="${BASH_REMATCH[2]//[\"\']/}"
-  dir="${dir/#\~/$HOME}"
-  dir="$(cd "$cwd" 2>/dev/null && cd "$dir" 2>/dev/null && pwd)" && cwd="$dir"
-fi
+# shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
+. "$(dirname "$0")/lib.sh"
+cwd="$(target_dir "$cmd" "$cwd")"
 
 root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
 [ -f "$root/.review-gate.yml" ] || exit 0
