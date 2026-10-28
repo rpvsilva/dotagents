@@ -49,7 +49,8 @@ mcp() {
 : >"$SANDBOX/calls"
 for t in claude cursor codex; do mcp "$t" "$SANDBOX/mcp.env"; done
 c="$home/.claude.json"
-check "$c" ".mcpServers.local == {type: \"stdio\", command: \"$home/bin/srv\", args: [\"--x\"], env: {KEY: \"k1\"}}" "claude: local server wrong"
+# Windows jq sees $HOME as a native path, so only the command's tail is compared.
+check "$c" '.mcpServers.local | (.command | endswith("/bin/srv")) and (del(.command) == {type: "stdio", args: ["--x"], env: {KEY: "k1"}})' "claude: local server wrong"
 check "$c" '.mcpServers.remote.headers.Authorization == "Bearer t1"' "claude: header not filled"
 grep -q "add-json local {.*} --scope user" "$SANDBOX/calls" || fail "claude: not added at user scope"
 u="$home/.cursor/mcp.json"
@@ -88,10 +89,12 @@ mcp cursor "$SANDBOX/partial.env"
 grep -q "remote: skipped, T_TOKEN not set" "$SANDBOX/out" || fail "unset variable not reported"
 check "$u" '.mcpServers.local.env.KEY == "k3"' "partial: set server not installed"
 
-# New Cursor file is private, since it holds secrets.
+# New Cursor file is private, since it holds secrets (Windows has no such modes).
 rm "$u"
 mcp cursor "$SANDBOX/mcp.env"
-[ "$(stat -f %Lp "$u" 2>/dev/null || stat -c %a "$u")" = 600 ] || fail "cursor: new mcp.json is not 600"
+if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* ]]; then
+  [ "$(stat -c %a "$u" 2>/dev/null || stat -f %Lp "$u")" = 600 ] || fail "cursor: new mcp.json is not 600"
+fi
 
 [ "$fails" -eq 0 ] || { echo "mcp-servers.test.sh: $fails failure(s)"; exit 1; }
 echo "mcp-servers.test.sh: ok"
