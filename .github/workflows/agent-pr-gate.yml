@@ -9,7 +9,7 @@ name: agent-pr-gate
 
 on:
   pull_request_target:
-    types: [opened, edited, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, edited, reopened, ready_for_review, labeled, unlabeled]
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -21,7 +21,7 @@ permissions:
   actions: read         # tell the gate's own job checks from CI jobs
   statuses: write       # the agent-pr-gate commit status
 
-# Queue, never cancel: a cancelled run leaves a grey check on the PR. Only review runs wait for CI.
+# Queue, never cancel: a cancelled run leaves a grey check on the PR.
 concurrency:
   group: agent-pr-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: false
@@ -34,8 +34,9 @@ jobs:
       # main after v1.0.2: adds the check CLI (0xgui/agent-pr-gate#9). Bump together with GATE_REF in scripts/merge-pr.sh.
       - uses: 0xgui/agent-pr-gate@2da570e75f377b413e19bdfc338dab7c9e881538
         with:
-          # A review waits for CI (up to 15 min), so an approval given while CI runs still ends green:
-          # nothing re-runs the gate when CI finishes. PR events judge at once.
-          ci-wait-seconds: ${{ github.event_name == 'pull_request_review' && '900' || '0' }}
+          # Every run waits for CI to finish (up to 15 min; at once when it already has), since nothing
+          # re-runs the gate when CI finishes. So each push and each review ends with a status that
+          # reflects CI, and a push never leaves the PR without a gate status.
+          ci-wait-seconds: '900'
           # The comment is for the human; the job only fails when the gate could not run.
           fail-on-block: 'false'
