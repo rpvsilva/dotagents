@@ -8,7 +8,7 @@ My personal AI setup: skills, instructions, MCP servers and hooks, written once 
 AGENTS.md           how to work on this repo: goal, principles, contributing
 global/AGENTS.md    my global instructions, linked into every tool
 skills/             tool-neutral skills (SKILL.md format); skills/_shared/ holds steps they share
-mcp/servers.json    MCP servers, one list for every tool
+mcp/servers.json    MCP servers, one list for every tool; secrets in ~/.config/dotagents/mcp.env
 scripts/hooks/      hook logic as plain scripts, wired up per tool
 adapters/<tool>/    tool-only pieces: per-tool agent wrappers, hook config
 install.sh          symlinks everything into place
