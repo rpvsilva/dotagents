@@ -19,9 +19,10 @@ permissions:
   actions: read         # tell the gate's own job checks from CI jobs
   statuses: write       # the agent-pr-gate commit status
 
+# Queue, never cancel: a cancelled run leaves a grey check on the PR. Runs take seconds, as they do not wait for CI.
 concurrency:
   group: agent-pr-gate-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Keep this job ID: the gate recognises its own checks by it, and it must differ from the
@@ -31,4 +32,6 @@ jobs:
     steps:
       - uses: 0xgui/agent-pr-gate@b8f3228e83e7ae46fb2b74bbfe22d09de8b6c39a # v1.0.2
         with:
-          ci-wait-seconds: '90'  # CI takes ~30s
+          ci-wait-seconds: '0'  # the workflow_run trigger re-judges once CI finishes
+          # The verdict is the agent-pr-gate status (required by scripts/merge-pr.sh); the job only fails when the gate could not run.
+          fail-on-block: 'false'
