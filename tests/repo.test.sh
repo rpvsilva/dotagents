@@ -12,9 +12,11 @@ fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 frontmatter() { awk -v k="$2" 'NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit} NR>1 && index($0, k": ")==1 {print substr($0, length(k)+3); exit}' "$1"; }
 
 # Skills: SKILL.md with a matching name, a description, and a README row.
+# Folders starting with _ hold shared files skills link to, not skills.
 for d in skills/*/; do
   d="${d%/}"
   s="$(basename "$d")"
+  case "$s" in _*) continue ;; esac
   f="$d/SKILL.md"
   if [ ! -f "$f" ]; then fail "$f missing"; continue; fi
   [ "$(frontmatter "$f" name)" = "$s" ] || fail "$f: frontmatter name is not '$s'"

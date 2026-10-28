@@ -10,7 +10,7 @@ Inputs: the PR number(s). When an orchestrator started you, its message may also
 
 ## Steps
 
-1. **Learn the repo.** Read `.agents/fix-pr-notes.md` and the repo's `AGENTS.md` (or `CLAUDE.md`) if they exist. Find the install, lint, test and build commands from the PR CI workflow and the manifest's scripts, unless you were given them. Done when you can name each command CI runs.
+1. **Learn the repo.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/fix-pr-notes.md`. Find the install, lint, test and build commands from the PR CI workflow and the manifest's scripts, unless you were given them. Done when you can name each command CI runs.
 
 2. **Check out the branch** in its own git worktree, unless you are already in one: `git fetch origin && git worktree add <path> -B <branch> origin/<branch>`. Done when `git status` shows the PR branch at its remote head.
 

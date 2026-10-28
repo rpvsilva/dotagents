@@ -14,9 +14,9 @@ Input: any mix of pasted text, file paths and links (docs, Notion, Google Docs, 
 
 ## Steps
 
-1. **Set up.** Read `.agents/to-epic-notes.md` if it exists: the tracker, labels to apply, an issue template, and the **identity** to create issues as (e.g. a `GH_TOKEN` prefix for a bot account). Otherwise look at the repo's own rules (`AGENTS.md` or `CLAUDE.md`), issue templates (`.github/ISSUE_TEMPLATE/`) and existing labels; with no identity named, use the current login. If the rules name an identity whose setup is missing, stop and ask. Create the run folder. Done when you can name the tracker, the identity and the labels (or know there are none).
+1. **Set up.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/to-epic-notes.md`: the tracker, labels to apply and an issue template, falling back to the repo's issue templates (`.github/ISSUE_TEMPLATE/`) and existing labels. Create the run folder. Done when you can name the tracker, the identity and the labels (or know there are none).
 
-2. **Read the sources.** Read short text (under about 100 lines: a pasted paragraph, a page of notes) yourself. For each longer source, and each link, start a `source-reader` subagent if your harness defines one, otherwise a general-purpose subagent told to follow [reader-brief.md](reader-brief.md); give it the source (path or link) and `sources/<name>.md` as its output, and run them in parallel. If your harness has no subagents, follow the brief yourself, one source at a time. Done when every source is read or has a note.
+2. **Read the sources.** Read short text (under about 100 lines: a pasted paragraph, a page of notes) yourself. For each longer source, and each link, start a `source-reader` subagent with [reader-brief.md](reader-brief.md) as in [Subagents](../_shared/conventions.md#subagents); give it the source (path or link) and `sources/<name>.md` as its output, and run them in parallel. Done when every source is read or has a note.
 
 3. **Check the tracker** for open issues that already cover part of the material (search by the key terms of each need). Done when each need is matched to an existing issue or marked new.
 
