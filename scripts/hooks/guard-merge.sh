@@ -17,13 +17,16 @@ else
 fi
 [ -n "$cmd" ] || exit 0
 
+# shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
+. "$(dirname "$0")/lib.sh"
+# Heredoc bodies are data (a file being written), never a command to judge.
+cmd="$(strip_heredocs "$cmd")"
+
 s='[[:space:]]'
 start="(^|[;&|(]|$s)"
 end="($s|[;&|)]|$)"
 same='[^;&|]*'
 
-# shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
-. "$(dirname "$0")/lib.sh"
 cwd="$(target_dir "$cmd" "$cwd")"
 
 root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
@@ -46,6 +49,14 @@ if [[ "$cmd" =~ ${start}git$s+push$end ]]; then
     block "never push to main; push a branch and open a PR."
   fi
   branch="$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null || true)"
+  # A `git switch`/`git checkout <branch>` before the push moves to that branch first; the last one wins.
+  before="$(tr '\n' ';' <<<"$cmd" | sed -E "s/${start}git${s}+push${end}.*//")"
+  # Flags are -x... or --word; a bare -- means paths follow (`git checkout -- file`), no switch.
+  switch_re="${start}git$s+(switch|checkout)$s+((-(-[^;&|[:space:]]+|[^-;&|[:space:]][^;&|[:space:]]*)$s+)*)([^-;&|[:space:]][^;&|[:space:]]*)(.*)"
+  while [[ "$before" =~ $switch_re ]]; do
+    branch="${BASH_REMATCH[6]}"
+    before="${BASH_REMATCH[7]}"
+  done
   if [ "$branch" = main ] || [ "$branch" = master ]; then
     block "you are on $branch; create a branch (git switch -c <name>) and push that."
   fi

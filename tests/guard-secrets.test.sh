@@ -50,6 +50,8 @@ cmd block 'ls *.pem'
 cmd block 'source .env && npm test'
 cmd block 'cat <.env'
 cmd block 'x=$(cat "./.env")'
+cmd block $'cat >notes.md <<\'EOF\'\nsome text\nEOF\ncat .env'
+cmd block 'jq . <<<"$x"; cat .env'
 cmd allow 'cat .env.example'
 cmd allow 'scripts/gh-app-token.sh'
 cmd allow "jq -r '.mcpServers | to_entries[] | .key' servers.json"

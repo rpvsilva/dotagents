@@ -14,3 +14,21 @@ target_dir() {
   fi
   echo "$cwd"
 }
+
+# Prints command $1 without heredoc bodies: the lines after `<<WORD` (also `<<-WORD`, `<<'WORD'`,
+# `<<"WORD"`) up to the line that is WORD. Their text is data written somewhere, not a command.
+# A here-string (`<<<`) is not a heredoc. Only the first heredoc on a line is recognised.
+strip_heredocs() {
+  awk -v q="'" '
+    BEGIN { re = "(^|[^<])<<-?[ \t]*[\"" q "]?[A-Za-z_][A-Za-z0-9_]*[\"" q "]?" }
+    end != "" { line = $0; sub(/^\t+/, "", line); if (line == end) end = ""; next }
+    {
+      print
+      if (match($0, re)) {
+        w = substr($0, RSTART, RLENGTH)
+        sub(/^[^<]?<<-?[ \t]*/, "", w)
+        gsub(/["\047]/, "", w)
+        end = w
+      }
+    }' <<<"$1"
+}
