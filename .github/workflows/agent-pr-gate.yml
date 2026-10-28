@@ -1,14 +1,17 @@
-# Keeps the gate comment on each PR current for the human; rules live in .review-gate.yml.
+# Keeps the gate comment and status on each PR current for the human, including after a review;
+# rules live in .review-gate.yml.
 # The verdict that decides a merge comes from scripts/merge-pr.sh, which runs the same gate
-# locally (`agent-pr-gate check`, pinned to the same commit as below), so nothing re-runs this
-# workflow after CI or reviews.
-# Runs from the default branch (pull_request_target), so a PR cannot change its own gate.
+# locally (`agent-pr-gate check`, pinned to the same commit as below) and never reads this status.
+# That is why pull_request_review is safe here: it runs this file from the PR, so a PR could fake
+# its own status, but the status decides nothing. PR events run from the default branch.
 # Never check out or run PR code in this workflow.
 name: agent-pr-gate
 
 on:
   pull_request_target:
     types: [opened, edited, reopened, ready_for_review, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
 
 permissions:
   contents: read        # .review-gate.yml and CODEOWNERS from the base branch
