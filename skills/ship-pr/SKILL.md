@@ -8,13 +8,12 @@ Ship the current changes as one PR, the way this repo wants PRs shipped. The rep
 
 ## Steps
 
-1. **Learn the rules.** Read `.agents/ship-pr-notes.md`, the repo's `AGENTS.md` (or `CLAUDE.md`), `CONTRIBUTING.md` and the PR template (`.github/pull_request_template.md`) if they exist. Note:
+1. **Learn the rules** ([how](../_shared/conventions.md#learn-the-rules); notes file `.agents/ship-pr-notes.md`). Besides the identity, note:
    - **Commit convention** (e.g. Conventional Commits), else match `git log`.
    - **Checks**: the local command that runs what CI runs.
-   - **Identity**: who opens and merges PRs (e.g. a `GH_TOKEN` prefix for a bot account). If the rules name a setup that is missing, stop and ask.
    - **Merge rule**: whether an agent may merge, and how (a merge script, required checks, approval tiers). With no rule, the agent does not merge.
 
-   Done when you can name each of the four, or know the repo is silent on it.
+   Done when you can name the identity and each of the three, or know the repo is silent on it.
 
 2. **Branch.** If on the default branch, `git switch -c <type>/<short-name>`. Done when HEAD is a new branch holding only the changes for this PR. When unrelated changes are mixed in, ask which ones belong.
 
