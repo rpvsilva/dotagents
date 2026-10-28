@@ -33,7 +33,7 @@ run "$home" all >/dev/null
 for s in "${skills[@]}"; do
   assert_link "$home/.agents/skills/$s" "$REPO/skills/$s"
   assert_link "$home/.claude/skills/$s" "$home/.agents/skills/$s"
-  [ -f "$home/.claude/skills/$s/SKILL.md" ] || fail "$s/SKILL.md not reachable through ~/.claude/skills"
+  [[ "$s" == _* ]] || [ -f "$home/.claude/skills/$s/SKILL.md" ] || fail "$s/SKILL.md not reachable through ~/.claude/skills"
 done
 assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"

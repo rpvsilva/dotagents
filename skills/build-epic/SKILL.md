@@ -26,9 +26,7 @@ When the folder already exists, **resume**: set every `in-progress` ticket back 
 | `epic-explorer` | [explorer-brief.md](explorer-brief.md) | `notes/<area>.md` |
 | `epic-implementer` | [implementer-brief.md](implementer-brief.md) | commits on its ticket branch |
 
-Start the named agent if your harness defines it, otherwise a general-purpose subagent told to follow the brief. Hand over the inputs the brief lists, as **paths**, never summaries. If your harness has no subagents, follow each brief yourself, one at a time, writing the same files.
-
-At most **N** subagents run at once (the **slots**): `--parallel N`, else `max_parallel` from the notes file, else 4.
+Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at most **N** at once (the **slots**).
 
 Every subagent ends with this report, and you act on it alone:
 
@@ -49,7 +47,7 @@ Keep the tracker in step with the build, as the identity from step 1. Each ticke
 
 ## Steps
 
-1. **Set up.** Read `.agents/build-epic-notes.md` if it exists (tracker, test commands, areas to avoid, `max_parallel`, `in_progress`). Learn the **identity** for tracker and GitHub calls from the repo's rules (`AGENTS.md` or `CLAUDE.md`), e.g. a `GH_TOKEN` prefix for a bot account; with none named, use the current login; if the rules name a setup that is missing, stop and ask. Create the run folder, or resume it. Done when you know N, the identity, and the run folder exists.
+1. **Set up.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/build-epic-notes.md` (tracker, test commands, areas to avoid, `max_parallel`, `in_progress`). Create the run folder, or resume it. Done when you know N, the identity, and the run folder exists.
 
 2. **Plan, pass A.** Start an `epic-planner` with: pass `A`, the input, the run folder, the notes file path, and `explore: always` when `--explore` was given. Done when it reports `done` and `spec.md` and `areas.md` exist. On `blocked` (for example, no connector for the tracker), relay its `why` to the human and stop.
 

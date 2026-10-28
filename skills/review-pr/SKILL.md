@@ -10,7 +10,7 @@ Input: the PR number. Optional: `--dry-run` to show the findings without posting
 
 ## Steps
 
-1. **Learn the rules.** Read `.agents/review-pr-notes.md`, the repo's `AGENTS.md` (or `CLAUDE.md`) and `CONTRIBUTING.md` if they exist. Note the **identity** the rules name for GitHub calls (e.g. a `GH_TOKEN` prefix for a bot account); if the rules name a setup that is missing, stop and ask. Done when you know which files hold the repo's rules and which identity to post as.
+1. **Learn the rules** ([how](../_shared/conventions.md#learn-the-rules); notes file `.agents/review-pr-notes.md`). Done when you know which files hold the repo's rules and which identity to post as.
 
 2. **Check out the PR head** in its own git worktree: `git fetch origin pull/<n>/head && git worktree add --detach <path> FETCH_HEAD`. Done when the worktree's HEAD matches `gh pr view <n> --json headRefOid`.
 
