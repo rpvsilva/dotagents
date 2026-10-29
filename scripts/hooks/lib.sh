@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Shared by the hooks in this folder: source it, never run it.
+# Shared by the hooks in this folder and scripts/remote-agent*.sh: source it, never run it.
+
+# True when path $1 looks like a secret file (.env, keys, certificates, credentials, secrets/),
+# unless it is an example (.example, .sample, .template).
+secret_re='(^|/)(\.env(\.[^/]*)?|[^/]+\.(env|pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.aws/credentials)$|(^|/)secrets/'
+example_re='\.(example|sample|template)$'
+is_secret() { [[ "$1" =~ $secret_re ]] && ! [[ "$1" =~ $example_re ]]; }
 
 # Prints the directory command $1 runs in, starting from $2: a command that moves into another
 # repo (`cd <dir> && ...`) is judged by that dir. Only one cd to an existing dir counts;

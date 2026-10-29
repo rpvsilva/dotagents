@@ -24,9 +24,8 @@ else
   cwd="${cwd:-$PWD}"
 fi
 
-secret_re='(^|/)(\.env(\.[^/]*)?|[^/]+\.(env|pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.aws/credentials)$|(^|/)secrets/'
-example_re='\.(example|sample|template)$'
-is_secret() { [[ "$1" =~ $secret_re ]] && ! [[ "$1" =~ $example_re ]]; }
+# shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
+. "$(dirname "$0")/lib.sh"
 
 block() {
   echo "guard-secrets: $1 Ask the human to run it themselves, or to give you the value another way." >&2
@@ -38,8 +37,6 @@ if [ -n "$path" ] && is_secret "$path"; then
 fi
 [ -n "$cmd" ] || exit 0
 
-# shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
-. "$(dirname "$0")/lib.sh"
 # Heredoc bodies are data (a file being written), never a command to judge.
 cmd="$(strip_heredocs "$cmd")"
 
