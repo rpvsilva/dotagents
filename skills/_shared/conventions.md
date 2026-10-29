@@ -18,8 +18,11 @@ A subagent the skill marks **remote-capable** (it only changes its worktree) run
 
 1. Create the worktree as for a local subagent.
 2. Write the message you would hand the subagent into a file. Name the worktree as `~/work`, and every other input as `~/attached/<its file or folder name>`. Attach only what its brief reads, never a whole run folder holding other worktrees.
-3. Run `~/.agents/bin/remote-agent --name <task> --attach <path>... @<message file> <worktree>` in the background, with a short task name the skill gives (e.g. a build-epic task's `TT-NN-<slug>`). It takes a slot like a local subagent. Its stdout is the subagent's report; its stderr is progress, one line per step, each starting with `[<task>]`.
-   - Follow each run's stderr as it arrives and relay a short line to the human per step (claimed, sent, each tool the subagent runs, the result). A run that only shows its result at the end looks like no agent is attached. If your harness cannot read a background command's output while it runs, say where it goes and check it between other work.
+3. Run `remote-agent --name <task> --attach <path>... @<message file> <worktree>` in the background, with a short task name the skill gives (e.g. a build-epic task's `TT-NN-<slug>`). Use the dispatcher the skill pins when it names one; otherwise `~/.agents/bin/remote-agent`. It takes a slot like a local subagent. Its stdout is the subagent's report; its stderr is progress, one line per step, each starting with `[<task>]`.
+   - Do not redirect its stderr: no `2>file`, no `2>&1 | <filter>`, no `2>/dev/null`. Left alone, each progress line shows to the human as it arrives; a run that only shows its result at the end looks like no agent is attached.
+   - When the run starts, give the human the transcript path from its `transcript:` line on stderr. That file holds the subagent's full event stream as it arrives.
+   - If your harness cannot show a background command's output while it runs, give the human the transcript path and read the run's stderr between other work.
+   - After the run, resuming a session from the worktree (e.g. `/resume`) opens the remote subagent's conversation, when the run brought its session back.
 4. Act on the exit code:
    - **0**: the changes are in the worktree, uncommitted. Commit them as the subagent would have, with the repo's commit convention, then act on the report.
    - **3**: no changes; act on the report.
