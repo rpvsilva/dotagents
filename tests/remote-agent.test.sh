@@ -186,6 +186,44 @@ rm -f "$W/hello.txt"
 code=0; (cd "$W" && PATH="$SANDBOX/bin:$PATH" remote-agent --attach "$SANDBOX/nope" "x") >/dev/null 2>&1 || code=$?
 [ "$code" = 1 ] || fail "attach: a missing path was not refused"
 
+# Naming the cluster backend explicitly gives the same run.
+printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=cluster\n' >"$SANDBOX/config/dotagents/remote.env"
+run 0 "$patch" || fail "explicit cluster: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "explicit cluster: patch not applied"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "explicit cluster: claim not deleted"
+rm -f "$W/hello.txt"
+
+# An unknown backend is refused before anything is staged or sent, naming the known ones.
+printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=nope\n' >"$SANDBOX/config/dotagents/remote.env"
+code=0; run 0 "$patch" || code=$?
+[ "$code" != 0 ] || fail "unknown backend: exited 0"
+[ ! -e "$SANDBOX/calls" ] || fail "unknown backend: kubectl was called"
+grep -q "cluster" "$SANDBOX/out" || fail "unknown backend: message does not list cluster: $(cat "$SANDBOX/out")"
+grep -qw "lib" "$SANDBOX/out" && fail "unknown backend: lib.sh listed as a backend"
+grep -q "snapshot:" "$SANDBOX/out" && fail "unknown backend: something was staged"
+echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$SANDBOX/config/dotagents/remote.env"
+
+# TERM mid-run still releases the sandbox through the exit cleanup: the stub's sandbox run hangs.
+mv "$SANDBOX/bin/kubectl" "$SANDBOX/kubectl.real"
+cat >"$SANDBOX/bin/kubectl" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" remote-agent-sandbox"*) : >"$SANDBOX/started"; sleep 2; exit 1 ;;
+esac
+exec "$SANDBOX/kubectl.real" "\$@"
+EOF
+chmod +x "$SANDBOX/bin/kubectl"
+rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
+pid=$!
+for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
+kill -TERM "$pid"
+code=0; wait "$pid" || code=$?
+[ "$code" = 143 ] || fail "TERM: wanted exit 143, got $code: $(cat "$SANDBOX/out")"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "TERM: claim not deleted"
+mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
+
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
 code=0; run 0 "$patch" || code=$?

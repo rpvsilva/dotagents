@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# Runs one subagent task on a remote sandbox (agent-sandbox on Kubernetes) for compute only, and applies its
-# changes to a local worktree. The cluster never touches a repo: it gets this machine's setup and a snapshot of
-# the worktree, and only a patch comes back.
+# Runs one subagent task on a remote sandbox for compute only, and applies its changes to a local worktree. The
+# sandbox comes from a backend (scripts/remote-backends/<name>.sh; the cluster by default) and never touches a
+# repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
 # Usage: remote-agent [--attach PATH]... <brief | @brief-file | -> [worktree]   (default worktree: the current one)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out.
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
-# secret-looking ones; claim a warm sandbox; stream both in with `kubectl exec` and the Claude token through stdin;
-# run scripts/remote-agent-sandbox.sh there; bring back the patch and apply it with `git apply`, uncommitted.
-# The claim is deleted on exit; its shutdownTime deletes it anyway if this script dies first.
-# Prints Claude's progress and summary. Keeps the patch and summary in <git dir>/remote-agent/<claim>/.
+# secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
+# run scripts/remote-agent-sandbox.sh there; get the patch back and apply it with `git apply`, uncommitted.
+# The sandbox is released on exit, also on INT or TERM; the backend's time limit (REMOTE_HOURS) removes it anyway
+# if this script dies first.
+# Prints Claude's progress and summary. Keeps the patch and summary in <git dir>/remote-agent/<run>/.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
-# Overrides: REMOTE_CONTEXT (kube context, default maxibombo), REMOTE_NAMESPACE (agents), REMOTE_POOL (claude-runner),
-# REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1 (keep the claim).
+# Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
+# (keep the sandbox), and the backend's own settings (see its script; cluster: REMOTE_CONTEXT, REMOTE_NAMESPACE,
+# REMOTE_POOL). Every REMOTE_* variable is exported to the backend; the Claude token is not.
 set -euo pipefail
 
 # Follow the link from ~/.agents/bin to this repo, where the sibling scripts live.
@@ -48,31 +50,34 @@ esac
 root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
 claude_token="${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (in $CONFIG/remote.env)}"
 
-context="${REMOTE_CONTEXT:-maxibombo}"
-namespace="${REMOTE_NAMESPACE:-agents}"
-pool="${REMOTE_POOL:-claude-runner}"
-hours="${REMOTE_HOURS:-2}"
+backend_name="${REMOTE_BACKEND:-cluster}"
+known=()
+for f in "$REPO"/scripts/remote-backends/*.sh; do
+  [ "$(basename "$f")" = lib.sh ] || known+=("$(basename "$f" .sh)")
+done
+backend="$REPO/scripts/remote-backends/$backend_name.sh"
+if [ "$backend_name" = lib ] || [[ "$backend_name" == */* ]] || [ ! -f "$backend" ]; then
+  echo "remote-agent: unknown REMOTE_BACKEND=$backend_name (known: ${known[*]})" >&2
+  exit 1
+fi
+# The backend reads its settings from REMOTE_* variables, sourced or not.
+while IFS= read -r v; do export "${v?}"; done < <(compgen -v REMOTE_)
 max_mb="${REMOTE_MAX_MB:-200}"
 
-kc() { kubectl --context "$context" -n "$namespace" "$@"; }
 say() { echo "remote-agent: $*" >&2; }
 
 stage="$(mktemp -d)"
-claim="agent-$(date +%Y%m%d-%H%M%S)-$RANDOM"
-claimed=""
+run="agent-$(date +%Y%m%d-%H%M%S)-$RANDOM"
+acquired=""
 cleanup() {
-  if [ -n "$claimed" ]; then
-    if [ -n "${REMOTE_KEEP:-}" ]; then
-      say "kept sandboxclaim/$claim"
-    else
-      kc delete sandboxclaim "$claim" --wait=false --ignore-not-found >/dev/null || true
-    fi
-  fi
+  [ -z "$acquired" ] || "$backend" release "$run" || true
   rm -rf "$stage"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# The setup, the attachments and the snapshot are built before anything reaches the cluster.
+# The setup, the attachments and the snapshot are built before anything reaches the backend.
 "$REPO/scripts/remote-agent-pack.sh" "$stage/home"
 for a in "${attach[@]+"${attach[@]}"}"; do
   name="$(basename "$a")"
@@ -97,42 +102,22 @@ kb=0
 [ "$kb" -le $((max_mb * 1024)) ] || { say "snapshot is $((kb / 1024)) MB, over REMOTE_MAX_MB=$max_mb"; exit 1; }
 say "snapshot: $count files, $((kb / 1024)) MB from $root"
 
-end=$(( $(date +%s) + hours * 3600 ))
-# GNU date takes -d @epoch, BSD date -r epoch.
-shutdown="$(date -u -d "@$end" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$end" +%Y-%m-%dT%H:%M:%SZ)"
-claimed=1
-kc apply -f - >/dev/null <<EOF
-apiVersion: extensions.agents.x-k8s.io/v1beta1
-kind: SandboxClaim
-metadata:
-  name: $claim
-spec:
-  warmPoolRef:
-    name: $pool
-  lifecycle:
-    shutdownTime: "$shutdown"
-    shutdownPolicy: Delete
-EOF
-kc wait --for=condition=Ready "sandboxclaim/$claim" --timeout=180s >/dev/null
-sandbox="$(kc get sandboxclaim "$claim" -o jsonpath='{.status.sandbox.name}')"
-pod="$(kc get sandbox "$sandbox" -o jsonpath='{.metadata.annotations.agents\.x-k8s\.io/pod-name}')"
-pod="${pod:-$sandbox}"
-say "claimed $claim ($pod)"
+acquired=1
+handle="$("$backend" acquire "$run")"
 
-# macOS tar would add AppleDouble files and xattr headers; GNU tar in the pod would warn about them.
+# macOS tar would add AppleDouble files and xattr headers.
 export COPYFILE_DISABLE=1
-untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
-tar -C "$stage/home" -chf - . | kc exec -i "$pod" -- sh -c "$untar -C \$HOME"
-(cd "$root" && tar -cf - --null -T "$stage/files") | kc exec -i "$pod" -- sh -c "mkdir -p \$HOME/work && $untar -C \$HOME/work"
+tar -C "$stage/home" -chf - . | "$backend" put "$run" "$handle" .
+(cd "$root" && tar -cf - --null -T "$stage/files") | "$backend" put "$run" "$handle" work
 say "sent setup and snapshot"
 
 status=0
 { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
-  | kc exec -i "$pod" -- bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox || status=$?
+  | "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox || status=$?
 
-keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$claim"
+keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
 mkdir -p "$keep"
-kc exec "$pod" -- sh -c "tar -cf - -C \$HOME/out ." | tar -xf - -C "$keep" 2>/dev/null || true
+"$backend" get "$run" "$handle" out | tar -xf - -C "$keep" 2>/dev/null || true
 [ "$status" -eq 0 ] || { say "the sandbox run failed (exit $status); what it left is in $keep"; exit "$status"; }
 
 [ -f "$keep/summary.md" ] && cat "$keep/summary.md"
