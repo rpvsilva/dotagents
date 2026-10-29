@@ -9,13 +9,14 @@ fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-# Stub gh: `pr view` prints $SANDBOX/view.json, `pr merge` logs its arguments.
+# Stub gh: `pr view` prints $SANDBOX/view.json, `repo view` prints main, `pr merge` logs its arguments.
 # Stub npx: logs its arguments, prints $SANDBOX/verdict.json and exits with $SANDBOX/code.
 mkdir "$SANDBOX/bin"
 cat >"$SANDBOX/bin/gh" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
   "pr view") cat "$SANDBOX/view.json" ;;
+  "repo view") echo main ;;
   "pr merge") echo "\$*" >>"$SANDBOX/merged" ;;
 esac
 EOF
@@ -27,24 +28,27 @@ exit "\$(cat "$SANDBOX/code")"
 EOF
 chmod +x "$SANDBOX/bin/gh" "$SANDBOX/bin/npx"
 
-# Sets the PR (state $1, draft $2) and the gate's answer: JSON $3, exit code $4.
+# Sets the PR (state $1, draft $2) and the gate's answer: JSON $3, exit code $4. The base is $BASE, else main.
 pr() {
-  printf '{"state":"%s","isDraft":%s}' "$1" "$2" >"$SANDBOX/view.json"
+  printf '{"state":"%s","isDraft":%s,"baseRefName":"%s","headRefOid":"abc123"}' "$1" "$2" "${BASE:-main}" >"$SANDBOX/view.json"
   printf '%s' "$3" >"$SANDBOX/verdict.json"
   echo "$4" >"$SANDBOX/code"
 }
 verdict() { printf '{"pr":7,"head_sha":"abc123","result":"%s","missing":[%s],"problems":[%s]}' "$1" "${2:-}" "${3:-}"; }
 
-# Runs merge-pr.sh on PR 7; $1 is "merge" or "refuse".
+# Runs merge-pr.sh on PR 7; $1 is "merge", "merge-ungated" (no gate run) or "refuse".
 expect() {
   local want="$1" desc="$2" got
   rm -f "$SANDBOX/merged" "$SANDBOX/npx"
   if PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" 7 >"$SANDBOX/out" 2>&1; then got=merge; else got=refuse; fi
+  [ "$got" = merge ] && [ ! -e "$SANDBOX/npx" ] && got=merge-ungated
   [ "$got" = "$want" ] || { fail "$desc: wanted $want, got $got: $(cat "$SANDBOX/out")"; return; }
-  if [ "$want" = merge ]; then
+  if [ "$want" != refuse ]; then
     grep -q -- "--match-head-commit abc123" "$SANDBOX/merged" || fail "$desc: merged without pinning the judged head commit"
+  fi
+  if [ "$want" = merge ]; then
     grep -qE "^--yes github:0xgui/agent-pr-gate#[0-9a-f]{40} check 7 --ci-wait-seconds [0-9]+$" "$SANDBOX/npx" || fail "$desc: gate not run as a pinned check of PR 7: $(cat "$SANDBOX/npx")"
-  elif [ -e "$SANDBOX/merged" ]; then
+  elif [ "$want" = refuse ] && [ -e "$SANDBOX/merged" ]; then
     fail "$desc: refused but still called gh pr merge"
   fi
 }
@@ -60,6 +64,11 @@ pr OPEN false 'not json' 0;                                           expect ref
 pr OPEN true "$(verdict pass)" 0;                                     expect refuse "draft"
 [ ! -e "$SANDBOX/npx" ] || fail "draft: gate still ran"
 pr MERGED false "$(verdict pass)" 0;                                  expect refuse "already merged"
+
+# A PR into another branch (a build-epic task PR) merges without the gate; a blocked verdict changes nothing.
+BASE=feat/gh-12-due-dates pr OPEN false "$(verdict blocked '"approvals"' "$problem")" 1
+expect merge-ungated "PR into a non-default branch"
+BASE=feat/gh-12-due-dates pr OPEN true "$(verdict pass)" 0;           expect refuse "draft into a non-default branch"
 
 # The CI wait is configurable, so a caller can judge at once.
 pr OPEN false "$(verdict pass)" 0

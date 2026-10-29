@@ -4,7 +4,7 @@ description: Turn meeting notes, docs or any other source into an epic and its i
 disable-model-invocation: true
 ---
 
-Turn source material into an **epic** and its **issues** on the tracker. Issues describe **outcomes**: what the user gets and why, with acceptance criteria and scope. The how (files, code, slicing into tickets) belongs to whoever builds the epic, such as [build-epic](../build-epic/SKILL.md)'s planner.
+Turn source material into an **epic** and its **issues** on the tracker. Issues describe **outcomes**: what the user gets and why, with acceptance criteria and scope. The how (files, code, slicing into tasks) belongs to whoever builds the epic, such as [build-epic](../build-epic/SKILL.md)'s planner.
 
 Input: any mix of pasted text, file paths and links (docs, Notion, Google Docs, ...).
 

@@ -12,17 +12,30 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
 2. **Write `spec.md`**: `Goal` (one paragraph), `Behaviours` (numbered, each observable from outside and naming the issue it came from), `Out of scope`, `Open questions`. Done when every child issue maps to a behaviour or to out of scope.
 3. **Write `areas.md`.** **Skim** the repo's shape: the tree, manifests, top-level docs, and line counts (`wc -l`); the deep reading of source files is the explorers' job. List the areas an explorer should read deeply, each with a slug, the paths to start from, and the **question** its note must answer. Write `no exploration needed` instead only when the source files the epic touches total under 2,000 lines and you were not given `explore: always`. Done when every behaviour falls in some area, or exploration is skipped.
 
-## Pass B: map and tickets
+## Pass B: map, tickets and tasks
 
-1. **Read** `spec.md` and every note in `notes/`. Where notes conflict or leave a gap a ticket depends on, read that code yourself. Done when every behaviour has known files and tests.
+1. **Read** `spec.md` and every note in `notes/`. Where notes conflict or leave a gap a task depends on, read that code yourself. Done when every behaviour has known files and tests.
 2. **Write `map.md`**: per area, the files to change and why, the tests that cover them, and the tests to add; every claim cites a path. Then a `Checks` section with the exact commands CI runs (from the CI workflow and the manifest's scripts) plus the one-time `Setup` a fresh git worktree needs before they run (e.g. creating a virtualenv, installing dependencies), or `Setup: none`; and a `Gaps` section: areas with no tests, open questions, risks. Give every open question in `spec.md` (the ones you find here too) an **assumed answer** in brackets, the way you would decide it: the human confirms or corrects them at the approval stop, so implementers build from decided answers. Done when every behaviour appears in the map and every open question has an assumed answer.
-3. **Write the tickets**, one file each as `tickets/NN-<slug>.md`, numbered blockers-first. Each ticket is a **tracer bullet**: a narrow slice through every layer it needs (schema, logic, interface, tests), verifiable on its own, small enough for one fresh context. Put any prefactoring in its own first ticket. Template:
+3. **Write the tickets**, one file each as `tickets/TT-<slug>.md`, numbered blockers-first. A ticket is one tracker issue the epic delivers: one per child issue, or a single ticket for the epic itself when it has no children, for one issue, and for plain-text input. Each one becomes its own PR into the default branch, so a different developer may build it. Template:
 
    ```
-   # NN: <title>
+   # TT: <title>
    Status: ready
+   Issue: <the tracker issue, e.g. #8; or none for plain-text input>
+   Branch: feat/<ticket-slug>
    Blocked by: <ticket numbers, or none>
-   Issues: <the tracker issues this ticket delivers part of, e.g. #8, #9; or none for plain-text input>
+   ```
+
+   `<ticket-slug>` is the issue's tracker ID plus a few words (`gh-14-due-date-field`), or a few words alone for plain-text input. A ticket is `Blocked by` another when one of its tasks needs that ticket's code: it starts only once that ticket is merged into the default branch.
+
+   Done when every tracker issue has its ticket and the ticket blocker graph has no cycle.
+4. **Write the tasks**, one file each as `tasks/TT-NN-<slug>.md`, `TT` its ticket, numbered blockers-first within it. Each task is a **tracer bullet**: a narrow slice through every layer it needs (schema, logic, interface, tests), verifiable on its own, small enough for one fresh context. Put any prefactoring in its own first task, in the first ticket that needs it. Template:
+
+   ```
+   # TT-NN: <title>
+   Status: ready
+   Ticket: TT
+   Blocked by: <task numbers of the same ticket, or none>
 
    ## What to build
    <the behaviour, from the user's side>
@@ -34,18 +47,18 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    <the test that proves it; or, where the area has no tests, the command or manual step, marked GAP>
 
    ## Pointers
-   <spec behaviours and map sections this ticket touches>
+   <spec behaviours and map sections this task touches>
    ```
 
-   `Blocked by` names only a real dependency: the ticket needs the other one's behaviour or code to exist. Tickets that merely edit the same files stay parallel; the orchestrator's merge step handles the overlap.
+   `Blocked by` names only a real dependency: the task needs the other one's behaviour or code to exist. Tasks that merely edit the same files stay parallel; the orchestrator's merge step handles the overlap.
 
-   Done when every behaviour in `spec.md` belongs to a ticket, every tracker issue appears in some ticket's `Issues`, and the blocker graph has no cycle.
+   Done when every behaviour in `spec.md` belongs to a task of the ticket for the issue it came from, every ticket has a task, and the task blocker graph has no cycle.
 
 ## Pass revise
 
-Input: the reason (the human's words, or a ticket path plus an implementer's `why`).
+Input: the reason (the human's words, or a task path plus an implementer's `why`).
 
-Change only what the reason touches, in `spec.md`, `map.md` and `tickets/`. Leave `done` tickets as they are: when one of them needs changing, add a new ticket. Set every ticket you change or add to `ready`. Done when the plan answers the reason and the blocker graph has no cycle.
+Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`. Done when the plan answers the reason and neither blocker graph has a cycle.
 
 ## Report
 
@@ -53,6 +66,6 @@ Your final message is this block and nothing else; details belong in the files y
 
 ```
 status: done | blocked
-changed: <files written; for revise, the tickets changed or added>
+changed: <files written; for revise, the tickets and tasks changed or added>
 why: <one line, when blocked>
 ```

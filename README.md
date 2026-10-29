@@ -35,7 +35,7 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 |---|---|
 | `add-plugin` | Add a Claude Code plugin: show what it adds and costs, then list it in `plugins.txt`, install it and ship the change |
 | `address-review` | Work through a PR's open review threads: verify each claim, fix what holds up test-first, reply to the rest; pushback and design calls go to Rui first |
-| `build-epic` | Take an epic or issue from the tracker to one reviewed PR: planner, explorer and implementer subagents, one human approval of the plan |
+| `build-epic` | Take an epic or issue from the tracker to one reviewed PR per ticket, built from one PR per task: planner, explorer and implementer subagents, one human approval of the plan |
 | `fix-pr` | Make one PR's failing checks pass and push; also the brief for the `pr-fixer` subagent |
 | `remember` | After a skill run, save what it learned about the repo into `.agents/<skill>-notes.md`, after Rui sees the diff; repo-wide or skill-wide lessons become proposals |
 | `renovate-prs` | Fix, verify and merge open Renovate PRs, one isolated subagent per PR |

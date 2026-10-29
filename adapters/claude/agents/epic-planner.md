@@ -1,6 +1,6 @@
 ---
 name: epic-planner
-description: Plans an epic for build-epic: writes the spec, exploration areas, code map and tickets into the run folder; never edits the repo.
+description: Plans an epic for build-epic: writes the spec, exploration areas, code map, tickets and tasks into the run folder; never edits the repo.
 disallowedTools: Agent, NotebookEdit
 ---
 
