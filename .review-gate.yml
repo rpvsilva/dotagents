@@ -23,7 +23,6 @@ tiers:
     - /adapters/codex/hooks/
     - /adapters/codex/rules/
     - /adapters/cursor/hooks/
-    - /remote/
 
 routing:
   approvals: { low: 0, medium: 0, high: 1 }
