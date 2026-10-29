@@ -69,7 +69,7 @@ case "$op" in
 root='"$(sq "$root")"'
 mkdir -p "$root" &&
 find "$root" -mindepth 1 -maxdepth 1 -name "agent-*" -mmin +'"$((hours * 60))"' -exec rm -rf {} + &&
-mkdir -m 700 "$root"/'"$(sq "$run")"' &&
+(umask 077 && mkdir "$root"/'"$(sq "$run")"') &&
 cd "$root"/'"$(sq "$run")"' && pwd' </dev/null
     say "created run folder $run on $host (bare mode)"
     ;;
