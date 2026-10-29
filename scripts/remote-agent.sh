@@ -69,7 +69,9 @@ say() { echo "remote-agent: $*" >&2; }
 stage="$(mktemp -d)"
 run="agent-$(date +%Y%m%d-%H%M%S)-$RANDOM"
 acquired=""
+runner=""
 cleanup() {
+  [ -z "$runner" ] || kill "$runner" 2>/dev/null || true
   [ -z "$acquired" ] || "$backend" release "$run" || true
   rm -rf "$stage"
 }
@@ -111,9 +113,13 @@ tar -C "$stage/home" -chf - . | "$backend" put "$run" "$handle" .
 (cd "$root" && tar -cf - --null -T "$stage/files") | "$backend" put "$run" "$handle" work
 say "sent setup and snapshot"
 
+# In the background, so INT or TERM reach the traps at once rather than when the run ends.
 status=0
 { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
-  | "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox || status=$?
+  | "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox &
+runner=$!
+wait "$runner" || status=$?
+runner=""
 
 keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
 mkdir -p "$keep"

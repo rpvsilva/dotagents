@@ -1,10 +1,10 @@
 # remote
 
-Running subagents on a remote backend for compute only: a Kubernetes cluster today (Docker on this machine and an SSH host are planned). The laptop keeps the code, the git history and the orchestrating session; the backend gets what one subagent needs for one task and gives back a patch. It never touches a repo or GitHub, so it works for any project, including ones the machine's owners have no access to.
+Running subagents on a remote backend for compute only: a Kubernetes cluster or Docker on this machine (an SSH host is planned). The laptop keeps the code, the git history and the orchestrating session; the backend gets what one subagent needs for one task and gives back a patch. It never touches a repo or GitHub, so it works for any project, including ones the machine's owners have no access to.
 
 ## Where the pieces live
 
-- **The cluster side** lives in the cluster's GitOps repo: the agent-sandbox controller, the `agent-runner` image (`tools/agent-runner`) and the `claude-runner` SandboxTemplate and warm pool (`ai-infrastructure/agents`).
+- **The cluster side** lives in the cluster's GitOps repo: the agent-sandbox controller, the `agent-runner` image (`tools/agent-runner`, also used by the `docker` backend) and the `claude-runner` SandboxTemplate and warm pool (`ai-infrastructure/agents`).
 - **This repo is the client**: [`scripts/remote-agent.sh`](../scripts/remote-agent.sh), driving one backend script from [`scripts/remote-backends/`](../scripts/remote-backends/).
 
 ## Use
@@ -42,10 +42,23 @@ Shared helpers for backends live in `scripts/remote-backends/lib.sh`, which is n
 
 An agent-sandbox SandboxClaim on a warm pool, driven with `kubectl exec`; the handle is the pod. Settings: `REMOTE_CONTEXT` (kube context, `maxibombo`), `REMOTE_NAMESPACE` (`agents`), `REMOTE_POOL` (warm pool, `claude-runner`), `REMOTE_HOURS` (the claim's `shutdownTime`, 2), `REMOTE_KEEP=1` (keep the claim: `kept sandboxclaim/<run>`). Needs a kube context that can create SandboxClaims and exec into pods in the namespace.
 
+### `docker`
+
+A fresh container of the runner image on this machine for each run, driven with `docker exec`; the handle is the container, named after the run. It runs `sleep <REMOTE_HOURS*3600>` under `--rm`, so it removes itself after `REMOTE_HOURS` if `remote-agent` dies; otherwise `docker rm -f` removes it at the end, also on failure, Ctrl-C or `kill`. Needs only Docker and the image. Settings, in `remote.env`:
+
+- `REMOTE_BACKEND=docker`.
+- `REMOTE_IMAGE`: the runner image, `ghcr.io/xgeekshq/agent-runner:main` by default. It is private: log in once with `docker login ghcr.io` (your GitHub user and a token with `read:packages`), or build it from `tools/agent-runner` in the cluster's GitOps repo (`docker build -t agent-runner:local tools/agent-runner`) and set `REMOTE_IMAGE=agent-runner:local`.
+- `REMOTE_PLATFORM`: passed to `docker run --platform` when set (e.g. `linux/amd64`); unset, Docker picks this machine's architecture.
+- `REMOTE_HOURS` (2) and `REMOTE_KEEP=1` (keep the container: `kept container <run>`; it still removes itself after `REMOTE_HOURS`).
+
+**Apple Silicon** needs the image published for `linux/arm64` as well as `linux/amd64`, or built locally as above. An amd64-only image runs under emulation with `REMOTE_PLATFORM=linux/amd64`, but slowly.
+
+The container gets Docker's default network: internet egress, and whatever this machine's network reaches. Anyone who can run `docker` here can see the snapshot and the token during a run.
+
 ## Setup, once
 
 - `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) in `~/.config/dotagents/remote.env`.
-- The backend's needs: for the default `cluster`, a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`. See [Backends](#backends).
+- The backend's needs: for the default `cluster`, a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image. See [Backends](#backends).
 
 No GitHub credentials are needed or sent: the PR, if any, is opened from the laptop.
 
