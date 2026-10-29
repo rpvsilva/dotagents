@@ -21,7 +21,7 @@ Ship the current changes as one PR, the way this repo wants PRs shipped. The rep
 
 4. **Commit and push.** Commit with the repo's convention, then `git push -u origin <branch>`. Done when the branch is on the remote.
 
-5. **Open the PR** with the identity from step 1. Fill every section of the template: under testing, the commands you ran and their results. When the branch already has an open PR (`gh pr view` on GitHub), update its body (`gh pr edit <n> --body-file <file>`) and mark it ready for review (`gh pr ready <n>`) instead of opening a new one; where the host has no drafts, drop a `WIP:` title prefix instead. Done when the PR URL exists, the PR is not a draft, and no template section is empty.
+5. **Open the PR** with the identity from step 1, titled by the commit convention: a squash merge makes the title the commit on the default branch. Fill every section of the template: under testing, the commands you ran and their results. When the branch already has an open PR (`gh pr view` on GitHub), update its body (`gh pr edit <n> --body-file <file>`), set its title when it differs (`gh pr edit <n> --title <title>`), and mark it ready for review (`gh pr ready <n>`) instead of opening a new one; where the host has no drafts, drop a `WIP:` title prefix instead. Done when the PR URL exists, the PR is not a draft, and no template section is empty.
 
 6. **Get it green.** `gh pr checks <n> --watch`. On a **red** check, start the PR fixer agent if your harness defines one, otherwise follow [fix-pr](../fix-pr/SKILL.md) yourself; then watch again. Done when every check passes, or a failure remains that needs a human (a secret, an approval).
 
