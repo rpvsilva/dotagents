@@ -1,17 +1,16 @@
 name: Runner image
 
 # Builds remote/Dockerfile: on PRs that touch it, to check it builds; on main, to push it to GHCR.
-# The image snapshots the whole repo, so every push to main publishes a fresh one.
 on:
   pull_request:
     paths:
-      - remote/**
-      - .dockerignore
-      - install.sh
-      - scripts/**
+      - remote/Dockerfile
       - .github/workflows/runner-image.yml
   push:
     branches: [main]
+    paths:
+      - remote/Dockerfile
+      - .github/workflows/runner-image.yml
   workflow_dispatch:
 
 permissions:
@@ -31,7 +30,6 @@ jobs:
       contents: read
       packages: write
     steps:
-      # No persisted credentials: the checkout's .git goes into the image.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -44,8 +42,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
-          file: remote/Dockerfile
+          context: remote
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: |

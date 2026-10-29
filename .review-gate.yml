@@ -24,7 +24,6 @@ tiers:
     - /adapters/codex/rules/
     - /adapters/cursor/hooks/
     - /remote/
-    - /.dockerignore
 
 routing:
   approvals: { low: 0, medium: 0, high: 1 }
