@@ -261,7 +261,8 @@ grep -qF 'CLAUDE_CODE_OAUTH_TOKEN=[redacted]' "$k/stream.jsonl" || fail "real sa
 # The session comes back and is kept with the run, but nothing is placed for /resume: the sandbox wrote it.
 [ -f "$k/session.jsonl" ] || fail "real sandbox: session not kept with the run"
 [ ! -e "$CC/projects" ] || fail "real sandbox: session placed without being asked: $(find "$CC" -type f)"
-grep -q "remote-agent: session: $k/session.jsonl .*remote-agent resume $claim " "$SANDBOX/err" \
+# The script prints the resolved path (macOS: /var is /private/var), so match its tail.
+grep -q "remote-agent: session: .*/.git/remote-agent/$claim/session.jsonl .*remote-agent resume $claim " "$SANDBOX/err" \
   || fail "real sandbox: how to resume not printed: $(cat "$SANDBOX/err")"
 grep -q "sessionId\|sk-claude-secret" "$k/changes.patch" && fail "real sandbox: the session is in the patch"
 git -C "$W" status --porcelain | grep -q "session" && fail "real sandbox: the session shows in the worktree"
