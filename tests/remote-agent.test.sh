@@ -231,6 +231,12 @@ claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
 logged_all "[$claim]" "$POD/main-stdout" "real sandbox"
 grep -q "→ Write hello.txt" "$POD/main-stdout" || fail "real sandbox: Claude's progress not in the sandbox log"
 grep -q "sk-claude-secret" "$POD/main-stdout" "$SANDBOX/out" && fail "real sandbox: the token reached a log"
+# Its raw events come back on the run's stdout into the transcript, not onto stdout.
+t="$W/.git/remote-agent/$claim/transcript.jsonl"
+[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr '\n' ' ')" = "assistant result " ] \
+  || fail "real sandbox: transcript does not hold Claude's events: $(cat "$t" 2>/dev/null)"
+grep -q "first agent event after [0-9]*s" "$SANDBOX/err" || fail "real sandbox: no first-event time"
+[ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "real sandbox: stdout is not just the summary: $(cat "$SANDBOX/report")"
 # Without a main-process stdout (SSH bare mode) the log is ~/progress.log.
 rm -f "$W/hello.txt"
 : >"$SANDBOX/nomain"
@@ -308,6 +314,63 @@ grep -q "cluster" "$SANDBOX/out" || fail "unknown backend: message does not list
 grep -qw "lib" "$SANDBOX/out" && fail "unknown backend: lib.sh listed as a backend"
 grep -q "snapshot:" "$SANDBOX/out" && fail "unknown backend: something was staged"
 echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$SANDBOX/config/dotagents/remote.env"
+
+# The transcript is written live: the stub's sandbox run prints a banner and two events (one echoing the token),
+# touches $SANDBOX/started and waits for $SANDBOX/go; the events are in transcript.jsonl while the run is alive,
+# the banner never, the token redacted. Its path is printed before the claim.
+mv "$SANDBOX/bin/kubectl" "$SANDBOX/kubectl.real"
+cat >"$SANDBOX/bin/kubectl" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" remote-agent-sandbox"*)
+    cat >/dev/null
+    echo "Warning: not an event"
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"user","text":"env: CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"}'
+    : >"$SANDBOX/started"
+    for _ in \$(seq 300); do [ -e "$SANDBOX/go" ] && break; sleep 0.1; done
+    mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"; echo "did the thing" >"$POD/out/summary.md"
+    exit 0 ;;
+esac
+exec "$SANDBOX/kubectl.real" "\$@"
+EOF
+chmod +x "$SANDBOX/bin/kubectl"
+printf '%s' "$patch" >"$SANDBOX/patch"
+rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started" "$SANDBOX/go" "$W/.git/remote-agent"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" &
+pid=$!
+for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
+live=""
+for _ in $(seq 100); do
+  if grep -qs '"subtype":"init"' "$W"/.git/remote-agent/*/transcript.jsonl; then live=1; break; fi
+  sleep 0.1
+done
+[ -n "$live" ] || fail "live transcript: event not in transcript.jsonl during the run"
+kill -0 "$pid" 2>/dev/null || fail "live transcript: the run ended before the check"
+: >"$SANDBOX/go"
+wait "$pid" || fail "live transcript: exited non-zero: $(cat "$SANDBOX/err")"
+claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
+t="$W/.git/remote-agent/$claim/transcript.jsonl"
+[ "$(grep -c . "$t" 2>/dev/null)" = 2 ] || fail "live transcript: wanted the 2 events, got: $(cat "$t" 2>/dev/null)"
+grep -q "not an event" "$t" 2>/dev/null && fail "live transcript: a non-JSON line was kept"
+grep -q "sk-claude-secret" "$t" 2>/dev/null && fail "live transcript: the token was kept"
+grep -qF 'CLAUDE_CODE_OAUTH_TOKEN=[redacted]' "$t" 2>/dev/null || fail "live transcript: the token not replaced by [redacted]"
+grep -q "sk-claude-secret" "$SANDBOX/report" "$SANDBOX/err" && fail "live transcript: the token reached the output"
+grep -q "Warning: not an event" "$SANDBOX/report" "$SANDBOX/err" && fail "live transcript: the banner reached the output"
+[ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "live transcript: stdout is not just the summary: $(cat "$SANDBOX/report")"
+at() { grep -n "$1" "$SANDBOX/err" | head -1 | cut -d: -f1 || true; }
+p="$(at "remote-agent: transcript: .*/remote-agent/$claim/transcript.jsonl\$")"
+c="$(at "remote-agent: claimed in [0-9]*s\$")"
+if [ -z "$p" ] || [ -z "$c" ] || [ "$p" -ge "$c" ]; then fail "live transcript: path line not before the claim line: $(cat "$SANDBOX/err")"; fi
+[ -n "$(at "remote-agent: sent setup and snapshot in [0-9]*s\$")" ] || fail "live transcript: no send time: $(cat "$SANDBOX/err")"
+[ -n "$(at "remote-agent: first agent event after [0-9]*s\$")" ] || fail "live transcript: no first-event time: $(cat "$SANDBOX/err")"
+[ "$(grep -c "first agent event" "$SANDBOX/err")" = 1 ] || fail "live transcript: first-event time printed more than once"
+logged_all "[$claim]" "$POD/main-stdout" "live transcript"
+git -C "$W" status --porcelain | grep -q "transcript" && fail "live transcript: the transcript shows in the worktree"
+grep -q "transcript" "$W/.git/remote-agent/$claim/changes.patch" && fail "live transcript: the transcript is in the patch"
+rm -f "$W/hello.txt" "$SANDBOX/started" "$SANDBOX/go"
+mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
 # TERM mid-run still releases the sandbox through the exit cleanup, and stops the backend's `kubectl exec` too: the
 # stub's sandbox run hangs, its pid in $SANDBOX/backend.pid.
