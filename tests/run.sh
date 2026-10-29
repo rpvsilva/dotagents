@@ -9,17 +9,20 @@ status=0
 step() { echo "== $1"; shift; "$@" || status=1; }
 
 # Lint at the shellcheck version pinned in scripts/shellcheck-version, the one CI runs: the local binary when it
-# matches, else the pinned docker image.
+# matches, else the image pinned by digest in scripts/shellcheck-image, with the checkout mounted read-only.
 pin="$(tr -d '\r\n' <scripts/shellcheck-version)"
+image="$(tr -d '\r\n' <scripts/shellcheck-image)"
 local_version=""
 if command -v shellcheck >/dev/null; then
   local_version="$(shellcheck --version | sed -n 's/^version: //p' | tr -d '\r')"
 fi
 if [ "$local_version" = "$pin" ]; then
   step shellcheck sh -c "git ls-files -z '*.sh' | xargs -0 shellcheck"
+elif command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  step "shellcheck ($image)" sh -c \
+    "git ls-files -z '*.sh' | xargs -0 docker run --rm -v \"\$PWD:/mnt:ro\" -w /mnt $image"
 elif command -v docker >/dev/null; then
-  step "shellcheck (koalaman/shellcheck:v$pin)" sh -c \
-    "git ls-files -z '*.sh' | xargs -0 docker run --rm -v \"\$PWD:/mnt\" -w /mnt koalaman/shellcheck:v$pin"
+  echo "== shellcheck: $pin not installed and the docker daemon is not running, skipped (start docker, or install $pin)"
 elif [ -n "$local_version" ]; then
   echo "== shellcheck: found $local_version, need $pin (scripts/shellcheck-version)."
   echo "   Install $pin from https://github.com/koalaman/shellcheck/releases/tag/v$pin, or install docker to run its image."
