@@ -15,7 +15,8 @@
 # secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
 # run scripts/remote-agent-sandbox.sh there; get the patch back and apply it with `git apply`, uncommitted.
 # The sandbox is released on exit, also on INT or TERM, once the run's processes here (the backend's client among
-# them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first.
+# them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first (SSH bare
+# mode: the first acquire 10 minutes past it kills the run and removes its folder).
 # Prints Claude's progress on stderr and the summary on stdout. The progress also goes to the sandbox's own log (its
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
 # SSH bare mode). Keeps the patch and summary in <git dir>/remote-agent/<run>/.
