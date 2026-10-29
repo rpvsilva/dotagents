@@ -36,4 +36,13 @@ fi
 
 for t in tests/*.test.sh; do step "$t" "$t"; done
 
+# macOS: run the suites again under /bin/bash 3.2. A `bash -> /bin/bash` shim first on PATH,
+# for this pass only, makes the scripts they call through `#!/usr/bin/env bash` run under 3.2 too.
+if [ "$(uname -s)" = Darwin ] && [ -x /bin/bash ]; then
+  shim="$(mktemp -d)"
+  trap 'rm -rf "$shim"' EXIT
+  ln -s /bin/bash "$shim/bash"
+  for t in tests/*.test.sh; do step "$t (bash 3.2)" env PATH="$shim:$PATH" /bin/bash "$t"; done
+fi
+
 exit "$status"
