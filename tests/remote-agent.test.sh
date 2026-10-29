@@ -154,6 +154,8 @@ run() {
 logged_all() {
   local line
   while IFS= read -r line; do
+    # jq.exe ends its lines with CRLF, and grep on Windows drops the CR from the log it reads.
+    line="${line%$'\r'}"
     case "$line" in
       "$1 "*) grep -qxF -- "${line#"$1 "}" "$2" 2>/dev/null || fail "$3: not in the sandbox log: $line" ;;
       *) fail "$3: progress line without $1: $line" ;;
