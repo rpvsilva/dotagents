@@ -23,13 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
-        # The version pinned in scripts/shellcheck-version, which tests/run.sh also runs. The release binary, not the
-        # koalaman/shellcheck image: a self-hosted runner in Docker has no Docker daemon. Python unpacks it (no xz there).
+        # The version pinned in scripts/shellcheck-version, which tests/run.sh also runs. The release binary, checked
+        # against its sha256, not the koalaman/shellcheck image: a self-hosted runner in Docker has no Docker daemon.
+        # Bumping the version means new sums here. Python unpacks it: the runner image has no xz.
         run: |
-          pin="$(cat scripts/shellcheck-version)"
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$pin/shellcheck-v$pin.linux.$(uname -m).tar.xz" |
-            python3 -c 'import sys, tarfile; tarfile.open(fileobj=sys.stdin.buffer, mode="r|xz").extractall(filter="data")'
-          git ls-files -z '*.sh' | xargs -0 "./shellcheck-v$pin/shellcheck"
+          pin="$(tr -d '\r\n' <scripts/shellcheck-version)"
+          case "$pin $(uname -m)" in
+            "0.11.0 x86_64") sum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
+            "0.11.0 aarch64") sum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588 ;;
+            *) echo "no sha256 for shellcheck $pin on $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v$pin/shellcheck-v$pin.linux.$(uname -m).tar.xz"
+          echo "$sum  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          python3 -c 'import sys, tarfile; tarfile.open(sys.argv[1], "r:xz").extractall(sys.argv[2], filter="data")' \
+            "$RUNNER_TEMP/shellcheck.tar.xz" "$RUNNER_TEMP"
+          git ls-files -z '*.sh' | xargs -0 "$RUNNER_TEMP/shellcheck-v$pin/shellcheck"
       # The release binary, not the docker:// action: a self-hosted runner in Docker has no Docker daemon.
       - name: actionlint
         run: |
