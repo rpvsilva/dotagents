@@ -4,7 +4,7 @@
 # Stdin: the Claude token (one line), then the brief.
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
 # progress on stderr and its raw stream-json events on stdout, and leaves ~/out/changes.patch (everything changed
-# since the base), ~/out/summary.md and ~/out/stream.jsonl.
+# since the base), ~/out/summary.md, ~/out/stream.jsonl and ~/out/session.jsonl (Claude's session, the token redacted).
 # The sandbox has no git remote and no GitHub credentials: results only leave as that patch.
 # Its progress also goes to the sandbox's own log, so `kubectl logs` / `docker logs` show the run live: the main
 # process's stdout (/proc/1/fd/1, writable by the runner user in a pod or container), else ~/progress.log. A backend
@@ -62,6 +62,24 @@ claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules
         elif .type == "tool_use" then "  → \(.name) \(.input.command // .input.file_path // .input.pattern // .input.description // "" | tostring | gsub("\n"; " ") | .[0:120])"
         else empty end' >&2
 jq -r 'select(.type == "result") | .result // ""' "$HOME/out/stream.jsonl" >"$HOME/out/summary.md"
+
+# The session Claude wrote, named by its init event, goes back as ~/out/session.jsonl with the token's value (through
+# the environment, never argv) replaced by [redacted]; remote-agent.sh places it for /resume. Missing: said, not fatal.
+session_id="$(jq -r 'select(.type == "system" and .subtype == "init") | .session_id // empty' "$HOME/out/stream.jsonl" | head -1 | tr -d '\r')"
+session=""
+if [ -n "$session_id" ]; then
+  for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$session_id.jsonl"; do
+    if [ -f "$f" ]; then session="$f"; break; fi
+  done
+fi
+if [ -n "$session" ]; then
+  awk 'BEGIN { tok = ENVIRON["CLAUDE_CODE_OAUTH_TOKEN"] }
+    { s = $0; out = ""
+      while (tok != "" && (i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) "[redacted]"; s = substr(s, i + length(tok)) }
+      print out s }' "$session" >"$HOME/out/session.jsonl"
+else
+  echo "== no session file${session_id:+ for $session_id}: the run cannot be resumed" >&2
+fi
 if jq -e 'select(.type == "result") | .is_error' "$HOME/out/stream.jsonl" >/dev/null; then
   echo "== claude reported an error" >&2
   exit 1

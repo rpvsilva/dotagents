@@ -101,7 +101,8 @@ case " \$* " in
   *" remote-agent-sandbox"*)
     if [ -e "$SANDBOX/real" ]; then
       while [ "\$1" != "-c" ]; do shift; done
-      tee "$SANDBOX/stdin" | HOME="$POD" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/$POD/main-stdout}" "\$3"
+      # A pod does not get this machine's CLAUDE_CONFIG_DIR.
+      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="$POD" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/$POD/main-stdout}" "\$3"
       exit
     fi
     cat >"$SANDBOX/stdin"
@@ -116,9 +117,21 @@ esac
 EOF
 chmod +x "$SANDBOX/bin/kubectl"
 mkdir -p "$SANDBOX/podbin"
-cat >"$SANDBOX/podbin/claude" <<'EOF'
+# It also starts a session as Claude does, under $HOME/.claude/projects/<munged cwd>, holding the token and cwd
+# lines; not with $SANDBOX/nosession.
+cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
-[ "$1" = -p ] || exit 0
+[ "\$1" = -p ] || exit 0
+if [ ! -e "$SANDBOX/nosession" ]; then
+  id=0b1e5e55-1d00-4c1a-9a7e-5e551011d000
+  echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"\$id\",\"cwd\":\"\$PWD\"}"
+  d="\$HOME/.claude/projects/\$(printf '%s' "\$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "\$d"
+  printf '{"type":"user","cwd":"%s","sessionId":"%s","message":"env: CLAUDE_CODE_OAUTH_TOKEN=%s"}\n' "\$PWD" "\$id" "\$CLAUDE_CODE_OAUTH_TOKEN" >"\$d/\$id.jsonl"
+  printf '{"type":"assistant","cwd":"%s","sessionId":"%s"}\n{"type":"last-prompt","sessionId":"%s"}\n' "\$PWD" "\$id" "\$id" >>"\$d/\$id.jsonl"
+fi
+EOF
+cat >>"$SANDBOX/podbin/claude" <<'EOF'
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"},{"type":"tool_use","name":"Write","input":{"file_path":"hello.txt"}}]}}'
 printf 'hello\n' >hello.txt
 echo '{"type":"result","result":"did the thing","is_error":false}'
@@ -139,6 +152,8 @@ printf 'local\n' >"$W/untracked.txt"
 printf 'ignored\n' >"$W/ignored.txt"
 printf 'KEY=1\n' >"$W/.env"
 
+# This machine's Claude config, where a run's session is placed.
+CC="$SANDBOX/claude-config"
 # Runs remote-agent.sh in $W with the fake run exiting $1 and returning patch $2; further arguments are options.
 # Stdout goes to $SANDBOX/report, stderr to $SANDBOX/err, both to $SANDBOX/out.
 run() {
@@ -148,7 +163,7 @@ run() {
   rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/stdin" "$SANDBOX/log-at-run"
   local code=0
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    "$REPO/scripts/remote-agent.sh" "$@" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?
+    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" "$@" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?
   cat "$SANDBOX/report" "$SANDBOX/err" >"$SANDBOX/out"
   return "$code"
 }
@@ -197,6 +212,7 @@ grep -qF "sandbox.users.io/remote-agent-run: $claim" "$SANDBOX/claim.yaml" || fa
 [ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim" ] || fail "pod labels: wanted only the run, got $(pod_labels)"
 [ -f "$W/.git/remote-agent/$claim/changes.patch" ] || fail "patch not kept under .git/remote-agent/$claim"
 grep -q "delete sandboxclaim $claim " "$SANDBOX/calls" || fail "claim not deleted"
+grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "no session: not reported: $(cat "$SANDBOX/err")"
 grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not delete on shutdown"
 rm "$W/hello.txt"
 
@@ -233,10 +249,34 @@ grep -q "→ Write hello.txt" "$POD/main-stdout" || fail "real sandbox: Claude's
 grep -q "sk-claude-secret" "$POD/main-stdout" "$SANDBOX/out" && fail "real sandbox: the token reached a log"
 # Its raw events come back on the run's stdout into the transcript, not onto stdout.
 t="$W/.git/remote-agent/$claim/transcript.jsonl"
-[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr '\n' ' ')" = "assistant result " ] \
+[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr '\n' ' ')" = "system assistant result " ] \
   || fail "real sandbox: transcript does not hold Claude's events: $(cat "$t" 2>/dev/null)"
 grep -q "first agent event after [0-9]*s" "$SANDBOX/err" || fail "real sandbox: no first-event time"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "real sandbox: stdout is not just the summary: $(cat "$SANDBOX/report")"
+# The session comes back too, placed under this machine's Claude config in the worktree's project folder, its cwd the
+# worktree's real path; neither it nor the copy kept with the run holds the token, and the patch has neither.
+real_w="$(cd "$W" && pwd -P)"
+s="$CC/projects/$(printf '%s' "$real_w" | sed 's/[^A-Za-z0-9]/-/g')/0b1e5e55-1d00-4c1a-9a7e-5e551011d000.jsonl"
+k="$W/.git/remote-agent/$claim/session.jsonl"
+[ -f "$s" ] || fail "real sandbox: session not placed at $s: $(find "$CC" -type f 2>/dev/null) $(cat "$SANDBOX/err")"
+[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -r 'select(.cwd) | .cwd' | tr -d '\r' | sort | uniq -c | sed 's/^ *//')" = "2 $real_w" ] \
+  || fail "real sandbox: session cwd not the worktree's real path: $(cat "$s" 2>/dev/null)"
+[ "$(grep -c . "$s" 2>/dev/null)" = 3 ] || fail "real sandbox: session lines lost: $(cat "$s" 2>/dev/null)"
+grep -qF "$s" "$SANDBOX/err" || fail "real sandbox: session path not printed: $(cat "$SANDBOX/err")"
+[ -f "$k" ] || fail "real sandbox: session not kept with the run"
+grep -q "sk-claude-secret" "$s" "$k" && fail "real sandbox: the token is in the session"
+grep -qF 'CLAUDE_CODE_OAUTH_TOKEN=[redacted]' "$s" || fail "real sandbox: the token not replaced by [redacted] in the session"
+grep -q "sessionId\|sk-claude-secret" "$W/.git/remote-agent/$claim/changes.patch" && fail "real sandbox: the session is in the patch"
+git -C "$W" status --porcelain | grep -q "session" && fail "real sandbox: the session shows in the worktree"
+# A run whose session is missing still applies its patch, and says so.
+rm -rf "$W/hello.txt" "$CC"
+: >"$SANDBOX/nosession"
+run 0 "" || fail "real no session: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "real no session: patch not applied"
+grep -q "== no session file" "$POD/main-stdout" || fail "real no session: the sandbox did not report it: $(cat "$SANDBOX/err")"
+grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "real no session: not reported: $(cat "$SANDBOX/err")"
+[ ! -e "$CC/projects" ] || fail "real no session: something placed: $(find "$CC" -type f)"
+rm -f "$SANDBOX/nosession"
 # Without a main-process stdout (SSH bare mode) the log is ~/progress.log.
 rm -f "$W/hello.txt"
 : >"$SANDBOX/nomain"
