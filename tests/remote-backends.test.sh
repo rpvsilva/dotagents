@@ -231,6 +231,10 @@ case "$f" in
   *) fail "bare: HOME in the sandbox is not a run folder under $runs: $f" ;;
 esac
 [ -f "$W/.git/remote-agent/${f##*/}/changes.patch" ] || fail "bare: patch not kept under .git/remote-agent/${f##*/}"
+grep -q '"text":"writing the hello file"' "$W/.git/remote-agent/${f##*/}/transcript.jsonl" 2>/dev/null \
+  || fail "bare: Claude's events not in transcript.jsonl"
+grep -q "remote-agent: transcript: .*/remote-agent/${f##*/}/transcript.jsonl$" "$SANDBOX/out" \
+  || fail "bare: transcript path not printed: $(cat "$SANDBOX/out")"
 [ "$(sed -n '2,6p' "$S/claude-env")" = "$f/.config
 $f/.local/share
 $f/.cache
