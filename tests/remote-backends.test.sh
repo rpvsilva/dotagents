@@ -23,7 +23,7 @@ mkdir -p "$H" "$SANDBOX/config/dotagents"
 stub_docker "$SANDBOX/bin" "$S"
 stub_ssh "$SANDBOX/bin" "$S"
 make_worktree "$W"
-# This machine's Claude config, where a run's session is placed.
+# This machine's Claude config, where `remote-agent resume` places a run's session.
 CC="$SANDBOX/claude-config"
 
 # Runs remote-agent.sh in $W with the remote.env lines given after the fake run's exit code $1 and patch $2; with
@@ -249,11 +249,18 @@ $f/.cache
 $f/.claude
 $f/work" ] || fail "bare: XDG folders, CLAUDE_CONFIG_DIR or the working folder not in the run folder: $(cat "$S/claude-env")"
 grep -q "no token" "$S/claude-env" && fail "bare: Claude did not get the token"
-# The session comes back from the run folder's .claude, placed for /resume in the worktree, without the token.
+# The session comes back from the run folder's .claude, kept with the run without the token, and placed for /resume
+# in the worktree only by `remote-agent resume`.
+k="$W/.git/remote-agent/${f##*/}"
+[ -f "$k/session.jsonl" ] || fail "bare: session not kept with the run: $(cat "$SANDBOX/out")"
+[ ! -e "$CC/projects" ] || fail "bare: session placed without being asked: $(find "$CC" -type f)"
+grep -rl "sk-claude-secret" "$k" && fail "bare: the token is in a kept file"
+(cd "$W" && env HOME="$H" CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" resume "${f##*/}") >/dev/null 2>&1 \
+  || fail "bare: resume exited non-zero"
 real_w="$(cd "$W" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then real_w="$(cygpath -w "$real_w")"; fi
 s="$CC/projects/$(printf '%s' "$real_w" | sed 's/[^A-Za-z0-9]/-/g')/5e551011-ba7e-4000-8000-000000000001.jsonl"
-[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -r .cwd | tr -d '\r')" = "$real_w" ] || fail "bare: session not placed at $s with the worktree's cwd: $(cat "$SANDBOX/out")"
-grep -q "sk-claude-secret" "$s" "$W/.git/remote-agent/${f##*/}/session.jsonl" && fail "bare: the token is in the session"
+[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -r .cwd | tr -d '\r')" = "$real_w" ] || fail "bare: session not placed at $s with the worktree's cwd: $(find "$CC" -type f 2>/dev/null)"
 if [ -z "$f" ] || [ -e "$f" ]; then fail "bare: run folder $f not removed after release"; fi
 grep -q -- "--warning\|--no-same-owner" "$S/calls" && fail "bare: tar flags beyond plain GNU/BSD ones: $(grep tar "$S/calls")"
 if grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@trusted-box "; then
