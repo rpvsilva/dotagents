@@ -23,9 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
+        # The version pinned in scripts/shellcheck-version, which tests/run.sh also runs. The release binary, not the
+        # koalaman/shellcheck image: a self-hosted runner in Docker has no Docker daemon. Python unpacks it (no xz there).
         run: |
-          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
-          git ls-files -z '*.sh' | xargs -0 shellcheck
+          pin="$(cat scripts/shellcheck-version)"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$pin/shellcheck-v$pin.linux.$(uname -m).tar.xz" |
+            python3 -c 'import sys, tarfile; tarfile.open(fileobj=sys.stdin.buffer, mode="r|xz").extractall(filter="data")'
+          git ls-files -z '*.sh' | xargs -0 "./shellcheck-v$pin/shellcheck"
       # The release binary, not the docker:// action: a self-hosted runner in Docker has no Docker daemon.
       - name: actionlint
         run: |
