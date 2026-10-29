@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Cluster backend for scripts/remote-agent.sh: a warm sandbox from agent-sandbox on Kubernetes, claimed with a
 # SandboxClaim and driven with `kubectl exec`.
-# Usage: cluster.sh acquire <run> | put <run> <pod> <dir> | run <run> <pod> <argv>... | get <run> <pod> <dir> | release <run>
+# Usage: cluster.sh acquire <run> | put <run> <pod> <dir> | run <run> <pod> <argv>... | get <run> <pod> <dir> | release <run> | check
 # acquire claims a sandbox and prints its pod; its shutdownTime deletes it after REMOTE_HOURS if release never comes.
 # put extracts the tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release deletes the claim (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
+# check names, one line each, what is missing: kubectl, the context, permission to create sandboxclaims and pods/exec
+# in the namespace.
 # Settings: REMOTE_CONTEXT (kube context, default maxibombo), REMOTE_NAMESPACE (agents), REMOTE_POOL (claude-runner),
 # REMOTE_HOURS (2), REMOTE_KEEP, REMOTE_CLAIM_TIMEOUT (seconds acquire waits for the claim to be Ready, 180);
 # REMOTE_TASK (set by remote-agent.sh from --name, a valid label value).
@@ -99,8 +101,25 @@ YAML
       kc delete sandboxclaim "$2" --wait=false --ignore-not-found >/dev/null || true
     fi
     ;;
+  check)
+    command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found on PATH"; exit 1; }
+    # Captured first: under pipefail, grep -q stopping early could fail kubectl with SIGPIPE.
+    contexts="$(kubectl config get-contexts -o name 2>/dev/null || true)"
+    if ! printf '%s\n' "$contexts" | grep -qxF "$context"; then
+      echo "kube context $context not found (kubectl config get-contexts; REMOTE_CONTEXT to pick another)"
+      exit 1
+    fi
+    missing=0
+    for what in sandboxclaims.extensions.agents.x-k8s.io pods/exec; do
+      if [ "$(kc auth can-i create "$what" 2>/dev/null || true)" != yes ]; then
+        echo "no permission to create ${what%%.*} in namespace $namespace (context $context)"
+        missing=1
+      fi
+    done
+    exit "$missing"
+    ;;
   *)
-    echo "usage: cluster.sh acquire|put|run|get|release <run> [<pod> ...]" >&2
+    echo "usage: cluster.sh acquire|put|run|get|release|check <run> [<pod> ...]" >&2
     exit 1
     ;;
 esac

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Docker backend for scripts/remote-agent.sh: a fresh container of the runner image on this machine per run,
 # driven with `docker exec`. Only Docker and the image are needed.
-# Usage: docker.sh acquire <run> | put <run> <container> <dir> | run <run> <container> <argv>... | get <run> <container> <dir> | release <run>
+# Usage: docker.sh acquire <run> | put <run> <container> <dir> | run <run> <container> <argv>... | get <run> <container> <dir> | release <run> | check
 # acquire starts container <run> and prints its name; its command is `sleep <REMOTE_HOURS*3600>` under --rm, so it
 # removes itself after REMOTE_HOURS if release never comes.
 # put extracts the tar on stdin under the container's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release removes the container (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
+# check names what is missing: docker, the Docker daemon, the image (pulled when absent); and notes on stderr when the
+# image's architecture differs from the machine's (it would run emulated).
 # Settings: REMOTE_IMAGE (ghcr.io/xgeekshq/agent-runner:main), REMOTE_PLATFORM (passed as --platform when set;
 # otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
 # ssh.sh runs this script with DOCKER_SSH_HOST set: every docker command then runs on that host, one ssh call each,
@@ -28,6 +30,15 @@ docker_cmd() {
 }
 dk() { docker_cmd "$@"; "${cmd[@]}"; }
 where="${DOCKER_SSH_HOST:+ on $DOCKER_SSH_HOST}"
+
+# Docker's name for an architecture: amd64 for x86_64, arm64 for aarch64.
+arch_name() {
+  case "$1" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    *) echo "$1" ;;
+  esac
+}
 
 # GNU tar in the image would warn about the xattr headers macOS tar adds.
 untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
@@ -63,8 +74,28 @@ case "$op" in
       dk rm -f "$2" </dev/null >/dev/null 2>&1 || true
     fi
     ;;
+  check)
+    if [ -z "${DOCKER_SSH_HOST:-}" ] && ! command -v docker >/dev/null 2>&1; then echo "docker not found on PATH"; exit 1; fi
+    # shellcheck disable=SC2016 # a Go template for docker
+    if ! machine="$(dk info --format '{{.Architecture}}' </dev/null 2>/dev/null)"; then
+      echo "Docker daemon not reachable$where (docker info failed: is it running, and may this user use it?)"
+      exit 1
+    fi
+    # shellcheck disable=SC2016
+    inspect() { dk image inspect --format '{{.Architecture}}' "$image" </dev/null 2>/dev/null; }
+    if ! arch="$(inspect)"; then
+      say "pulling $image$where"
+      if ! dk pull "$image" </dev/null >/dev/null 2>&1 || ! arch="$(inspect)"; then
+        echo "image $image$where: not present and not pullable (docker login to its registry, or build it and set REMOTE_IMAGE)"
+        exit 1
+      fi
+    fi
+    if [ "$(arch_name "$arch")" != "$(arch_name "$machine")" ]; then
+      say "note: image $image is $(arch_name "$arch"), the machine$where is $(arch_name "$machine"): it runs emulated, slowly"
+    fi
+    ;;
   *)
-    echo "usage: docker.sh acquire|put|run|get|release <run> [<container> ...]" >&2
+    echo "usage: docker.sh acquire|put|run|get|release|check <run> [<container> ...]" >&2
     exit 1
     ;;
 esac

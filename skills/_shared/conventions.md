@@ -14,7 +14,7 @@ At most **N** subagents run at once (the **slots**): `--parallel N`, else `max_p
 
 ## Remote subagents
 
-A subagent the skill marks **remote-capable** (it only changes its worktree) runs on the remote backend set in `~/.config/dotagents/remote.env` (a cluster by default) instead of this machine when that file exists and the human did not ask for `--local`. The backend is compute only: it gets this machine's setup, a snapshot of the worktree and the files you attach, and gives back a patch. It has no GitHub access and no git branches, so it cannot push, open a PR, read CI logs or see another branch. Details: [remote/README.md](../../remote/README.md). The human creates `remote.env` with `~/.agents/bin/remote-agent setup`; without it, subagents run locally.
+A subagent the skill marks **remote-capable** (it only changes its worktree) runs on the remote backend set in `~/.config/dotagents/remote.env` (a cluster by default) instead of this machine when that file exists and the human did not ask for `--local`. The backend is compute only: it gets this machine's setup, a snapshot of the worktree and the files you attach, and gives back a patch. It has no GitHub access and no git branches, so it cannot push, open a PR, read CI logs or see another branch. Details: [remote/README.md](../../remote/README.md). The human creates `remote.env` with `~/.agents/bin/remote-agent setup` and proves it with `remote-agent check`; without it, subagents run locally.
 
 1. Create the worktree as for a local subagent.
 2. Write the message you would hand the subagent into a file. Name the worktree as `~/work`, and every other input as `~/attached/<its file or folder name>`. Attach only what its brief reads, never a whole run folder holding other worktrees.

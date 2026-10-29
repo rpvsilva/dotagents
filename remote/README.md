@@ -35,6 +35,7 @@ Exit codes: 0 applied, 3 no changes, 4 the patch did not apply (the worktree cha
 | `run <run> <handle> <argv>...` | Runs the command in the sandbox with stdin, stdout and stderr streamed; returns its exit code. |
 | `get <run> <handle> <dir>` | Writes a tar of the sandbox's `$HOME/<dir>` on stdout. |
 | `release <run>` | Removes the sandbox, even after a half-done `acquire`; with `REMOTE_KEEP=1` keeps it and says what it kept. |
+| `check` | Names, one line each, what this backend needs and is missing; fails when anything is. Used by `remote-agent check`. |
 
 Shared helpers for backends live in `scripts/remote-backends/lib.sh`, which is not a backend.
 
@@ -91,6 +92,12 @@ With `REMOTE_SSH_MODE=bare` the run happens directly on the host, as the SSH use
 ```
 
 `setup` asks for the backend and its details (cluster: kube context, the current one by default, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
+
+`check` proves the setup without spending tokens. It names each missing thing on its own line, then ends with a dry run, and exits 0 only when everything passes (it prints `ok` last):
+
+- `remote.env` exists (without it, it says so and points to `setup`) and sets `CLAUDE_CODE_OAUTH_TOKEN`; the token is checked as set, never printed, and not sent anywhere.
+- The backend's needs. `cluster`: `kubectl` on `PATH`, the kube context, and `kubectl auth can-i` to create SandboxClaims and `pods/exec` in the namespace. `docker`: the Docker daemon (`docker info`), the image present or pullable, and a note when the image's architecture differs from the machine's (it would run emulated). `ssh`: the host reachable with `ssh -o BatchMode=yes`, then the `docker` checks run on the host (container mode) or the tools bare mode needs (bare mode).
+- The dry run, only when nothing is missing: acquire a sandbox, put a one-file snapshot in `~/work`, run a shell command that copies it to `~/out` and finds `claude`, get `~/out` back and compare, release. No Claude call. The sandbox is released even when a step fails, and the failing step is named.
 
 By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image; for `ssh`, key-based SSH to a host with Docker and the image (bare mode: the tools listed under [Bare mode](#bare-mode-trusted-hosts-only) instead).
 

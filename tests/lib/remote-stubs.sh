@@ -7,7 +7,13 @@
 # It also saves the script it was given (`bash -c <script>`) to $STATE/script, and with $STATE/pair present it
 # first waits for a second container to exist and appends how many it saw to $STATE/seen.
 
-# Writes a stub `docker` into <bin> keeping its state in <state>: run -d, exec [-i], rm -f.
+# Writes a stub `docker` into <bin> keeping its state in <state>: run -d, exec [-i], rm -f, and for `remote-agent
+# check` info, image inspect and pull. The daemon is down with <state>/daemon-down; its architecture is
+# <state>/daemon-arch (x86_64). Images are present, of architecture <state>/image-arch (amd64), except with
+# <state>/image-missing, which a pull removes unless <state>/no-pull exists. With <state>/corrupt present, exec
+# changes out/ping before a command that writes a tar, so what comes back differs from what went in. With
+# <state>/padding present, such a command's tar is followed, a moment later, by 200 KB of zeros: the remote tar's
+# trailing padding arriving after the reading tar (GNU or bsdtar) stopped at the end-of-archive marker.
 stub_docker() {
   local bin="$1" state="$2"
   mkdir -p "$bin" "$state/containers"
@@ -52,10 +58,30 @@ case "$op" in
         mkdir -p "$home/out"; cp "$state/patch" "$home/out/changes.patch"; echo "did the thing" >"$home/out/summary.md"
         exit "$(cat "$state/code")" ;;
     esac
+    [ ! -e "$state/corrupt" ] || [[ " $* " != *"tar -cf"* ]] || echo corrupted >"$home/out/ping"
     # bsdtar (macOS) has no --warning.
     argv=()
     for a in "$@"; do argv+=("${a//--warning=no-unknown-keyword/}"); done
-    cd "$home" && HOME="$home" exec "${argv[@]}"
+    cd "$home" || exit 1
+    if [ -e "$state/padding" ] && [[ " $* " == *"tar -cf"* ]]; then
+      HOME="$home" "${argv[@]}" || exit
+      sleep 0.3
+      exec head -c 200000 /dev/zero
+    fi
+    HOME="$home" exec "${argv[@]}"
+    ;;
+  info)
+    [ ! -e "$state/daemon-down" ] || { echo "Cannot connect to the Docker daemon. Is the docker daemon running?" >&2; exit 1; }
+    cat "$state/daemon-arch" 2>/dev/null || echo x86_64
+    ;;
+  image)
+    [ "$1" = inspect ] || { echo "stub docker: unexpected image $1" >&2; exit 1; }
+    [ ! -e "$state/image-missing" ] || { echo "Error: No such image: ${*: -1}" >&2; exit 1; }
+    cat "$state/image-arch" 2>/dev/null || echo amd64
+    ;;
+  pull)
+    [ ! -e "$state/no-pull" ] || { echo "Error response from daemon: denied" >&2; exit 1; }
+    rm -f "$state/image-missing"
     ;;
   rm)
     [ "${1:-}" != -f ] || shift
@@ -72,7 +98,8 @@ EOF
 # Writes a stub `ssh` into <bin> logging to <state>/calls: it drops its options and destination and runs the one
 # remote command string with `sh -c` here, so a real POSIX shell parses the quoting. Also a stub `scp` that records
 # any call in <state>/scp and fails. With STUB_SSH_HOME set, it plays a bare host: the command starts there with it as
-# HOME, PATH is STUB_SSH_PATH when set, and the host has no writable main-process stdout (/proc/1/fd/1).
+# HOME, PATH is STUB_SSH_PATH when set (sh itself is found on the caller's PATH), and the host has no writable
+# main-process stdout (/proc/1/fd/1).
 stub_ssh() {
   local bin="$1" state="$2"
   mkdir -p "$bin" "$state"
@@ -93,13 +120,14 @@ done
 shift # the destination
 [ $# -eq 1 ] || { echo "stub ssh: wanted one remote command string, got $#" >&2; exit 255; }
 cmd="$1"
+sh="$(command -v sh)"
 if [ -n "${STUB_SSH_HOME:-}" ]; then
   cd "$STUB_SSH_HOME"
   export HOME="$STUB_SSH_HOME"
   [ -z "${STUB_SSH_PATH:-}" ] || export PATH="$STUB_SSH_PATH"
   cmd="${cmd//\/proc\/1\/fd\/1/\/nonexistent\/main-stdout}"
 fi
-exec sh -c "$cmd"
+exec "$sh" -c "$cmd"
 EOF
   cat >"$bin/scp" <<EOF
 #!/bin/sh

@@ -5,6 +5,7 @@
 # Usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]   (default worktree: the
 # current one)
 #        remote-agent setup   (asks for the backend and the Claude token, writes remote.env: remote-agent-setup.sh)
+#        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out. --name names the task (e.g. a ticket's NN-slug),
@@ -34,6 +35,7 @@ done
 REPO="$(cd "$(dirname "$src")/.." && pwd)"
 case "${1:-}" in
   setup) shift; exec "$REPO/scripts/remote-agent-setup.sh" "$@" ;;
+  check) shift; exec "$REPO/scripts/remote-agent-check.sh" "$@" ;;
 esac
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 # shellcheck source=hooks/lib.sh disable=SC1091
@@ -174,7 +176,8 @@ runner=""
 
 keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
 mkdir -p "$keep"
-with_progress "$backend" get "$run" "$handle" out | tar -xf - -C "$keep" 2>/dev/null || true
+# Drained after extracting, so the sender's trailing padding does not hit a closed pipe (tar stops at the end marker).
+with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$keep" 2>/dev/null; cat >/dev/null; } || true
 [ "$status" -eq 0 ] || { say "the sandbox run failed (exit $status); what it left is in $keep"; exit "$status"; }
 
 [ -f "$keep/summary.md" ] && cat "$keep/summary.md"
