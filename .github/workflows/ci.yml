@@ -1,9 +1,11 @@
 name: CI
 
-# Runs on PRs only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run.
+# Runs on PRs into main only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run.
+# PRs into other branches (build-epic's task PRs into a ticket branch) run their checks locally, to save runners.
 # macOS and Windows run in portability.yml, only when shell code changes.
 on:
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

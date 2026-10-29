@@ -1,10 +1,11 @@
 # The tests on Windows (Git Bash), only when a change can behave differently there.
-# Skill and doc changes run on Linux alone (ci.yml). macOS is covered by tests/run.sh, which every
+# PRs into main only, as ci.yml. Skill and doc changes run on Linux alone (ci.yml). macOS is covered by tests/run.sh, which every
 # change passes locally before pushing (AGENTS.md); hosted macOS runners queued for a long time here.
 name: portability
 
 on:
   pull_request:
+    branches: [main]
     paths:
       - install.sh
       - scripts/**
