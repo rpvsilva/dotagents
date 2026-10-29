@@ -38,12 +38,16 @@ if [ -n "$path" ] && is_secret "$path"; then
 fi
 [ -n "$cmd" ] || exit 0
 
+# shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
+. "$(dirname "$0")/lib.sh"
+# Heredoc bodies are data (a file being written), never a command to judge.
+cmd="$(strip_heredocs "$cmd")"
+
 s='[[:space:]]'
 start="(^|[;&|(]|$s)"
 
-# Paths named in the command, outside heredoc bodies and quoted prose.
-scan="${cmd%%<<*}"
-scan="$(sed -E "s/\"[^\"]*${s}[^\"]*\"//g; s/'[^']*${s}[^']*'//g" <<<"$scan")"
+# Paths named in the command, outside quoted prose.
+scan="$(sed -E "s/\"[^\"]*${s}[^\"]*\"//g; s/'[^']*${s}[^']*'//g" <<<"$cmd")"
 set -f
 for word in $(tr '"'"'"'()<>|;&,=' ' ' <<<"$scan"); do
   if is_secret "$word"; then
@@ -52,8 +56,6 @@ for word in $(tr '"'"'"'()<>|;&,=' ' ' <<<"$scan"); do
 done
 
 if [[ "$cmd" =~ ${start}git$s+([^;&|]*$s)?commit($s|$) ]]; then
-  # shellcheck source=SCRIPTDIR/lib.sh disable=SC1091
-  . "$(dirname "$0")/lib.sh"
   dir="$(target_dir "$cmd" "$cwd")"
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || exit 0
   # `commit -a` also commits every tracked change; otherwise only what is staged.
