@@ -63,6 +63,22 @@ expect allow on-main 'git status'
 expect allow plain 'gh pr merge 7'
 expect allow plain 'git push origin main'
 
+# A switch before the push decides the branch pushed; the last one wins, and one after the push doesn't count.
+expect allow on-main 'git switch -c feat/y && git push -u origin feat/y'
+expect allow on-main 'git switch -q feat/y && git pull --ff-only && git push'
+expect allow on-main 'git checkout -b feat/y origin/feat/y; git push'
+expect allow on-main $'git switch feat/y\ngit push'
+expect block gated 'git switch main && git push'
+expect block gated 'git switch feat/y && git checkout master && git push'
+expect block on-main 'git push && git switch feat/y'
+expect block on-main 'git checkout -- README.md && git push'
+
+# Heredoc bodies are data, not commands; what follows the heredoc is still judged.
+expect allow gated $'cat >notes.md <<\'EOF\'\nnever run gh pr merge 7 by hand\nEOF'
+expect allow gated $'cat >notes.md <<-EOF\n\tgh pr merge 7\n\tEOF'
+expect block gated $'cat >notes.md <<EOF\ntext\nEOF\ngh pr merge 7'
+expect block gated 'jq . <<<"$x"; gh pr merge 7'
+
 # A single cd into another repo is judged by that repo.
 expect block plain "cd $SANDBOX/gated && gh pr merge 7"
 expect allow gated "cd $SANDBOX/plain && gh pr merge 7"
