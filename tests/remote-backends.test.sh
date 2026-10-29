@@ -282,6 +282,54 @@ if alive "$(cat "$S/claude.pid" 2>/dev/null)"; then
 fi
 rm -f "$S/hang"
 
+# release kills what still runs for the run before removing its folder, or keeping it under REMOTE_KEEP: here a
+# claude (and its child) ignoring TERM and its closed stdout, started by ssh.sh run outside remote-agent's process
+# group, so only release can stop it. Its child goes too where the host can kill it: setsid (group) or pkill -P.
+cat >"$HB/stubborn" <<STUBBORN
+#!/bin/sh
+trap '' TERM HUP PIPE
+sleep 60 &
+echo \$! >"$S/stubborn-child.pid"
+echo \$\$ >"$S/stubborn.pid"
+while :; do echo tick 2>/dev/null || : >"$S/stdout-closed"; sleep 0.2; done
+STUBBORN
+chmod +x "$HB/stubborn"
+bare_op() {
+  env PATH="$SANDBOX/bin:$PATH" REMOTE_SSH_HOST=me@trusted-box REMOTE_SSH_MODE=bare \
+    "$REPO/scripts/remote-backends/ssh.sh" "$@"
+}
+for keep in "" 1; do
+  t="bare release${keep:+ keep}"
+  rm -f "$S/stubborn.pid" "$S/stubborn-child.pid" "$S/stdout-closed"
+  h="$(bare_op acquire agent-stubborn 2>/dev/null)" || fail "$t: acquire failed"
+  (bare_op run agent-stubborn "$h" "$HB/stubborn" </dev/null 2>/dev/null | head -1 >/dev/null) &
+  pid=$!
+  for _ in $(seq 100); do [ -e "$S/stdout-closed" ] && break; sleep 0.1; done
+  [ -e "$S/stdout-closed" ] || fail "$t: the fake claude did not start or its stdout did not close"
+  REMOTE_KEEP="$keep" bare_op release agent-stubborn 2>/dev/null
+  # Once the run ends on the host, the client's call returns; a run left going fails the checks below.
+  for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  for p in stubborn stubborn-child; do
+    [ "$p" = stubborn ] || command -v setsid >/dev/null || command -v pkill >/dev/null || continue
+    if alive "$(cat "$S/$p.pid" 2>/dev/null)"; then
+      fail "$t: $p on the host outlived release"
+      kill -KILL "$(cat "$S/$p.pid")"
+    fi
+  done
+  if [ -n "$keep" ]; then
+    [ -d "$h" ] || fail "$t: run folder removed"
+  elif [ -z "$h" ] || [ -e "$h" ]; then
+    fail "$t: run folder $h not removed"
+  fi
+  rm -rf "$h"
+done
+# A run folder with no .pid (nothing was run in it) is removed all the same.
+h="$(bare_op acquire agent-nopid 2>/dev/null)" || fail "bare release no pid: acquire failed"
+bare_op release agent-nopid 2>/dev/null || fail "bare release no pid: release failed"
+if [ -z "$h" ] || [ -e "$h" ]; then fail "bare release no pid: run folder $h not removed"; fi
+
 # The next acquire removes run folders older than REMOTE_HOURS and keeps fresh ones.
 [ -z "$f" ] || touch -t 200001010000 "$f"
 mkdir -p "$runs/agent-fresh"

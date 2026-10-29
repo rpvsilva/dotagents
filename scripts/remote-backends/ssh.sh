@@ -11,7 +11,9 @@
 # folders older than REMOTE_HOURS left by clients that died, and creates the run folder $REMOTE_SSH_DIR/<run> (mode
 # 700), printing its absolute path as the handle. run uses that folder as HOME, with the XDG folders and Claude
 # Code's config inside it, so runs stay apart from the host user's own setup and from each other. put and get use
-# plain tar flags (the host's tar may be GNU or BSD). release removes the folder, or keeps it under REMOTE_KEEP.
+# plain tar flags (the host's tar may be GNU or BSD). run records the command's pid (and process group, under setsid
+# where the host has it) in the folder's .pid, since killing the ssh client does not stop it; release kills what that
+# names (TERM, then KILL), then removes the folder, or keeps it under REMOTE_KEEP.
 # check names what is missing: the host with key-based ssh, then docker.sh's check on the host (container mode) or
 # the tools acquire checks (bare mode).
 # Settings: REMOTE_SSH_HOST (ssh destination: user@host or a ~/.ssh/config alias), REMOTE_SSH_MODE (container or
@@ -84,19 +86,54 @@ cd "$root"/'"$(sq "$run")"' && pwd' </dev/null
     # Claude Code reads CLAUDE_CONFIG_DIR before HOME: set it, so a value from the host user's profile is not used.
     # REMOTE_AGENT_LOG: the sandbox log is progress.log here, never the host's /proc/1/fd/1 (writable as root, or on
     # a host that is itself a container, where it is another process's stdout).
+    argv="$(sq_argv env "HOME=$home" "XDG_CONFIG_HOME=$home/.config" "XDG_DATA_HOME=$home/.local/share" \
+      "XDG_CACHE_HOME=$home/.cache" "CLAUDE_CONFIG_DIR=$home/.claude" "REMOTE_AGENT_LOG=$home/progress.log" "$@")"
+    # Killing the ssh client does not stop the command on the host, so release kills it by the line each run adds to
+    # .pid: "<pid> group" when the command leads its own process group (started under setsid, from a child shell so
+    # setsid needs no fork; else when the login shell already leads one), "<pid>" when it does not.
     # exec: remote-agent stops this run by signalling its process group, so the ssh client goes with it.
-    exec ssh -T -o BatchMode=yes "$host" "cd $(sq "$home") && exec $(sq_argv env "HOME=$home" \
-      "XDG_CONFIG_HOME=$home/.config" "XDG_DATA_HOME=$home/.local/share" "XDG_CACHE_HOME=$home/.cache" \
-      "CLAUDE_CONFIG_DIR=$home/.claude" "REMOTE_AGENT_LOG=$home/progress.log" "$@")"
+    # shellcheck disable=SC2016 # expanded by the sh setsid starts
+    exec ssh -T -o BatchMode=yes "$host" "cd $(sq "$home") || exit 1
+if command -v setsid >/dev/null 2>&1; then
+  setsid sh -c $(sq 'echo "$$ group" >>.pid && exec "$@"') sh $argv
+  exit \$?
+fi
+g=
+[ \"\$(ps -o pgid= -p \$\$ 2>/dev/null | tr -d ' ')\" != \"\$\$\" ] || g=group
+echo \"\$\$ \$g\" >>.pid && exec $argv"
     ;;
   get)
     on_host "tar -cf - -C $(sq "$3")/$(sq "$4") ." </dev/null
     ;;
   release)
+    # Kills what each line of .pid names (see run): TERM, up to 3 s for it to go, then KILL. A group goes whole; a
+    # plain pid takes its children with it through pkill -P, where the host has pkill.
+    # shellcheck disable=SC2016 # expanded on the host
+    remove='rm -rf "$d"'
+    [ -z "${REMOTE_KEEP:-}" ] || remove=:
+    # shellcheck disable=SC2016 # expanded on the host
+    on_host 'd='"$(sq "$root")/$(sq "$2")"'
+signal() {
+  while read -r p g; do
+    case "$p" in ""|*[!0-9]*) continue ;; esac
+    if [ "$g" = group ]; then
+      kill -s "$1" -- "-$p" 2>/dev/null && [ "$1" = 0 ] && return 0
+    else
+      [ "$1" = 0 ] || pkill -"$1" -P "$p" 2>/dev/null
+      kill -s "$1" -- "$p" 2>/dev/null && [ "$1" = 0 ] && return 0
+    fi
+  done <"$d/.pid"
+  [ "$1" != 0 ]
+}
+if [ -f "$d/.pid" ]; then
+  signal TERM
+  i=0
+  while [ "$i" -lt 3 ] && signal 0; do sleep 1; i=$((i + 1)); done
+  signal KILL
+fi
+'"$remove" </dev/null >/dev/null 2>&1 || true
     if [ -n "${REMOTE_KEEP:-}" ]; then
       say "kept run folder $root/$2 on $host (the next run's acquire removes it after REMOTE_HOURS)"
-    else
-      on_host "rm -rf $(sq "$root")/$(sq "$2")" </dev/null >/dev/null 2>&1 || true
     fi
     ;;
   check)
