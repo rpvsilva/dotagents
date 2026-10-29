@@ -4,6 +4,9 @@
 # It runs the gate's read-only CLI (`agent-pr-gate check`, pinned to GATE_REF, the commit the gate
 # workflow uses): the same rules, read from the base commit, so a PR cannot change its own gate. The
 # CLI waits for CI, judges CI, evidence, approvals and code owners, and prints the verdict as JSON.
+# A PR into another branch (build-epic's task PR into a ticket branch) skips the gate: CI and the gate
+# run on PRs into the default branch only, and the ticket's own PR into it is judged in full. Whoever
+# merges it runs the checks locally first.
 # Usage: scripts/merge-pr.sh <pr-number>   (needs GH_TOKEN, node and npx)
 set -euo pipefail
 
@@ -11,9 +14,18 @@ GATE_REF=2da570e75f377b413e19bdfc338dab7c9e881538
 pr="${1:?usage: merge-pr.sh <pr-number>}"
 wait="${MERGE_PR_CI_WAIT:-1800}"
 
-view="$(gh pr view "$pr" --json state,isDraft)"
+view="$(gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid)"
 [ "$(jq -r .state <<<"$view")" = "OPEN" ] || { echo "PR #$pr is $(jq -r .state <<<"$view"), not merging"; exit 1; }
 [ "$(jq -r .isDraft <<<"$view")" = "false" ] || { echo "PR #$pr is a draft, not merging"; exit 1; }
+
+base="$(jq -r .baseRefName <<<"$view")"
+default="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+[ -n "$default" ] || { echo "PR #$pr: could not read the default branch, not merging"; exit 1; }
+if [ "$base" != "$default" ]; then
+  echo "PR #$pr: base $base is not $default, merging without the gate"
+  gh pr merge "$pr" --squash --delete-branch --match-head-commit "$(jq -r .headRefOid <<<"$view")"
+  exit 0
+fi
 
 echo "PR #$pr: running agent-pr-gate (waits up to ${wait}s for CI)"
 code=0

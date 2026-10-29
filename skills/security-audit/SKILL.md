@@ -12,7 +12,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 
 ## Run folder
 
-`~/.agents/runs/<repo>/security-audit-<YYYY-MM-DD>/`. It holds `worktree/`, `map.md`, `reports/<scope>-r<round>.md` (one per reviewer per round), `tickets/` and `worktrees/` for fixes, and `findings.md`: your ledger, one row per finding (number, status `confirmed`/`plausible`/`dropped`/`fixed`/`declined`, severity, file:line, claim, gain, fix, report it came from), then an **Other bugs** list: the non-security bugs the reports name. When the folder exists, **resume** at the first step whose done-condition is not met.
+`~/.agents/runs/<repo>/security-audit-<YYYY-MM-DD>/`. It holds `worktree/`, `map.md`, `reports/<scope>-r<round>.md` (one per reviewer per round), `tasks/` and `worktrees/` for fixes, and `findings.md`: your ledger, one row per finding (number, status `confirmed`/`plausible`/`dropped`/`fixed`/`declined`, severity, file:line, claim, gain, fix, report it came from), then an **Other bugs** list: the non-security bugs the reports name. When the folder exists, **resume** at the first step whose done-condition is not met.
 
 ## Subagents
 
@@ -20,7 +20,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 |---|---|---|
 | `security-mapper` | [mapper-brief.md](mapper-brief.md) | `map.md` |
 | `security-reviewer` | [security-brief.md](security-brief.md) | `reports/<scope>-r<round>.md` |
-| `epic-implementer` | [implementer-brief.md](../build-epic/implementer-brief.md) | fix commits on its ticket branch |
+| `epic-implementer` | [implementer-brief.md](../build-epic/implementer-brief.md) | fix commits on its task branch |
 
 Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at most **N** at once (the **slots**).
 
@@ -40,12 +40,12 @@ Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at 
 
 7. **Ask what to fix.** Show the kept findings as a numbered list, most severe first, one line each: severity, file:line, claim, gain, the proposed fix, and the plausible ones marked; then **Other bugs** as a separate list numbered `B1`, `B2`..., marked as not security; then the rounds run. Give your recommendation: which findings are worth their fix, and which other bugs, if any, belong in this PR. Ask which to fix: the recommended ones, some by number, or none. With no kept findings, say what was checked and stop. Mark the rest `declined`. On "none", also ask whether to record them as accepted risks; on no, go to step 10. Done when the human has answered.
 
-8. **Fix.** Skip this step when nothing was picked. In the worktree, `git switch -c fix/security-<short-name>`: the **fix branch**. Append to `map.md` a `## Setup` section (what the checks need first) and a `## Checks` section (the checks from step 1). For each area, or the repo-wide lane, with chosen findings, write `<run>/tickets/NN-<scope>.md` in build-epic's ticket shape ([planner-brief.md](../build-epic/planner-brief.md), step 3): one acceptance criterion per finding, "the attack in finding #N fails", proven by a test that performs the attack and goes **red** before the fix, when the repo tests that kind of code (a chosen other bug: "bug BN no longer happens", proven the same way); `Pointers` names the `findings.md` rows and their reports. Then, while a slot is free, `git worktree add <run>/worktrees/NN -b fix/security-<short-name>/NN fix/security-<short-name>` and start an `epic-implementer` with the ticket path, the run folder, that worktree path and the fix branch name.
-   - Handle each implementer's answer as build-epic's step 6 does (**On `done`**, **On `blocked`**, **On `plan-wrong`**; [SKILL.md](../build-epic/SKILL.md)), with the fix branch as the epic branch and these changes: on `done`, mark the ticket's findings `fixed`; on `blocked` or `plan-wrong`, leave its findings open with the `why` for the report, with no re-plan; skip every tracker update.
+8. **Fix.** Skip this step when nothing was picked. In the worktree, `git switch -c fix/security-<short-name> && git push -u origin fix/security-<short-name>`: the **fix branch**. Append to `map.md` a `## Setup` section (what the checks need first) and a `## Checks` section (the checks from step 1). For each area, or the repo-wide lane, with chosen findings, write `<run>/tasks/NN-<scope>.md` in build-epic's task shape ([planner-brief.md](../build-epic/planner-brief.md), step 4, with `Ticket: none`): one acceptance criterion per finding, "the attack in finding #N fails", proven by a test that performs the attack and goes **red** before the fix, when the repo tests that kind of code (a chosen other bug: "bug BN no longer happens", proven the same way); `Pointers` names the `findings.md` rows and their reports. Then, while a slot is free, `git worktree add <run>/worktrees/NN -b fix/security-<short-name>/NN origin/fix/security-<short-name>` and start an `epic-implementer` with the task path, the run folder, that worktree path and `origin/fix/security-<short-name>`.
+   - Handle each implementer's answer as build-epic's step 6 does (**On `done`**, **Merge**, **On `blocked`**, **On `plan-wrong`**; [SKILL.md](../build-epic/SKILL.md)), with the fix branch as the ticket branch and these changes: the task PR's body names its findings instead of an issue; once it merges, mark the task's findings `fixed`; on `blocked` or `plan-wrong`, leave its findings open with the `why` for the report, with no re-plan; skip every tracker update.
 
-   Done when every ticket is merged into the fix branch or reported, and every merged finding is `fixed` with its test.
+   Done when every task is merged into the fix branch or reported, and every merged finding is `fixed` with its test.
 
-9. **Record and ship.** On the fix branch (create it as in step 8 when step 8 was skipped), add each `declined` finding to the **accepted risks** in `.agents/security-audit-notes.md`, one line with file:line and claim, so the next audit skips it. Then ship the fix branch with the [ship-pr](../ship-pr/SKILL.md) steps, listing each fixed finding and its test in the PR body. Done when the PR URL exists.
+9. **Record and ship.** On the fix branch (`git pull` it first; create it as in step 8 when step 8 was skipped), add each `declined` finding to the **accepted risks** in `.agents/security-audit-notes.md`, one line with file:line and claim, so the next audit skips it. Then ship the fix branch with the [ship-pr](../ship-pr/SKILL.md) steps, listing each fixed finding and its test in the PR body. Done when the PR URL exists.
 
 10. **Clean up**: `git worktree remove` each worktree under `<run>/`. Keep the run folder.
 
