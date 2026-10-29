@@ -2,7 +2,10 @@
 # Runs one subagent task on a remote sandbox (agent-sandbox on Kubernetes) for compute only, and applies its
 # changes to a local worktree. The cluster never touches a repo: it gets this machine's setup and a snapshot of
 # the worktree, and only a patch comes back.
-# Usage: scripts/remote-agent.sh <brief | @brief-file | -> [worktree]   (default worktree: the current one)
+# Usage: remote-agent [--attach PATH]... <brief | @brief-file | -> [worktree]   (default worktree: the current one)
+# install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
+# the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
+# changes come back. Secret-looking files inside it are left out.
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
 # secret-looking ones; claim a warm sandbox; stream both in with `kubectl exec` and the Claude token through stdin;
 # run scripts/remote-agent-sandbox.sh there; bring back the patch and apply it with `git apply`, uncommitted.
@@ -14,14 +17,27 @@
 # REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1 (keep the claim).
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Follow the link from ~/.agents/bin to this repo, where the sibling scripts live.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" == /* ]] || src="$dir/$src"
+done
+REPO="$(cd "$(dirname "$src")/.." && pwd)"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$REPO/scripts/hooks/lib.sh"
 # shellcheck disable=SC1091
 [ -f "$CONFIG/remote.env" ] && . "$CONFIG/remote.env"
 
-usage() { echo "usage: $0 <brief | @brief-file | -> [worktree]" >&2; exit 1; }
+usage() { echo "usage: remote-agent [--attach PATH]... <brief | @brief-file | -> [worktree]" >&2; exit 1; }
+attach=()
+while [ $# -gt 0 ] && [ "$1" = --attach ]; do
+  if [ $# -lt 2 ] || [ ! -e "$2" ]; then echo "remote-agent: --attach needs an existing path: ${2:-}" >&2; exit 1; fi
+  attach+=("$2")
+  shift 2
+done
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then usage; fi
 case "$1" in
   -) brief="$(cat)" ;;
@@ -56,8 +72,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The setup and the snapshot are built before anything reaches the cluster.
+# The setup, the attachments and the snapshot are built before anything reaches the cluster.
 "$REPO/scripts/remote-agent-pack.sh" "$stage/home"
+for a in "${attach[@]+"${attach[@]}"}"; do
+  name="$(basename "$a")"
+  [ ! -e "$stage/home/attached/$name" ] || { say "two attachments named $name"; exit 1; }
+  mkdir -p "$stage/home/attached"
+  cp -RL "$a" "$stage/home/attached/$name"
+  while IFS= read -r -d '' f; do
+    if is_secret "${f#"$stage/home/attached/"}"; then rm -f "$f"; say "left out attached/${f#"$stage/home/attached/"} (looks like a secret)"; fi
+  done < <(find "$stage/home/attached/$name" -type f -print0)
+  say "attached $a as ~/attached/$name"
+done
 : >"$stage/files"
 while IFS= read -r -d '' f; do
   [ -f "$root/$f" ] || continue # tracked but deleted locally

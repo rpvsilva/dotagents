@@ -165,6 +165,26 @@ code=0; run 0 "$stale" || code=$?
 [ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
 [ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
 
+# --attach sends files from outside the worktree to ~/attached, minus secrets; it works through a link,
+# as install.sh puts it at ~/.agents/bin/remote-agent.
+mkdir -p "$SANDBOX/run/notes"
+printf 'ticket\n' >"$SANDBOX/run/01-ticket.md"
+printf 'map\n' >"$SANDBOX/run/notes/map.md"
+printf 'KEY=1\n' >"$SANDBOX/run/notes/.env"
+ln -s "$REPO/scripts/remote-agent.sh" "$SANDBOX/bin/remote-agent"
+echo 0 >"$SANDBOX/code"
+printf '%s' "$patch" >"$SANDBOX/patch"
+rm -rf "$POD" "$SANDBOX/calls"
+(cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  remote-agent --attach "$SANDBOX/run/01-ticket.md" --attach "$SANDBOX/run/notes" "build it") >"$SANDBOX/out" 2>&1 \
+  || fail "attach: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$POD/attached/01-ticket.md" 2>/dev/null)" = ticket ] || fail "attach: file not under ~/attached"
+[ "$(cat "$POD/attached/notes/map.md" 2>/dev/null)" = map ] || fail "attach: folder not under ~/attached"
+[ ! -e "$POD/attached/notes/.env" ] || fail "attach: secret-looking file sent"
+rm -f "$W/hello.txt"
+code=0; (cd "$W" && PATH="$SANDBOX/bin:$PATH" remote-agent --attach "$SANDBOX/nope" "x") >/dev/null 2>&1 || code=$?
+[ "$code" = 1 ] || fail "attach: a missing path was not refused"
+
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
 code=0; run 0 "$patch" || code=$?

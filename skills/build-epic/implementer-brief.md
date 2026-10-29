@@ -17,6 +17,10 @@ You build one ticket for `build-epic` (or `security-audit`, where the fix branch
 4. **Run every check** in `map.md`'s `Checks`, then commit on your ticket branch with the repo's commit convention. Done when all pass.
 5. **Catch up with the epic.** `git merge <epic-branch>`, resolve any conflicts, and run the checks again. Done when your branch contains the epic branch's tip and every check passes.
 
+## When you run remotely
+
+Your worktree is `~/work`: a snapshot of the ticket worktree, already holding the epic branch's tip, with one commit and no other branches. The ticket, `spec.md`, `map.md` and `notes/` are under `~/attached`. Skip the branch check in step 1 and all of step 5, and do not commit: leave your changes in the files. The orchestrator commits them on your ticket branch and catches up with the epic. In the report, `changed:` lists the files.
+
 ## Report
 
 Your final message is this block and nothing else; details belong in the files you wrote or the commits you made.
