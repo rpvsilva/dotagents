@@ -22,7 +22,7 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 [ -f "$CONFIG/remote.env" ] && . "$CONFIG/remote.env"
 
 usage() { echo "usage: $0 <brief | @brief-file | -> [worktree]" >&2; exit 1; }
-[ $# -ge 1 ] && [ $# -le 2 ] || usage
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then usage; fi
 case "$1" in
   -) brief="$(cat)" ;;
   @*) brief="$(cat "${1#@}")" ;;

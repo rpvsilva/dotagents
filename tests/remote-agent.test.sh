@@ -51,7 +51,7 @@ EOF
 # --- remote-agent-pack.sh
 P="$SANDBOX/packed"
 HOME="$H" "$REPO/scripts/remote-agent-pack.sh" "$P" 2>"$SANDBOX/pack.err" || fail "pack: exited non-zero: $(cat "$SANDBOX/pack.err")"
-[ -f "$P/.claude/CLAUDE.md" ] && [ ! -L "$P/.claude/CLAUDE.md" ] || fail "pack: CLAUDE.md not copied as a file"
+if [ ! -f "$P/.claude/CLAUDE.md" ] || [ -L "$P/.claude/CLAUDE.md" ]; then fail "pack: CLAUDE.md not copied as a file"; fi
 [ -f "$P/.claude/skills/skill-a/SKILL.md" ] || fail "pack: linked skill not copied"
 [ -f "$P/.agents/hooks/guard.sh" ] || fail "pack: hook scripts not copied"
 for f in .claude/.credentials.json .claude/history.jsonl .claude/projects .claude/skills/skill-a/.env .claude.json; do
@@ -124,11 +124,11 @@ index 0000000..ce01362
 '
 
 run 0 "$patch" || fail "success: exited non-zero: $(cat "$SANDBOX/out")"
-[ -f "$POD/work/tracked.txt" ] && [ -f "$POD/work/untracked.txt" ] || fail "tracked or untracked file not sent"
+if [ ! -f "$POD/work/tracked.txt" ] || [ ! -f "$POD/work/untracked.txt" ]; then fail "tracked or untracked file not sent"; fi
 [ ! -e "$POD/work/ignored.txt" ] || fail "ignored file sent"
 [ ! -e "$POD/work/.env" ] || fail "secret-looking file sent"
 grep -q "left out .env" "$SANDBOX/out" || fail "left-out secret not reported"
-[ -f "$POD/.claude/skills/skill-a/SKILL.md" ] && [ ! -e "$POD/.claude/.credentials.json" ] || fail "setup not sent, or credentials sent"
+if [ ! -f "$POD/.claude/skills/skill-a/SKILL.md" ] || [ -e "$POD/.claude/.credentials.json" ]; then fail "setup not sent, or credentials sent"; fi
 [ "$(sed -n 1p "$SANDBOX/stdin")" = "sk-claude-secret" ] || fail "stdin line 1 is not the Claude token"
 [ "$(sed -n '2,$p' "$SANDBOX/stdin")" = "add a hello file" ] || fail "brief does not follow the token"
 grep -q "sk-claude-secret" "$SANDBOX/calls" "$SANDBOX/claim.yaml" "$SANDBOX/out" && fail "the token leaked into kubectl arguments, the claim or the output"
@@ -168,7 +168,7 @@ code=0; run 0 "$stale" || code=$?
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
 code=0; run 0 "$patch" || code=$?
-[ "$code" != 0 ] && [ ! -e "$SANDBOX/calls" ] || fail "no token: ran anyway or called kubectl"
+if [ "$code" = 0 ] || [ -e "$SANDBOX/calls" ]; then fail "no token: ran anyway or called kubectl"; fi
 
 [ "$fails" -eq 0 ] || { echo "remote-agent.test.sh: $fails failure(s)"; exit 1; }
 echo "remote-agent.test.sh: ok"
