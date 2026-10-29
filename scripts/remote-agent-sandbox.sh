@@ -5,8 +5,16 @@
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
 # progress on stderr, and leaves ~/out/changes.patch (everything changed since the base) and ~/out/summary.md.
 # The sandbox has no git remote and no GitHub credentials: results only leave as that patch.
+# Its progress also goes to the sandbox's own log, so `kubectl logs` / `docker logs` show the run live: the main
+# process's stdout (/proc/1/fd/1, writable by the runner user in a pod or container), else ~/progress.log (SSH bare
+# mode). scripts/remote-agent.sh picks it the same way.
 set -euo pipefail
 
+log=/proc/1/fd/1
+[ -w "$log" ] || log="$HOME/progress.log"
+
+# The whole run, left unindented; its stdout and stderr are kept apart, stderr copied to the log at the end.
+main() {
 read -r CLAUDE_CODE_OAUTH_TOKEN
 export CLAUDE_CODE_OAUTH_TOKEN
 brief="$(cat)"
@@ -59,3 +67,7 @@ fi
 git add -A
 git diff --cached --binary "$base" >"$HOME/out/changes.patch"
 echo "== $(git diff --cached --shortstat "$base" || true)" >&2
+}
+
+# Synchronous, unlike `exec 2> >(tee ...)`: every line is in the log before this script exits.
+{ main 2>&1 >&3 | tee -a "$log" >&2; } 3>&1

@@ -2,17 +2,21 @@
 # Runs one subagent task on a remote sandbox for compute only, and applies its changes to a local worktree. The
 # sandbox comes from a backend (scripts/remote-backends/<name>.sh; the cluster by default) and never touches a
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
-# Usage: remote-agent [--attach PATH]... <brief | @brief-file | -> [worktree]   (default worktree: the current one)
+# Usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]   (default worktree: the
+# current one)
 #        remote-agent setup   (asks for the backend and the Claude token, writes remote.env: remote-agent-setup.sh)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
-# changes come back. Secret-looking files inside it are left out.
+# changes come back. Secret-looking files inside it are left out. --name names the task (e.g. a ticket's NN-slug),
+# turned into a label value (lowercase, [a-z0-9-], at most 63 characters): the backend labels the sandbox with it
+# (cluster: remote-agent/task) and every progress line on stderr starts with [NAME] ([<run>] without it).
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
 # secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
 # run scripts/remote-agent-sandbox.sh there; get the patch back and apply it with `git apply`, uncommitted.
 # The sandbox is released on exit, also on INT or TERM; the backend's time limit (REMOTE_HOURS) removes it anyway
 # if this script dies first.
-# Prints Claude's progress and summary. Keeps the patch and summary in <git dir>/remote-agent/<run>/.
+# Prints Claude's progress on stderr and the summary on stdout. The progress also goes to the sandbox's own log (its
+# main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none). Keeps the patch and summary in <git dir>/remote-agent/<run>/.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
 # Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
@@ -37,11 +41,24 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 # shellcheck disable=SC1091
 [ -f "$CONFIG/remote.env" ] && . "$CONFIG/remote.env"
 
-usage() { echo "usage: remote-agent [--attach PATH]... <brief | @brief-file | -> [worktree]" >&2; exit 1; }
+usage() { echo "usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]" >&2; exit 1; }
 attach=()
-while [ $# -gt 0 ] && [ "$1" = --attach ]; do
-  if [ $# -lt 2 ] || [ ! -e "$2" ]; then echo "remote-agent: --attach needs an existing path: ${2:-}" >&2; exit 1; fi
-  attach+=("$2")
+name=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --attach)
+      if [ $# -lt 2 ] || [ ! -e "$2" ]; then echo "remote-agent: --attach needs an existing path: ${2:-}" >&2; exit 1; fi
+      attach+=("$2")
+      ;;
+    --name)
+      [ $# -ge 2 ] || usage
+      # A valid label value: lowercase, [a-z0-9-], starting and ending with a letter or digit, at most 63 characters.
+      name="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9-]/-/g' -e 's/--*/-/g' -e 's/^-//' \
+        | cut -c1-63 | sed 's/-$//')"
+      [ -n "$name" ] || { echo "remote-agent: --name needs a letter or digit: $2" >&2; exit 1; }
+      ;;
+    *) break ;;
+  esac
   shift 2
 done
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then usage; fi
@@ -65,18 +82,47 @@ if [ "$backend_name" = lib ] || [[ "$backend_name" == */* ]] || [ ! -f "$backend
   exit 1
 fi
 # The backend reads its settings from REMOTE_* variables, sourced or not.
+export REMOTE_TASK="$name"
 while IFS= read -r v; do export "${v?}"; done < <(compgen -v REMOTE_)
 max_mb="${REMOTE_MAX_MB:-200}"
 
-say() { echo "remote-agent: $*" >&2; }
-
 stage="$(mktemp -d)"
 run="agent-$(date +%Y%m%d-%H%M%S)-$RANDOM"
+tag="[${name:-$run}]"
+
+# Progress: each line on stdin goes to stderr behind the tag and, without --no-log, to $stage/log, which
+# send_log copies to the sandbox's log. The sandbox logs its own run's lines itself.
+progress() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s %s\n' "$tag" "$line" >&2
+    [ "${1:-}" = --no-log ] || printf '%s\n' "$line" >>"$stage/log"
+  done
+}
+say() { echo "remote-agent: $*" | progress; }
+# Runs a command with its stderr through progress; its stdout and exit code are kept.
+with_progress() {
+  local opt=""
+  if [ "$1" = --no-log ]; then opt="$1"; shift; fi
+  { "$@" 2>&1 >&4 | progress ${opt:+"$opt"}; } 4>&1
+}
+# The sandbox's log is its main process's stdout (/proc/1/fd/1 in a pod or container), else ~/progress.log;
+# scripts/remote-agent-sandbox.sh picks it the same way.
+send_log() {
+  [ -n "$handle" ] && [ -s "$stage/log" ] || return 0
+  # shellcheck disable=SC2016 # expanded in the sandbox
+  "$backend" run "$run" "$handle" sh -c 'l=/proc/1/fd/1; [ -w "$l" ] || l="$HOME/progress.log"; cat >>"$l"' \
+    <"$stage/log" >/dev/null 2>&1 || true
+  : >"$stage/log"
+}
+
 acquired=""
+handle=""
 runner=""
 cleanup() {
   [ -z "$runner" ] || kill "$runner" 2>/dev/null || true
-  [ -z "$acquired" ] || "$backend" release "$run" || true
+  send_log
+  [ -z "$acquired" ] || with_progress "$backend" release "$run" || true
   rm -rf "$stage"
 }
 trap cleanup EXIT
@@ -84,7 +130,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # The setup, the attachments and the snapshot are built before anything reaches the backend.
-"$REPO/scripts/remote-agent-pack.sh" "$stage/home"
+with_progress "$REPO/scripts/remote-agent-pack.sh" "$stage/home"
 for a in "${attach[@]+"${attach[@]}"}"; do
   name="$(basename "$a")"
   [ ! -e "$stage/home/attached/$name" ] || { say "two attachments named $name"; exit 1; }
@@ -109,25 +155,26 @@ kb=0
 say "snapshot: $count files, $((kb / 1024)) MB from $root"
 
 acquired=1
-handle="$("$backend" acquire "$run")"
+handle="$(with_progress "$backend" acquire "$run")"
 
 # macOS tar would add AppleDouble files and xattr headers.
 export COPYFILE_DISABLE=1
-tar -C "$stage/home" -chf - . | "$backend" put "$run" "$handle" .
-(cd "$root" && tar -cf - --null -T "$stage/files") | "$backend" put "$run" "$handle" work
+tar -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
+(cd "$root" && tar -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
 say "sent setup and snapshot"
+send_log
 
 # In the background, so INT or TERM reach the traps at once rather than when the run ends.
 status=0
 { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
-  | "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox &
+  | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox &
 runner=$!
 wait "$runner" || status=$?
 runner=""
 
 keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
 mkdir -p "$keep"
-"$backend" get "$run" "$handle" out | tar -xf - -C "$keep" 2>/dev/null || true
+with_progress "$backend" get "$run" "$handle" out | tar -xf - -C "$keep" 2>/dev/null || true
 [ "$status" -eq 0 ] || { say "the sandbox run failed (exit $status); what it left is in $keep"; exit "$status"; }
 
 [ -f "$keep/summary.md" ] && cat "$keep/summary.md"
@@ -135,7 +182,7 @@ if [ ! -s "$keep/changes.patch" ]; then
   say "no changes"
   exit 3
 fi
-if ! git -C "$root" apply --whitespace=nowarn "$keep/changes.patch"; then
+if ! with_progress git -C "$root" apply --whitespace=nowarn "$keep/changes.patch"; then
   say "the patch does not apply to $root (did the worktree change meanwhile?); it is in $keep/changes.patch"
   exit 4
 fi

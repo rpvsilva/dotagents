@@ -6,7 +6,9 @@
 # put extracts the tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release deletes the claim (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # Settings: REMOTE_CONTEXT (kube context, default maxibombo), REMOTE_NAMESPACE (agents), REMOTE_POOL (claude-runner),
-# REMOTE_HOURS (2), REMOTE_KEEP.
+# REMOTE_HOURS (2), REMOTE_KEEP; REMOTE_TASK (set by remote-agent.sh from --name, a valid label value).
+# The claim and its pod are labelled remote-agent/run=<run> and, with REMOTE_TASK, remote-agent/task=<task>, so
+# `kubectl get pods -L remote-agent/task` tells the runs apart.
 set -euo pipefail
 
 # shellcheck source=lib.sh disable=SC1091
@@ -26,6 +28,8 @@ op="${1:-}"
 case "$op" in
   acquire)
     claim="$2"
+    labels="remote-agent/run: $claim"
+    [ -z "${REMOTE_TASK:-}" ] || labels="$labels, remote-agent/task: $REMOTE_TASK"
     end=$(( $(date +%s) + hours * 3600 ))
     # GNU date takes -d @epoch, BSD date -r epoch.
     shutdown="$(date -u -d "@$end" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$end" +%Y-%m-%dT%H:%M:%SZ)"
@@ -34,7 +38,10 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxClaim
 metadata:
   name: $claim
+  labels: {$labels}
 spec:
+  additionalPodMetadata:
+    labels: {$labels}
   warmPoolRef:
     name: $pool
   lifecycle:

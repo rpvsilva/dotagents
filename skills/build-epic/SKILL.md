@@ -28,7 +28,7 @@ When the folder already exists, **resume**: set every `in-progress` ticket back 
 
 Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at most **N** at once (the **slots**).
 
-The `epic-implementer` is **remote-capable** ([Remote subagents](../_shared/conventions.md#remote-subagents)): attach its ticket, `spec.md`, `map.md` and `notes/`. When it returns, commit its changes on the ticket branch and do its step 5 for it: `git merge <epic-branch>` in its worktree. On a conflict, send it back to resolve the conflict markers, then commit the merge. Act on its report after that. The planner and explorers write into the run folder, so they always run here.
+The `epic-implementer` is **remote-capable** ([Remote subagents](../_shared/conventions.md#remote-subagents)): name it after its ticket's file, `--name NN-<slug>`, and attach its ticket, `spec.md`, `map.md` and `notes/`. When it returns, commit its changes on the ticket branch and do its step 5 for it: `git merge <epic-branch>` in its worktree. On a conflict, send it back to resolve the conflict markers, then commit the merge. Act on its report after that. The planner and explorers write into the run folder, so they always run here.
 
 Every subagent ends with this report, and you act on it alone:
 

@@ -10,15 +10,15 @@ Running subagents on a remote backend for compute only: a Kubernetes cluster or 
 ## Use
 
 ```sh
-~/.agents/bin/remote-agent [--attach PATH]... "<brief>" [worktree]   # or @brief.md, or - for stdin
+~/.agents/bin/remote-agent [--attach PATH]... [--name TASK] "<brief>" [worktree]   # or @brief.md, or - for stdin
 ```
 
-`install.sh` links the command there, so skills reach it from any project. Skills use it through [Remote subagents](../skills/_shared/conventions.md#remote-subagents): a subagent a skill marks remote-capable (today `build-epic`'s implementer) runs here whenever `remote.env` exists. `--attach` copies a file or folder from outside the worktree (a ticket, a spec) to `~/attached/<name>` in the sandbox, read-only.
+`install.sh` links the command there, so skills reach it from any project. Skills use it through [Remote subagents](../skills/_shared/conventions.md#remote-subagents): a subagent a skill marks remote-capable (today `build-epic`'s implementer) runs here whenever `remote.env` exists. `--attach` copies a file or folder from outside the worktree (a ticket, a spec) to `~/attached/<name>` in the sandbox, read-only. `--name` names the task (e.g. a ticket's `NN-<slug>`), made a valid label value (lowercase, `[a-z0-9-]`, at most 63 characters): every progress line on stderr starts with `[<task>]` (`[<run>]` without it), so several runs in parallel stay readable, and the backend labels the sandbox with it.
 
 1. [`remote-agent-pack.sh`](../scripts/remote-agent-pack.sh) stages this machine's setup: `CLAUDE.md`, skills, agents, commands, rules, `~/.agents/{skills,hooks}`; `settings.json` cut down to permissions, model, plugins and the hooks that call `~/.agents/hooks`; MCP servers that need no env or headers. Credentials, history, transcripts, caches and settings `env` never leave the machine; what it leaves out is printed.
 2. It copies the attachments (minus secret-looking files) and lists the worktree's tracked and unignored files, minus secret-looking ones (the `guard-secrets` rule), and checks the size (`REMOTE_MAX_MB`, 200 by default).
 3. It acquires a sandbox from the backend (on the cluster: claims a warm one) and puts the setup and the snapshot in as tar streams. The Claude token goes through stdin.
-4. In the sandbox, [`remote-agent-sandbox.sh`](../scripts/remote-agent-sandbox.sh) reinstalls the plugins and MCP servers, commits the snapshot as a base, and runs Claude headless on the brief. Its progress shows on stderr.
+4. In the sandbox, [`remote-agent-sandbox.sh`](../scripts/remote-agent-sandbox.sh) reinstalls the plugins and MCP servers, commits the snapshot as a base, and runs Claude headless on the brief. Its progress shows on stderr, and in the sandbox's own log with every step of `remote-agent` (`kubectl logs <pod>`; `progress.log` in the sandbox's home where there is no such log). The token never goes there.
 5. The patch comes back and is applied to the worktree, uncommitted. The summary goes to stdout. Both, with the full stream, are kept in `<git dir>/remote-agent/<run>/`.
 6. The sandbox is released on exit, also on Ctrl-C or `kill`, and with it the token (on the cluster: the claim is deleted, and with it the pod). The backend's time limit (`REMOTE_HOURS`, 2 by default; the claim's `shutdownTime` on the cluster) removes it if the script dies first.
 
@@ -40,7 +40,7 @@ Shared helpers for backends live in `scripts/remote-backends/lib.sh`, which is n
 
 ### `cluster` (default)
 
-An agent-sandbox SandboxClaim on a warm pool, driven with `kubectl exec`; the handle is the pod. Settings: `REMOTE_CONTEXT` (kube context, `maxibombo`), `REMOTE_NAMESPACE` (`agents`), `REMOTE_POOL` (warm pool, `claude-runner`), `REMOTE_HOURS` (the claim's `shutdownTime`, 2), `REMOTE_KEEP=1` (keep the claim: `kept sandboxclaim/<run>`). Needs a kube context that can create SandboxClaims and exec into pods in the namespace.
+An agent-sandbox SandboxClaim on a warm pool, driven with `kubectl exec`; the handle is the pod. Settings: `REMOTE_CONTEXT` (kube context, `maxibombo`), `REMOTE_NAMESPACE` (`agents`), `REMOTE_POOL` (warm pool, `claude-runner`), `REMOTE_HOURS` (the claim's `shutdownTime`, 2), `REMOTE_KEEP=1` (keep the claim: `kept sandboxclaim/<run>`). The claim and its pod carry the labels `remote-agent/run=<run>` and, with `--name`, `remote-agent/task=<task>`: `kubectl get pods -L remote-agent/task` tells the runs apart, and `kubectl logs -f <pod>` follows one. Needs a kube context that can create SandboxClaims and exec into pods in the namespace.
 
 ### `docker`
 

@@ -18,7 +18,8 @@ A subagent the skill marks **remote-capable** (it only changes its worktree) run
 
 1. Create the worktree as for a local subagent.
 2. Write the message you would hand the subagent into a file. Name the worktree as `~/work`, and every other input as `~/attached/<its file or folder name>`. Attach only what its brief reads, never a whole run folder holding other worktrees.
-3. Run `~/.agents/bin/remote-agent --attach <path>... @<message file> <worktree>` in the background. It takes a slot like a local subagent. Its stdout is the subagent's report; its stderr is progress.
+3. Run `~/.agents/bin/remote-agent --name <task> --attach <path>... @<message file> <worktree>` in the background, with a short task name the skill gives (e.g. a ticket's `NN-<slug>`). It takes a slot like a local subagent. Its stdout is the subagent's report; its stderr is progress, one line per step, each starting with `[<task>]`.
+   - Follow each run's stderr as it arrives and relay a short line to the human per step (claimed, sent, each tool the subagent runs, the result). A run that only shows its result at the end looks like no agent is attached. If your harness cannot read a background command's output while it runs, say where it goes and check it between other work.
 4. Act on the exit code:
    - **0**: the changes are in the worktree, uncommitted. Commit them as the subagent would have, with the repo's commit convention, then act on the report.
    - **3**: no changes; act on the report.
