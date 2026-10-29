@@ -330,8 +330,50 @@ h="$(bare_op acquire agent-nopid 2>/dev/null)" || fail "bare release no pid: acq
 bare_op release agent-nopid 2>/dev/null || fail "bare release no pid: release failed"
 if [ -z "$h" ] || [ -e "$h" ]; then fail "bare release no pid: run folder $h not removed"; fi
 
-# The next acquire removes run folders older than REMOTE_HOURS and keeps fresh ones.
-[ -z "$f" ] || touch -t 200001010000 "$f"
+# acquire records the run's expiry, host clock + REMOTE_HOURS, in its folder's .expires; put cannot overwrite it.
+before="$(date +%s)"
+h="$(REMOTE_HOURS=1 bare_op acquire agent-expiry 2>/dev/null)" || fail "bare expiry: acquire failed"
+e="$(tr -d '\r' <"$h/.expires" 2>/dev/null || true)"
+case "$e" in
+  ""|*[!0-9]*) fail "bare expiry: no .expires in the run folder: $e" ;;
+  *)
+    if [ "$e" -lt $((before + 3600)) ] || [ "$e" -gt $(($(date +%s) + 3600)) ]; then
+      fail "bare expiry: .expires is not now + REMOTE_HOURS: $e"
+    fi
+    ;;
+esac
+mkdir -p "$SANDBOX/stage" && printf '0\n' >"$SANDBOX/stage/.expires"
+tar -cf - -C "$SANDBOX/stage" . | bare_op put agent-expiry "$h" . 2>/dev/null || fail "bare expiry: put failed"
+[ "$(tr -d '\r' <"$h/.expires" 2>/dev/null)" = "$e" ] || fail "bare expiry: put overwrote .expires: $(cat "$h/.expires")"
+
+# run keeps a heartbeat, .heartbeat touched while the run lives, from a loop holding none of the connection's
+# streams: the call returns when the run ends, though the loop sleeps on.
+start=$SECONDS
+out="$(bare_op run agent-expiry "$h" sh -c 'sleep 1; echo ran' </dev/null 2>/dev/null)" || fail "bare heartbeat: run failed"
+[ "$out" = ran ] || fail "bare heartbeat: run output: $out"
+[ $((SECONDS - start)) -lt 15 ] || fail "bare heartbeat: run waited for the heartbeat loop"
+[ -e "$h/.heartbeat" ] || fail "bare heartbeat: no .heartbeat in the run folder"
+bare_op release agent-expiry 2>/dev/null || true
+
+# The next acquire removes a run folder past its own .expires with no heartbeat in 3 minutes, whatever its mtime and
+# the acquiring client's REMOTE_HOURS; a folder with no .expires (an older client's) when older than REMOTE_HOURS.
+now="$(date +%s)"
+for d in future live dead silent; do mkdir -p "$runs/agent-$d"; done
+echo $((now + 3600)) >"$runs/agent-future/.expires"
+for d in live dead silent; do echo $((now - 10)) >"$runs/agent-$d/.expires"; done
+touch "$runs/agent-live/.heartbeat"
+touch -t 200001010000 "$runs/agent-dead/.heartbeat"
+for d in future live dead silent; do touch -t 200001010000 "$runs/agent-$d"; done
+h="$(REMOTE_HOURS=1 bare_op acquire agent-sweep 2>/dev/null)" || fail "bare sweep: acquire failed"
+bare_op release agent-sweep 2>/dev/null || true
+[ -d "$runs/agent-future" ] || fail "bare sweep: a folder before its .expires was removed"
+[ -d "$runs/agent-live" ] || fail "bare sweep: an expired folder with a live heartbeat was removed"
+[ ! -e "$runs/agent-dead" ] || fail "bare sweep: an expired folder with a stale heartbeat was kept"
+[ ! -e "$runs/agent-silent" ] || fail "bare sweep: an expired folder with no heartbeat was kept"
+rm -rf "$runs"/agent-future "$runs"/agent-live
+
+# The next acquire removes run folders older than REMOTE_HOURS and keeps fresh ones (folders with no .expires).
+[ -z "$f" ] || { rm -f "$f/.expires" && touch -t 200001010000 "$f"; }
 mkdir -p "$runs/agent-fresh"
 run 0 "" "${bare[@]}" || true
 if [ -z "$f" ] || [ -e "$f" ]; then fail "bare stale: folder older than REMOTE_HOURS not removed"; fi
