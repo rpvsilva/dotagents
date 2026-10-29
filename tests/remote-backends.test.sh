@@ -253,6 +253,8 @@ run 0 "" "${bare[@]}" REMOTE_KEEP=1 || true
 f="$(run_home)"
 if [ -z "$f" ] || [ ! -d "$f" ]; then fail "bare keep: run folder removed"; fi
 grep -q "kept run folder" "$SANDBOX/out" || fail "bare keep: not reported: $(cat "$SANDBOX/out")"
+grep -q "kept run folder.*once the host's clock is past its .expires and its .heartbeat is 3 minutes old" \
+  "$SANDBOX/out" || fail "bare keep: the message does not say when the folder goes: $(cat "$SANDBOX/out")"
 # Git Bash on Windows has no Unix modes.
 [ -n "${MSYSTEM:-}" ] || [ -n "$(find "$f" -maxdepth 0 -perm 700)" ] || fail "bare keep: run folder mode is not 700"
 [ "$(cat "$f/work/tracked.txt" 2>/dev/null)" = one ] || fail "bare keep: snapshot not in the run folder"
@@ -359,7 +361,7 @@ bare_op release agent-expiry 2>/dev/null || true
 # the acquiring client's REMOTE_HOURS; a folder with no .expires (an older client's) when older than REMOTE_HOURS.
 now="$(date +%s)"
 for d in future live dead silent; do mkdir -p "$runs/agent-$d"; done
-echo $((now + 3600)) >"$runs/agent-future/.expires"
+echo $((now + 7200)) >"$runs/agent-future/.expires"
 for d in live dead silent; do echo $((now - 10)) >"$runs/agent-$d/.expires"; done
 touch "$runs/agent-live/.heartbeat"
 touch -t 200001010000 "$runs/agent-dead/.heartbeat"
@@ -371,6 +373,44 @@ bare_op release agent-sweep 2>/dev/null || true
 [ ! -e "$runs/agent-dead" ] || fail "bare sweep: an expired folder with a stale heartbeat was kept"
 [ ! -e "$runs/agent-silent" ] || fail "bare sweep: an expired folder with no heartbeat was kept"
 rm -rf "$runs"/agent-future "$runs"/agent-live
+
+# A hard limit: once the host's clock is more than 10 minutes past a folder's .expires, the next acquire kills what
+# still runs there (through .pid, as release does) and removes it, though its heartbeat is fresh.
+rm -f "$S/stubborn.pid" "$S/stubborn-child.pid" "$S/stdout-closed"
+h="$(bare_op acquire agent-overdue 2>/dev/null)" || fail "bare hard limit: acquire failed"
+(bare_op run agent-overdue "$h" "$HB/stubborn" </dev/null >/dev/null 2>&1) &
+pid=$!
+for _ in $(seq 100); do [ -e "$S/stubborn.pid" ] && break; sleep 0.1; done
+echo $(($(date +%s) - 86400)) >"$h/.expires"
+touch "$h/.heartbeat"
+h2="$(bare_op acquire agent-sweep 2>/dev/null)" || fail "bare hard limit: the next acquire failed"
+bare_op release agent-sweep 2>/dev/null || true
+[ ! -e "$h" ] || fail "bare hard limit: a folder long past its .expires, with a fresh heartbeat, was kept"
+if alive "$(cat "$S/stubborn.pid" 2>/dev/null)"; then
+  fail "bare hard limit: the run long past its .expires outlived the next acquire"
+  kill -KILL "$(cat "$S/stubborn.pid")"
+fi
+kill -KILL "$pid" 2>/dev/null || true
+wait "$pid" 2>/dev/null || true
+[ -z "$h2" ] || rm -rf "$h2"
+
+# Signals reach only the run's own processes: a .pid naming a live process working outside the run folder (a pid
+# reused since) is left alone by release and by acquire's cleanup.
+(cd "$SANDBOX" && exec sleep 60) &
+other=$!
+h="$(bare_op acquire agent-reused 2>/dev/null)" || fail "bare reused pid: acquire failed"
+printf '%s group\n%s\n' "$other" "$other" >"$h/.pid"
+bare_op release agent-reused 2>/dev/null || true
+alive "$other" || fail "bare reused pid: release signalled a process outside the run folder"
+mkdir -p "$runs/agent-reused"
+echo $(($(date +%s) - 86400)) >"$runs/agent-reused/.expires"
+printf '%s group\n%s\n' "$other" "$other" >"$runs/agent-reused/.pid"
+h="$(bare_op acquire agent-sweep 2>/dev/null)" || fail "bare reused pid: the next acquire failed"
+bare_op release agent-sweep 2>/dev/null || true
+[ ! -e "$runs/agent-reused" ] || fail "bare reused pid: the expired folder was kept"
+alive "$other" || fail "bare reused pid: acquire's cleanup signalled a process outside the run folder"
+kill "$other" 2>/dev/null || true
+wait "$other" 2>/dev/null || true
 
 # The next acquire removes run folders older than REMOTE_HOURS and keeps fresh ones (folders with no .expires).
 [ -z "$f" ] || { rm -f "$f/.expires" && touch -t 200001010000 "$f"; }
