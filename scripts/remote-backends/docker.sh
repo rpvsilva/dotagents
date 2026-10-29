@@ -8,6 +8,8 @@
 # release removes the container (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # Settings: REMOTE_IMAGE (ghcr.io/xgeekshq/agent-runner:main), REMOTE_PLATFORM (passed as --platform when set;
 # otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
+# ssh.sh runs this script with DOCKER_SSH_HOST set: every docker command then runs on that host, one ssh call each,
+# its words quoted for the remote shell and its streams through the connection.
 set -euo pipefail
 
 # shellcheck source=lib.sh disable=SC1091
@@ -15,6 +17,17 @@ set -euo pipefail
 
 image="${REMOTE_IMAGE:-ghcr.io/xgeekshq/agent-runner:main}"
 hours="${REMOTE_HOURS:-2}"
+
+# Sets cmd to the command line for `docker <args>`: here, or on DOCKER_SSH_HOST.
+docker_cmd() {
+  if [ -n "${DOCKER_SSH_HOST:-}" ]; then
+    cmd=(ssh -T -o BatchMode=yes "$DOCKER_SSH_HOST" "$(sq_argv docker "$@")")
+  else
+    cmd=(docker "$@")
+  fi
+}
+dk() { docker_cmd "$@"; "${cmd[@]}"; }
+where="${DOCKER_SSH_HOST:+ on $DOCKER_SSH_HOST}"
 
 # GNU tar in the image would warn about the xattr headers macOS tar adds.
 untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
@@ -25,28 +38,29 @@ case "$op" in
     name="$2"
     args=(run -d --rm --name "$name" --label dotagents.remote-agent=1)
     [ -z "${REMOTE_PLATFORM:-}" ] || args+=(--platform "$REMOTE_PLATFORM")
-    docker "${args[@]}" "$image" sleep $((hours * 3600)) >/dev/null
-    say "started container $name ($image)"
+    dk "${args[@]}" "$image" sleep $((hours * 3600)) </dev/null >/dev/null
+    say "started container $name$where ($image)"
     printf '%s\n' "$name"
     ;;
   put)
     dir="\"\$HOME\"/$(sq "$4")"
-    docker exec -i "$3" sh -c "mkdir -p $dir && $untar -C $dir"
+    dk exec -i "$3" sh -c "mkdir -p $dir && $untar -C $dir"
     ;;
   run)
     container="$3"
     shift 3
-    # exec: when remote-agent stops this run, the docker client goes with it.
-    exec docker exec -i "$container" "$@"
+    # exec: when remote-agent stops this run, the docker (or ssh) client goes with it.
+    docker_cmd exec -i "$container" "$@"
+    exec "${cmd[@]}"
     ;;
   get)
-    docker exec "$3" sh -c "tar -cf - -C \"\$HOME\"/$(sq "$4") ."
+    dk exec "$3" sh -c "tar -cf - -C \"\$HOME\"/$(sq "$4") ." </dev/null
     ;;
   release)
     if [ -n "${REMOTE_KEEP:-}" ]; then
-      say "kept container $2 (it removes itself after REMOTE_HOURS; docker rm -f $2 to remove it now)"
+      say "kept container $2$where (it removes itself after REMOTE_HOURS; docker rm -f $2 to remove it now)"
     else
-      docker rm -f "$2" >/dev/null 2>&1 || true
+      dk rm -f "$2" </dev/null >/dev/null 2>&1 || true
     fi
     ;;
   *)

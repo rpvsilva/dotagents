@@ -4,6 +4,8 @@
 # $STATE/containers/<name> that is its $HOME. The sandbox script (argv holding `remote-agent-sandbox`) is faked:
 # it saves its stdin to $STATE/stdin, writes out/changes.patch from $STATE/patch (empty = no changes) and
 # out/summary.md, and exits $STATE/code. With $STATE/hang present it touches $STATE/started and sleeps instead.
+# It also saves the script it was given (`bash -c <script>`) to $STATE/script, and with $STATE/pair present it
+# first waits for a second container to exist and appends how many it saw to $STATE/seen.
 
 # Writes a stub `docker` into <bin> keeping its state in <state>: run -d, exec [-i], rm -f.
 stub_docker() {
@@ -41,6 +43,11 @@ case "$op" in
     case " $* " in
       *" remote-agent-sandbox "*)
         cat >"$state/stdin"
+        [ "$1" != bash ] || printf '%s' "$3" >"$state/script"
+        if [ -e "$state/pair" ]; then
+          for _ in $(seq 100); do [ "$(ls "$state/containers" | wc -l)" -ge 2 ] && break; sleep 0.1; done
+          ls "$state/containers" | wc -l | tr -d ' ' >>"$state/seen"
+        fi
         if [ -e "$state/hang" ]; then : >"$state/started"; exec sleep 30; fi
         mkdir -p "$home/out"; cp "$state/patch" "$home/out/changes.patch"; echo "did the thing" >"$home/out/summary.md"
         exit "$(cat "$state/code")" ;;
@@ -60,6 +67,38 @@ case "$op" in
 esac
 EOF
   chmod +x "$bin/docker"
+}
+
+# Writes a stub `ssh` into <bin> logging to <state>/calls: it drops its options and destination and runs the one
+# remote command string with `sh -c` here, so a real POSIX shell parses the quoting. Also a stub `scp` that records
+# any call in <state>/scp and fails.
+stub_ssh() {
+  local bin="$1" state="$2"
+  mkdir -p "$bin" "$state"
+  cat >"$bin/ssh" <<EOF
+#!/usr/bin/env bash
+state="$state"
+EOF
+  cat >>"$bin/ssh" <<'EOF'
+args="ssh $*"
+printf '%s\n' "${args//$'\n'/ }" >>"$state/calls"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|-p|-i|-l|-F) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+shift # the destination
+[ $# -eq 1 ] || { echo "stub ssh: wanted one remote command string, got $#" >&2; exit 255; }
+exec sh -c "$1"
+EOF
+  cat >"$bin/scp" <<EOF
+#!/bin/sh
+echo "scp \$*" >>"$state/scp"
+exit 1
+EOF
+  chmod +x "$bin/ssh" "$bin/scp"
 }
 
 # Makes a git worktree at <dir> with a tracked file (tracked.txt: one), an untracked one, an ignored one and a

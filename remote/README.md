@@ -1,10 +1,10 @@
 # remote
 
-Running subagents on a remote backend for compute only: a Kubernetes cluster or Docker on this machine (an SSH host is planned). The laptop keeps the code, the git history and the orchestrating session; the backend gets what one subagent needs for one task and gives back a patch. It never touches a repo or GitHub, so it works for any project, including ones the machine's owners have no access to.
+Running subagents on a remote backend for compute only: a Kubernetes cluster, Docker on this machine, or a VM or PC over SSH. The laptop keeps the code, the git history and the orchestrating session; the backend gets what one subagent needs for one task and gives back a patch. It never touches a repo or GitHub, so it works for any project, including ones the machine's owners have no access to.
 
 ## Where the pieces live
 
-- **The cluster side** lives in the cluster's GitOps repo: the agent-sandbox controller, the `agent-runner` image (`tools/agent-runner`, also used by the `docker` backend) and the `claude-runner` SandboxTemplate and warm pool (`ai-infrastructure/agents`).
+- **The cluster side** lives in the cluster's GitOps repo: the agent-sandbox controller, the `agent-runner` image (`tools/agent-runner`, also used by the `docker` and `ssh` backends) and the `claude-runner` SandboxTemplate and warm pool (`ai-infrastructure/agents`).
 - **This repo is the client**: [`scripts/remote-agent.sh`](../scripts/remote-agent.sh), driving one backend script from [`scripts/remote-backends/`](../scripts/remote-backends/).
 
 ## Use
@@ -55,6 +55,23 @@ A fresh container of the runner image on this machine for each run, driven with 
 
 The container gets Docker's default network: internet egress, and whatever this machine's network reaches. Anyone who can run `docker` here can see the snapshot and the token during a run.
 
+### `ssh`
+
+A VM or PC reached with `ssh`. In container mode (the default) it is the `docker` backend run on that host: a fresh container of the runner image per run, each `docker` command sent as one `ssh -T -o BatchMode=yes <host> '<command>'` call with every word single-quoted, so any login shell (bash, zsh, dash) runs it as written. Files travel as tar streams through the connection, and the token through stdin: no `scp`, no temp files on either side, and the token never in `ssh` arguments. Containers are named after the run, so several runs can share the host; each is removed at the end, and `--rm` with its `sleep` removes it after `REMOTE_HOURS` if `remote-agent` dies. Settings, in `remote.env`:
+
+- `REMOTE_BACKEND=ssh`.
+- `REMOTE_SSH_HOST`: the ssh destination, `user@host` or an alias from `~/.ssh/config` (where a port, key or jump host go).
+- `REMOTE_SSH_MODE`: `container` (the default). Any other value stops the run, naming `container` and `bare`; `bare` is not built yet.
+- `REMOTE_IMAGE`, `REMOTE_PLATFORM`, `REMOTE_HOURS` and `REMOTE_KEEP=1` as for [`docker`](#docker), applied on the host.
+
+The host needs:
+
+- **Key-based SSH** that works without a prompt (`BatchMode=yes` never asks for a password or passphrase: use an agent or an unencrypted key). Check with `ssh -o BatchMode=yes <host> true`.
+- **Docker**, with the SSH user in the `docker` group (`sudo usermod -aG docker <user>`, then log in again). Check with `ssh <host> docker info`.
+- **The image**: log in once on the host (`ssh -t <host> docker login ghcr.io`) or build it there, and set `REMOTE_IMAGE` to its tag. Pick a `REMOTE_PLATFORM` or image that matches the host's architecture.
+
+**Who can see the code and the token during a run**: the host's root and every member of its `docker` group, since they can `docker exec` into the container or inspect it. Use a host only you (and people you trust with the token) administer. The container gets Docker's default network on the host: internet egress, and whatever the host's network reaches.
+
 ## Setup, once
 
 ```sh
@@ -64,7 +81,7 @@ The container gets Docker's default network: internet egress, and whatever this 
 
 `setup` asks for the backend and its details (cluster: kube context, the current one by default, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
 
-By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image.
+By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image; for `ssh`, key-based SSH to a host with Docker and the image.
 
 Without `remote.env`, skills run their subagents on this machine, as before.
 

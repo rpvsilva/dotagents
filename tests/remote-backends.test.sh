@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs scripts/remote-agent.sh end to end on each non-cluster backend against stubs (tests/lib/remote-stubs.sh):
 # the patch comes back, the exit codes match the cluster's, the token stays off the command line, and the
-# sandbox goes away after success, failure and TERM.
+# sandbox goes away after success, failure and TERM. The ssh backend runs against a stub ssh that hands the remote
+# command to a local `sh -c`, with the docker stub behind it.
 # Opt-in real run: REMOTE_DOCKER_IMAGE_TEST=<image> runs one task in a real container of <image> (needs Docker).
 set -euo pipefail
 
@@ -19,6 +20,7 @@ H="$SANDBOX/home"
 W="$SANDBOX/work"
 mkdir -p "$H" "$SANDBOX/config/dotagents"
 stub_docker "$SANDBOX/bin" "$S"
+stub_ssh "$SANDBOX/bin" "$S"
 make_worktree "$W"
 
 # Runs remote-agent.sh in $W with the remote.env lines given after the fake run's exit code $1 and patch $2.
@@ -29,7 +31,7 @@ run() {
   { echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"; printf '%s\n' "$@"; } >"$SANDBOX/config/dotagents/remote.env"
   rm -rf "$S/calls" "$S/stdin"
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1
+    "$REPO/scripts/remote-agent.sh" "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
 }
 # The container a run used: the name given to `docker run`.
 container() { sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" 2>/dev/null | head -1 || true; }
@@ -100,6 +102,78 @@ code=0; wait "$pid" || code=$?
 [ $((SECONDS - start)) -lt 10 ] || fail "docker TERM: waited for the sandbox run to end"
 gone "$(container)" || fail "docker TERM: container not removed"
 rm -f "$S/hang"
+
+# --- ssh, container mode: the docker backend's commands, each one an ssh call to the host.
+weird="it's a \$HOME file.txt"
+printf 'odd\n' >"$W/$weird"
+BRIEF="don't add \$HOME or \`x\`;  add a hello file" \
+  run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box || fail "ssh: exited non-zero: $(cat "$SANDBOX/out")"
+c="$(container)"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = hello ] || fail "ssh: patch not applied: $(cat "$SANDBOX/out")"
+grep -q "did the thing" "$SANDBOX/out" || fail "ssh: summary not printed"
+grep -q "^ssh -T -o BatchMode=yes me@build-box 'docker' 'run' '-d' '--rm' " "$S/calls" \
+  || fail "ssh: docker run not sent to the host as quoted words: $(grep '^ssh' "$S/calls" | head -1)"
+if ! grep -q "^ssh " "$S/calls" || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@build-box "; then
+  fail "ssh: an ssh call without -T, BatchMode or the host: $(grep '^ssh' "$S/calls")"
+fi
+grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\$" "$S/calls" \
+  || fail "ssh: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
+[ "$(cat "$S/script" 2>/dev/null)" = "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" ] \
+  || fail "ssh: the sandbox script did not survive the remote shell's quoting"
+[ "$(sed -n 1p "$S/stdin")" = sk-claude-secret ] || fail "ssh: stdin line 1 is not the Claude token"
+[ "$(sed -n '2,$p' "$S/stdin")" = "don't add \$HOME or \`x\`;  add a hello file" ] \
+  || fail "ssh: brief changed on the way: $(sed -n '2,$p' "$S/stdin")"
+grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "ssh: the token leaked into ssh arguments or the output"
+[ ! -e "$S/scp" ] || fail "ssh: scp called: $(cat "$S/scp")"
+gone "$c" || fail "ssh: container $c not removed"
+rm -f "$W/hello.txt"
+
+# The snapshot arrives intact: keep the container to look inside it.
+run 0 "" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_KEEP=1 || true
+c="$(container)"
+[ "$(cat "$S/containers/$c/work/$weird" 2>/dev/null)" = odd ] \
+  || fail "ssh: file name with a quote, spaces and \$ not sent: $(ls "$S/containers/$c/work" 2>&1)"
+grep -q "kept container $c" "$SANDBOX/out" || fail "ssh keep: not reported: $(cat "$SANDBOX/out")"
+rm -rf "${S:?}/containers/$c" "${W:?}/$weird"
+
+# A failed run keeps its exit code and removes the container.
+code=0; run 5 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box || code=$?
+[ "$code" = 5 ] || fail "ssh failed run: wanted exit 5, got $code"
+gone "$(container)" || fail "ssh failed run: container not removed"
+
+# Unknown mode or no host: the run stops naming what is wrong, and nothing reaches the host.
+code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_MODE=pod || code=$?
+[ "$code" != 0 ] || fail "ssh unknown mode: exited 0"
+grep -q "REMOTE_SSH_MODE=pod.*container.*bare" "$SANDBOX/out" || fail "ssh unknown mode: message: $(cat "$SANDBOX/out")"
+[ "$(grep -c 'REMOTE_SSH_MODE' "$SANDBOX/out")" = 1 ] || fail "ssh unknown mode: said more than once: $(cat "$SANDBOX/out")"
+[ ! -e "$S/calls" ] || fail "ssh unknown mode: something reached the host: $(cat "$S/calls")"
+code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh || code=$?
+[ "$code" != 0 ] || fail "ssh no host: exited 0"
+grep -q "set REMOTE_SSH_HOST" "$SANDBOX/out" || fail "ssh no host: message: $(cat "$SANDBOX/out")"
+[ ! -e "$S/calls" ] || fail "ssh no host: something reached the host: $(cat "$S/calls")"
+
+# Two runs at once on one host: each gets its own container, both finish, both containers go.
+W2="$SANDBOX/work2"
+make_worktree "$W2"
+: >"$S/pair"
+echo 0 >"$S/code"
+printf '%s' "$HELLO_PATCH" >"$S/patch"
+printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=ssh\nREMOTE_SSH_HOST=me@build-box\n' \
+  >"$SANDBOX/config/dotagents/remote.env"
+rm -rf "$S/calls" "$S/seen"
+pids=()
+for w in "$W" "$W2"; do
+  (cd "$w" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    "$REPO/scripts/remote-agent.sh" "add a hello file") >"$w.out" 2>&1 &
+  pids+=($!)
+done
+for p in "${pids[@]}"; do wait "$p" || fail "ssh pair: a run exited non-zero: $(cat "$W.out" "$W2.out")"; done
+for w in "$W" "$W2"; do [ "$(cat "$w/hello.txt" 2>/dev/null)" = hello ] || fail "ssh pair: patch not applied in $w"; done
+names="$(sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" | sort -u)"
+[ "$(printf '%s\n' "$names" | grep -c .)" = 2 ] || fail "ssh pair: wanted 2 containers, got: $names"
+[ "$(sort -u "$S/seen" 2>/dev/null)" = 2 ] || fail "ssh pair: the runs did not overlap: $(cat "$S/seen" 2>/dev/null)"
+for n in $names; do gone "$n" || fail "ssh pair: container $n not removed"; done
+rm -f "$S/pair" "$W/hello.txt"
 
 # Opt-in: one real task in a real container of the image named, with the real token from the environment.
 if [ -n "${REMOTE_DOCKER_IMAGE_TEST:-}" ]; then
