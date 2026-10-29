@@ -20,7 +20,9 @@
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
 # SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
 # and Claude's full stream in <git dir>/remote-agent/<run>/, plus transcript.jsonl: Claude's raw stream-json events,
-# written as they arrive (the token's value redacted), its path printed before the sandbox is claimed.
+# written as they arrive (the token's value redacted), its path printed before the sandbox is claimed, and
+# session.jsonl: Claude's session (the token redacted), also placed under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/ in
+# the worktree's project folder, so `/resume` in the worktree opens it.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
 # Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
@@ -216,6 +218,26 @@ runner=""
 
 # Drained after extracting, so the sender's trailing padding does not hit a closed pipe (tar stops at the end marker).
 with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$keep" 2>/dev/null; cat >/dev/null; } || true
+# Claude's session goes under this machine's Claude config, in the project folder for the worktree's real path (every
+# character outside [A-Za-z0-9] made -), its cwd made that path, so /resume in the worktree opens it. The copy in
+# $keep stays as it came.
+session_id=""
+[ ! -s "$keep/session.jsonl" ] || session_id="$(jq -rn 'first(inputs | .sessionId? // empty)' "$keep/session.jsonl" 2>/dev/null | tr -d '\r')" || true
+if [[ "$session_id" =~ ^[A-Za-z0-9-]+$ ]]; then
+  real="$(cd "$root" && pwd -P)"
+  dest="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$real" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$dest"
+  # As a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
+  w="$(printf '%s' "$real" | jq -Rs . | tr -d '\r')"
+  if jq -c --argjson w "$w" 'if .cwd? then .cwd = $w else . end' "$keep/session.jsonl" | tr -d '\r' >"$dest/$session_id.jsonl"; then
+    say "session: $dest/$session_id.jsonl (/resume in $real opens it)"
+  else
+    rm -f "$dest/$session_id.jsonl"
+    say "session not placed (not JSON lines?); it is in $keep/session.jsonl"
+  fi
+else
+  say "no session came back: the run cannot be resumed"
+fi
 [ "$status" -eq 0 ] || { say "the sandbox run failed (exit $status); what it left is in $keep"; exit "$status"; }
 
 [ -f "$keep/summary.md" ] && cat "$keep/summary.md"
