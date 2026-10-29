@@ -14,10 +14,11 @@
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
 # secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
 # run scripts/remote-agent-sandbox.sh there; get the patch back and apply it with `git apply`, uncommitted.
-# The sandbox is released on exit, also on INT or TERM; the backend's time limit (REMOTE_HOURS) removes it anyway
-# if this script dies first.
+# The sandbox is released on exit, also on INT or TERM, once the run's processes here (the backend's client among
+# them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first.
 # Prints Claude's progress on stderr and the summary on stdout. The progress also goes to the sandbox's own log (its
-# main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none). Keeps the patch and summary in <git dir>/remote-agent/<run>/.
+# main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
+# SSH bare mode). Keeps the patch and summary in <git dir>/remote-agent/<run>/.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
 # Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
@@ -108,12 +109,12 @@ with_progress() {
   if [ "$1" = --no-log ]; then opt="$1"; shift; fi
   { "$@" 2>&1 >&4 | progress ${opt:+"$opt"}; } 4>&1
 }
-# The sandbox's log is its main process's stdout (/proc/1/fd/1 in a pod or container), else ~/progress.log;
-# scripts/remote-agent-sandbox.sh picks it the same way.
+# The sandbox's log is REMOTE_AGENT_LOG when the backend's run sets it, else its main process's stdout
+# (/proc/1/fd/1 in a pod or container), else ~/progress.log; scripts/remote-agent-sandbox.sh picks it the same way.
 send_log() {
   [ -n "$handle" ] && [ -s "$stage/log" ] || return 0
   # shellcheck disable=SC2016 # expanded in the sandbox
-  "$backend" run "$run" "$handle" sh -c 'l=/proc/1/fd/1; [ -w "$l" ] || l="$HOME/progress.log"; cat >>"$l"' \
+  "$backend" run "$run" "$handle" sh -c 'l="${REMOTE_AGENT_LOG:-/proc/1/fd/1}"; [ -w "$l" ] || l="$HOME/progress.log"; cat >>"$l"' \
     <"$stage/log" >/dev/null 2>&1 || true
   : >"$stage/log"
 }
@@ -122,7 +123,8 @@ acquired=""
 handle=""
 runner=""
 cleanup() {
-  [ -z "$runner" ] || kill "$runner" 2>/dev/null || true
+  # The run is its own process group (see below): stop all of it, the backend's client included.
+  if [ -n "$runner" ]; then kill -TERM -- "-$runner" 2>/dev/null || kill "$runner" 2>/dev/null || true; fi
   send_log
   [ -z "$acquired" ] || with_progress "$backend" release "$run" || true
   rm -rf "$stage"
@@ -166,11 +168,16 @@ tar -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
 say "sent setup and snapshot"
 send_log
 
-# In the background, so INT or TERM reach the traps at once rather than when the run ends.
+# In the background, so INT or TERM reach the traps at once rather than when the run ends; with job control on, in
+# a process group of its own (numbered $runner), so cleanup stops the backend's client (ssh, docker, kubectl) with it.
 status=0
-{ printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
-  | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox &
+set -m
+(
+  { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
+    | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox
+) &
 runner=$!
+set +m
 wait "$runner" || status=$?
 runner=""
 

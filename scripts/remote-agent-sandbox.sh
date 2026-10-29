@@ -6,11 +6,12 @@
 # progress on stderr, and leaves ~/out/changes.patch (everything changed since the base) and ~/out/summary.md.
 # The sandbox has no git remote and no GitHub credentials: results only leave as that patch.
 # Its progress also goes to the sandbox's own log, so `kubectl logs` / `docker logs` show the run live: the main
-# process's stdout (/proc/1/fd/1, writable by the runner user in a pod or container), else ~/progress.log (SSH bare
-# mode). scripts/remote-agent.sh picks it the same way.
+# process's stdout (/proc/1/fd/1, writable by the runner user in a pod or container), else ~/progress.log. A backend
+# with no log of its own (SSH bare mode) names the file in REMOTE_AGENT_LOG. scripts/remote-agent.sh picks it the
+# same way.
 set -euo pipefail
 
-log=/proc/1/fd/1
+log="${REMOTE_AGENT_LOG:-/proc/1/fd/1}"
 [ -w "$log" ] || log="$HOME/progress.log"
 
 # The whole run, left unindented; its stdout and stderr are kept apart, stderr copied to the log at the end.

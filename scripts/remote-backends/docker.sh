@@ -6,6 +6,9 @@
 # removes itself after REMOTE_HOURS if release never comes.
 # put extracts the tar on stdin under the container's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release removes the container (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
+# The container is labelled sandbox.users.io/remote-agent-run=<run> and, with REMOTE_TASK (set by remote-agent.sh
+# from --name), sandbox.users.io/remote-agent-task=<task>: the cluster's keys, so
+# `docker ps --filter label=sandbox.users.io/remote-agent-task` lists the named runs.
 # check names what is missing: docker, the Docker daemon, the image (pulled when absent); and notes on stderr when the
 # image's architecture differs from the machine's (it would run emulated).
 # Settings: REMOTE_IMAGE (ghcr.io/xgeekshq/agent-runner:main), REMOTE_PLATFORM (passed as --platform when set;
@@ -47,7 +50,8 @@ op="${1:-}"
 case "$op" in
   acquire)
     name="$2"
-    args=(run -d --rm --name "$name" --label dotagents.remote-agent=1)
+    args=(run -d --rm --name "$name" --label "sandbox.users.io/remote-agent-run=$name")
+    [ -z "${REMOTE_TASK:-}" ] || args+=(--label "sandbox.users.io/remote-agent-task=$REMOTE_TASK")
     [ -z "${REMOTE_PLATFORM:-}" ] || args+=(--platform "$REMOTE_PLATFORM")
     dk "${args[@]}" "$image" sleep $((hours * 3600)) </dev/null >/dev/null
     say "started container $name$where ($image)"
@@ -60,7 +64,7 @@ case "$op" in
   run)
     container="$3"
     shift 3
-    # exec: when remote-agent stops this run, the docker (or ssh) client goes with it.
+    # exec: remote-agent stops this run by signalling its process group, so the docker (or ssh) client goes with it.
     docker_cmd exec -i "$container" "$@"
     exec "${cmd[@]}"
     ;;

@@ -2,10 +2,11 @@
 # Guided setup for scripts/remote-agent.sh, run as `remote-agent setup`: asks for the backend and its details, then
 # for a Claude token (from `claude setup-token`, read without echo), and writes ~/.config/dotagents/remote.env
 # readable only by the user (mode 600), through a temp file in the same folder moved into place.
-# Enter takes the default shown; for the token, it keeps the one already in remote.env. Settings it does not ask
-# about (REMOTE_HOURS, REMOTE_KEEP, ...) are kept from the old file. Reads answers from stdin when it is not a
-# terminal (for tests). EOF or Ctrl-C before the end writes nothing: an existing remote.env stays as it was, and
-# without one skills keep running subagents locally.
+# Enter takes the default shown: the old file's value, else a fallback (for the kube context, the current one); for
+# the token, it keeps the one already in remote.env. Settings it does not ask about (REMOTE_HOURS, REMOTE_KEEP, ...)
+# are kept from the old file. Reads answers from stdin when it is not a terminal (for tests). EOF or Ctrl-C before
+# the end writes nothing: an existing remote.env stays as it was, and without one skills keep running subagents
+# locally.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
@@ -36,8 +37,9 @@ ask() {
   printf '%s' "$answer"
 }
 
-# Quotes a value for the sourced file: single quotes, each ' written as '\''.
-sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+# sq quotes a value for the sourced file.
+# shellcheck source=remote-backends/lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/remote-backends/lib.sh"
 
 # Prints setting $1 from the existing file, the default for its question; the environment's own does not count.
 old() {
@@ -55,7 +57,7 @@ case "$backend" in
   cluster)
     current="$(kubectl config current-context 2>/dev/null || true)"
     old_context="$(old REMOTE_CONTEXT)" old_namespace="$(old REMOTE_NAMESPACE)" old_pool="$(old REMOTE_POOL)"
-    context="$(ask "Kube context" "${current:-${old_context:-maxibombo}}")"
+    context="$(ask "Kube context" "${old_context:-${current:-maxibombo}}")"
     namespace="$(ask "Namespace" "${old_namespace:-agents}")"
     pool="$(ask "Warm pool" "${old_pool:-claude-runner}")"
     lines+=("REMOTE_CONTEXT=$(sq "$context")" "REMOTE_NAMESPACE=$(sq "$namespace")" "REMOTE_POOL=$(sq "$pool")")

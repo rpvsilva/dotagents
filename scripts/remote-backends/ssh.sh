@@ -82,10 +82,12 @@ cd "$root"/'"$(sq "$run")"' && pwd' </dev/null
     home="$3"
     shift 3
     # Claude Code reads CLAUDE_CONFIG_DIR before HOME: set it, so a value from the host user's profile is not used.
-    # exec: when remote-agent stops this run, the ssh client goes with it.
+    # REMOTE_AGENT_LOG: the sandbox log is progress.log here, never the host's /proc/1/fd/1 (writable as root, or on
+    # a host that is itself a container, where it is another process's stdout).
+    # exec: remote-agent stops this run by signalling its process group, so the ssh client goes with it.
     exec ssh -T -o BatchMode=yes "$host" "cd $(sq "$home") && exec $(sq_argv env "HOME=$home" \
       "XDG_CONFIG_HOME=$home/.config" "XDG_DATA_HOME=$home/.local/share" "XDG_CACHE_HOME=$home/.cache" \
-      "CLAUDE_CONFIG_DIR=$home/.claude" "$@")"
+      "CLAUDE_CONFIG_DIR=$home/.claude" "REMOTE_AGENT_LOG=$home/progress.log" "$@")"
     ;;
   get)
     on_host "tar -cf - -C $(sq "$3")/$(sq "$4") ." </dev/null

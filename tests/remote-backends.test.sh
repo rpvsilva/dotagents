@@ -24,7 +24,8 @@ stub_docker "$SANDBOX/bin" "$S"
 stub_ssh "$SANDBOX/bin" "$S"
 make_worktree "$W"
 
-# Runs remote-agent.sh in $W with the remote.env lines given after the fake run's exit code $1 and patch $2.
+# Runs remote-agent.sh in $W with the remote.env lines given after the fake run's exit code $1 and patch $2; with
+# NAME set, as --name NAME.
 run() {
   echo "$1" >"$S/code"
   printf '%s' "$2" >"$S/patch"
@@ -32,7 +33,7 @@ run() {
   { echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"; printf '%s\n' "$@"; } >"$SANDBOX/config/dotagents/remote.env"
   rm -rf "$S/calls" "$S/stdin"
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    "$REPO/scripts/remote-agent.sh" "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
+    "$REPO/scripts/remote-agent.sh" ${NAME:+--name "$NAME"} "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
 }
 # The container a run used: the name given to `docker run`.
 container() { sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" 2>/dev/null | head -1 || true; }
@@ -49,6 +50,9 @@ grep -q "did the thing" "$SANDBOX/out" || fail "docker: summary not printed"
 grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\$" "$S/calls" \
   || fail "docker: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
 grep -q -- "--platform" "$S/calls" && fail "docker: --platform passed though REMOTE_PLATFORM is unset"
+grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
+  || fail "docker: container not labelled with its run: $(grep '^run' "$S/calls")"
+grep -q -- "remote-agent-task" "$S/calls" && fail "docker: task label though no --name"
 grep -q "^exec -i $c .*remote-agent-sandbox" "$S/calls" || fail "docker: sandbox script not run with exec -i"
 [ "$(sed -n 1p "$S/stdin")" = sk-claude-secret ] || fail "docker: stdin line 1 is not the Claude token"
 [ "$(sed -n '2,$p' "$S/stdin")" = "add a hello file" ] || fail "docker: brief does not follow the token"
@@ -62,6 +66,11 @@ run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_IMAGE=local/runner:dev REMOTE_
 grep -q "^run -d --rm .*--platform linux/arm64 local/runner:dev sleep 3600\$" "$S/calls" \
   || fail "docker settings: image, platform or hours not used: $(grep '^run' "$S/calls")"
 rm -f "$W/hello.txt"
+
+# --name labels the container with the task, under the cluster's key.
+NAME="09-Review fixes" run 0 "" REMOTE_BACKEND=docker || true
+grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " "$S/calls" \
+  || fail "docker name: container not labelled with the task: $(grep '^run' "$S/calls")"
 
 # No changes: exit 3.
 code=0; run 0 "" REMOTE_BACKEND=docker || code=$?
@@ -119,6 +128,8 @@ if ! grep -q "^ssh " "$S/calls" || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -
 fi
 grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\$" "$S/calls" \
   || fail "ssh: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
+grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
+  || fail "ssh: container not labelled with its run: $(grep '^run' "$S/calls")"
 # Compared without CRs: a Windows checkout may turn the file's LFs into CRLFs, and the shell drops the CRs in transit.
 want="$(cat "$REPO/scripts/remote-agent-sandbox.sh")"
 want="${want//$'\r'/}"
@@ -196,6 +207,7 @@ printf '#!/bin/sh\nexit 0\n' >"$HB/node"
 cat >"$HB/claude" <<CLAUDE
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
+if [ -e "$S/hang" ]; then echo \$\$ >"$S/claude.pid"; : >"$S/started"; exec sleep 30; fi
 printf '%s\n' "\$HOME" "\$XDG_CONFIG_HOME" "\$XDG_DATA_HOME" "\$XDG_CACHE_HOME" "\$CLAUDE_CONFIG_DIR" "\$PWD" >"$S/claude-env"
 [ "\$CLAUDE_CODE_OAUTH_TOKEN" = sk-claude-secret ] || echo "no token" >>"$S/claude-env"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"}]}}'
@@ -247,6 +259,28 @@ grep -q "kept run folder" "$SANDBOX/out" || fail "bare keep: not reported: $(cat
 grep -q "writing the hello file" "$f/progress.log" 2>/dev/null || fail "bare keep: Claude's progress not in progress.log"
 grep -q "sent setup and snapshot" "$f/progress.log" 2>/dev/null || fail "bare keep: client progress not in progress.log"
 grep -q "sk-claude-secret" "$f/progress.log" 2>/dev/null && fail "bare keep: the token reached progress.log"
+# Even where the host's main-process stdout is writable (as root, or a host that is itself a container).
+[ ! -s "$S/host-main-stdout" ] || fail "bare keep: progress written to the host's /proc/1/fd/1: $(head -3 "$S/host-main-stdout")"
+
+# TERM mid-run stops the run on the host too: no claude (no ssh client, here) outlives remote-agent.
+: >"$S/hang"
+rm -f "$S/started" "$S/claude.pid"
+printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\n' >"$SANDBOX/config/dotagents/remote.env"
+printf '%s\n' "${bare[@]}" >>"$SANDBOX/config/dotagents/remote.env"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
+pid=$!
+for _ in $(seq 100); do [ -e "$S/started" ] && break; sleep 0.1; done
+start=$SECONDS
+kill -TERM "$pid"
+code=0; wait "$pid" || code=$?
+[ "$code" = 143 ] || fail "bare TERM: wanted exit 143, got $code: $(cat "$SANDBOX/out")"
+[ $((SECONDS - start)) -lt 10 ] || fail "bare TERM: waited for the sandbox run to end"
+if alive "$(cat "$S/claude.pid" 2>/dev/null)"; then
+  fail "bare TERM: claude on the host outlived remote-agent"
+  kill "$(cat "$S/claude.pid")"
+fi
+rm -f "$S/hang"
 
 # The next acquire removes run folders older than REMOTE_HOURS and keeps fresh ones.
 [ -z "$f" ] || touch -t 200001010000 "$f"
@@ -285,7 +319,7 @@ if [ -n "${REMOTE_DOCKER_IMAGE_TEST:-}" ]; then
       "$REPO/scripts/remote-agent.sh" "Create hello.txt containing the word hello.") >"$SANDBOX/out" 2>&1 \
       || fail "real docker: exited non-zero: $(tail -5 "$SANDBOX/out")"
     [ -f "$R/hello.txt" ] || fail "real docker: hello.txt not created"
-    left="$(docker ps -aq --filter label=dotagents.remote-agent=1)"
+    left="$(docker ps -aq --filter label=sandbox.users.io/remote-agent-run)"
     [ -z "$left" ] || fail "real docker: containers left behind: $left"
   fi
 fi

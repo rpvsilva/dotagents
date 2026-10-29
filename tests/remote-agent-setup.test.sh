@@ -88,6 +88,14 @@ check_written cluster "$odd"
 [ "$(value REMOTE_POOL)" = claude-runner ] || fail "cluster: REMOTE_POOL is $(value REMOTE_POOL)"
 [ "$(value REMOTE_IMAGE)" = unset ] || fail "cluster: an image was written"
 
+# Re-running keeps the saved kube context over the current one (enter through every question).
+cp "$FILE" "$SANDBOX/cluster.env"
+sed 's/^REMOTE_CONTEXT=.*/REMOTE_CONTEXT=saved-ctx/' "$SANDBOX/cluster.env" >"$FILE"
+setup $'\n\n\n\n\n' || fail "cluster re-run: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_CONTEXT)" = saved-ctx ] || fail "cluster re-run: REMOTE_CONTEXT is $(value REMOTE_CONTEXT), not the saved one"
+[ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster re-run: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
+[ "$(value CLAUDE_CODE_OAUTH_TOKEN)" = "$odd" ] || fail "cluster re-run: the token with quotes did not survive"
+
 # An unknown backend is asked again.
 rm -f "$FILE"
 setup $'nope\ndocker\n\n'"$TOKEN"$'\n' || fail "unknown backend: exited non-zero: $(cat "$SANDBOX/out")"

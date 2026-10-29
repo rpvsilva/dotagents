@@ -45,7 +45,7 @@ An agent-sandbox SandboxClaim on a warm pool, driven with `kubectl exec`; the ha
 
 ### `docker`
 
-A fresh container of the runner image on this machine for each run, driven with `docker exec`; the handle is the container, named after the run. It runs `sleep <REMOTE_HOURS*3600>` under `--rm`, so it removes itself after `REMOTE_HOURS` if `remote-agent` dies; otherwise `docker rm -f` removes it at the end, also on failure, Ctrl-C or `kill`. Needs only Docker and the image. Settings, in `remote.env`:
+A fresh container of the runner image on this machine for each run, driven with `docker exec`; the handle is the container, named after the run. It runs `sleep <REMOTE_HOURS*3600>` under `--rm`, so it removes itself after `REMOTE_HOURS` if `remote-agent` dies; otherwise `docker rm -f` removes it at the end, also on failure, Ctrl-C or `kill`. Like the cluster's pods, it carries the labels `sandbox.users.io/remote-agent-run=<run>` and, with `--name`, `sandbox.users.io/remote-agent-task=<task>`: `docker ps --filter label=sandbox.users.io/remote-agent-task` lists the named runs, and `docker logs -f <run>` follows one. Needs only Docker and the image. Settings, in `remote.env`:
 
 - `REMOTE_BACKEND=docker`.
 - `REMOTE_IMAGE`: the runner image, `ghcr.io/xgeekshq/agent-runner:main` by default. It is private: log in once with `docker login ghcr.io` (your GitHub user and a token with `read:packages`), or build it from `tools/agent-runner` in the cluster's GitOps repo (`docker build -t agent-runner:local tools/agent-runner`) and set `REMOTE_IMAGE=agent-runner:local`.
@@ -58,7 +58,7 @@ The container gets Docker's default network: internet egress, and whatever this 
 
 ### `ssh`
 
-A VM or PC reached with `ssh`. In container mode (the default) it is the `docker` backend run on that host: a fresh container of the runner image per run, each `docker` command sent as one `ssh -T -o BatchMode=yes <host> '<command>'` call with every word single-quoted, so any login shell (bash, zsh, dash) runs it as written. Files travel as tar streams through the connection, and the token through stdin: no `scp`, no temp files on either side, and the token never in `ssh` arguments. Containers are named after the run, so several runs can share the host; each is removed at the end, and `--rm` with its `sleep` removes it after `REMOTE_HOURS` if `remote-agent` dies. Settings, in `remote.env`:
+A VM or PC reached with `ssh`. In container mode (the default) it is the `docker` backend run on that host: a fresh container of the runner image per run, each `docker` command sent as one `ssh -T -o BatchMode=yes <host> '<command>'` call with every word single-quoted, so any login shell (bash, zsh, dash) runs it as written. Files travel as tar streams through the connection, and the token through stdin: no `scp`, no temp files on either side, and the token never in `ssh` arguments. Containers are named after the run and labelled as for `docker`, so several runs can share the host; each is removed at the end, and `--rm` with its `sleep` removes it after `REMOTE_HOURS` if `remote-agent` dies. Settings, in `remote.env`:
 
 - `REMOTE_BACKEND=ssh`.
 - `REMOTE_SSH_HOST`: the ssh destination, `user@host` or an alias from `~/.ssh/config` (where a port, key or jump host go).
@@ -81,7 +81,7 @@ With `REMOTE_SSH_MODE=bare` the run happens directly on the host, as the SSH use
 - The host needs the same key-based SSH as container mode, and no Docker.
 - Before anything is sent, the host is checked for `bash`, `tar`, `git`, `jq`, `node` and `claude` on the SSH user's `PATH` (non-interactive login: set it in the shell's non-interactive startup file); each missing one is named and the run stops.
 - A client that dies leaves its folder behind: the next run's acquire removes run folders older than `REMOTE_HOURS`.
-- The sandbox log is `progress.log` in the run folder (there is no container log). SSH in as a normal user, not root: root could write to the host's init process's stdout instead.
+- The sandbox log is `progress.log` in the run folder (there is no container log), never the host's `/proc/1/fd/1`, even as root.
 - Settings: `REMOTE_SSH_DIR`, the run folders' root on the host, absolute or relative to the SSH user's home (`.remote-agent/runs` by default); `REMOTE_HOURS` and `REMOTE_KEEP=1` as above. `REMOTE_IMAGE` and `REMOTE_PLATFORM` do not apply.
 
 ## Setup, once
@@ -91,7 +91,7 @@ With `REMOTE_SSH_MODE=bare` the run happens directly on the host, as the SSH use
 ~/.agents/bin/remote-agent check   # checks the backend's needs, then a dry run
 ```
 
-`setup` asks for the backend and its details (cluster: kube context, the current one by default, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
+`setup` asks for the backend and its details (cluster: kube context, by default the saved one or else the current one, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
 
 `check` proves the setup without spending tokens. It names each missing thing on its own line, then ends with a dry run, and exits 0 only when everything passes (it prints `ok` last):
 

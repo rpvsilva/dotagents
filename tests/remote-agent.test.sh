@@ -10,6 +10,8 @@ trap 'rm -rf "$SANDBOX"' EXIT
 fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
+# shellcheck source=lib/remote-stubs.sh disable=SC1091
+. "$REPO/tests/lib/remote-stubs.sh"
 
 # A $HOME with a setup worth filtering.
 H="$SANDBOX/home"
@@ -307,12 +309,13 @@ grep -qw "lib" "$SANDBOX/out" && fail "unknown backend: lib.sh listed as a backe
 grep -q "snapshot:" "$SANDBOX/out" && fail "unknown backend: something was staged"
 echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$SANDBOX/config/dotagents/remote.env"
 
-# TERM mid-run still releases the sandbox through the exit cleanup: the stub's sandbox run hangs.
+# TERM mid-run still releases the sandbox through the exit cleanup, and stops the backend's `kubectl exec` too: the
+# stub's sandbox run hangs, its pid in $SANDBOX/backend.pid.
 mv "$SANDBOX/bin/kubectl" "$SANDBOX/kubectl.real"
 cat >"$SANDBOX/bin/kubectl" <<EOF
 #!/usr/bin/env bash
 case " \$* " in
-  *" remote-agent-sandbox"*) : >"$SANDBOX/started"; sleep 2; exit 1 ;;
+  *" remote-agent-sandbox"*) echo \$\$ >"$SANDBOX/backend.pid"; : >"$SANDBOX/started"; exec sleep 30 ;;
 esac
 exec "$SANDBOX/kubectl.real" "\$@"
 EOF
@@ -322,10 +325,16 @@ rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started"
   "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
 pid=$!
 for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
+start=$SECONDS
 kill -TERM "$pid"
 code=0; wait "$pid" || code=$?
 [ "$code" = 143 ] || fail "TERM: wanted exit 143, got $code: $(cat "$SANDBOX/out")"
+[ $((SECONDS - start)) -lt 10 ] || fail "TERM: waited for the sandbox run to end"
 grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "TERM: claim not deleted"
+if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
+  fail "TERM: the backend's kubectl exec outlived remote-agent"
+  kill "$(cat "$SANDBOX/backend.pid")"
+fi
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
 # Without a token nothing reaches the cluster.

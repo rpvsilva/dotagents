@@ -98,8 +98,8 @@ EOF
 # Writes a stub `ssh` into <bin> logging to <state>/calls: it drops its options and destination and runs the one
 # remote command string with `sh -c` here, so a real POSIX shell parses the quoting. Also a stub `scp` that records
 # any call in <state>/scp and fails. With STUB_SSH_HOME set, it plays a bare host: the command starts there with it as
-# HOME, PATH is STUB_SSH_PATH when set (sh itself is found on the caller's PATH), and the host has no writable
-# main-process stdout (/proc/1/fd/1).
+# HOME, PATH is STUB_SSH_PATH when set (sh itself is found on the caller's PATH), and the host's main-process stdout
+# (/proc/1/fd/1) is the writable file <state>/host-main-stdout, as for root or on a host that is itself a container.
 stub_ssh() {
   local bin="$1" state="$2"
   mkdir -p "$bin" "$state"
@@ -125,7 +125,8 @@ if [ -n "${STUB_SSH_HOME:-}" ]; then
   cd "$STUB_SSH_HOME"
   export HOME="$STUB_SSH_HOME"
   [ -z "${STUB_SSH_PATH:-}" ] || export PATH="$STUB_SSH_PATH"
-  cmd="${cmd//\/proc\/1\/fd\/1/\/nonexistent\/main-stdout}"
+  : >>"$state/host-main-stdout"
+  cmd="${cmd//\/proc\/1\/fd\/1/$state\/host-main-stdout}"
 fi
 exec "$sh" -c "$cmd"
 EOF
@@ -151,6 +152,13 @@ make_worktree() {
   printf 'local\n' >"$w/untracked.txt"
   printf 'ignored\n' >"$w/ignored.txt"
   printf 'KEY=1\n' >"$w/.env"
+}
+
+# Succeeds when process <pid> is still running 3 seconds on (a stopped process may take a moment to go); fails at
+# once for an empty pid.
+alive() {
+  [ -n "$1" ] || return 1
+  for _ in $(seq 30); do kill -0 "$1" 2>/dev/null || return 1; sleep 0.1; done
 }
 
 # A patch adding hello.txt, and one that does not apply to make_worktree's tracked.txt.
