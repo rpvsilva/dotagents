@@ -2,7 +2,8 @@
 # Runs scripts/remote-agent.sh end to end on each non-cluster backend against stubs (tests/lib/remote-stubs.sh):
 # the patch comes back, the exit codes match the cluster's, the token stays off the command line, and the
 # sandbox goes away after success, failure and TERM. The ssh backend runs against a stub ssh that hands the remote
-# command to a local `sh -c`, with the docker stub behind it.
+# command to a local `sh -c`, with the docker stub behind it; in bare mode, the stub ssh plays a host whose home is a
+# throwaway folder, and the real sandbox script runs there with a fake claude.
 # Opt-in real run: REMOTE_DOCKER_IMAGE_TEST=<image> runs one task in a real container of <image> (needs Docker).
 set -euo pipefail
 
@@ -174,6 +175,95 @@ names="$(sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" | sort -u)"
 [ "$(sort -u "$S/seen" 2>/dev/null)" = 2 ] || fail "ssh pair: the runs did not overlap: $(cat "$S/seen" 2>/dev/null)"
 for n in $names; do gone "$n" || fail "ssh pair: container $n not removed"; done
 rm -f "$S/pair" "$W/hello.txt"
+
+# --- ssh, bare mode: straight on the host, in a run folder used as HOME. The "host" is the folder $HH, its PATH the
+# client's minus any real claude, plus $HB: a fake claude (recording its environment, applying $S/patch) and node.
+HH="$SANDBOX/host home"
+HB="$SANDBOX/hostbin"
+mkdir -p "$HH" "$HB"
+host_path=""
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do [ -x "$d/claude" ] || host_path="$host_path:$d"; done
+printf '#!/bin/sh\nexit 0\n' >"$HB/node"
+cat >"$HB/claude" <<CLAUDE
+#!/usr/bin/env bash
+[ "\$1" = -p ] || exit 0
+printf '%s\n' "\$HOME" "\$XDG_CONFIG_HOME" "\$XDG_DATA_HOME" "\$XDG_CACHE_HOME" "\$CLAUDE_CONFIG_DIR" "\$PWD" >"$S/claude-env"
+[ "\$CLAUDE_CODE_OAUTH_TOKEN" = sk-claude-secret ] || echo "no token" >>"$S/claude-env"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"}]}}'
+[ ! -s "$S/patch" ] || git apply "$S/patch"
+echo '{"type":"result","result":"did the thing","is_error":false}'
+CLAUDE
+chmod +x "$HB/node" "$HB/claude"
+export STUB_SSH_HOME="$HH" STUB_SSH_PATH="$HB$host_path"
+runs="$HH/.remote-agent/runs"
+bare=(REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@trusted-box REMOTE_SSH_MODE=bare)
+# The run's folder on the host: the HOME the fake claude saw.
+run_home() { sed -n 1p "$S/claude-env" 2>/dev/null || true; }
+
+rm -f "$S/claude-env"
+run 0 "$HELLO_PATCH" "${bare[@]}" || fail "bare: exited non-zero: $(cat "$SANDBOX/out")"
+f="$(run_home)"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = hello ] || fail "bare: patch not applied: $(cat "$SANDBOX/out")"
+grep -q "did the thing" "$SANDBOX/out" || fail "bare: summary not printed"
+case "$f" in
+  "$runs"/agent-*) ;;
+  *) fail "bare: HOME in the sandbox is not a run folder under $runs: $f" ;;
+esac
+[ -f "$W/.git/remote-agent/${f##*/}/changes.patch" ] || fail "bare: patch not kept under .git/remote-agent/${f##*/}"
+[ "$(sed -n '2,6p' "$S/claude-env")" = "$f/.config
+$f/.local/share
+$f/.cache
+$f/.claude
+$f/work" ] || fail "bare: XDG folders, CLAUDE_CONFIG_DIR or the working folder not in the run folder: $(cat "$S/claude-env")"
+grep -q "no token" "$S/claude-env" && fail "bare: Claude did not get the token"
+[ -n "$f" ] && [ ! -e "$f" ] || fail "bare: run folder $f not removed after release"
+grep -q -- "--warning\|--no-same-owner" "$S/calls" && fail "bare: tar flags beyond plain GNU/BSD ones: $(grep tar "$S/calls")"
+if grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@trusted-box "; then
+  fail "bare: an ssh call without -T, BatchMode or the host: $(grep '^ssh' "$S/calls")"
+fi
+grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "bare: the token leaked into ssh arguments or the output"
+grep -q "'docker'" "$S/calls" && fail "bare: docker used: $(grep "'docker'" "$S/calls")"
+[ ! -e "$S/scp" ] || fail "bare: scp called: $(cat "$S/scp")"
+rm -f "$W/hello.txt"
+
+# REMOTE_KEEP keeps the folder: mode 700, the snapshot in it, and the progress in progress.log there.
+rm -f "$S/claude-env"
+run 0 "" "${bare[@]}" REMOTE_KEEP=1 || true
+f="$(run_home)"
+[ -n "$f" ] && [ -d "$f" ] || fail "bare keep: run folder removed"
+grep -q "kept run folder" "$SANDBOX/out" || fail "bare keep: not reported: $(cat "$SANDBOX/out")"
+# Git Bash on Windows has no Unix modes.
+[ -n "${MSYSTEM:-}" ] || [ -n "$(find "$f" -maxdepth 0 -perm 700)" ] || fail "bare keep: run folder mode is not 700"
+[ "$(cat "$f/work/tracked.txt" 2>/dev/null)" = one ] || fail "bare keep: snapshot not in the run folder"
+grep -q "writing the hello file" "$f/progress.log" 2>/dev/null || fail "bare keep: Claude's progress not in progress.log"
+grep -q "sent setup and snapshot" "$f/progress.log" 2>/dev/null || fail "bare keep: client progress not in progress.log"
+grep -q "sk-claude-secret" "$f/progress.log" 2>/dev/null && fail "bare keep: the token reached progress.log"
+
+# The next acquire removes run folders older than REMOTE_HOURS and keeps fresh ones.
+[ -z "$f" ] || touch -t 200001010000 "$f"
+mkdir -p "$runs/agent-fresh"
+run 0 "" "${bare[@]}" || true
+[ -n "$f" ] && [ ! -e "$f" ] || fail "bare stale: folder older than REMOTE_HOURS not removed"
+[ -d "$runs/agent-fresh" ] || fail "bare stale: a fresh folder was removed"
+rm -rf "$runs/agent-fresh"
+
+# REMOTE_SSH_DIR moves the run folders.
+rm -f "$S/claude-env"
+run 0 "" "${bare[@]}" "REMOTE_SSH_DIR='$SANDBOX/other runs'" REMOTE_KEEP=1 || true
+case "$(run_home)" in
+  "$SANDBOX/other runs"/agent-*) ;;
+  *) fail "bare REMOTE_SSH_DIR: run folder not under it: $(run_home)" ;;
+esac
+
+# Without claude on the host the run stops before anything is sent, naming it, and creates no run folder.
+rm -rf "$runs"
+STUB_SSH_PATH="$host_path" run 0 "$HELLO_PATCH" "${bare[@]}" && fail "bare no claude: exited 0"
+grep -q "missing on the host:.*claude" "$SANDBOX/out" || fail "bare no claude: claude not named: $(cat "$SANDBOX/out")"
+grep -q "tar -x" "$S/calls" && fail "bare no claude: files sent anyway"
+[ -z "$(ls "$runs" 2>/dev/null)" ] || fail "bare no claude: run folder created: $(ls "$runs")"
+[ ! -e "$W/hello.txt" ] || fail "bare no claude: patch applied"
+unset STUB_SSH_HOME STUB_SSH_PATH
 
 # Opt-in: one real task in a real container of the image named, with the real token from the environment.
 if [ -n "${REMOTE_DOCKER_IMAGE_TEST:-}" ]; then

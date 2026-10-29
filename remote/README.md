@@ -61,16 +61,27 @@ A VM or PC reached with `ssh`. In container mode (the default) it is the `docker
 
 - `REMOTE_BACKEND=ssh`.
 - `REMOTE_SSH_HOST`: the ssh destination, `user@host` or an alias from `~/.ssh/config` (where a port, key or jump host go).
-- `REMOTE_SSH_MODE`: `container` (the default). Any other value stops the run, naming `container` and `bare`; `bare` is not built yet.
+- `REMOTE_SSH_MODE`: `container` (the default) or `bare` (see [Bare mode](#bare-mode-trusted-hosts-only)). Any other value stops the run, naming both.
 - `REMOTE_IMAGE`, `REMOTE_PLATFORM`, `REMOTE_HOURS` and `REMOTE_KEEP=1` as for [`docker`](#docker), applied on the host.
 
-The host needs:
+In container mode the host needs:
 
 - **Key-based SSH** that works without a prompt (`BatchMode=yes` never asks for a password or passphrase: use an agent or an unencrypted key). Check with `ssh -o BatchMode=yes <host> true`.
 - **Docker**, with the SSH user in the `docker` group (`sudo usermod -aG docker <user>`, then log in again). Check with `ssh <host> docker info`.
 - **The image**: log in once on the host (`ssh -t <host> docker login ghcr.io`) or build it there, and set `REMOTE_IMAGE` to its tag. Pick a `REMOTE_PLATFORM` or image that matches the host's architecture.
 
-**Who can see the code and the token during a run**: the host's root and every member of its `docker` group, since they can `docker exec` into the container or inspect it. Use a host only you (and people you trust with the token) administer. The container gets Docker's default network on the host: internet egress, and whatever the host's network reaches.
+**Who can see the code and the token during a run** in container mode: the host's root and every member of its `docker` group, since they can `docker exec` into the container or inspect it. Use a host only you (and people you trust with the token) administer. The container gets Docker's default network on the host: internet egress, and whatever the host's network reaches.
+
+#### Bare mode (trusted hosts only)
+
+With `REMOTE_SSH_MODE=bare` the run happens directly on the host, as the SSH user, with no container. **This is weaker isolation**: the run shares the OS user with that user's own setup and with other runs, has no network limits beyond the host's own, and the SSH user (and the host's root) can read the code and the Claude token while a run lives. Prefer container mode whenever the host has Docker or is shared with anyone else.
+
+- Each run gets its own folder, `$REMOTE_SSH_DIR/<run>` (mode 700), used as its `HOME`, with `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and Claude Code's config (`CLAUDE_CONFIG_DIR`) inside it: the setup, plugins, MCP servers, token and files stay apart from the host user's `~/.claude` and from other runs. The folder is removed at the end; `REMOTE_KEEP=1` keeps it (`kept run folder ...`).
+- The host needs the same key-based SSH as container mode, and no Docker.
+- Before anything is sent, the host is checked for `bash`, `tar`, `git`, `jq`, `node` and `claude` on the SSH user's `PATH` (non-interactive login: set it in the shell's non-interactive startup file); each missing one is named and the run stops.
+- A client that dies leaves its folder behind: the next run's acquire removes run folders older than `REMOTE_HOURS`.
+- The sandbox log is `progress.log` in the run folder (there is no container log). SSH in as a normal user, not root: root could write to the host's init process's stdout instead.
+- Settings: `REMOTE_SSH_DIR`, the run folders' root on the host, absolute or relative to the SSH user's home (`.remote-agent/runs` by default); `REMOTE_HOURS` and `REMOTE_KEEP=1` as above. `REMOTE_IMAGE` and `REMOTE_PLATFORM` do not apply.
 
 ## Setup, once
 
@@ -81,7 +92,7 @@ The host needs:
 
 `setup` asks for the backend and its details (cluster: kube context, the current one by default, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
 
-By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image; for `ssh`, key-based SSH to a host with Docker and the image.
+By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image; for `ssh`, key-based SSH to a host with Docker and the image (bare mode: the tools listed under [Bare mode](#bare-mode-trusted-hosts-only) instead).
 
 Without `remote.env`, skills run their subagents on this machine, as before.
 

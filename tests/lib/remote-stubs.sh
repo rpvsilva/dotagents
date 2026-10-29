@@ -71,7 +71,8 @@ EOF
 
 # Writes a stub `ssh` into <bin> logging to <state>/calls: it drops its options and destination and runs the one
 # remote command string with `sh -c` here, so a real POSIX shell parses the quoting. Also a stub `scp` that records
-# any call in <state>/scp and fails.
+# any call in <state>/scp and fails. With STUB_SSH_HOME set, it plays a bare host: the command starts there with it as
+# HOME, PATH is STUB_SSH_PATH when set, and the host has no writable main-process stdout (/proc/1/fd/1).
 stub_ssh() {
   local bin="$1" state="$2"
   mkdir -p "$bin" "$state"
@@ -91,7 +92,14 @@ while [ $# -gt 0 ]; do
 done
 shift # the destination
 [ $# -eq 1 ] || { echo "stub ssh: wanted one remote command string, got $#" >&2; exit 255; }
-exec sh -c "$1"
+cmd="$1"
+if [ -n "${STUB_SSH_HOME:-}" ]; then
+  cd "$STUB_SSH_HOME"
+  export HOME="$STUB_SSH_HOME"
+  [ -z "${STUB_SSH_PATH:-}" ] || export PATH="$STUB_SSH_PATH"
+  cmd="${cmd//\/proc\/1\/fd\/1/\/nonexistent\/main-stdout}"
+fi
+exec sh -c "$cmd"
 EOF
   cat >"$bin/scp" <<EOF
 #!/bin/sh
