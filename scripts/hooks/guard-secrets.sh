@@ -6,6 +6,10 @@
 # - blocks `git commit` when the changes it commits add a secret file, or a line that looks like a
 #   token or private key. The reason names the file, never the secret.
 # Quoted text with spaces and heredoc bodies are prose, so they are not scanned for paths.
+# The command is judged per segment (split on ; & | ( ) and newline): a segment that only tests or
+# lists a path (test, [, [[, ls, stat, with no < or >) may name a secret file; `test -f .env && cat .env`
+# still blocks on the cat. Accepted holes: data flowing from such a segment into a reader
+# (`ls .env | xargs cat`) and commands in backticks pass.
 # A guardrail against mistakes, not a security boundary: the human can still run anything themselves.
 # Input: the command as $1, or a hook's JSON on stdin with .tool_input.command or a path
 # (.tool_input.file_path / .path / .notebook_path, or Cursor's top-level .file_path), and optional .cwd.
@@ -43,14 +47,36 @@ cmd="$(strip_heredocs "$cmd")"
 s='[[:space:]]'
 start="(^|[;&|(]|$s)"
 
-# Paths named in the command, outside quoted prose.
+# True when segment $1 only tests or lists paths: its first word, after `!`, `{`, `if`, `while`,
+# `until`, `then`, `do`, `else`, `time` and `VAR=val`, is test, [, [[, ls or stat, and it has no
+# redirection.
+path_only() {
+  local w words
+  case "$1" in *'<'* | *'>'*) return 1 ;; esac
+  IFS=$' \t\r' read -ra words <<<"$1"
+  for w in ${words[@]+"${words[@]}"}; do
+    case "$w" in
+      '!' | '{' | if | while | until | then | do | else | time) ;;
+      test | '[' | '[[' | ls | stat) return 0 ;;
+      *)
+        if ! [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then return 1; fi
+        ;;
+    esac
+  done
+  return 1
+}
+
+# Paths named in the command, outside quoted prose, judged one segment at a time.
 scan="$(sed -E "s/\"[^\"]*${s}[^\"]*\"//g; s/'[^']*${s}[^']*'//g" <<<"$cmd")"
 set -f
-for word in $(tr '"'"'"'()<>|;&,=' ' ' <<<"$scan"); do
-  if is_secret "$word"; then
-    block "the command names $word, which looks like a secret file."
-  fi
-done
+while IFS= read -r seg; do
+  if path_only "$seg"; then continue; fi
+  for word in $(tr '"'"'"'<>,=\r' ' ' <<<"$seg"); do
+    if is_secret "$word"; then
+      block "the command names $word, which looks like a secret file."
+    fi
+  done
+done <<<"$(tr ';&|()' '\n' <<<"$scan")"
 
 if [[ "$cmd" =~ ${start}git$s+([^;&|]*$s)?commit($s|$) ]]; then
   dir="$(target_dir "$cmd" "$cwd")"
