@@ -21,7 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
-        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+        # The version pinned in scripts/shellcheck-version, which tests/run.sh also runs.
+        run: |
+          pin="$(cat scripts/shellcheck-version)"
+          git ls-files -z '*.sh' | xargs -0 docker run --rm -v "$PWD:/mnt" -w /mnt "koalaman/shellcheck:v$pin"
       - name: actionlint
         uses: docker://rhysd/actionlint:1.7.12
         with:
