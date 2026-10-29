@@ -9,7 +9,7 @@
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out. --name names the task (e.g. a ticket's NN-slug),
 # turned into a label value (lowercase, [a-z0-9-], at most 63 characters): the backend labels the sandbox with it
-# (cluster: remote-agent/task) and every progress line on stderr starts with [NAME] ([<run>] without it).
+# (cluster: sandbox.users.io/remote-agent-task) and every progress line on stderr starts with [NAME] ([<run>] without it).
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
 # secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
 # run scripts/remote-agent-sandbox.sh there; get the patch back and apply it with `git apply`, uncommitted.

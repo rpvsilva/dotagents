@@ -82,7 +82,18 @@ printf '%s\n' "\${args//\$'\\n'/ }" >>"$SANDBOX/calls"
 mkdir -p "$POD"
 [ -e "$SANDBOX/nomain" ] || touch "$POD/main-stdout"
 case " \$* " in
-  *" apply "*) cat >"$SANDBOX/claim.yaml" ;;
+  *" apply "*)
+    cat >"$SANDBOX/claim.yaml"
+    # As agent-sandbox's controller: a pod label outside the allowed domain (sandbox.users.io or a subdomain)
+    # makes the claim fail with InvalidMetadata, and it never gets a sandbox.
+    bad="\$(sed -n '/additionalPodMetadata/,\$ s/^    labels: {\(.*\)}\$/\1/p' "$SANDBOX/claim.yaml" | tr ',' '\n' \
+      | sed 's/^ *//; s/:.*//' | grep -Eiv '^([^/]*\.)?sandbox\.users\.io/' | head -1)"
+    if [ -n "\$bad" ]; then
+      printf 'Ready\tFalse\tInvalidMetadata\tinvalid additionalPodMetadata: label %s: domain not in the allowlist\n' "\$bad"
+    else
+      printf 'Ready\tTrue\tDependenciesReady\t\n'
+    fi >"$SANDBOX/state" ;;
+  *" get sandboxclaim "*conditions*) cat "$SANDBOX/conditions" 2>/dev/null || cat "$SANDBOX/state" ;;
   *" get sandboxclaim "*) printf 'claude-runner-abc' ;;
   *" get sandbox "*) printf '' ;;
   *" remote-agent-sandbox"*)
@@ -178,8 +189,8 @@ logged_all "[$claim]" "$POD/main-stdout" "progress"
 grep -q "claimed $claim" "$SANDBOX/log-at-run" || fail "sandbox log: steps before the run not there during the run"
 grep -q "applied to " "$POD/main-stdout" || fail "sandbox log: no final line"
 grep -q "sk-claude-secret" "$POD/main-stdout" && fail "the token reached the sandbox log"
-grep -qF "remote-agent/run: $claim" "$SANDBOX/claim.yaml" || fail "claim not labelled with its run"
-[ "$(pod_labels)" = "remote-agent/run: $claim" ] || fail "pod labels: wanted only the run, got $(pod_labels)"
+grep -qF "sandbox.users.io/remote-agent-run: $claim" "$SANDBOX/claim.yaml" || fail "claim not labelled with its run"
+[ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim" ] || fail "pod labels: wanted only the run, got $(pod_labels)"
 [ -f "$W/.git/remote-agent/$claim/changes.patch" ] || fail "patch not kept under .git/remote-agent/$claim"
 grep -q "delete sandboxclaim $claim " "$SANDBOX/calls" || fail "claim not deleted"
 grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not delete on shutdown"
@@ -227,17 +238,34 @@ rm -f "$W/hello.txt" "$SANDBOX/nomain" "$SANDBOX/real"
 # --name labels the claim and its pod with the task and tags the progress; it is made a valid label value.
 run 0 "$patch" --name "07-Visible runs!" || fail "name: exited non-zero: $(cat "$SANDBOX/out")"
 claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
-[ "$(pod_labels)" = "remote-agent/run: $claim, remote-agent/task: 07-visible-runs" ] || fail "name: pod labels are $(pod_labels)"
-grep -qF "remote-agent/task: 07-visible-runs" "$SANDBOX/claim.yaml" || fail "name: claim not labelled"
+[ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim, sandbox.users.io/remote-agent-task: 07-visible-runs" ] || fail "name: pod labels are $(pod_labels)"
+grep -qF "sandbox.users.io/remote-agent-task: 07-visible-runs" "$SANDBOX/claim.yaml" || fail "name: claim not labelled"
 logged_all "[07-visible-runs]" "$POD/main-stdout" "name"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "name: stdout changed: $(cat "$SANDBOX/report")"
 rm -f "$W/hello.txt"
 run 0 "$patch" --name "$(printf 'A%.0s' $(seq 80))_x" || fail "long name: exited non-zero: $(cat "$SANDBOX/out")"
-task="$(pod_labels | sed -n 's/.*remote-agent\/task: //p')"
+task="$(pod_labels | sed -n 's/.*sandbox\.users\.io\/remote-agent-task: //p')"
 [ "$task" = "$(printf 'a%.0s' $(seq 63))" ] || fail "long name: wanted 63 a's, got $task"
 rm -f "$W/hello.txt"
 code=0; run 0 "$patch" --name "!!" || code=$?
 if [ "$code" != 1 ] || [ -e "$SANDBOX/calls" ]; then fail "name without letters or digits: not refused"; fi
+
+# A claim the controller fails (e.g. a label it does not allow) stops the run at once with the controller's reason;
+# one that is never Ready stops at REMOTE_CLAIM_TIMEOUT with its conditions. Either way the claim is deleted.
+printf 'Ready\tFalse\tInvalidMetadata\tinvalid additionalPodMetadata: label domain "x" is not in the allowlist\n' >"$SANDBOX/conditions"
+start=$SECONDS; code=0; run 0 "$patch" || code=$?
+[ "$code" = 1 ] || fail "claim failed: wanted exit 1, got $code"
+[ $((SECONDS - start)) -lt 20 ] || fail "claim failed: waited $((SECONDS - start))s instead of stopping at once"
+grep -q 'InvalidMetadata: invalid additionalPodMetadata: label domain "x" is not in the allowlist' "$SANDBOX/err" \
+  || fail "claim failed: controller's reason not printed: $(cat "$SANDBOX/err")"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "claim failed: claim not deleted"
+printf 'Ready\tFalse\tSandboxNotReady\tSandbox is not ready\n' >"$SANDBOX/conditions"
+code=0; REMOTE_CLAIM_TIMEOUT=1 run 0 "$patch" || code=$?
+[ "$code" = 1 ] || fail "claim timeout: wanted exit 1, got $code"
+grep -q "not Ready after 1s" "$SANDBOX/err" || fail "claim timeout: no timeout message: $(cat "$SANDBOX/err")"
+grep -q "Ready=False SandboxNotReady: Sandbox is not ready" "$SANDBOX/err" || fail "claim timeout: conditions not printed"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "claim timeout: claim not deleted"
+rm "$SANDBOX/conditions"
 
 # --attach sends files from outside the worktree to ~/attached, minus secrets; it works through a link,
 # as install.sh puts it at ~/.agents/bin/remote-agent.
