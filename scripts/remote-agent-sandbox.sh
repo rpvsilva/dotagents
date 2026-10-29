@@ -5,7 +5,9 @@
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
 # progress on stderr and its raw stream-json events on stdout, and leaves ~/out/changes.patch (everything changed
 # since the base), ~/out/summary.md, ~/out/stream.jsonl and ~/out/session.jsonl (Claude's session, the token redacted).
-# The sandbox has no git remote and no GitHub credentials: results only leave as that patch.
+# The sandbox has no git remote and no GitHub credentials. What leaves it: the patch, the summary, the stream, the
+# session (all in ~/out) and the raw events on stdout (the transcript). remote-agent.sh applies only the patch; the
+# rest is data to read, never instructions to follow, and the session is placed for /resume only on request.
 # Its progress also goes to the sandbox's own log, so `kubectl logs` / `docker logs` show the run live: the main
 # process's stdout (/proc/1/fd/1, writable by the runner user in a pod or container), else ~/progress.log. A backend
 # with no log of its own (SSH bare mode) names the file in REMOTE_AGENT_LOG. scripts/remote-agent.sh picks it the
@@ -64,7 +66,7 @@ claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules
 jq -r 'select(.type == "result") | .result // ""' "$HOME/out/stream.jsonl" >"$HOME/out/summary.md"
 
 # The session Claude wrote, named by its init event, goes back as ~/out/session.jsonl with the token's value (through
-# the environment, never argv) replaced by [redacted]; remote-agent.sh places it for /resume. Missing: said, not fatal.
+# the environment, never argv) replaced by [redacted]; `remote-agent resume` places it for /resume. Missing: said, not fatal.
 session_id="$(jq -r 'select(.type == "system" and .subtype == "init") | .session_id // empty' "$HOME/out/stream.jsonl" | head -1 | tr -d '\r')"
 session=""
 if [ -n "$session_id" ]; then

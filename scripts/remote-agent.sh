@@ -6,6 +6,7 @@
 # current one)
 #        remote-agent setup   (asks for the backend and the Claude token, writes remote.env: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
+#        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out. --name names the task (e.g. a ticket's NN-slug),
@@ -20,9 +21,10 @@
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
 # SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
 # and Claude's full stream in <git dir>/remote-agent/<run>/, plus transcript.jsonl: Claude's raw stream-json events,
-# written as they arrive (the token's value redacted), its path printed before the sandbox is claimed, and
-# session.jsonl: Claude's session (the token redacted), also placed under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/ in
-# the worktree's project folder, so `/resume` in the worktree opens it.
+# written as they arrive, its path printed before the sandbox is claimed, and session.jsonl: Claude's session. The
+# token's value is redacted in every kept file. The session is not placed for /resume at the end: the sandbox wrote it,
+# so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
+# in the worktree's project folder, its cwd the worktree, after a warning saying so.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
 # Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
@@ -38,9 +40,46 @@ while [ -L "$src" ]; do
   [[ "$src" == /* ]] || src="$dir/$src"
 done
 REPO="$(cd "$(dirname "$src")/.." && pwd)"
+
+# Places the session run $1 kept (<git dir>/remote-agent/<run>/session.jsonl) where Claude Code looks for worktree
+# ${2:-$PWD}'s sessions: projects/<the worktree's real path, every character outside [A-Za-z0-9] made ->, its Windows
+# path under Git Bash, as Claude Code there sees it>, its cwd lines made that path. Warns before placing.
+resume() {
+  local run root keep id real dir w tmp dest
+  if [ $# -lt 1 ] || [ $# -gt 2 ]; then echo "usage: remote-agent resume <run> [worktree]" >&2; exit 1; fi
+  run="$1"
+  if [[ ! "$run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then echo "remote-agent: not a run name: $run" >&2; exit 1; fi
+  root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
+  keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
+  [ -s "$keep/session.jsonl" ] || { echo "remote-agent: no session kept in $keep" >&2; exit 1; }
+  id="$(jq -rn 'first(inputs | .sessionId? // empty)' "$keep/session.jsonl" 2>/dev/null | tr -d '\r')" || true
+  [[ "$id" =~ ^[A-Za-z0-9-]+$ ]] || { echo "remote-agent: no session id in $keep/session.jsonl" >&2; exit 1; }
+  real="$(cd "$root" && pwd -P)"
+  if command -v cygpath >/dev/null 2>&1; then real="$(cygpath -w "$real")"; fi
+  dir="$(printf '%s' "$real" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  # Claude Code shortens a longer name with a hash of its own, so a folder named in full would never be read.
+  if [ "${#dir}" -gt 200 ]; then
+    echo "remote-agent: session not placed: the project folder name for $real is ${#dir} characters, over Claude Code's 200, so /resume would not find it; it is in $keep/session.jsonl" >&2
+    exit 1
+  fi
+  echo "remote-agent: warning: this session comes from an untrusted sandbox. The remote agent could have written turns in it that read as yours; /resume loads them as your own history, run with your credentials. Read $keep/session.jsonl before you go on in it." >&2
+  # As a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
+  w="$(printf '%s' "$real" | jq -Rs . | tr -d '\r')"
+  tmp="$keep/session.placing"
+  if ! jq -c --argjson w "$w" 'if type == "object" and has("cwd") then .cwd = $w else . end' "$keep/session.jsonl" | tr -d '\r' >"$tmp"; then
+    rm -f "$tmp"
+    echo "remote-agent: session not placed (not JSON lines?); it is in $keep/session.jsonl" >&2
+    exit 1
+  fi
+  dest="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$dir"
+  mkdir -p "$dest"
+  mv "$tmp" "$dest/$id.jsonl"
+  echo "remote-agent: session: $dest/$id.jsonl (/resume in $real opens it, or claude --resume $id)" >&2
+}
 case "${1:-}" in
   setup) shift; exec "$REPO/scripts/remote-agent-setup.sh" "$@" ;;
   check) shift; exec "$REPO/scripts/remote-agent-check.sh" "$@" ;;
+  resume) shift; resume "$@"; exit 0 ;;
 esac
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 # shellcheck source=hooks/lib.sh disable=SC1091
@@ -127,19 +166,31 @@ send_log() {
   : >"$stage/log"
 }
 
-# Appends the JSON lines on stdin to file $1 as they come, each flushed, with the Claude token's value (through the
-# environment, never argv) replaced by [redacted]; anything else (an ssh banner, a kubectl warning) is dropped.
-# awk marks the first event on its stderr, which becomes the first-event time (t0: just before the run).
+# awk's redact(s): s with the Claude token's value (scrub_token in the environment, never argv) replaced by [redacted].
+redact_awk='function redact(s,  out, i) {
+  out = ""
+  while (ENVIRON["scrub_token"] != "" && (i = index(s, ENVIRON["scrub_token"])) > 0) {
+    out = out substr(s, 1, i - 1) "[redacted]"; s = substr(s, i + length(ENVIRON["scrub_token"]))
+  }
+  return out s
+}'
+# Rewrites file $1, if there, with the token's value redacted.
+scrub() {
+  [ -f "$1" ] || return 0
+  scrub_token="$claude_token" awk "$redact_awk"'
+    { print redact($0) }' "$1" >"$1.scrubbed"
+  mv "$1.scrubbed" "$1"
+}
+# Appends the JSON lines on stdin to file $1 as they come, each flushed, the token's value redacted; anything else
+# (an ssh banner, a kubectl warning) is dropped. awk marks the first event on its stderr, which becomes the
+# first-event time (t0: just before the run).
 transcript_to() {
   # mawk (Debian's awk) reads a pipe in blocks unless told otherwise.
   local live=()
   case "$(awk -W version </dev/null 2>&1)" in *mawk*) live=(-W interactive) ;; esac
-  scrub_token="$claude_token" awk ${live[@]+"${live[@]}"} '
-    BEGIN { tok = ENVIRON["scrub_token"] }
+  scrub_token="$claude_token" awk ${live[@]+"${live[@]}"} "$redact_awk"'
     /^\{/ {
-      s = $0; out = ""
-      while (tok != "" && (i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) "[redacted]"; s = substr(s, i + length(tok)) }
-      print out s; fflush()
+      print redact($0); fflush()
       if (!seen++) { print "first" >"/dev/stderr"; fflush("/dev/stderr") }
     }' 2>&1 >>"$1" | while IFS= read -r line; do
     line="${line%$'\r'}"
@@ -218,23 +269,11 @@ runner=""
 
 # Drained after extracting, so the sender's trailing padding does not hit a closed pipe (tar stops at the end marker).
 with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$keep" 2>/dev/null; cat >/dev/null; } || true
-# Claude's session goes under this machine's Claude config, in the project folder for the worktree's real path (every
-# character outside [A-Za-z0-9] made -), its cwd made that path, so /resume in the worktree opens it. The copy in
-# $keep stays as it came.
-session_id=""
-[ ! -s "$keep/session.jsonl" ] || session_id="$(jq -rn 'first(inputs | .sessionId? // empty)' "$keep/session.jsonl" 2>/dev/null | tr -d '\r')" || true
-if [[ "$session_id" =~ ^[A-Za-z0-9-]+$ ]]; then
-  real="$(cd "$root" && pwd -P)"
-  dest="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$real" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
-  mkdir -p "$dest"
-  # As a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
-  w="$(printf '%s' "$real" | jq -Rs . | tr -d '\r')"
-  if jq -c --argjson w "$w" 'if .cwd? then .cwd = $w else . end' "$keep/session.jsonl" | tr -d '\r' >"$dest/$session_id.jsonl"; then
-    say "session: $dest/$session_id.jsonl (/resume in $real opens it)"
-  else
-    rm -f "$dest/$session_id.jsonl"
-    say "session not placed (not JSON lines?); it is in $keep/session.jsonl"
-  fi
+# The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
+for f in stream.jsonl session.jsonl summary.md; do scrub "$keep/$f"; done
+# The session stays here: the sandbox wrote it, so placing it for /resume is the human's call (remote-agent resume).
+if [ -s "$keep/session.jsonl" ]; then
+  say "session: $keep/session.jsonl (from the sandbox, not placed for /resume; to place it: remote-agent resume $run $(printf '%q' "$root"))"
 else
   say "no session came back: the run cannot be resumed"
 fi
