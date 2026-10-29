@@ -15,13 +15,14 @@ Input: an epic or issue (link or ID, on any tracker), or plain text. Optional: `
 `~/.agents/runs/<repo>/<epic-slug>/`: `<repo>` is the repo folder's name, `<epic-slug>` the tracker ID plus a few words (`gh-12-due-dates`). It holds:
 
 - `spec.md`, `areas.md`, `notes/<area>.md`, `map.md`: written by the planner and explorers.
-- `tickets/TT-<slug>.md`: one per ticket. Its `Status:` line is yours: `ready`, `claimed` (another developer builds it), `building`, `in-review` (its PR waits on a human), `merged`, `blocked`. Add a `PR:` line when you open its PR.
+- `tickets/TT-<slug>.md`: one per ticket. Its `Status:` line is yours: `ready`, `claimed` (another developer builds it), `building`, `in-review` (its PR waits on a human), `merged`, `blocked`. Add a `PR:` line when you open its draft PR in step 6.
 - `tasks/TT-NN-<slug>.md`: one per task, `TT` its ticket. Its `Status:` line is yours: `ready`, `in-progress`, `done` (its PR is merged), `blocked`. Add a `PR:` line when you open its PR.
 - `worktrees/TT-NN/` (one per task being built) and `worktrees/TT/` (one per ticket being shipped).
+- `dispatcher.sha` and `worktrees/dispatcher/`: the pinned dispatcher, only when the epic changes the dispatcher's own repo (see [Remote dispatcher](#remote-dispatcher)).
 
 Subagents leave every `Status:` and `PR:` line alone.
 
-When the folder already exists, **resume**: set each `in-review` ticket whose PR has merged to `merged`; set every `in-progress` task with no PR back to `ready` and remove its worktree and branch, and take every task with an open PR to **Merge** in step 6. Then continue at the first step whose done-condition is not met.
+When the folder already exists, **resume**: set each `in-review` ticket whose PR has merged to `merged`; set every `in-progress` task with no PR back to `ready` and remove its worktree and branch, and take every task with an open PR to **Merge** in step 6. When `dispatcher.sha` exists, reuse that SHA: re-create `worktrees/dispatcher/` at it if the worktree is gone, never at a newer commit. Then continue at the first step whose done-condition is not met.
 
 ## Subagents
 
@@ -33,7 +34,7 @@ When the folder already exists, **resume**: set each `in-review` ticket whose PR
 
 Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at most **N** at once (the **slots**).
 
-The `epic-implementer` is **remote-capable** ([Remote subagents](../_shared/conventions.md#remote-subagents)): name it after its task's file, `--name TT-NN-<slug>`, and attach its task, `spec.md`, `map.md` and `notes/`. When it returns, commit its changes on the task branch and do its step 5 for it: `git fetch origin && git merge <ticket-branch>` in its worktree. On a conflict, send it back to resolve the conflict markers, then commit the merge. Act on its report after that. The planner and explorers write into the run folder, so they always run here.
+The `epic-implementer` is **remote-capable** ([Remote subagents](../_shared/conventions.md#remote-subagents)): name it after its task's file, `--name TT-NN-<slug>`, and attach its task, `spec.md`, `map.md` and `notes/`. Dispatch it with the command [Remote dispatcher](#remote-dispatcher) names. When it returns, commit its changes on the task branch and do its step 5 for it: `git fetch origin && git merge <ticket-branch>` in its worktree. On a conflict, send it back to resolve the conflict markers, then commit the merge. Act on its report after that. The planner and explorers write into the run folder, so they always run here.
 
 Every subagent ends with this report, and you act on it alone:
 
@@ -43,6 +44,14 @@ changed: <paths, or the last commit SHA>
 why: <one line, when status is not done>
 follow-up: <optional, implementers only: work a later task must pick up>
 ```
+
+### Remote dispatcher
+
+The remote dispatcher is `~/.agents/bin/remote-agent`, a link into the checkout that installed it. When the epic changes that same repo, merges during the epic would change the dispatcher under the running tasks, so dispatch from a pinned copy instead:
+
+1. In step 1, compare the real path of `~/.agents/bin/remote-agent` (`realpath`, or `readlink -f`) with the real path of `scripts/remote-agent.sh` in the epic's repo. When they differ, or the link is missing, dispatch with `~/.agents/bin/remote-agent` and skip the rest of this section.
+2. When they match, once per run: `git fetch origin`, write the commit of `origin/<default-branch>` into `<run>/dispatcher.sha`, and `git worktree add --detach <run>/worktrees/dispatcher <sha>`. On resume, read the SHA from `dispatcher.sha` instead of fetching a new one.
+3. Dispatch every remote run with `<run>/worktrees/dispatcher/scripts/remote-agent.sh` in place of `~/.agents/bin/remote-agent`, with the same arguments. It finds its sibling scripts from its own path, so it runs the pinned code. The pinned copy may predate features the epic adds; rely only on what it already does.
 
 ## Tracker
 
@@ -55,7 +64,7 @@ Keep the tracker in step with the build, as the identity from step 1. Each ticke
 
 ## Steps
 
-1. **Set up.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/build-epic-notes.md` (tracker, test commands, areas to avoid, `max_parallel`, `in_progress`), and the [ship-pr](../ship-pr/SKILL.md) rules from its step 1: commit convention and merge rule. Create the run folder, or resume it. Done when you know N, the identity, the human's login, the merge rule, and the run folder exists.
+1. **Set up.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/build-epic-notes.md` (tracker, test commands, areas to avoid, `max_parallel`, `in_progress`), and the [ship-pr](../ship-pr/SKILL.md) rules from its step 1: commit convention and merge rule. Create the run folder, or resume it, and pin the [remote dispatcher](#remote-dispatcher) when subagents run remotely. Done when you know N, the identity, the human's login, the merge rule, the dispatch command, and the run folder exists.
 
 2. **Plan, pass A.** Start an `epic-planner` with: pass `A`, the input, the run folder, the notes file path, and `explore: always` when `--explore` was given. Done when it reports `done` and `spec.md` and `areas.md` exist. On `blocked` (for example, no connector for the tracker), relay its `why` to the human and stop.
 
@@ -69,16 +78,17 @@ Keep the tracker in step with the build, as the identity from step 1. Each ticke
    - **Start** each `ready` ticket whose `Blocked by` tickets are all `merged`: `git fetch origin && git push origin origin/<default-branch>:refs/heads/<ticket-branch>` (the ticket's `Branch` line), set it to `building`, and mark its issue **started** (see [Tracker](#tracker)). A ticket blocked by a `claimed` or `in-review` one waits for that PR to merge.
    - **Dispatch** each `ready` task of a `building` ticket whose blockers are all `done`, while a slot is free: `git fetch origin && git worktree add <run>/worktrees/TT-NN -b task/<ticket-slug>/NN origin/<ticket-branch>`, set the task to `in-progress`, and start an `epic-implementer` with the task path, the run folder, the worktree path and `origin/<ticket-branch>`.
    - **On `done`**: push the task branch and open its PR into the ticket branch, as the identity: the task's title in the commit convention, and a body with what it builds, its check and result, and a reference to the ticket's issue that leaves it open (`Part of #n` on GitHub). Record the PR on the task, then **Merge** it.
-   - **Merge** task PRs one at a time per ticket. In the task's worktree, `git fetch origin`; when the branch lacks the ticket branch's tip, `git merge origin/<ticket-branch>`. Run every command in `map.md`'s `Checks` there: CI runs only on PRs into the default branch, so this run is the task PR's check. Push, then merge by the merge rule for PRs into a non-default branch; when the rule names none, `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`. On a conflict or a **red** check, send the task back to its implementer with the failure (continue the same subagent if your harness can, otherwise start a new one on the same worktree), then merge again. When merged, set the task to `done` and remove its worktree and branch. Add each `follow-up` as an acceptance criterion to the not-yet-started task of the same ticket it concerns, or, when none fits, keep it for that ticket's review-fixes task in step 7.
+   - **Merge** task PRs one at a time per ticket. In the task's worktree, `git fetch origin`; when the branch lacks the ticket branch's tip, `git merge origin/<ticket-branch>`. Run every command in `map.md`'s `Checks` there: CI runs only on PRs into the default branch, so this run is the task PR's check. Push, then merge by the merge rule for PRs into a non-default branch; when the rule names none, `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`. On a conflict or a **red** check, send the task back to its implementer with the failure (continue the same subagent if your harness can, otherwise start a new one on the same worktree), then merge again. When merged, set the task to `done` and remove its worktree and branch, then do **Ticket CI**. Add each `follow-up` as an acceptance criterion to the not-yet-started task of the same ticket it concerns, or, when none fits, keep it for that ticket's review-fixes task in step 7.
+   - **Ticket CI**, so CI runs before the ticket ships (it runs only on PRs into the default branch). After the ticket's **first** task merges: `git fetch origin`, push the ticket branch if the merge left it only local, and open a **draft** PR from the ticket branch into the default branch as the identity (`gh pr create --draft --base <default-branch> --head <ticket-branch>` on GitHub), with the ticket's title and a reference to its issue that leaves it open (`Part of #n`). Record it as the ticket's `PR:` line. Where the host has no draft PRs, open it with a `WIP:` title prefix and drop the prefix in step 7; where it has no PR checks, skip Ticket CI. After each **later** task merge, read the ticket PR's checks once, without waiting (`gh pr checks <n>` on GitHub, no `--watch`): ignore cancelled runs (a newer push replaced them) and leave pending ones for the next merge. On a **red** check, read the failure (`gh run view <run-id> --log-failed`) and add it as an acceptance criterion to the ticket's next not-yet-started task; when none is left, write a fix task `tasks/TT-NN-fix-ci.md` with the failure as its check and dispatch it.
    - **On `blocked`**: set the task to `blocked`, mark its ticket's issue as **blocked** with the `why`, and keep dispatching the rest.
    - **On `plan-wrong`**: mark its ticket's issue as **blocked** with the `why`, stop dispatching and let running implementers finish. Start an `epic-planner` with pass `revise`, the task path and the implementer's `why`. Show the human its changed tickets and tasks as in step 5 and wait for approval, then resume dispatching.
    - **Ship** each `building` ticket whose tasks are all `done`, by step 7.
 
    Done when every ticket you build is `merged` or `in-review`. When the only ones left are `blocked`, or wait on a `blocked`, `claimed` or `in-review` ticket, report to the human and stop: each ticket branch keeps every merged task, and a later run resumes from there.
 
-7. **Ship a ticket.** `git worktree add <run>/worktrees/TT <ticket-branch>` and follow [ship-pr](../ship-pr/SKILL.md) in it, from its "Open the PR" step through "Get it green", with the default branch as the base. In the PR body, add a closing reference (`Closes #n` on GitHub) for the ticket's issue, and list its tasks (title, PR link, one line each). Then follow [review-pr](../review-pr/SKILL.md) on the PR. When it kept findings, write them as one new task `tasks/TT-NN-review-fixes.md` (each finding an acceptance criterion, its scenario the check), run it through step 6, `git pull` in the ticket's worktree and get the PR green again. Then follow ship-pr's "Merge" step: set the ticket to `merged` when the PR merged, or `in-review` when it waits on a human, and remove the ticket's worktree. Done when ship-pr's report is in hand.
+7. **Ship a ticket.** `git worktree add <run>/worktrees/TT <ticket-branch>` and follow [ship-pr](../ship-pr/SKILL.md) in it, from its "Open the PR" step through "Get it green", with the default branch as the base. The ticket's draft PR from step 6 is that PR: ship-pr updates its body and marks it ready instead of opening a new one. In the PR body, add a closing reference (`Closes #n` on GitHub) for the ticket's issue, and list its tasks (title, PR link, one line each). Then follow [review-pr](../review-pr/SKILL.md) on the PR. When it kept findings, write them as one new task `tasks/TT-NN-review-fixes.md` (each finding an acceptance criterion, its scenario the check), run it through step 6, `git pull` in the ticket's worktree and get the PR green again. Then follow ship-pr's "Merge" step: set the ticket to `merged` when the PR merged, or `in-review` when it waits on a human, and remove the ticket's worktree. Done when ship-pr's report is in hand.
 
-8. **Clean up.** Remove any worktrees and task branches left. After a merge, remove the `in progress` and `blocked` labels from the issues it closed. Keep the run folder.
+8. **Clean up.** Remove any worktrees and task branches left, `worktrees/dispatcher/` included. After a merge, remove the `in progress` and `blocked` labels from the issues it closed. Keep the run folder.
 
 ## Report
 
