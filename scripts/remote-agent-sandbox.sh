@@ -3,7 +3,8 @@
 # Expects the setup unpacked under $HOME (scripts/remote-agent-pack.sh) and the worktree snapshot in ~/work.
 # Stdin: the Claude token (one line), then the brief.
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
-# progress on stderr, and leaves ~/out/changes.patch (everything changed since the base) and ~/out/summary.md.
+# progress on stderr and its raw stream-json events on stdout, and leaves ~/out/changes.patch (everything changed
+# since the base), ~/out/summary.md and ~/out/stream.jsonl.
 # The sandbox has no git remote and no GitHub credentials: results only leave as that patch.
 # Its progress also goes to the sandbox's own log, so `kubectl logs` / `docker logs` show the run live: the main
 # process's stdout (/proc/1/fd/1, writable by the runner user in a pod or container), else ~/progress.log. A backend
@@ -52,9 +53,10 @@ they go back to the user as a patch. Do not push or open PRs. End with a short s
 you checked it."
 
 echo "== claude" >&2
-# Progress: Claude's text and each tool call, one line each; the full stream is kept for the summary.
+# Progress: Claude's text and each tool call, one line each; the full stream is kept for the summary, and goes out
+# raw, as it comes, on the run's stdout (fd 3: see the end), which remote-agent.sh keeps as the live transcript.
 claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules" --output-format stream-json --verbose \
-  | tee "$HOME/out/stream.jsonl" \
+  | tee "$HOME/out/stream.jsonl" /dev/fd/3 \
   | jq -r --unbuffered 'select(.type == "assistant") | .message.content[]
       | if .type == "text" then .text
         elif .type == "tool_use" then "  → \(.name) \(.input.command // .input.file_path // .input.pattern // .input.description // "" | tostring | gsub("\n"; " ") | .[0:120])"

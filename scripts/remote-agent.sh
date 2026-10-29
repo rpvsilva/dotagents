@@ -18,7 +18,9 @@
 # them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first.
 # Prints Claude's progress on stderr and the summary on stdout. The progress also goes to the sandbox's own log (its
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
-# SSH bare mode). Keeps the patch and summary in <git dir>/remote-agent/<run>/.
+# SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
+# and Claude's full stream in <git dir>/remote-agent/<run>/, plus transcript.jsonl: Claude's raw stream-json events,
+# written as they arrive (the token's value redacted), its path printed before the sandbox is claimed.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
 # Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
@@ -92,6 +94,10 @@ max_mb="${REMOTE_MAX_MB:-200}"
 stage="$(mktemp -d)"
 run="agent-$(date +%Y%m%d-%H%M%S)-$RANDOM"
 tag="[${name:-$run}]"
+# What is kept of the run, outside the worktree: the live transcript from the start, the sandbox's ~/out at the end.
+keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
+mkdir -p "$keep"
+: >>"$keep/transcript.jsonl"
 
 # Progress: each line on stdin goes to stderr behind the tag and, without --no-log, to $stage/log, which
 # send_log copies to the sandbox's log. The sandbox logs its own run's lines itself.
@@ -117,6 +123,26 @@ send_log() {
   "$backend" run "$run" "$handle" sh -c 'l="${REMOTE_AGENT_LOG:-/proc/1/fd/1}"; [ -w "$l" ] || l="$HOME/progress.log"; cat >>"$l"' \
     <"$stage/log" >/dev/null 2>&1 || true
   : >"$stage/log"
+}
+
+# Appends the JSON lines on stdin to file $1 as they come, each flushed, with the Claude token's value (through the
+# environment, never argv) replaced by [redacted]; anything else (an ssh banner, a kubectl warning) is dropped.
+# awk marks the first event on its stderr, which becomes the first-event time (t0: just before the run).
+transcript_to() {
+  # mawk (Debian's awk) reads a pipe in blocks unless told otherwise.
+  local live=()
+  case "$(awk -W version </dev/null 2>&1)" in *mawk*) live=(-W interactive) ;; esac
+  scrub_token="$claude_token" awk ${live[@]+"${live[@]}"} '
+    BEGIN { tok = ENVIRON["scrub_token"] }
+    /^\{/ {
+      s = $0; out = ""
+      while (tok != "" && (i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) "[redacted]"; s = substr(s, i + length(tok)) }
+      print out s; fflush()
+      if (!seen++) { print "first" >"/dev/stderr"; fflush("/dev/stderr") }
+    }' 2>&1 >>"$1" | while IFS= read -r line; do
+    line="${line%$'\r'}"
+    if [ "$line" = first ]; then say "first agent event after $((SECONDS - t0))s"; else say "$line"; fi
+  done
 }
 
 acquired=""
@@ -158,31 +184,36 @@ kb=0
 [ "$kb" -le $((max_mb * 1024)) ] || { say "snapshot is $((kb / 1024)) MB, over REMOTE_MAX_MB=$max_mb"; exit 1; }
 say "snapshot: $count files, $((kb / 1024)) MB from $root"
 
+say "transcript: $keep/transcript.jsonl"
 acquired=1
+t0=$SECONDS
 handle="$(with_progress "$backend" acquire "$run")"
+say "claimed in $((SECONDS - t0))s"
 
 # macOS tar would add AppleDouble files and xattr headers.
 export COPYFILE_DISABLE=1
+t0=$SECONDS
 tar -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
 (cd "$root" && tar -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
-say "sent setup and snapshot"
+say "sent setup and snapshot in $((SECONDS - t0))s"
 send_log
 
 # In the background, so INT or TERM reach the traps at once rather than when the run ends; with job control on, in
 # a process group of its own (numbered $runner), so cleanup stops the backend's client (ssh, docker, kubectl) with it.
+# The run's stdout is Claude's raw events: transcript_to keeps them, and says when the first one comes.
 status=0
+t0=$SECONDS
 set -m
 (
   { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
-    | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox
+    | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox \
+    | transcript_to "$keep/transcript.jsonl"
 ) &
 runner=$!
 set +m
 wait "$runner" || status=$?
 runner=""
 
-keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
-mkdir -p "$keep"
 # Drained after extracting, so the sender's trailing padding does not hit a closed pipe (tar stops at the end marker).
 with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$keep" 2>/dev/null; cat >/dev/null; } || true
 [ "$status" -eq 0 ] || { say "the sandbox run failed (exit $status); what it left is in $keep"; exit "$status"; }
