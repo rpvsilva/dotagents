@@ -10,11 +10,13 @@ Running subagents on a Kubernetes cluster for compute only. The laptop keeps the
 ## Use
 
 ```sh
-scripts/remote-agent.sh "<brief>" [worktree]       # or @brief.md, or - for stdin
+~/.agents/bin/remote-agent [--attach PATH]... "<brief>" [worktree]   # or @brief.md, or - for stdin
 ```
 
+`install.sh` links the command there, so skills reach it from any project. Skills use it through [Remote subagents](../skills/_shared/conventions.md#remote-subagents): a subagent a skill marks remote-capable (today `build-epic`'s implementer) runs here whenever `remote.env` exists. `--attach` copies a file or folder from outside the worktree (a ticket, a spec) to `~/attached/<name>` in the sandbox, read-only.
+
 1. [`remote-agent-pack.sh`](../scripts/remote-agent-pack.sh) stages this machine's setup: `CLAUDE.md`, skills, agents, commands, rules, `~/.agents/{skills,hooks}`; `settings.json` cut down to permissions, model, plugins and the hooks that call `~/.agents/hooks`; MCP servers that need no env or headers. Credentials, history, transcripts, caches and settings `env` never leave the machine; what it leaves out is printed.
-2. It lists the worktree's tracked and unignored files, minus secret-looking ones (the `guard-secrets` rule), and checks the size (`REMOTE_MAX_MB`, 200 by default).
+2. It copies the attachments (minus secret-looking files) and lists the worktree's tracked and unignored files, minus secret-looking ones (the `guard-secrets` rule), and checks the size (`REMOTE_MAX_MB`, 200 by default).
 3. It claims a warm sandbox and streams the setup and the snapshot in with `kubectl exec`. The Claude token goes through stdin.
 4. In the pod, [`remote-agent-sandbox.sh`](../scripts/remote-agent-sandbox.sh) reinstalls the plugins and MCP servers, commits the snapshot as a base, and runs Claude headless on the brief. Its progress shows on stderr.
 5. The patch comes back and is applied to the worktree, uncommitted. The summary goes to stdout. Both, with the full stream, are kept in `<git dir>/remote-agent/<claim>/`.
