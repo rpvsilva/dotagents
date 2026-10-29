@@ -3,6 +3,7 @@
 # sandbox comes from a backend (scripts/remote-backends/<name>.sh; the cluster by default) and never touches a
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
 # Usage: remote-agent [--attach PATH]... <brief | @brief-file | -> [worktree]   (default worktree: the current one)
+#        remote-agent setup   (asks for the backend and the Claude token, writes remote.env: remote-agent-setup.sh)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out.
@@ -27,6 +28,9 @@ while [ -L "$src" ]; do
   [[ "$src" == /* ]] || src="$dir/$src"
 done
 REPO="$(cd "$(dirname "$src")/.." && pwd)"
+case "${1:-}" in
+  setup) shift; exec "$REPO/scripts/remote-agent-setup.sh" "$@" ;;
+esac
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$REPO/scripts/hooks/lib.sh"

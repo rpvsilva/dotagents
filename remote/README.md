@@ -57,8 +57,16 @@ The container gets Docker's default network: internet egress, and whatever this 
 
 ## Setup, once
 
-- `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) in `~/.config/dotagents/remote.env`.
-- The backend's needs: for the default `cluster`, a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image. See [Backends](#backends).
+```sh
+~/.agents/bin/remote-agent setup   # asks for the backend, its settings and a Claude token; writes remote.env
+~/.agents/bin/remote-agent check   # checks the backend's needs, then a dry run
+```
+
+`setup` asks for the backend and its details (cluster: kube context, the current one by default, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
+
+By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image.
+
+Without `remote.env`, skills run their subagents on this machine, as before.
 
 No GitHub credentials are needed or sent: the PR, if any, is opened from the laptop.
 
