@@ -1,9 +1,0 @@
-# remote/Dockerfile copies the repo, .git included, into the runner image.
-# Keep out anything local or secret (mirrors .gitignore).
-.env
-.env.*
-*.local.json
-*.local.md
-secrets/
-.DS_Store
-**/__pycache__/
