@@ -119,8 +119,13 @@ if ! grep -q "^ssh " "$S/calls" || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -
 fi
 grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\$" "$S/calls" \
   || fail "ssh: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
-[ "$(cat "$S/script" 2>/dev/null)" = "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" ] \
-  || fail "ssh: the sandbox script did not survive the remote shell's quoting"
+want="$(cat "$REPO/scripts/remote-agent-sandbox.sh")"
+got="$(cat "$S/script" 2>/dev/null)"
+if [ "$got" != "$want" ]; then
+  printf '%s' "$want" >"$SANDBOX/script.want"
+  printf '%s' "$got" >"$SANDBOX/script.got"
+  fail "ssh: the sandbox script did not survive the remote shell's quoting: $(wc -c <"$SANDBOX/script.want") bytes sent, $(wc -c <"$SANDBOX/script.got") back; $(cmp "$SANDBOX/script.want" "$SANDBOX/script.got" 2>&1 | head -2)"
+fi
 [ "$(sed -n 1p "$S/stdin")" = sk-claude-secret ] || fail "ssh: stdin line 1 is not the Claude token"
 [ "$(sed -n '2,$p' "$S/stdin")" = "don't add \$HOME or \`x\`;  add a hello file" ] \
   || fail "ssh: brief changed on the way: $(sed -n '2,$p' "$S/stdin")"
