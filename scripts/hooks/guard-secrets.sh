@@ -7,9 +7,14 @@
 #   token or private key. The reason names the file, never the secret.
 # Quoted text with spaces and heredoc bodies are prose, so they are not scanned for paths.
 # The command is judged per segment (split on ; & | ( ) and newline): a segment that only tests or
-# lists a path (test, [, [[, ls, stat, with no < or >) may name a secret file; `test -f .env && cat .env`
-# still blocks on the cat. Accepted holes: data flowing from such a segment into a reader
-# (`ls .env | xargs cat`) and commands in backticks pass.
+# lists a path (test, [, [[, ls, stat) may name a secret file, unless it redirects to or from one;
+# `test -f .env && cat .env` still blocks on the cat. Once the command redefines one of those as a
+# function or alias, no segment gets this pass.
+# Accepted holes, where a secret is read and nothing blocks:
+# - data flowing from a path-only segment into a reader: `ls .env | xargs cat`;
+# - commands in backticks: `cat \`echo .env\``. The hook never parsed backticks;
+# - names built at run time: globs (`cat .en?`), variables set earlier (`cat "$F"`), `eval`;
+# - a quoted path with a space in it, which reads as prose.
 # A guardrail against mistakes, not a security boundary: the human can still run anything themselves.
 # Input: the command as $1, or a hook's JSON on stdin with .tool_input.command or a path
 # (.tool_input.file_path / .path / .notebook_path, or Cursor's top-level .file_path), and optional .cwd.
@@ -47,16 +52,24 @@ cmd="$(strip_heredocs "$cmd")"
 s='[[:space:]]'
 start="(^|[;&|(]|$s)"
 
-# True when segment $1 only tests or lists paths: its first word, after `!`, `{`, `if`, `while`,
-# `until`, `then`, `do`, `else`, `time` and `VAR=val`, is test, [, [[, ls or stat, and it has no
-# redirection.
+# A command that redefines a path-only command (`ls(){ cat "$1"; }`, `function test {`,
+# `alias ls=cat`) turns it into a reader, so then no segment is path-only.
+names='(test|\[|\[\[|ls|stat)'
+func_re="(^|[;&|({}!]|$s)$names$s*\(\)"
+function_re="${start}function$s+$names($s|[({]|$)"
+alias_re="${start}alias$s([^;&|]*[$s\"'])?$names="
+redefined=""
+if [[ "$cmd" =~ $func_re || "$cmd" =~ $function_re || "$cmd" =~ $alias_re ]]; then redefined=1; fi
+
+# True when segment $1 only tests or lists paths: its first word, after `!`, `{`, `if`, `elif`,
+# `while`, `until`, `then`, `do`, `else`, `time` and `VAR=val`, is test, [, [[, ls or stat.
 path_only() {
   local w words
-  case "$1" in *'<'* | *'>'*) return 1 ;; esac
+  [ -z "$redefined" ] || return 1
   IFS=$' \t\r' read -ra words <<<"$1"
   for w in ${words[@]+"${words[@]}"}; do
     case "$w" in
-      '!' | '{' | if | while | until | then | do | else | time) ;;
+      '!' | '{' | if | elif | while | until | then | do | else | time) ;;
       test | '[' | '[[' | ls | stat) return 0 ;;
       *)
         if ! [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then return 1; fi
@@ -66,11 +79,15 @@ path_only() {
   return 1
 }
 
-# Paths named in the command, outside quoted prose, judged one segment at a time.
+# Paths named in the command, outside quoted prose, judged one segment at a time. A path-only
+# segment is judged by its redirection targets alone, so `ls .env 2>/dev/null` passes and
+# `ls > .env` blocks.
 scan="$(sed -E "s/\"[^\"]*${s}[^\"]*\"//g; s/'[^']*${s}[^']*'//g" <<<"$cmd")"
 set -f
 while IFS= read -r seg; do
-  if path_only "$seg"; then continue; fi
+  if path_only "$seg"; then
+    seg="$(grep -oE "[<>]+$s*[^[:space:]<>]+" <<<"$seg" || true)"
+  fi
   for word in $(tr '"'"'"'<>,=\r' ' ' <<<"$seg"); do
     if is_secret "$word"; then
       block "the command names $word, which looks like a secret file."

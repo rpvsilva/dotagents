@@ -59,7 +59,7 @@ cmd allow 'echo "load the .env file first"'
 cmd allow $'cat >notes.md <<\'EOF\'\nkeep keys in .env\nEOF'
 cmd allow 'git status'
 
-# A segment that only tests or lists a path passes; a segment that reads it, or redirects, still blocks.
+# A segment that only tests or lists a path passes; a segment that reads it, or redirects to or from it, still blocks.
 cmd allow 'test -f .env'
 cmd allow '[ -f .env ]'
 cmd allow '[[ -f .env ]]'
@@ -70,6 +70,11 @@ cmd allow 'stat .env'
 cmd allow 'test -f ~/.config/dotagents/github-app.pem && echo yes'
 cmd allow '! test -f .env || echo missing'
 cmd allow 'X=1 ls secrets/'
+cmd allow 'if [ -f .env ]; then echo yes; fi'
+cmd allow 'if false; then :; elif [ -f .env ]; then echo y; fi'
+cmd allow '{ ls .env; }'
+cmd allow 'ls .env 2>/dev/null'
+cmd allow 'test -f .env 2>/dev/null || echo none'
 cmd block 'test -f .env && cat .env'
 cmd block '[ -f .env ] && source .env'
 cmd block 'ls .env; head .env'
@@ -77,8 +82,16 @@ cmd block $'ls .env\nhead .env'
 cmd block 'if [ -f .env ]; then source .env; fi'
 cmd block 'test -f .env > .env'
 cmd block 'ls > .env'
+cmd block 'ls >.env'
+cmd block 'test -f x < .env'
+cmd block 'ls .env &> .env'
 cmd block 'find . -name .env -exec cat {} \;'
 cmd block 'x=$(cat .env); test -n "$x"'
+# Redefining a path-only command as a function or alias makes it a reader: nothing counts as path-only.
+cmd block 'ls(){ cat $1;}; ls .env'
+cmd block 'function test { cat "$@"; }; test .env'
+cmd block 'alias ls=cat; ls .env'
+cmd block 'stat () { cat "$1"; }; stat .env'
 
 # Commits: a staged secret file or token line blocks; the reason never echoes the token.
 git init -q "$SANDBOX/r"
