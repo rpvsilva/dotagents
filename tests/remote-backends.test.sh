@@ -119,8 +119,11 @@ if ! grep -q "^ssh " "$S/calls" || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -
 fi
 grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\$" "$S/calls" \
   || fail "ssh: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
+# Compared without CRs: a Windows checkout may turn the file's LFs into CRLFs, and the shell drops the CRs in transit.
 want="$(cat "$REPO/scripts/remote-agent-sandbox.sh")"
+want="${want//$'\r'/}"
 got="$(cat "$S/script" 2>/dev/null)"
+got="${got//$'\r'/}"
 if [ "$got" != "$want" ]; then
   printf '%s' "$want" >"$SANDBOX/script.want"
   printf '%s' "$got" >"$SANDBOX/script.got"
