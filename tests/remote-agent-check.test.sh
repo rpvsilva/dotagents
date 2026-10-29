@@ -22,11 +22,30 @@ stub_ssh "$SANDBOX/bin" "$S"
 
 # The client's PATH without any real claude or kubectl; $CB holds a fake claude for the "sandbox" (the stub docker
 # runs container commands here).
+#
+# A folder that holds claude or kubectl (/usr/bin on GitHub's Linux runners, Chocolatey's bin on Windows) cannot be
+# dropped whole: it also holds bash, env, jq and the rest. It is left out of the PATH and replaced by $SANDBOX/shim,
+# a wrapper for each of its other commands.
+CB="$SANDBOX/claudebin"
+SHIM="$SANDBOX/shim"
+mkdir -p "$CB" "$SHIM"
 base_path=""
 IFS=: read -ra dirs <<<"$PATH"
-for d in "${dirs[@]}"; do [ -x "$d/claude" ] || [ -x "$d/kubectl" ] || base_path="$base_path:$d"; done
-CB="$SANDBOX/claudebin"
-mkdir -p "$CB"
+for d in "${dirs[@]}"; do
+  if [ -x "$d/claude" ] || [ -x "$d/kubectl" ] || [ -x "$d/claude.exe" ] || [ -x "$d/kubectl.exe" ]; then
+    for f in "$d"/*; do
+      b="${f##*/}"
+      case "$b" in claude | claude.* | kubectl | kubectl.*) continue ;; esac
+      if [ -f "$f" ] && [ -x "$f" ] && [ ! -e "$SHIM/$b" ]; then
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "$f" >"$SHIM/$b"
+        chmod +x "$SHIM/$b"
+      fi
+    done
+    base_path="$base_path:$SHIM"
+  else
+    base_path="$base_path:$d"
+  fi
+done
 printf '#!/bin/sh\necho "claude called" >>"%s/claude-called"\n' "$S" >"$CB/claude"
 printf '#!/bin/sh\nexit 0\n' >"$CB/node"
 chmod +x "$CB/claude" "$CB/node"
@@ -43,7 +62,9 @@ check() {
 out() { cat "$SANDBOX/out"; }
 # Line number in $S/calls of the first call matching the regex $1 (0 when none).
 at() { grep -n -m1 -e "$1" "$S/calls" 2>/dev/null | cut -d: -f1 | grep . || echo 0; }
-no_token() { grep -q "sk-claude-secret" "$SANDBOX/out" "$S/calls" 2>/dev/null && fail "$1: the token showed" || true; }
+no_token() {
+  if grep -q "sk-claude-secret" "$SANDBOX/out" "$S/calls" 2>/dev/null; then fail "$1: the token showed"; fi
+}
 
 # --- docker: all there, so the dry run runs the five ops in order and passes.
 config REMOTE_BACKEND=docker
@@ -52,9 +73,10 @@ c="$(sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" | head -1)"
 info="$(at '^info')" acquire="$(at "^run -d ")" put="$(at "^exec -i $c sh -c mkdir .*work.* tar -x")"
 runs="$(at "^exec -i $c sh -c .*ping.*command -v claude")" get="$(at "^exec $c sh -c tar -cf .*out")"
 release="$(at "^rm -f $c\$")"
-[ "$info" -gt 0 ] && [ "$info" -lt "$acquire" ] || fail "docker: docker info not checked before the dry run: $(cat "$S/calls")"
-[ "$acquire" -gt 0 ] && [ "$acquire" -lt "$put" ] && [ "$put" -lt "$runs" ] && [ "$runs" -lt "$get" ] && [ "$get" -lt "$release" ] \
-  || fail "docker: dry run not acquire, put, run, get, release in order ($acquire $put $runs $get $release): $(cat "$S/calls")"
+if [ "$info" -le 0 ] || [ "$info" -ge "$acquire" ]; then fail "docker: docker info not checked before the dry run: $(cat "$S/calls")"; fi
+if ! { [ "$acquire" -gt 0 ] && [ "$acquire" -lt "$put" ] && [ "$put" -lt "$runs" ] && [ "$runs" -lt "$get" ] && [ "$get" -lt "$release" ]; }; then
+  fail "docker: dry run not acquire, put, run, get, release in order ($acquire $put $runs $get $release): $(cat "$S/calls")"
+fi
 [ ! -e "$S/containers/$c" ] || fail "docker: dry run container not removed"
 grep -q "^ok" "$SANDBOX/out" || fail "docker: does not end with ok: $(out)"
 grep -q "^pull" "$S/calls" && fail "docker: pulled an image already present"

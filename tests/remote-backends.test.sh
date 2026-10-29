@@ -217,7 +217,7 @@ $f/.cache
 $f/.claude
 $f/work" ] || fail "bare: XDG folders, CLAUDE_CONFIG_DIR or the working folder not in the run folder: $(cat "$S/claude-env")"
 grep -q "no token" "$S/claude-env" && fail "bare: Claude did not get the token"
-[ -n "$f" ] && [ ! -e "$f" ] || fail "bare: run folder $f not removed after release"
+if [ -z "$f" ] || [ -e "$f" ]; then fail "bare: run folder $f not removed after release"; fi
 grep -q -- "--warning\|--no-same-owner" "$S/calls" && fail "bare: tar flags beyond plain GNU/BSD ones: $(grep tar "$S/calls")"
 if grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@trusted-box "; then
   fail "bare: an ssh call without -T, BatchMode or the host: $(grep '^ssh' "$S/calls")"
@@ -231,7 +231,7 @@ rm -f "$W/hello.txt"
 rm -f "$S/claude-env"
 run 0 "" "${bare[@]}" REMOTE_KEEP=1 || true
 f="$(run_home)"
-[ -n "$f" ] && [ -d "$f" ] || fail "bare keep: run folder removed"
+if [ -z "$f" ] || [ ! -d "$f" ]; then fail "bare keep: run folder removed"; fi
 grep -q "kept run folder" "$SANDBOX/out" || fail "bare keep: not reported: $(cat "$SANDBOX/out")"
 # Git Bash on Windows has no Unix modes.
 [ -n "${MSYSTEM:-}" ] || [ -n "$(find "$f" -maxdepth 0 -perm 700)" ] || fail "bare keep: run folder mode is not 700"
@@ -244,7 +244,7 @@ grep -q "sk-claude-secret" "$f/progress.log" 2>/dev/null && fail "bare keep: the
 [ -z "$f" ] || touch -t 200001010000 "$f"
 mkdir -p "$runs/agent-fresh"
 run 0 "" "${bare[@]}" || true
-[ -n "$f" ] && [ ! -e "$f" ] || fail "bare stale: folder older than REMOTE_HOURS not removed"
+if [ -z "$f" ] || [ -e "$f" ]; then fail "bare stale: folder older than REMOTE_HOURS not removed"; fi
 [ -d "$runs/agent-fresh" ] || fail "bare stale: a fresh folder was removed"
 rm -rf "$runs/agent-fresh"
 

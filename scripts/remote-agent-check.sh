@@ -60,7 +60,8 @@ say "dry run: acquire, put, run, get, release"
 printf 'ping %s\n' "$run" >"$tmp/ping"
 mkdir "$tmp/back"
 acquired=1
-handle="$("$backend" acquire "$run" </dev/null)" && [ -n "$handle" ] || step_failed "acquire"
+handle="$("$backend" acquire "$run" </dev/null)" || step_failed "acquire"
+[ -n "$handle" ] || step_failed "acquire"
 export COPYFILE_DISABLE=1
 tar -C "$tmp" -cf - ping | "$backend" put "$run" "$handle" work || step_failed "put"
 code=0
