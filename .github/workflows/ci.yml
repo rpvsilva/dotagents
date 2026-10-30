@@ -22,8 +22,20 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # The checks covering the PR's changed files (tests/affected.sh, mapped in tests/suites.txt); every check when
+      # run by hand. The jobs still run and pass when theirs are not picked, so the gate always gets a result.
+      - name: affected checks
+        id: affected
+        shell: bash
+        run: |
+          if [ -n "$GITHUB_BASE_REF" ]; then args=(--base "origin/$GITHUB_BASE_REF"); else args=(--all); fi
+          checks="$(tests/affected.sh "${args[@]}" | tr '\n' ' ')"
+          echo "checks: $checks"
+          echo "checks=$checks" >>"$GITHUB_OUTPUT"
       - name: shellcheck
-        if: ${{ !vars.CI_RUNNER }}
+        if: ${{ !vars.CI_RUNNER && contains(format(' {0} ', steps.affected.outputs.checks), ' shellcheck ') }}
         # The image pinned by digest in scripts/shellcheck-image, which tests/run.sh also runs. Read-only mount:
         # the image cannot write to the checkout.
         run: |
@@ -33,7 +45,7 @@ jobs:
       # scripts/shellcheck-version, checked against its sha256 (a version bump needs new sums). Python unpacks it: the
       # runner image has no xz.
       - name: shellcheck (self-hosted)
-        if: ${{ vars.CI_RUNNER }}
+        if: ${{ vars.CI_RUNNER && contains(format(' {0} ', steps.affected.outputs.checks), ' shellcheck ') }}
         run: |
           pin="$(tr -d '\r\n' <scripts/shellcheck-version)"
           case "$pin $(uname -m)" in
@@ -49,6 +61,7 @@ jobs:
           git ls-files -z '*.sh' | xargs -0 "$RUNNER_TEMP/shellcheck-v$pin/shellcheck"
       # The release binary, not the docker:// action: a self-hosted runner in Docker has no Docker daemon.
       - name: actionlint
+        if: ${{ contains(format(' {0} ', steps.affected.outputs.checks), ' actionlint ') }}
         run: |
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
@@ -57,9 +70,23 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # The checks covering the PR's changed files (tests/affected.sh, mapped in tests/suites.txt); every check when
+      # run by hand. The jobs still run and pass when theirs are not picked, so the gate always gets a result.
+      - name: affected checks
+        id: affected
+        shell: bash
+        run: |
+          if [ -n "$GITHUB_BASE_REF" ]; then args=(--base "origin/$GITHUB_BASE_REF"); else args=(--all); fi
+          checks="$(tests/affected.sh "${args[@]}" | tr '\n' ' ')"
+          echo "checks: $checks"
+          echo "checks=$checks" >>"$GITHUB_OUTPUT"
       - name: tests/*.test.sh
         shell: bash
-        run: for t in tests/*.test.sh; do echo "== $t"; "$t"; done
+        env:
+          CHECKS: ${{ steps.affected.outputs.checks }}
+        run: for t in tests/*.test.sh; do case " $CHECKS " in *" ${t##*/} "*) echo "== $t"; "$t" ;; esac; done
 
   secrets:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
