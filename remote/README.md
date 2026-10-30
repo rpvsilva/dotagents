@@ -5,6 +5,7 @@ Running subagents on a remote backend for compute only: a Kubernetes cluster, Do
 ## Where the pieces live
 
 - **The cluster side** lives in the cluster's GitOps repo: the agent-sandbox controller, the `agent-runner` image (`tools/agent-runner`, also used by the `docker` and `ssh` backends) and the `claude-runner` SandboxTemplate and warm pool (`ai-infrastructure/agents`).
+  The image must ship shellcheck at the version in [`scripts/shellcheck-version`](../scripts/shellcheck-version): implementers run `tests/run.sh` there, and it fails on any other version. Bump the image there when the pin changes here.
 - **This repo is the client**: [`scripts/remote-agent.sh`](../scripts/remote-agent.sh), driving one backend script from [`scripts/remote-backends/`](../scripts/remote-backends/).
 
 ## Use
