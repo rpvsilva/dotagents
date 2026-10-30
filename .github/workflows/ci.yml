@@ -23,9 +23,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
+        if: ${{ !vars.CI_RUNNER }}
+        # The image pinned by digest in scripts/shellcheck-image, which tests/run.sh also runs. Read-only mount:
+        # the image cannot write to the checkout.
         run: |
-          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
-          git ls-files -z '*.sh' | xargs -0 shellcheck
+          image="$(cat scripts/shellcheck-image)"
+          git ls-files -z '*.sh' | xargs -0 docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$image"
+      # self-hosted: the runners in Docker have no Docker daemon, so they run the release binary of the version in
+      # scripts/shellcheck-version, checked against its sha256 (a version bump needs new sums). Python unpacks it: the
+      # runner image has no xz.
+      - name: shellcheck (self-hosted)
+        if: ${{ vars.CI_RUNNER }}
+        run: |
+          pin="$(tr -d '\r\n' <scripts/shellcheck-version)"
+          case "$pin $(uname -m)" in
+            "0.11.0 x86_64") sum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
+            "0.11.0 aarch64") sum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588 ;;
+            *) echo "no sha256 for shellcheck $pin on $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v$pin/shellcheck-v$pin.linux.$(uname -m).tar.xz"
+          echo "$sum  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          python3 -c 'import sys, tarfile; tarfile.open(sys.argv[1], "r:xz").extractall(sys.argv[2], filter="data")' \
+            "$RUNNER_TEMP/shellcheck.tar.xz" "$RUNNER_TEMP"
+          git ls-files -z '*.sh' | xargs -0 "$RUNNER_TEMP/shellcheck-v$pin/shellcheck"
       # The release binary, not the docker:// action: a self-hosted runner in Docker has no Docker daemon.
       - name: actionlint
         run: |

@@ -81,5 +81,18 @@ while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"
 done < <(git ls-files -s '*.sh')
 
+# The shellcheck image is the pinned version, pinned by digest.
+sc_version="$(tr -d '\r\n' <scripts/shellcheck-version)"
+case "$(tr -d '\r\n' <scripts/shellcheck-image)" in
+  "koalaman/shellcheck:v$sc_version@sha256:"*) ;;
+  *) fail "scripts/shellcheck-image is not koalaman/shellcheck:v$sc_version@sha256:<digest> (scripts/shellcheck-version)" ;;
+esac
+
+# CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
+mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
+if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then
+  fail "CLAUDE.md is not committed as a symlink to AGENTS.md (git rm --cached CLAUDE.md && ln -sf AGENTS.md CLAUDE.md && git add CLAUDE.md)"
+fi
+
 [ "$fails" -eq 0 ] || { echo "repo.test.sh: $fails failure(s)"; exit 1; }
 echo "repo.test.sh: ok"
