@@ -93,6 +93,12 @@ case "$(tr -d '\r\n' <scripts/shellcheck-image)" in
   *) fail "scripts/shellcheck-image is not koalaman/shellcheck:v$sc_version@sha256:<digest> (scripts/shellcheck-version)" ;;
 esac
 
+# Every suite has a line in tests/suites.txt, or tests/run.sh and CI would never run it.
+for t in tests/*.test.sh; do
+  awk -v s="${t##*/}" '$1 == s { found = 1 } END { exit !found }' tests/suites.txt \
+    || fail "tests/suites.txt: no line for ${t##*/}"
+done
+
 # CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
 mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
 if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then
