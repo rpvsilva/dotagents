@@ -76,10 +76,28 @@ while read -r p; do
   fail "$p is in only one of .review-gate.yml (high tier) and CODEOWNERS"
 done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
 
+# Remote subagents say to give the human the transcript path and to leave remote-agent's stderr unredirected.
+remote="$(awk '/^## Remote subagents/ {on=1; next} on && /^## / {exit} on' skills/_shared/conventions.md)"
+grep -q 'transcript' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not mention the transcript"
+grep -qi 'not redirect' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not say to leave stderr unredirected"
+
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"
 done < <(git ls-files -s '*.sh')
+
+# The shellcheck image is the pinned version, pinned by digest.
+sc_version="$(tr -d '\r\n' <scripts/shellcheck-version)"
+case "$(tr -d '\r\n' <scripts/shellcheck-image)" in
+  "koalaman/shellcheck:v$sc_version@sha256:"*) ;;
+  *) fail "scripts/shellcheck-image is not koalaman/shellcheck:v$sc_version@sha256:<digest> (scripts/shellcheck-version)" ;;
+esac
+
+# CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
+mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
+if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then
+  fail "CLAUDE.md is not committed as a symlink to AGENTS.md (git rm --cached CLAUDE.md && ln -sf AGENTS.md CLAUDE.md && git add CLAUDE.md)"
+fi
 
 [ "$fails" -eq 0 ] || { echo "repo.test.sh: $fails failure(s)"; exit 1; }
 echo "repo.test.sh: ok"
