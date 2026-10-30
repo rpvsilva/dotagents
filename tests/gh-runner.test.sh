@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# self-hosted: this whole test.
 # Runs scripts/gh-runner.sh against a stub GitHub API (curl) and a stub docker, with a throwaway App key.
 set -euo pipefail
 

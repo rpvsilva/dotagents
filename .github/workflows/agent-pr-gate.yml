@@ -34,7 +34,7 @@ jobs:
     # pull_request_review has no branches filter.
     if: github.event.pull_request.base.ref == 'main'
     # GitHub-hosted, or self-hosted while CI_RUNNER names a label (see ci.yml). This job runs no PR code.
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }} # self-hosted: was ubuntu-latest
     steps:
       # main after v1.0.2: adds the check CLI (0xgui/agent-pr-gate#9). Bump together with GATE_REF in scripts/merge-pr.sh.
       - uses: 0xgui/agent-pr-gate@2da570e75f377b413e19bdfc338dab7c9e881538

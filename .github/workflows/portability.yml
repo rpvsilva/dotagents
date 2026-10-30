@@ -1,5 +1,5 @@
 # The tests on Windows (Git Bash), run by hand: gh workflow run portability.yml --ref <branch>.
-# Paused on PRs while hosted minutes are out: a Windows runner cannot be self-hosted in Docker (ci.yml, scripts/gh-runner.sh).
+# self-hosted: paused on PRs while hosted minutes are out: a Windows runner cannot be self-hosted in Docker (ci.yml, scripts/gh-runner.sh).
 # To run it on PRs again, put back under on:
 #   pull_request: { branches: [main], paths: [install.sh, scripts/**, tests/**, adapters/**, .github/workflows/portability.yml] }
 # macOS is covered by tests/run.sh, which every change passes locally before pushing (AGENTS.md); hosted macOS runners

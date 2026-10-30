@@ -3,8 +3,9 @@ name: CI
 # Runs on PRs into main only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run.
 # PRs into other branches (build-epic's task PRs into a ticket branch) run their checks locally, to save runners.
 # macOS and Windows run in portability.yml, only when shell code changes.
-# Jobs run on GitHub-hosted runners, or on self-hosted ones while the repo variable CI_RUNNER names their label
-# (scripts/gh-runner.sh serves them from local Docker). Steps install what the runner image lacks.
+# self-hosted: jobs run on GitHub-hosted runners, or on self-hosted ones while the repo variable CI_RUNNER names their
+# label (scripts/gh-runner.sh serves them from local Docker). Every line that exists only for those runners is tagged
+# "self-hosted:", so removing them starts with `git grep self-hosted:`.
 on:
   pull_request:
     branches: [main]
@@ -19,21 +20,23 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }} # self-hosted: was ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
+        # self-hosted: the install; the runner image has no shellcheck, hosted runners do.
         run: |
           command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck; }
           git ls-files -z '*.sh' | xargs -0 shellcheck
-      # The release binary, not the docker:// action: a self-hosted runner in Docker has no Docker daemon.
+      # self-hosted: the release binary, not the docker://rhysd/actionlint:1.7.12 action: the runners in Docker have no
+      # Docker daemon.
       - name: actionlint
         run: |
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
 
   test:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }} # self-hosted: was ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: tests/*.test.sh
@@ -41,7 +44,7 @@ jobs:
         run: for t in tests/*.test.sh; do echo "== $t"; "$t"; done
 
   secrets:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }} # self-hosted: was ubuntu-latest
     permissions:
       contents: read
       pull-requests: read

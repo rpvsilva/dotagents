@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# self-hosted: this whole script.
 # Serves a repo's GitHub Actions jobs from ephemeral self-hosted runners in this machine's Docker, so CI spends no
 # hosted minutes. Each runner is a fresh container of GitHub's runner image: it registers, takes one job, exits, and
 # a new one with a new registration token takes its place. Runs in the foreground until Ctrl-C (or TERM), which
