@@ -8,7 +8,9 @@
 # ci.yml runs on these runners only while the repo variable CI_RUNNER holds their label:
 #   gh variable set CI_RUNNER --body dotagents     (unset it to go back to GitHub-hosted runners)
 # Needs docker, and the App behind scripts/gh-app-token.sh with the "Administration: write" repository permission
-# (to create registration tokens and remove runners).
+# (to create registration tokens and remove runners). Without that permission, set GH_RUNNER_TOKEN to a token from
+# the repo's Settings > Actions > Runners > New self-hosted runner: it registers runners for 1 hour, after which new
+# runners fail until you restart with a fresh one; runners stopped before their job are then left for GitHub to drop.
 # Settings: RUNNER_COUNT (3: one per ci.yml job), RUNNER_LABEL (dotagents),
 # RUNNER_IMAGE (ghcr.io/actions/actions-runner:2.338.0), RUNNER_RETRY_SECONDS (30: wait after a failed start).
 set -euo pipefail
@@ -43,7 +45,9 @@ slot() {
   while :; do
     n=$((n + 1))
     name="$prefix-$i-$n"
-    if ! token="$(api -X POST "$API/repos/$repo/actions/runners/registration-token" | jq -er .token)"; then
+    if [ -n "${GH_RUNNER_TOKEN:-}" ]; then
+      token="$GH_RUNNER_TOKEN"
+    elif ! token="$(api -X POST "$API/repos/$repo/actions/runners/registration-token" | jq -er .token)"; then
       say "$name: no registration token (does the App have Administration: write on $repo?); retrying in ${retry}s"
       sleep "$retry"
       continue
@@ -54,7 +58,7 @@ slot() {
       "$image" bash -c '
         ./config.sh --unattended --ephemeral --url "$1" --token "$RUNNER_TOKEN" --name "$2" --labels "$3" &&
           exec ./run.sh' _ "https://github.com/$repo" "$name" "$label" </dev/null; then
-      say "$name: exited with an error; retrying in ${retry}s"
+      say "$name: exited with an error${GH_RUNNER_TOKEN:+ (GH_RUNNER_TOKEN lasts 1 hour; has it expired?)}; retrying in ${retry}s"
       sleep "$retry"
     fi
     [ -z "$once" ] || return 0

@@ -89,6 +89,13 @@ echo 1 >"$S/token-fails"
 grep -q 'no registration token' "$SANDBOX/err" || fail "failed token not reported: $(cat "$SANDBOX/err")"
 [ "$(wc -l <"$S/runs" | tr -d ' ')" = 1 ] || fail "want 1 container after the retry: $(cat "$S/runs" 2>/dev/null)"
 
+# GH_RUNNER_TOKEN is used as is, with no registration-token call.
+rm -f "$S"/*
+(run RUNNER_COUNT=1 GH_RUNNER_TOKEN=manual_secret "$REPO/scripts/gh-runner.sh" --once o/r) 2>"$SANDBOX/err" ||
+  fail "GH_RUNNER_TOKEN exited non-zero: $(cat "$SANDBOX/err")"
+[ "$(cat "$S/env-tokens")" = manual_secret ] || fail "GH_RUNNER_TOKEN not passed in RUNNER_TOKEN: $(cat "$S/env-tokens")"
+if grep -q 'registration-token' "$S/requests" 2>/dev/null; then fail "asked for a registration token despite GH_RUNNER_TOKEN"; fi
+
 # TERM while a runner waits for its job removes its container and deregisters it.
 rm -f "$S"/*
 touch "$S/hang"
