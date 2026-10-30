@@ -41,11 +41,11 @@ Done when the revert is committed and `git status` is clean.
 
 Some PRs were rebased onto #88 and carry their own self-hosted pieces, which the revert does not touch. In 2026-10 that was #73 (check-parity): a `shellcheck (self-hosted)` step with sha256-checked downloads, an `if: ${{ !vars.CI_RUNNER }}` on its Docker shellcheck step, and the `gh-runner.test.sh` entry in its `AGENTS.md` Checks list. #79 (follow-remote-run) carried that same `AGENTS.md` entry.
 
-1. On the branch, run `git grep -n -e CI_RUNNER -e gh-runner -e self-hosted`. For each hit, delete the self-hosted step or line and keep the hosted path as it is: a step guarded by `if: ${{ !vars.CI_RUNNER }}` loses only its `if:` line.
-2. Delete this plan (`docs/plans/remove-self-hosted-runners.md`) in the same branch: its job is done.
+1. Delete this plan (`docs/plans/remove-self-hosted-runners.md`) in the same branch, so it does not match the grep below.
+2. On the branch, run `git grep -n -e CI_RUNNER -e gh-runner -e self-hosted`. For each hit, delete the self-hosted step or line and keep the hosted path as it is: a step guarded by `if: ${{ !vars.CI_RUNNER }}` loses only its `if:` line.
 3. For each open PR, run `git diff origin/main...origin/<branch> | grep -n -e CI_RUNNER -e gh-runner -e self-hosted` and remove what it finds from that PR. Rebase each one onto `main` after the removal PR merges.
 
-Done when the `git grep` in step 1 finds nothing on the branch and the per-PR grep finds nothing in any open PR.
+Done when the `git grep` in item 2 finds nothing on the branch and the per-PR grep finds nothing in any open PR.
 
 ## 4. Check and ship
 
