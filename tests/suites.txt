@@ -1,0 +1,23 @@
+# Which checks cover which files, read by tests/affected.sh: `<check> <pattern>...`. Patterns match the repo-relative
+# path as in bash `[[ $path == $pattern ]]`, so `*` also matches `/`. A suite's own file always selects it, and a file
+# matching `all` selects every check. Every tests/*.test.sh has a line (tests/repo.test.sh checks it).
+all tests/suites.txt tests/affected.sh .github/workflows/ci.yml
+shellcheck *.sh scripts/shellcheck-version scripts/shellcheck-image
+actionlint .github/workflows/*
+repo.test.sh *
+python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/*
+install.test.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-agent*
+affected.test.sh
+claude-plugins.test.sh scripts/claude-plugins.sh adapters/claude/plugins.txt
+gh-app-token.test.sh scripts/gh-app-token.sh
+gh-runner.test.sh scripts/gh-runner.sh scripts/gh-app-token.sh
+guard-merge.test.sh scripts/hooks/* scripts/merge-pr.sh scripts/gh-app-token.sh
+guard-secrets.test.sh scripts/hooks/* scripts/gh-app-token.sh
+merge-json.test.sh scripts/merge-json.sh
+merge-pr.test.sh scripts/merge-pr.sh scripts/gh-app-token.sh
+mcp-servers.test.sh scripts/mcp-servers.sh scripts/merge-json.sh mcp/*
+remote-agent.test.sh scripts/remote-agent* scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
+remote-backends.test.sh scripts/remote-agent* scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
+remote-agent-setup.test.sh scripts/remote-agent* scripts/remote-backends/*
+remote-agent-check.test.sh scripts/remote-agent* scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
+run.test.sh tests/run.sh scripts/shellcheck-version scripts/shellcheck-image
