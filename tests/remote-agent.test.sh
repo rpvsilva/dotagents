@@ -101,7 +101,8 @@ case " \$* " in
   *" remote-agent-sandbox"*)
     if [ -e "$SANDBOX/real" ]; then
       while [ "\$1" != "-c" ]; do shift; done
-      tee "$SANDBOX/stdin" | HOME="$POD" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/$POD/main-stdout}" "\$3"
+      # A pod does not get this machine's CLAUDE_CONFIG_DIR.
+      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="$POD" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/$POD/main-stdout}" "\$3"
       exit
     fi
     cat >"$SANDBOX/stdin"
@@ -116,9 +117,22 @@ esac
 EOF
 chmod +x "$SANDBOX/bin/kubectl"
 mkdir -p "$SANDBOX/podbin"
-cat >"$SANDBOX/podbin/claude" <<'EOF'
+# It also starts a session as Claude does, under $HOME/.claude/projects/<munged cwd>, holding the token and cwd
+# lines; not with $SANDBOX/nosession.
+cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
-[ "$1" = -p ] || exit 0
+[ "\$1" = -p ] || exit 0
+if [ ! -e "$SANDBOX/nosession" ]; then
+  id=0b1e5e55-1d00-4c1a-9a7e-5e551011d000
+  echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"\$id\",\"cwd\":\"\$PWD\"}"
+  d="\$HOME/.claude/projects/\$(printf '%s' "\$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "\$d"
+  printf '{"type":"user","cwd":"%s","sessionId":"%s","message":"env: CLAUDE_CODE_OAUTH_TOKEN=%s"}\n' "\$PWD" "\$id" "\$CLAUDE_CODE_OAUTH_TOKEN" >"\$d/\$id.jsonl"
+  printf '{"type":"assistant","cwd":"%s","sessionId":"%s"}\n{"type":"last-prompt","sessionId":"%s"}\n' "\$PWD" "\$id" "\$id" >>"\$d/\$id.jsonl"
+fi
+EOF
+cat >>"$SANDBOX/podbin/claude" <<'EOF'
+echo "{\"type\":\"user\",\"text\":\"env: CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN\"}"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"},{"type":"tool_use","name":"Write","input":{"file_path":"hello.txt"}}]}}'
 printf 'hello\n' >hello.txt
 echo '{"type":"result","result":"did the thing","is_error":false}'
@@ -139,6 +153,8 @@ printf 'local\n' >"$W/untracked.txt"
 printf 'ignored\n' >"$W/ignored.txt"
 printf 'KEY=1\n' >"$W/.env"
 
+# This machine's Claude config, where `remote-agent resume` places a run's session.
+CC="$SANDBOX/claude-config"
 # Runs remote-agent.sh in $W with the fake run exiting $1 and returning patch $2; further arguments are options.
 # Stdout goes to $SANDBOX/report, stderr to $SANDBOX/err, both to $SANDBOX/out.
 run() {
@@ -148,7 +164,7 @@ run() {
   rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/stdin" "$SANDBOX/log-at-run"
   local code=0
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    "$REPO/scripts/remote-agent.sh" "$@" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?
+    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" "$@" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?
   cat "$SANDBOX/report" "$SANDBOX/err" >"$SANDBOX/out"
   return "$code"
 }
@@ -197,6 +213,7 @@ grep -qF "sandbox.users.io/remote-agent-run: $claim" "$SANDBOX/claim.yaml" || fa
 [ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim" ] || fail "pod labels: wanted only the run, got $(pod_labels)"
 [ -f "$W/.git/remote-agent/$claim/changes.patch" ] || fail "patch not kept under .git/remote-agent/$claim"
 grep -q "delete sandboxclaim $claim " "$SANDBOX/calls" || fail "claim not deleted"
+grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "no session: not reported: $(cat "$SANDBOX/err")"
 grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not delete on shutdown"
 rm "$W/hello.txt"
 
@@ -231,6 +248,92 @@ claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
 logged_all "[$claim]" "$POD/main-stdout" "real sandbox"
 grep -q "→ Write hello.txt" "$POD/main-stdout" || fail "real sandbox: Claude's progress not in the sandbox log"
 grep -q "sk-claude-secret" "$POD/main-stdout" "$SANDBOX/out" && fail "real sandbox: the token reached a log"
+# Its raw events come back on the run's stdout into the transcript, not onto stdout.
+t="$W/.git/remote-agent/$claim/transcript.jsonl"
+[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr '\n' ' ')" = "system user assistant result " ] \
+  || fail "real sandbox: transcript does not hold Claude's events: $(cat "$t" 2>/dev/null)"
+grep -q "first agent event after [0-9]*s" "$SANDBOX/err" || fail "real sandbox: no first-event time"
+[ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "real sandbox: stdout is not just the summary: $(cat "$SANDBOX/report")"
+# No file the run keeps holds the token: the stub's stream and session both echo it.
+k="$W/.git/remote-agent/$claim"
+grep -rl "sk-claude-secret" "$k" && fail "real sandbox: the token is in a kept file"
+grep -qF 'CLAUDE_CODE_OAUTH_TOKEN=[redacted]' "$k/stream.jsonl" || fail "real sandbox: the token not replaced by [redacted] in the stream"
+# The session comes back and is kept with the run, but nothing is placed for /resume: the sandbox wrote it.
+[ -f "$k/session.jsonl" ] || fail "real sandbox: session not kept with the run"
+[ ! -e "$CC/projects" ] || fail "real sandbox: session placed without being asked: $(find "$CC" -type f)"
+# The script prints the resolved path (macOS: /var is /private/var), so match its tail.
+grep -q "remote-agent: session: .*/.git/remote-agent/$claim/session.jsonl .*remote-agent resume $claim " "$SANDBOX/err" \
+  || fail "real sandbox: how to resume not printed: $(cat "$SANDBOX/err")"
+grep -q "sessionId\|sk-claude-secret" "$k/changes.patch" && fail "real sandbox: the session is in the patch"
+git -C "$W" status --porcelain | grep -q "session" && fail "real sandbox: the session shows in the worktree"
+# `remote-agent resume <run>` places it under this machine's Claude config in the worktree's project folder (from its
+# Windows path under Git Bash), its cwd that path, after warning that it came from an untrusted sandbox.
+# Runs `remote-agent resume` in $W with the arguments given; stderr to $SANDBOX/err.
+resume() {
+  (cd "$W" && env HOME="$H" PATH="${RESUME_PATH:-$PATH}" CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" resume "$@") \
+    >/dev/null 2>"$SANDBOX/err"
+}
+real_w="$(cd "$W" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then real_w="$(cygpath -w "$real_w")"; fi
+s="$CC/projects/$(printf '%s' "$real_w" | sed 's/[^A-Za-z0-9]/-/g')/0b1e5e55-1d00-4c1a-9a7e-5e551011d000.jsonl"
+resume "$claim" || fail "resume: exited non-zero: $(cat "$SANDBOX/err")"
+[ -f "$s" ] || fail "resume: session not placed at $s: $(find "$CC" -type f 2>/dev/null) $(cat "$SANDBOX/err")"
+[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -r 'select(.cwd) | .cwd' | tr -d '\r' | sort | uniq -c | sed 's/^ *//')" = "2 $real_w" ] \
+  || fail "resume: session cwd not the worktree's real path: $(cat "$s" 2>/dev/null)"
+[ "$(grep -c . "$s" 2>/dev/null)" = 3 ] || fail "resume: session lines lost: $(cat "$s" 2>/dev/null)"
+grep -q "sk-claude-secret" "$s" && fail "resume: the token is in the session"
+grep -qF 'CLAUDE_CODE_OAUTH_TOKEN=[redacted]' "$s" || fail "resume: the token not replaced by [redacted] in the session"
+at() { grep -n "$1" "$SANDBOX/err" | head -1 | cut -d: -f1 || true; }
+warned="$(at "untrusted sandbox")"
+placed="$(at "remote-agent: session: $s")"
+if [ -z "$warned" ] || [ -z "$placed" ] || [ "$warned" -ge "$placed" ]; then
+  fail "resume: no untrusted-sandbox warning before the placed path: $(cat "$SANDBOX/err")"
+fi
+# Hand-made runs: a session with non-object lines keeps them; one that is not JSON lines leaves nothing placed; under
+# Git Bash (a stub cygpath) the folder and cwd come from the Windows path; a folder name over 200 characters is refused.
+hand="$W/.git/remote-agent/agent-hand"
+mkdir -p "$hand"
+printf '%s\n' '{"sessionId":"5e55-0001","cwd":"/sandbox/work"}' '"a string"' '[1,2]' '{"type":"x"}' >"$hand/session.jsonl"
+rm -rf "$CC"
+resume agent-hand || fail "non-object lines: exited non-zero: $(cat "$SANDBOX/err")"
+s="$(find "$CC/projects" -name 5e55-0001.jsonl 2>/dev/null | head -1)"
+[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -c . | tr -d '\r' | tail -3 | tr '\n' ' ')" = '"a string" [1,2] {"type":"x"} ' ] \
+  || fail "non-object lines: not kept as they were: $(cat "$s" 2>/dev/null)"
+printf '%s\n' '{"sessionId":"5e55-0002","cwd":"/sandbox/work"}' 'not json' >"$hand/session.jsonl"
+rm -rf "$CC"
+code=0; resume agent-hand || code=$?
+[ "$code" != 0 ] || fail "not JSON lines: exited 0"
+grep -q "not JSON lines" "$SANDBOX/err" || fail "not JSON lines: not said: $(cat "$SANDBOX/err")"
+[ -z "$(find "$CC/projects" 2>/dev/null)" ] || fail "not JSON lines: left under projects/: $(find "$CC/projects")"
+[ -z "$(find "$hand" -type f ! -name session.jsonl)" ] || fail "not JSON lines: left a partial file: $(find "$hand" -type f)"
+mkdir -p "$SANDBOX/winbin"
+cat >"$SANDBOX/winbin/cygpath" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$STUB_WINPATH"
+EOF
+chmod +x "$SANDBOX/winbin/cygpath"
+printf '%s\n' '{"sessionId":"5e55-0003","cwd":"/sandbox/work"}' >"$hand/session.jsonl"
+rm -rf "$CC"
+STUB_WINPATH='C:\Users\x\proj' RESUME_PATH="$SANDBOX/winbin:$PATH" resume agent-hand \
+  || fail "windows path: exited non-zero: $(cat "$SANDBOX/err")"
+s="$CC/projects/C--Users-x-proj/5e55-0003.jsonl"
+[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -r .cwd | tr -d '\r')" = 'C:\Users\x\proj' ] \
+  || fail "windows path: not placed at $s with the Windows cwd: $(find "$CC" -type f 2>/dev/null) $(cat "$SANDBOX/err")"
+rm -rf "$CC"
+code=0; STUB_WINPATH="C:\\$(printf 'a%.0s' $(seq 200))" RESUME_PATH="$SANDBOX/winbin:$PATH" resume agent-hand || code=$?
+[ "$code" != 0 ] || fail "long path: exited 0"
+grep -q "over Claude Code's 200" "$SANDBOX/err" || fail "long path: not said: $(cat "$SANDBOX/err")"
+[ ! -e "$CC/projects" ] || fail "long path: something placed: $(find "$CC" -type f)"
+rm -rf "$hand" "$CC"
+# A run whose session is missing still applies its patch, and says so.
+rm -f "$W/hello.txt"
+: >"$SANDBOX/nosession"
+run 0 "" || fail "real no session: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "real no session: patch not applied"
+grep -q "== no session file" "$POD/main-stdout" || fail "real no session: the sandbox did not report it: $(cat "$SANDBOX/err")"
+grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "real no session: not reported: $(cat "$SANDBOX/err")"
+[ ! -e "$CC/projects" ] || fail "real no session: something placed: $(find "$CC" -type f)"
+rm -f "$SANDBOX/nosession"
 # Without a main-process stdout (SSH bare mode) the log is ~/progress.log.
 rm -f "$W/hello.txt"
 : >"$SANDBOX/nomain"
@@ -308,6 +411,62 @@ grep -q "cluster" "$SANDBOX/out" || fail "unknown backend: message does not list
 grep -qw "lib" "$SANDBOX/out" && fail "unknown backend: lib.sh listed as a backend"
 grep -q "snapshot:" "$SANDBOX/out" && fail "unknown backend: something was staged"
 echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$SANDBOX/config/dotagents/remote.env"
+
+# The transcript is written live: the stub's sandbox run prints a banner and two events (one echoing the token),
+# touches $SANDBOX/started and waits for $SANDBOX/go; the events are in transcript.jsonl while the run is alive,
+# the banner never, the token redacted. Its path is printed before the claim.
+mv "$SANDBOX/bin/kubectl" "$SANDBOX/kubectl.real"
+cat >"$SANDBOX/bin/kubectl" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" remote-agent-sandbox"*)
+    cat >/dev/null
+    echo "Warning: not an event"
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"user","text":"env: CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"}'
+    : >"$SANDBOX/started"
+    for _ in \$(seq 300); do [ -e "$SANDBOX/go" ] && break; sleep 0.1; done
+    mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"; echo "did the thing" >"$POD/out/summary.md"
+    exit 0 ;;
+esac
+exec "$SANDBOX/kubectl.real" "\$@"
+EOF
+chmod +x "$SANDBOX/bin/kubectl"
+printf '%s' "$patch" >"$SANDBOX/patch"
+rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started" "$SANDBOX/go" "$W/.git/remote-agent"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" &
+pid=$!
+for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
+live=""
+for _ in $(seq 100); do
+  if grep -qs '"subtype":"init"' "$W"/.git/remote-agent/*/transcript.jsonl; then live=1; break; fi
+  sleep 0.1
+done
+[ -n "$live" ] || fail "live transcript: event not in transcript.jsonl during the run"
+kill -0 "$pid" 2>/dev/null || fail "live transcript: the run ended before the check"
+: >"$SANDBOX/go"
+wait "$pid" || fail "live transcript: exited non-zero: $(cat "$SANDBOX/err")"
+claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
+t="$W/.git/remote-agent/$claim/transcript.jsonl"
+[ "$(grep -c . "$t" 2>/dev/null)" = 2 ] || fail "live transcript: wanted the 2 events, got: $(cat "$t" 2>/dev/null)"
+grep -q "not an event" "$t" 2>/dev/null && fail "live transcript: a non-JSON line was kept"
+grep -q "sk-claude-secret" "$t" 2>/dev/null && fail "live transcript: the token was kept"
+grep -qF 'CLAUDE_CODE_OAUTH_TOKEN=[redacted]' "$t" 2>/dev/null || fail "live transcript: the token not replaced by [redacted]"
+grep -q "sk-claude-secret" "$SANDBOX/report" "$SANDBOX/err" && fail "live transcript: the token reached the output"
+grep -q "Warning: not an event" "$SANDBOX/report" "$SANDBOX/err" && fail "live transcript: the banner reached the output"
+[ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "live transcript: stdout is not just the summary: $(cat "$SANDBOX/report")"
+p="$(at "remote-agent: transcript: .*/remote-agent/$claim/transcript.jsonl\$")"
+c="$(at "remote-agent: claimed in [0-9]*s\$")"
+if [ -z "$p" ] || [ -z "$c" ] || [ "$p" -ge "$c" ]; then fail "live transcript: path line not before the claim line: $(cat "$SANDBOX/err")"; fi
+[ -n "$(at "remote-agent: sent setup and snapshot in [0-9]*s\$")" ] || fail "live transcript: no send time: $(cat "$SANDBOX/err")"
+[ -n "$(at "remote-agent: first agent event after [0-9]*s\$")" ] || fail "live transcript: no first-event time: $(cat "$SANDBOX/err")"
+[ "$(grep -c "first agent event" "$SANDBOX/err")" = 1 ] || fail "live transcript: first-event time printed more than once"
+logged_all "[$claim]" "$POD/main-stdout" "live transcript"
+git -C "$W" status --porcelain | grep -q "transcript" && fail "live transcript: the transcript shows in the worktree"
+grep -q "transcript" "$W/.git/remote-agent/$claim/changes.patch" && fail "live transcript: the transcript is in the patch"
+rm -f "$W/hello.txt" "$SANDBOX/started" "$SANDBOX/go"
+mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
 # TERM mid-run still releases the sandbox through the exit cleanup, and stops the backend's `kubectl exec` too: the
 # stub's sandbox run hangs, its pid in $SANDBOX/backend.pid.

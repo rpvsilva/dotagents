@@ -76,6 +76,11 @@ while read -r p; do
   fail "$p is in only one of .review-gate.yml (high tier) and CODEOWNERS"
 done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
 
+# Remote subagents say to give the human the transcript path and to leave remote-agent's stderr unredirected.
+remote="$(awk '/^## Remote subagents/ {on=1; next} on && /^## / {exit} on' skills/_shared/conventions.md)"
+grep -q 'transcript' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not mention the transcript"
+grep -qi 'not redirect' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not say to leave stderr unredirected"
+
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"

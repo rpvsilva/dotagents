@@ -23,6 +23,8 @@ mkdir -p "$H" "$SANDBOX/config/dotagents"
 stub_docker "$SANDBOX/bin" "$S"
 stub_ssh "$SANDBOX/bin" "$S"
 make_worktree "$W"
+# This machine's Claude config, where `remote-agent resume` places a run's session.
+CC="$SANDBOX/claude-config"
 
 # Runs remote-agent.sh in $W with the remote.env lines given after the fake run's exit code $1 and patch $2; with
 # NAME set, as --name NAME.
@@ -33,7 +35,7 @@ run() {
   { echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"; printf '%s\n' "$@"; } >"$SANDBOX/config/dotagents/remote.env"
   rm -rf "$S/calls" "$S/stdin"
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    "$REPO/scripts/remote-agent.sh" ${NAME:+--name "$NAME"} "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
+    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" ${NAME:+--name "$NAME"} "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
 }
 # The container a run used: the name given to `docker run`.
 container() { sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" 2>/dev/null | head -1 || true; }
@@ -210,6 +212,12 @@ cat >"$HB/claude" <<CLAUDE
 if [ -e "$S/hang" ]; then echo \$\$ >"$S/claude.pid"; : >"$S/started"; exec sleep 30; fi
 printf '%s\n' "\$HOME" "\$XDG_CONFIG_HOME" "\$XDG_DATA_HOME" "\$XDG_CACHE_HOME" "\$CLAUDE_CONFIG_DIR" "\$PWD" >"$S/claude-env"
 [ "\$CLAUDE_CODE_OAUTH_TOKEN" = sk-claude-secret ] || echo "no token" >>"$S/claude-env"
+# A session as Claude starts one, in its config folder, holding the token and a cwd line.
+id=5e551011-ba7e-4000-8000-000000000001
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"\$id\"}"
+d="\${CLAUDE_CONFIG_DIR:-\$HOME/.claude}/projects/\$(printf '%s' "\$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "\$d"
+printf '{"type":"user","cwd":"%s","sessionId":"%s","message":"%s"}\n' "\$PWD" "\$id" "\$CLAUDE_CODE_OAUTH_TOKEN" >"\$d/\$id.jsonl"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"}]}}'
 [ ! -s "$S/patch" ] || git apply "$S/patch"
 echo '{"type":"result","result":"did the thing","is_error":false}'
@@ -231,12 +239,28 @@ case "$f" in
   *) fail "bare: HOME in the sandbox is not a run folder under $runs: $f" ;;
 esac
 [ -f "$W/.git/remote-agent/${f##*/}/changes.patch" ] || fail "bare: patch not kept under .git/remote-agent/${f##*/}"
+grep -q '"text":"writing the hello file"' "$W/.git/remote-agent/${f##*/}/transcript.jsonl" 2>/dev/null \
+  || fail "bare: Claude's events not in transcript.jsonl"
+grep -q "remote-agent: transcript: .*/remote-agent/${f##*/}/transcript.jsonl$" "$SANDBOX/out" \
+  || fail "bare: transcript path not printed: $(cat "$SANDBOX/out")"
 [ "$(sed -n '2,6p' "$S/claude-env")" = "$f/.config
 $f/.local/share
 $f/.cache
 $f/.claude
 $f/work" ] || fail "bare: XDG folders, CLAUDE_CONFIG_DIR or the working folder not in the run folder: $(cat "$S/claude-env")"
 grep -q "no token" "$S/claude-env" && fail "bare: Claude did not get the token"
+# The session comes back from the run folder's .claude, kept with the run without the token, and placed for /resume
+# in the worktree only by `remote-agent resume`.
+k="$W/.git/remote-agent/${f##*/}"
+[ -f "$k/session.jsonl" ] || fail "bare: session not kept with the run: $(cat "$SANDBOX/out")"
+[ ! -e "$CC/projects" ] || fail "bare: session placed without being asked: $(find "$CC" -type f)"
+grep -rl "sk-claude-secret" "$k" && fail "bare: the token is in a kept file"
+(cd "$W" && env HOME="$H" CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" resume "${f##*/}") >/dev/null 2>&1 \
+  || fail "bare: resume exited non-zero"
+real_w="$(cd "$W" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then real_w="$(cygpath -w "$real_w")"; fi
+s="$CC/projects/$(printf '%s' "$real_w" | sed 's/[^A-Za-z0-9]/-/g')/5e551011-ba7e-4000-8000-000000000001.jsonl"
+[ "$(sed 's/\r$//' "$s" 2>/dev/null | jq -r .cwd | tr -d '\r')" = "$real_w" ] || fail "bare: session not placed at $s with the worktree's cwd: $(find "$CC" -type f 2>/dev/null)"
 if [ -z "$f" ] || [ -e "$f" ]; then fail "bare: run folder $f not removed after release"; fi
 grep -q -- "--warning\|--no-same-owner" "$S/calls" && fail "bare: tar flags beyond plain GNU/BSD ones: $(grep tar "$S/calls")"
 if grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@trusted-box "; then
