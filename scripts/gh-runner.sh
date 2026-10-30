@@ -5,19 +5,20 @@
 # removes its containers and deregisters their runners.
 # Usage: scripts/gh-runner.sh [--once] [owner/repo]   (default repo: this checkout's origin)
 #   --once: each runner serves one job and the script exits, instead of starting a new runner after each job.
-# ci.yml runs on these runners only while the repo variable CI_RUNNER holds their label:
+# ci.yml and agent-pr-gate.yml run on these runners only while the repo variable CI_RUNNER holds their label:
 #   gh variable set CI_RUNNER --body dotagents     (unset it to go back to GitHub-hosted runners)
 # Needs docker, and the App behind scripts/gh-app-token.sh with the "Administration: write" repository permission
 # (to create registration tokens and remove runners). Without that permission, set GH_RUNNER_TOKEN to a token from
 # the repo's Settings > Actions > Runners > New self-hosted runner: it registers runners for 1 hour, after which new
 # runners fail until you restart with a fresh one; runners stopped before their job are then left for GitHub to drop.
-# Settings: RUNNER_COUNT (3: one per ci.yml job), RUNNER_LABEL (dotagents),
-# RUNNER_IMAGE (ghcr.io/actions/actions-runner:2.338.0), RUNNER_RETRY_SECONDS (30: wait after a failed start).
+# Settings: RUNNER_COUNT (4: one per ci.yml job, plus the gate job, which holds one while it waits for CI),
+# RUNNER_LABEL (dotagents), RUNNER_IMAGE (ghcr.io/actions/actions-runner:2.338.0),
+# RUNNER_RETRY_SECONDS (30: wait after a failed start).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API="${GITHUB_API_URL:-https://api.github.com}"
-count="${RUNNER_COUNT:-3}"
+count="${RUNNER_COUNT:-4}"
 label="${RUNNER_LABEL:-dotagents}"
 image="${RUNNER_IMAGE:-ghcr.io/actions/actions-runner:2.338.0}"
 retry="${RUNNER_RETRY_SECONDS:-30}"
