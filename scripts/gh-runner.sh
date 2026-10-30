@@ -54,8 +54,9 @@ slot() {
     fi
     say "$name: waiting for a job"
     # The token goes in through the environment, so it never shows in this machine's process list.
+    # The image prints the runner's debug log to stdout; keep only its normal output.
     if ! RUNNER_TOKEN="$token" docker run --rm --name "$name" --label "dotagents.gh-runner=$prefix" -e RUNNER_TOKEN \
-      "$image" bash -c '
+      -e ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=0 "$image" bash -c '
         ./config.sh --unattended --ephemeral --url "$1" --token "$RUNNER_TOKEN" --name "$2" --labels "$3" &&
           exec ./run.sh' _ "https://github.com/$repo" "$name" "$label" </dev/null; then
       say "$name: exited with an error${GH_RUNNER_TOKEN:+ (GH_RUNNER_TOKEN lasts 1 hour; has it expired?)}; retrying in ${retry}s"
