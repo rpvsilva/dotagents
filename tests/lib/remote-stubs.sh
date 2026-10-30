@@ -178,3 +178,20 @@ STALE_PATCH='diff --git a/tracked.txt b/tracked.txt
 +two
 '
 export HELLO_PATCH STALE_PATCH
+
+# Writes <config>/dotagents/remote.env holding only the test token, and <config>/dotagents/settings.json holding the
+# remote Settings given as REMOTE_<KEY>=<value> assignments (shell-quoted, as remote.env once held them), each set
+# through scripts/settings.sh so it is validated. Needs $REPO.
+remote_config() {
+  local cfg="$1" a name value
+  shift
+  mkdir -p "$cfg/dotagents"
+  echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$cfg/dotagents/remote.env"
+  rm -f "$cfg/dotagents/settings.json"
+  for a in "$@"; do
+    name="${a%%=*}"
+    value="$(eval "$a"; printf '%s' "${!name}")"
+    XDG_CONFIG_HOME="$cfg" "$REPO/scripts/settings.sh" set remote "$(printf '%s' "${name#REMOTE_}" | tr '[:upper:]' '[:lower:]')" \
+      "$value" --machine >/dev/null || return 1
+  done
+}

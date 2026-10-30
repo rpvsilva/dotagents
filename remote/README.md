@@ -29,7 +29,7 @@ Exit codes: 0 applied, 3 no changes, 4 the patch did not apply (the worktree cha
 
 ## Backends
 
-`REMOTE_BACKEND` in `remote.env` (or the environment) names the backend: `cluster` when unset. Each one is a script, `scripts/remote-backends/<name>.sh`; an unknown name stops the run before anything is staged, listing the known ones. `remote-agent` exports every `REMOTE_*` setting to it (never the Claude token) and drives it with five operations only, so packing, secret filtering, the in-sandbox run, keeping results and exit codes stay the same on every backend:
+The `remote.backend` Setting names the backend; unset, remote runs are off and skills run subagents on this machine. Every remote Setting is declared, with its default and meaning, in [settings.json](settings.json), and lives at the machine Level (`~/.config/dotagents/settings.json`, through `~/.agents/bin/settings` or the `configure` skill); a repo can only set `remote.allowed` to `false`, which keeps its worktree snapshots on this machine. Each Setting's `REMOTE_*` variable, when set in the environment, overrides it for one run; the names below are those variables. Each backend is a script, `scripts/remote-backends/<name>.sh`. `remote-agent` exports every `REMOTE_*` setting to it (never the Claude token) and drives it with five operations only, so packing, secret filtering, the in-sandbox run, keeping results and exit codes stay the same on every backend:
 
 | Operation | Does |
 |---|---|
@@ -90,21 +90,22 @@ With `REMOTE_SSH_MODE=bare` the run happens directly on the host, as the SSH use
 ## Setup, once
 
 ```sh
-~/.agents/bin/remote-agent setup   # asks for the backend, its settings and a Claude token; writes remote.env
+~/.agents/bin/remote-agent setup   # asks for the backend, its Settings and a Claude token
 ~/.agents/bin/remote-agent check   # checks the backend's needs, then a dry run
+~/.agents/bin/remote-agent ready   # whether skills send this repo's subagents to the backend, and if not, why
 ```
 
-`setup` asks for the backend and its details (cluster: kube context, by default the saved one or else the current one, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. It writes `~/.config/dotagents/remote.env` readable only by you (mode 600), keeping settings it does not ask about (`REMOTE_HOURS`, `REMOTE_KEEP`, ...). Stopping it midway (Ctrl-C, end of input) writes nothing.
+`setup` asks for the backend and its details (cluster: kube context, by default the saved one or else the current one, namespace and pool; SSH: host and mode; Docker: nothing more; the runner image for Docker and SSH container mode), and writes them as Settings to `~/.config/dotagents/settings.json`, keeping those it does not ask about (`hours`, `keep`, ...). It then asks you to run `claude setup-token` in another terminal and paste the token, which it reads without echo and never prints; enter keeps the token already there. The token is a Secret, so it goes alone to `~/.config/dotagents/remote.env`, readable only by you (mode 600). A `remote.env` from before `settings.json` still holds `REMOTE_*` lines, which `remote-agent` now ignores (it says so): running `setup` once moves them into `settings.json`. Stopping it midway (Ctrl-C, end of input) writes nothing.
 
 `check` proves the setup without spending tokens. It names each missing thing on its own line, then ends with a dry run, and exits 0 only when everything passes (it prints `ok` last):
 
-- `remote.env` exists (without it, it says so and points to `setup`) and sets `CLAUDE_CODE_OAUTH_TOKEN`; the token is checked as set, never printed, and not sent anywhere.
+- `remote.env` exists (without it, it says so and points to `setup`), sets `CLAUDE_CODE_OAUTH_TOKEN` and no `REMOTE_*` lines left from before `settings.json`; the token is checked as set, never printed, and not sent anywhere. A `remote.backend` is set.
 - The backend's needs. `cluster`: `kubectl` on `PATH`, the kube context, and `kubectl auth can-i` to create SandboxClaims and `pods/exec` in the namespace. `docker`: the Docker daemon (`docker info`), the image present or pullable, and a note when the image's architecture differs from the machine's (it would run emulated). `ssh`: the host reachable with `ssh -o BatchMode=yes`, then the `docker` checks run on the host (container mode) or the tools bare mode needs (bare mode).
 - The dry run, only when nothing is missing: acquire a sandbox, put a one-file snapshot in `~/work`, run a shell command that copies it to `~/out` and finds `claude`, get `~/out` back and compare, release. No Claude call. The sandbox is released even when a step fails, and the failing step is named.
 
-By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) and the backend's settings (see [Backends](#backends)) in `~/.config/dotagents/remote.env`, then `chmod 600` it. For the default `cluster`, that needs a kube context (`maxibombo` by default, `REMOTE_CONTEXT` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image; for `ssh`, key-based SSH to a host with Docker and the image (bare mode: the tools listed under [Bare mode](#bare-mode-trusted-hosts-only) instead).
+By hand instead: put `CLAUDE_CODE_OAUTH_TOKEN=...` (from `claude setup-token`) in `~/.config/dotagents/remote.env`, `chmod 600` it, and set the backend's Settings with `~/.agents/bin/settings set remote <key> <value> --machine` (see [Backends](#backends)). For `cluster`, that needs a kube context (`maxibombo` by default, `remote.context` to change) that can create SandboxClaims and exec into pods in `agents`; for `docker`, Docker and the runner image; for `ssh`, key-based SSH to a host with Docker and the image (bare mode: the tools listed under [Bare mode](#bare-mode-trusted-hosts-only) instead).
 
-Without `remote.env`, skills run their subagents on this machine, as before.
+Without a backend or a token, skills run their subagents on this machine, as before.
 
 No GitHub credentials are needed or sent: the PR, if any, is opened from the laptop.
 

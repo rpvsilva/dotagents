@@ -24,6 +24,31 @@ for d in skills/*/; do
   grep -q "^| \`$s\` |" README.md || fail "README.md: no row for skill '$s'"
 done
 
+# Settings Declarations: valid JSON, each key with a known kind, a meaning, a default of its kind (null for unset),
+# choices for an enum, known Levels; no skill redeclares a shared key (skills/_shared/settings.json).
+for f in skills/*/settings.json remote/settings.json; do
+  [ -f "$f" ] || continue
+  jq -e 'type == "object"' "$f" >/dev/null 2>&1 || { fail "$f: not a JSON object"; continue; }
+  while read -r bad; do fail "$f: $bad"; done < <(jq -r 'to_entries[] | .key as $k | .value as $d
+    | if ($d | type) != "object" then "\($k): not an object"
+      elif ([$d.kind] | inside(["int", "bool", "string", "enum", "list"]) | not) then "\($k): unknown kind \($d.kind)"
+      elif ($d.meaning | type) != "string" or $d.meaning == "" then "\($k): no meaning"
+      elif $d.kind == "enum" and ((($d.choices | type) != "array") or ($d.choices | length) == 0) then "\($k): an enum without choices"
+      elif ($d | has("default") | not) then "\($k): no default (null for unset)"
+      elif $d.default != null and (($d.kind == "int" and ($d.default | type) != "number")
+        or ($d.kind == "bool" and ($d.default | type) != "boolean")
+        or (($d.kind == "string" or $d.kind == "enum") and ($d.default | type) != "string")
+        or ($d.kind == "enum" and ($d.choices | index([$d.default])) == null)
+        or ($d.kind == "list" and ($d.default | type) != "array")) then "\($k): default \($d.default | tojson) is not of kind \($d.kind)"
+      elif $d.levels != null and (($d.levels | type) != "array" or ($d.levels | length) == 0 or ($d.levels | inside(["machine", "repo"]) | not)) then "\($k): levels must be machine and/or repo"
+      else empty end' "$f")
+  case "$f" in
+    skills/_shared/*) ;;
+    *) while read -r k; do fail "$f: redeclares $k, a shared Setting (skills/_shared/settings.json)"; done < <(
+      jq -rn --slurpfile a "$f" --slurpfile s skills/_shared/settings.json '$a[0] | keys[] | select(. as $k | $s[0] | has($k))') ;;
+  esac
+done
+
 # Relative markdown links resolve.
 while read -r md; do
   dir="$(dirname "$md")"

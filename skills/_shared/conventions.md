@@ -4,17 +4,17 @@ Steps several skills share. A skill links to the section it needs; follow that s
 
 ## Learn the rules
 
-Read, if they exist: the skill's notes file (its rules override the skill's defaults), the repo's `AGENTS.md` (or `CLAUDE.md`), `CONTRIBUTING.md` and the PR template (`.github/pull_request_template.md`). Note the **identity** for GitHub and tracker calls (e.g. a `GH_TOKEN` prefix for a bot account); with none named, use the current login. If the rules name a setup that is missing, stop and ask the human. Then note what the skill's step lists.
+Run `~/.agents/bin/settings list <skill>` in the repo: the skill's **Settings**, one per line as `<skill>.<key> TAB <value> TAB <Level> TAB <meaning>`, already resolved across flag, repo, machine and default. Use them as they are; never read a settings file yourself. When it fails, relay its message and stop. Then read, if they exist: the skill's notes file (its Lessons inform your judgement), the repo's `AGENTS.md` (or `CLAUDE.md`), `CONTRIBUTING.md` and the PR template (`.github/pull_request_template.md`). A notes line stating a value the skill declares as a Setting is left over from before Settings existed: the Setting wins, and you tell the human that [configure](../configure/SKILL.md) can move the line. Note the **identity** for GitHub and tracker calls (e.g. a `GH_TOKEN` prefix for a bot account); with none named, use the current login. If the rules name a setup that is missing, stop and ask the human. Then note what the skill's step lists.
 
 ## Subagents
 
 Start the named agent if your harness defines it, otherwise a general-purpose subagent told to follow the brief. Hand over the inputs the brief lists as **paths**, never summaries, so its read is not anchored on yours. If your harness has no subagents, follow each brief yourself, one at a time, writing the same files.
 
-At most **N** subagents run at once (the **slots**): `--parallel N`, else `max_parallel` from the notes file, else 4.
+At most **N** subagents run at once (the **slots**): `--parallel N`, else the skill's `max_parallel` Setting.
 
 ## Remote subagents
 
-A subagent the skill marks **remote-capable** (it only changes its worktree) runs on the remote backend set in `~/.config/dotagents/remote.env` (a cluster by default) instead of this machine when that file exists and the human did not ask for `--local`. The backend is compute only: it gets this machine's setup, a snapshot of the worktree and the files you attach, and gives back a patch. It has no GitHub access and no git branches, so it cannot push, open a PR, read CI logs or see another branch. Details: [remote/README.md](../../remote/README.md). The human creates `remote.env` with `~/.agents/bin/remote-agent setup` and proves it with `remote-agent check`; without it, subagents run locally.
+A subagent the skill marks **remote-capable** (it only changes its worktree) runs on the remote backend (the `remote.backend` Setting: a cluster, Docker or an SSH host) instead of this machine when `~/.agents/bin/remote-agent ready` exits 0 in the repo and the human did not ask for `--local`. `ready` prints the backend, or why remote runs are off: no backend set, no token, or the repo sets `remote.allowed` to `false`. Say that reason once, then run subagents locally. The backend is compute only: it gets this machine's setup, a snapshot of the worktree and the files you attach, and gives back a patch. It has no GitHub access and no git branches, so it cannot push, open a PR, read CI logs or see another branch. Details: [remote/README.md](../../remote/README.md). The human sets it up with `~/.agents/bin/remote-agent setup` and proves it with `remote-agent check`.
 
 1. Create the worktree as for a local subagent.
 2. Write the message you would hand the subagent into a file. Name the worktree as `~/work`, and every other input as `~/attached/<its file or folder name>`. Attach only what its brief reads, never a whole run folder holding other worktrees.

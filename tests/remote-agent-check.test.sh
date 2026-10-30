@@ -51,8 +51,8 @@ printf '#!/bin/sh\nexit 0\n' >"$CB/node"
 chmod +x "$CB/claude" "$CB/node"
 CLIENT_PATH="$SANDBOX/bin:$CB$base_path"
 
-# Writes remote.env with the token and the lines given.
-config() { { echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"; printf '%s\n' "$@"; } >"$CFG/remote.env"; }
+# Writes remote.env with the token, and settings.json with the remote Settings given (see remote_config).
+config() { remote_config "$SANDBOX/config" "$@"; }
 # Runs `remote-agent check`; its output (stdout and stderr) in $SANDBOX/out, the stub calls in $S/calls.
 check() {
   rm -f "$S/calls"
@@ -147,7 +147,7 @@ EOF
 chmod +x "$SANDBOX/bin/kubectl"
 printf 'other\nmaxibombo\n' >"$S/contexts"
 echo no >"$S/can-exec"
-config
+config REMOTE_BACKEND=cluster
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "cluster can-i: exited 0"
 grep -q "pods/exec" "$SANDBOX/out" || fail "cluster can-i: pods/exec permission not named: $(out)"
@@ -155,28 +155,41 @@ grep -q "sandboxclaims" "$SANDBOX/out" && fail "cluster can-i: named a permissio
 grep -q -- "--context maxibombo -n agents auth can-i create sandboxclaims" "$S/calls" \
   || fail "cluster can-i: sandboxclaims permission not asked in the namespace: $(cat "$S/calls")"
 grep -q "apply" "$S/calls" && fail "cluster can-i: the dry run ran anyway"
-config REMOTE_CONTEXT=missing-ctx
+config REMOTE_BACKEND=cluster REMOTE_CONTEXT=missing-ctx
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "cluster context: exited 0"
 grep -q "context missing-ctx not found" "$SANDBOX/out" || fail "cluster context: context not named as missing: $(out)"
 grep -q "auth can-i" "$S/calls" && fail "cluster context: asked for permissions in a missing context"
 no_token cluster
 
-# --- no config, no token, unknown backend.
+# --- no token file, no backend, no token, settings left in remote.env, unknown backend.
+config REMOTE_BACKEND=docker
 rm -f "$CFG/remote.env"
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "no config: exited 0"
 grep -q "remote.env" "$SANDBOX/out" || fail "no config: does not name remote.env: $(out)"
 grep -q "remote-agent setup" "$SANDBOX/out" || fail "no config: does not point to remote-agent setup: $(out)"
 [ ! -e "$S/calls" ] || fail "no config: a backend was called: $(cat "$S/calls")"
-echo "REMOTE_BACKEND=docker" >"$CFG/remote.env"
+config
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "no backend: exited 0"
+grep -q "remote.backend.*remote-agent setup" "$SANDBOX/out" || fail "no backend: does not point to remote-agent setup: $(out)"
+[ ! -e "$S/calls" ] || fail "no backend: a backend was called: $(cat "$S/calls")"
+config REMOTE_BACKEND=docker
+: >"$CFG/remote.env"
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "no token: exited 0"
 grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$SANDBOX/out" || fail "no token: token not named: $(out)"
-config REMOTE_BACKEND=nope
+config REMOTE_BACKEND=docker
+echo "REMOTE_POOL=old-pool" >>"$CFG/remote.env"
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "leftover: exited 0"
+grep -q "REMOTE_POOL.*remote-agent setup" "$SANDBOX/out" || fail "leftover: not named with how to move it: $(out)"
+config
+echo '{"remote": {"backend": "nope"}}' >"$CFG/settings.json"
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "unknown backend: exited 0"
-grep -q "REMOTE_BACKEND=nope.*cluster" "$SANDBOX/out" || fail "unknown backend: message: $(out)"
+grep -q "backend is \"nope\".*cluster, docker, ssh" "$SANDBOX/out" || fail "unknown backend: message: $(out)"
 
 # --- ssh, container mode: the docker checks sent to the host over ssh.
 config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box

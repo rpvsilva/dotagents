@@ -138,7 +138,7 @@ printf 'hello\n' >hello.txt
 echo '{"type":"result","result":"did the thing","is_error":false}'
 EOF
 chmod +x "$SANDBOX/podbin/claude"
-echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$SANDBOX/config/dotagents/remote.env"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 
 # A worktree with a tracked file, an untracked one, an ignored one and a secret-looking one.
 W="$SANDBOX/work"
@@ -395,22 +395,53 @@ rm -f "$W/hello.txt"
 code=0; (cd "$W" && PATH="$SANDBOX/bin:$PATH" remote-agent --attach "$SANDBOX/nope" "x") >/dev/null 2>&1 || code=$?
 [ "$code" = 1 ] || fail "attach: a missing path was not refused"
 
-# Naming the cluster backend explicitly gives the same run.
-printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=cluster\n' >"$SANDBOX/config/dotagents/remote.env"
-run 0 "$patch" || fail "explicit cluster: exited non-zero: $(cat "$SANDBOX/out")"
-[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "explicit cluster: patch not applied"
-grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "explicit cluster: claim not deleted"
+# Settings left in remote.env from before settings.json are ignored, and the run names them and how to move them.
+echo "REMOTE_BACKEND=docker" >>"$SANDBOX/config/dotagents/remote.env"
+run 0 "$patch" || fail "leftover: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "leftover: patch not applied: $(cat "$SANDBOX/out")"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "leftover: the old REMOTE_BACKEND was used, not settings.json"
+grep -q "REMOTE_BACKEND.*remote-agent setup" "$SANDBOX/err" || fail "leftover: not named: $(cat "$SANDBOX/err")"
 rm -f "$W/hello.txt"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 
-# An unknown backend is refused before anything is staged or sent, naming the known ones.
-printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=nope\n' >"$SANDBOX/config/dotagents/remote.env"
-code=0; run 0 "$patch" || code=$?
-[ "$code" != 0 ] || fail "unknown backend: exited 0"
-[ ! -e "$SANDBOX/calls" ] || fail "unknown backend: kubectl was called"
-grep -q "cluster" "$SANDBOX/out" || fail "unknown backend: message does not list cluster: $(cat "$SANDBOX/out")"
+# Refused before anything is staged or sent: an unknown backend (hand-edited, naming the known ones), no backend
+# (remote is off; pointing to setup), and a repo that sets remote.allowed to false.
+refused() {
+  local code=0
+  run 0 "$patch" || code=$?
+  [ "$code" != 0 ] || fail "$1: exited 0"
+  [ ! -e "$SANDBOX/calls" ] || fail "$1: kubectl was called"
+  grep -q "snapshot:" "$SANDBOX/out" && fail "$1: something was staged"
+  grep -q "$2" "$SANDBOX/out" || fail "$1: message does not name $2: $(cat "$SANDBOX/out")"
+}
+echo '{"remote": {"backend": "nope"}}' >"$SANDBOX/config/dotagents/settings.json"
+refused "unknown backend" "cluster, docker, ssh"
 grep -qw "lib" "$SANDBOX/out" && fail "unknown backend: lib.sh listed as a backend"
-grep -q "snapshot:" "$SANDBOX/out" && fail "unknown backend: something was staged"
-echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" >"$SANDBOX/config/dotagents/remote.env"
+remote_config "$SANDBOX/config"
+refused "no backend" "remote-agent setup"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+mkdir -p "$W/.agents"
+echo '{"remote": {"allowed": false}}' >"$W/.agents/settings.json"
+refused "not allowed" "remote.allowed"
+rm -rf "$W/.agents"
+
+# ready: whether skills may send this repo's subagents to the backend; the backend on stdout, else why not.
+ready() { (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" ready) >"$SANDBOX/out" 2>&1; }
+ready && [ "$(cat "$SANDBOX/out")" = cluster ] || fail "ready: $(cat "$SANDBOX/out")"
+mkdir -p "$W/.agents"
+echo '{"remote": {"allowed": false}}' >"$W/.agents/settings.json"
+ready && fail "ready: yes though the repo does not allow remote runs"
+grep -q "remote.allowed" "$SANDBOX/out" || fail "ready, not allowed: $(cat "$SANDBOX/out")"
+rm -rf "$W/.agents"
+remote_config "$SANDBOX/config"
+ready && fail "ready: yes with no backend"
+grep -q "remote-agent setup" "$SANDBOX/out" || fail "ready, no backend: $(cat "$SANDBOX/out")"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+rm "$SANDBOX/config/dotagents/remote.env"
+ready && fail "ready: yes with no token"
+grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$SANDBOX/out" || fail "ready, no token: $(cat "$SANDBOX/out")"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 
 # The transcript is written live: the stub's sandbox run prints a banner and two events (one echoing the token),
 # touches $SANDBOX/started and waits for $SANDBOX/go; the events are in transcript.jsonl while the run is alive,

@@ -4,9 +4,11 @@
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
 # Usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]   (default worktree: the
 # current one)
-#        remote-agent setup   (asks for the backend and the Claude token, writes remote.env: remote-agent-setup.sh)
+#        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
+#        remote-agent ready [dir]   (whether skills may send the subagents of the repo at dir, default the current
+#                                    one, to the backend: prints the backend and exits 0, else prints why not)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out. --name names the task (e.g. a ticket's NN-slug),
@@ -27,10 +29,12 @@
 # so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
 # in the worktree's project folder, its cwd the worktree, after a warning saying so.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
-# Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from the environment or ~/.config/dotagents/remote.env.
-# Overrides: REMOTE_BACKEND (cluster), REMOTE_HOURS (2), REMOTE_MAX_MB (200, snapshot size cap), REMOTE_KEEP=1
-# (keep the sandbox), and the backend's own settings (see its script; cluster: REMOTE_CONTEXT, REMOTE_NAMESPACE,
-# REMOTE_POOL). Every REMOTE_* variable is exported to the backend; the Claude token is not.
+# Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
+# the remote Settings (remote/settings.json: backend, hours, max_mb, keep, and the backend's own) from
+# scripts/settings.sh, each exported as its REMOTE_* variable, which also overrides it for one run (REMOTE_KEEP=1).
+# Refused before anything is staged when no backend is set or the worktree's repo sets remote.allowed to false.
+# Every REMOTE_* variable is exported to the backend; the Claude token is not. REMOTE_* lines left in remote.env from
+# before settings.json are ignored, with a line saying so.
 set -euo pipefail
 
 # Follow the link from ~/.agents/bin to this repo, where the sibling scripts live.
@@ -82,11 +86,21 @@ case "${1:-}" in
   check) shift; exec "$REPO/scripts/remote-agent-check.sh" "$@" ;;
   resume) shift; resume "$@"; exit 0 ;;
 esac
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$REPO/scripts/hooks/lib.sh"
-# shellcheck disable=SC1091
-[ -f "$CONFIG/remote.env" ] && . "$CONFIG/remote.env"
+# shellcheck source=remote-config.sh disable=SC1091
+. "$REPO/scripts/remote-config.sh"
+
+if [ "${1:-}" = ready ]; then
+  [ $# -le 2 ] || { echo "usage: remote-agent ready [dir]" >&2; exit 1; }
+  dir="${2:-$PWD}"
+  remote_settings "$dir" || exit 1
+  why="$(remote_blocker "$dir")" || exit 1
+  [ -z "$why" ] || { echo "$why"; exit 1; }
+  [ -n "$(remote_token)" ] || { echo "no CLAUDE_CODE_OAUTH_TOKEN in $REMOTE_SECRET_FILE: run \`remote-agent setup\`"; exit 1; }
+  echo "$REMOTE_BACKEND"
+  exit 0
+fi
 
 usage() { echo "usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]" >&2; exit 1; }
 attach=()
@@ -116,9 +130,14 @@ case "$1" in
 esac
 [ -n "$brief" ] || { echo "remote-agent: empty brief" >&2; exit 1; }
 root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
-claude_token="${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN (in $CONFIG/remote.env)}"
+claude_token="$(remote_token)"
+[ -n "$claude_token" ] || { echo "remote-agent: set CLAUDE_CODE_OAUTH_TOKEN (in $REMOTE_SECRET_FILE): run \`remote-agent setup\`" >&2; exit 1; }
+remote_settings "$root" || exit 1
+why="$(remote_blocker "$root")" || exit 1
+[ -z "$why" ] || { echo "remote-agent: $why" >&2; exit 1; }
+leftovers="$(remote_leftovers)"
 
-backend_name="${REMOTE_BACKEND:-cluster}"
+backend_name="$REMOTE_BACKEND"
 known=()
 for f in "$REPO"/scripts/remote-backends/*.sh; do
   [ "$(basename "$f")" = lib.sh ] || known+=("$(basename "$f" .sh)")
@@ -213,6 +232,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+[ -z "$leftovers" ] || say "remote.env still sets $leftovers, now ignored: run \`remote-agent setup\` to move them to settings.json"
 # The setup, the attachments and the snapshot are built before anything reaches the backend.
 with_progress "$REPO/scripts/remote-agent-pack.sh" "$stage/home"
 for a in "${attach[@]+"${attach[@]}"}"; do

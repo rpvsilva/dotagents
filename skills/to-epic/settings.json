@@ -1,0 +1,4 @@
+{
+  "labels": { "kind": "list", "default": [], "meaning": "Labels put on every issue it creates; empty: the repo's existing labels that fit." },
+  "issue_template": { "kind": "string", "default": null, "meaning": "Path of the issue template to follow; unset: the repo's .github/ISSUE_TEMPLATE/, else none." }
+}
