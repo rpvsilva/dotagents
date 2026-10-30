@@ -3,7 +3,7 @@ name: configure
 description: Show or change the Settings skills and scripts read (how many subagents run at once, the tracker, labels, where remote subagents run, ...), for this machine or this repo. Use when the human asks to configure or set up a skill, or says what a skill should do from now on ("use 2 agents in this repo", "run subagents on my SSH box").
 ---
 
-Show and change **Settings**: named values with a default that skills and scripts act on. Each skill declares the Settings it reads, with their kind, default and meaning; a key no skill declares does not exist. Settings are not **Lessons** (free text in a repo's notes files, owned by [remember](../remember/SKILL.md)) and never **Secrets** (tokens and keys).
+Show and change **Settings**: named values with a default that skills and scripts act on. Each skill declares the Settings it reads, with their kind, default and meaning; a key no skill declares does not exist. Settings are not **Lessons** (free text in a repo's notes files, owned by [remember](../remember/SKILL.md)) and never **Secrets** (tokens and other credentials).
 
 Every read and write goes through `~/.agents/bin/settings`; never edit a settings file yourself. It resolves each value by **Level**, strongest first:
 
@@ -23,7 +23,7 @@ Input: nothing, to show the Settings; or a change, exact (`<section> <key> <valu
 2. **Resolve the change** into one or more `<section> <key> <value>` triples, each with a Level:
    - **repo** when the value describes the repo (its tracker, its labels) or the human says "here" or "in this repo"; **machine** when it is personal or a remote Setting. When it is unclear, ask.
    - A key no skill declares: say so, name the declared keys that come closest, and ask. Never invent a key.
-   - A Secret (the Claude token, MCP credentials, the GitHub App key): never ask for it or read its file. Point to the command that owns it: `~/.agents/bin/remote-agent setup` for the token, `~/.config/dotagents/mcp.env` and `~/.config/dotagents/github-app.env` (see the dotagents README) for the rest. The human edits those themselves.
+   - A Secret (the Claude token, MCP credentials, the GitHub App's credentials): never ask for it or read its file. Point to the command that owns it: `~/.agents/bin/remote-agent setup` for the token, `~/.config/dotagents/mcp.env` and `~/.config/dotagents/github-app.env` (see the dotagents README) for the rest. The human edits those themselves.
    - Remote subagents set up from scratch: suggest the human run `~/.agents/bin/remote-agent setup` in their terminal instead (it asks for the token), then `remote-agent check`.
    - Each leftover notes line from step 1 that the human wants kept becomes a repo-Level change, plus removing that line from the notes file.
 

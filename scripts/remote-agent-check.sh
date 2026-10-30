@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Checks the remote-agent setup, run as `remote-agent check`: remote.env exists and holds a Claude token (never
-# printed) and no Settings left from before settings.json, a remote.backend is set, the backend's own requirements (`<backend> check`: one line per missing thing), then a dry run: acquire a
-# sandbox, put a one-file snapshot in ~/work, run a trivial command that copies it to ~/out and finds claude, get
-# ~/out back, compare, release. No Claude call, so no tokens spent. The sandbox is released even when a step fails.
+# printed) and no Settings left from before settings.json, a remote.backend is set, the backend's own requirements
+# (`<backend> check`: one line per missing thing), then a dry run: acquire a sandbox, put a one-file snapshot in
+# ~/work, run a trivial command that copies it to ~/out and finds claude, get ~/out back, compare, release. No Claude call, so no tokens spent. The sandbox is released even when a step fails.
 # The dry run is skipped when a requirement is missing. Exit 0 only when everything passes; prints ok at the end.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=remote-config.sh disable=SC1091
-. "$REPO/scripts/remote-config.sh"
+# shellcheck source=remote-settings.sh disable=SC1091
+. "$REPO/scripts/remote-settings.sh"
 
 say() { echo "remote-agent: $*" >&2; }
 

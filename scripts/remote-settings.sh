@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Sourced by remote-agent.sh and remote-agent-check.sh: loads the remote setup. The Claude token is a Secret, in
-# remote.env (written by `remote-agent setup`) or the environment; every other remote Setting comes from
-# scripts/settings.sh (section remote), exported as the REMOTE_* variables the backends read. Needs $REPO.
+# Sourced by remote-agent.sh, remote-agent-check.sh and remote-agent-setup.sh: loads the remote setup. The Claude
+# token is a Secret, in remote.env (written by `remote-agent setup`) or the environment; every other remote Setting
+# comes from scripts/settings.sh (section remote), exported as the REMOTE_* variables the backends read. Needs $REPO.
 
 REMOTE_SECRET_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents/remote.env"
+
+# Remote Setting <-> its variable: ssh_host <-> REMOTE_SSH_HOST.
+remote_var() { printf 'REMOTE_%s' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
+remote_key() { printf '%s' "${1#REMOTE_}" | tr '[:upper:]' '[:lower:]'; }
 
 # Prints the Claude token: remote.env's when it sets one, else the environment's; nothing when neither does.
 remote_token() {

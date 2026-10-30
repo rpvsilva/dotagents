@@ -10,7 +10,7 @@ Input: the PR number. Optional: `--dry-run` to stop after the triage.
 
 ## Steps
 
-1. **Learn the rules** ([how](../_shared/conventions.md#learn-the-rules); notes file `.agents/address-review-notes.md`). Besides the identity, note the commit convention, the local checks command, and whether the repo lets the author **resolve** threads (default: resolve your own fixed threads, leave the rest to the reviewer). Done when you can name the identity, the checks command and the resolve rule.
+1. **Learn the rules** ([how](../_shared/conventions.md#learn-the-rules); notes file `.agents/address-review-notes.md`). Besides the identity, note the commit convention, the local checks command, and the **resolve** rule: the `resolve` Setting, unless the repo's own rules say who resolves threads. Done when you can name the identity, the checks command and the resolve rule.
 
 2. **Check out the branch** in its own git worktree: `git fetch origin && git worktree add <path> -B <branch> origin/<branch>`. Done when `git status` shows the PR branch at its remote head.
 

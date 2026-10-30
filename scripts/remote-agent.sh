@@ -29,7 +29,7 @@
 # so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
 # in the worktree's project folder, its cwd the worktree, after a warning saying so.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
-# Config: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
+# Settings: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
 # the remote Settings (remote/settings.json: backend, hours, max_mb, keep, and the backend's own) from
 # scripts/settings.sh, each exported as its REMOTE_* variable, which also overrides it for one run (REMOTE_KEEP=1).
 # Refused before anything is staged when no backend is set or the worktree's repo sets remote.allowed to false.
@@ -88,8 +88,8 @@ case "${1:-}" in
 esac
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$REPO/scripts/hooks/lib.sh"
-# shellcheck source=remote-config.sh disable=SC1091
-. "$REPO/scripts/remote-config.sh"
+# shellcheck source=remote-settings.sh disable=SC1091
+. "$REPO/scripts/remote-settings.sh"
 
 if [ "${1:-}" = ready ]; then
   [ $# -le 2 ] || { echo "usage: remote-agent ready [dir]" >&2; exit 1; }

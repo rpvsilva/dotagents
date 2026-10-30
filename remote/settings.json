@@ -1,6 +1,6 @@
 {
   "backend": { "kind": "enum", "choices": ["cluster", "docker", "ssh"], "default": null, "levels": ["machine"], "env": "REMOTE_BACKEND", "meaning": "Where remote subagents run; unset: remote is off and skills run subagents on this machine." },
-  "allowed": { "kind": "bool", "default": true, "meaning": "false keeps a repo's worktree snapshots on this machine: its subagents always run locally." },
+  "allowed": { "kind": "bool", "default": true, "levels": ["repo"], "meaning": "false keeps a repo's worktree snapshots on this machine: its subagents always run locally." },
   "context": { "kind": "string", "default": "maxibombo", "levels": ["machine"], "env": "REMOTE_CONTEXT", "meaning": "Cluster backend: the kube context." },
   "namespace": { "kind": "string", "default": "agents", "levels": ["machine"], "env": "REMOTE_NAMESPACE", "meaning": "Cluster backend: the namespace sandboxes are claimed in." },
   "pool": { "kind": "string", "default": "claude-runner", "levels": ["machine"], "env": "REMOTE_POOL", "meaning": "Cluster backend: the warm pool sandboxes are claimed from." },

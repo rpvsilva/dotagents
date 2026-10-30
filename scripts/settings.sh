@@ -11,6 +11,7 @@
 # Declarations: skills/<skill>/settings.json, skills/_shared/settings.json (shared) and remote/settings.json; each key
 # has a kind (int with optional min and max, bool, string, enum with its choices, list of strings), a default (null:
 # unset), a meaning, and optionally `levels` (default both; e.g. ["machine"]) and `env` (the variable scripts read).
+# A skill reads a shared key only by opting in with `"<key>": {"shared": true}` in its own Declaration.
 # Levels, strongest first: flag (the key's `env` variable, when set), repo (<git root of DIR>/.agents/settings.json),
 # machine (${XDG_CONFIG_HOME:-~/.config}/dotagents/settings.json), default. Within a Level, a skill's own entry for a
 # shared key ({"build-epic": {"max_parallel": 2}}) beats the top-level one ({"max_parallel": 4}).
@@ -18,8 +19,8 @@
 # that Level holds. set validates the value (a list as a comma-separated string) and writes it through a temp file;
 # `set shared <key>` writes the top-level entry. list prints `<section>.<key> TAB <value> TAB <level> TAB <meaning>`
 # for every key the sections read, the meaning ending with the values it takes. env prints `export VAR=value` lines
-# for the section's keys that have an `env` variable and a value (a true bool as 1, a false one left out, a list
-# joined by commas). check validates both files whole: unknown keys, bad values, keys set at a Level they do not allow.
+# for the section's keys that have an `env` variable and a value (a true bool as 1, a list joined by commas), and
+# `unset VAR` for a false bool, since scripts read any non-empty value as true. check validates both files whole: unknown keys, bad values, keys set at a Level they do not allow.
 # A bad value fails loudly, naming the file and key, instead of falling back to the default. Exit 2 on an unknown
 # section or key.
 # shellcheck disable=SC2016 # the single-quoted strings are jq programs, expanded by jq
@@ -52,7 +53,6 @@ if root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then REPO_FILE
 
 # Every Declaration as one object: {"shared": {...}, "<skill>": {...}, "remote": {...}}.
 decls() {
-
   local d f s
   # Every skill is a section, with or without Settings of its own.
   for d in "$REPO"/skills/*/ "$REPO/remote/"; do
@@ -96,15 +96,16 @@ def coerce($d; $s):
    else $s end) as $v
   | if $v != null and ($v | kindok($d)) then {value: $v} else {error: "\($s | tojson) is not \(describe($d))"} end;
 def allowed($d): $d.levels // ["machine", "repo"];
-# The declaration of key $k read through section $s: {d, own} or null.
+# The declaration of key $k read through section $s: {d, own} or null. A skill reads a shared key only when its
+# Declaration opts in with {"shared": true}.
 def decl($s; $k):
   if $s == "shared" then ($decls.shared[$k] | if . then {d: ., own: true} else null end)
-  elif $decls[$s] == null then null
-  elif $decls[$s][$k] then {d: $decls[$s][$k], own: true}
-  elif $decls.shared[$k] then {d: $decls.shared[$k], own: false}
-  else null end;
-# Where a file holds key $k for section $s, strongest first.
-def paths($s; $k; $own): if $s == "shared" then [[$k]] elif $own then [[$s, $k]] else [[$s, $k], [$k]] end;
+  elif $decls[$s][$k] == null then null
+  elif $decls[$s][$k].shared == true then ($decls.shared[$k] | if . then {d: ., own: false} else null end)
+  else {d: $decls[$s][$k], own: true} end;
+# Where a file holds $k for $s: its own entry, then (a shared key read through a skill) the top-level one.
+def target($s; $k): if $s == "shared" then [$k] else [$s, $k] end;
+def paths($s; $k; $own): [target($s; $k)] + (if $own or $s == "shared" then [] else [[$k]] end);
 def levels: [{name: "repo", file: $repofile, data: $repo}, {name: "machine", file: $machinefile, data: $machine}]
   | map(select(.data != null and ($only == "" or .name == $only)));
 def resolve($s; $k):
@@ -154,7 +155,7 @@ write() {
   local tmp
   mkdir -p "$(dirname "$1")"
   tmp="$(mktemp "$(dirname "$1")/.settings.json.XXXXXX")"
-  if ! jq . >"$tmp"; then rm -f "$tmp"; die "could not write $1"; fi
+  if ! jq -e 'if type == "object" then . else error("not an object") end' >"$tmp"; then rm -f "$tmp"; die "could not write $1"; fi
   mv -f "$tmp" "$1"
 }
 
@@ -181,22 +182,19 @@ case "$cmd" in
       | if (allowed($d) | index($level)) == null then {error: "\($s).\($k) can only be set at the \(allowed($d) | join(" or ")) Level"}
         else coerce($d; $v) end' --arg s "$1" --arg k "$2" --arg v "$3" --arg level "$level")"
     [ "$(jq -r '.error // empty' <<<"$r")" = "" ] || die "$1.$2: $(jq -r .error <<<"$r")"
-    old="$(content "$file")"
-    path='[$s, $k]'
-    [ "$1" != shared ] || path='[$k]'
-    jq --arg s "$1" --arg k "$2" --argjson v "$(jq -c .value <<<"$r")" \
-      "(. // {}) | if (\$s != \"shared\" and (.[\$s] | type) != \"object\" and .[\$s] != null) then error(\"\(\$s) is not an object\") else . end
-       | setpath($path; \$v)" <<<"$old" | write "$file"
+    new="$(q '($old // {}) | if $s != "shared" and (.[$s] | type) != "object" and .[$s] != null then error("\($s) is not an object")
+        else setpath(target($s; $k); $v) end' --arg s "$1" --arg k "$2" --argjson v "$(jq -c .value <<<"$r")" \
+      --argjson old "$(content "$file")")" || die "could not write $file"
+    write "$file" <<<"$new"
     ;;
   unset)
     [ $# -eq 3 ] || usage
     level_file "$3"
     known "$1" "$2"
     [ -f "$file" ] || exit 0
-    path='[$s, $k]'
-    [ "$1" != shared ] || path='[$k]'
-    content "$file" | jq --arg s "$1" --arg k "$2" \
-      "delpaths([$path]) | if \$s != \"shared\" and .[\$s] == {} then del(.[\$s]) else . end" | write "$file"
+    new="$(q '$old | delpaths([target($s; $k)]) | if $s != "shared" and .[$s] == {} then del(.[$s]) else . end' \
+      --arg s "$1" --arg k "$2" --argjson old "$(content "$file")")" || die "could not write $file"
+    write "$file" <<<"$new"
     ;;
   list)
     if [ $# -eq 0 ]; then
@@ -205,8 +203,7 @@ case "$cmd" in
     fi
     for s in "$@"; do q '$decls[$s] != null' --arg s "$s" | grep -q true || {
       echo "settings: unknown section $s" >&2; exit 2; }; done
-    lines="$(q '$ARGS.positional[] as $s | ($decls[$s] | keys_unsorted) + (if $s == "shared" then [] else ($decls.shared | keys_unsorted) end)
-         | unique[] as $k | resolve($s; $k) as $r
+    lines="$(q '$ARGS.positional[] as $s | $decls[$s] | keys_unsorted | sort[] as $k | resolve($s; $k) as $r
          | decl($s; $k).d as $d
          | "\($s).\($k)\t\(if $r.error then "ERROR: " + $r.error else ($r.value | show) end)\t\($r.level // "")\t\($d.meaning) (\(describe($d)))"' --args "$@")"
     printf '%s\n' "$lines"
@@ -218,7 +215,7 @@ case "$cmd" in
       | resolve($s; $k) | if .error then {error} else {e: $e, v: .value} end]' --arg s "$1")"
     err="$(jq -r 'map(.error // empty) | first // empty' <<<"$r")"
     [ -z "$err" ] || die "$err"
-    jq -r '.[] | select(.v != null and .v != false) | "export \(.e)=\(if .v == true then "1" else (.v | if type == "array" then join(",") else tostring end) end | @sh)"' <<<"$r"
+    jq -r '.[] | select(.v != null) | if .v == false then "unset \(.e)" else "export \(.e)=\(if .v == true then "1" else (.v | if type == "array" then join(",") else tostring end) end | @sh)" end' <<<"$r"
     ;;
   check)
     [ $# -eq 0 ] || usage

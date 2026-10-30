@@ -88,6 +88,9 @@ refuse "machine-only key" remote backend docker --repo
 refuse "unknown key" build-epic max_paralel 3 --machine
 refuse "unknown section" nope max_parallel 3 --machine
 refuse "no Level" build-epic max_parallel 3
+refuse "a shared key the section does not read" remote tracker jira --machine
+refuse "a shared key the skill does not read" fix-pr max_parallel 2 --machine
+refuse "a repo-only key" remote allowed false --machine
 grep -q "one of: cluster, docker, ssh" <(s -- set remote backend k8s --machine; err) || fail "set enum: message does not list the choices"
 code=0; s -- get build-epic max_paralel || code=$?
 [ "$code" = 2 ] || fail "get unknown key: exit $code, not 2"
@@ -126,14 +129,17 @@ code=0; s REMOTE_HOURS=soon -- get remote hours || code=$?
 [ "$code" = 1 ] && grep -q REMOTE_HOURS "$SANDBOX/err" || fail "bad env value: exit $code, $(err)"
 s REMOTE_HOURS=1 -- get remote hours --machine; [ "$(out)" = 4 ] || fail "get --machine: the env Level counted"
 
-# --- env: export lines for scripts, with defaults, the env Level, true bools as 1 and false ones left out.
+# --- env: export lines for scripts, with defaults, the env Level, true bools as 1 and false ones unset (the
+# backends treat any non-empty value as true, so REMOTE_KEEP=0 must not survive).
 s REMOTE_KEEP=1 -- env remote || fail "env: exited non-zero: $(err)"
 for line in "export REMOTE_BACKEND='ssh'" "export REMOTE_SSH_HOST='me@box'" "export REMOTE_HOURS='4'" \
   "export REMOTE_KEEP='1'" "export REMOTE_MAX_MB='200'" "export REMOTE_SSH_MODE='container'"; do
   grep -qxF "$line" "$SANDBOX/out" || fail "env: no line $line in: $(out)"
 done
 grep -q 'REMOTE_PLATFORM' "$SANDBOX/out" && fail "env: an unset key was exported"
-s -- env remote; grep -q REMOTE_KEEP "$SANDBOX/out" && fail "env: a false bool was exported"
+s -- env remote; grep -qxF "unset REMOTE_KEEP" "$SANDBOX/out" || fail "env: a false bool not unset: $(out)"
+s REMOTE_KEEP=0 -- env remote
+( REMOTE_KEEP=0; eval "$(out)"; [ -z "${REMOTE_KEEP+set}" ] ) || fail "env: REMOTE_KEEP=0 survived eval: $(out)"
 echo '{"remote": {"ssh_host": "a b'"'"'c"}}' >"$MACHINE"
 s -- env remote; ( eval "$(out)"; [ "$REMOTE_SSH_HOST" = "a b'c" ] ) || fail "env: a value with a quote did not survive eval: $(out)"
 
@@ -154,6 +160,7 @@ grep -qF $'build-epic.max_parallel\t3\tmachine\tSubagents running at once' "$SAN
 grep -qF $'build-epic.in_progress\t\tdefault\t' "$SANDBOX/out" || fail "list: in_progress line: $(out)"
 grep -q $'^remote.backend\t.*one of: cluster, docker, ssh' <(s -- list remote; out) || fail "list: no accepted values in the meaning column"
 s -- list; grep -q '^remote.backend' "$SANDBOX/out" && grep -q '^shared.max_parallel' "$SANDBOX/out" || fail "list with no section: $(out)"
+s -- list remote; grep -q max_parallel "$SANDBOX/out" && fail "list remote: shows a shared key remote does not read: $(out)"
 echo '{"max_parallel": 0}' >"$MACHINE"
 code=0; s -- list build-epic || code=$?
 [ "$code" = 1 ] && grep -q $'build-epic.max_parallel\tERROR: ' "$SANDBOX/out" || fail "list with a bad value: exit $code, $(out)"

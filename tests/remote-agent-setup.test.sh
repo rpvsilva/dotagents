@@ -120,6 +120,16 @@ setup $'\n\n\n\n\n' || fail "cluster re-run: exited non-zero: $(cat "$SANDBOX/ou
 [ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster re-run: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
 [ "$(value CLAUDE_CODE_OAUTH_TOKEN)" = "$odd" ] || fail "cluster re-run: the token with quotes did not survive"
 
+# A bad value in settings.json stops setup before it asks anything, naming the key; neither file changes.
+fresh
+cp "$SANDBOX/seed" "$FILE"
+echo '{"remote": {"hours": "soon"}}' >"$SETTINGS"
+cp "$SETTINGS" "$SANDBOX/bad.json"
+code=0; setup $'docker\n\n\n' || code=$?
+[ "$code" != 0 ] || fail "bad settings.json: exited 0"
+grep -q "remote.hours" "$SANDBOX/out" || fail "bad settings.json: the key not named: $(cat "$SANDBOX/out")"
+cmp -s "$SANDBOX/bad.json" "$SETTINGS" && cmp -s "$SANDBOX/seed" "$FILE" || fail "bad settings.json: a file changed"
+
 # An unknown backend is asked again.
 fresh
 setup $'nope\ndocker\n\n'"$TOKEN"$'\n' || fail "unknown backend: exited non-zero: $(cat "$SANDBOX/out")"

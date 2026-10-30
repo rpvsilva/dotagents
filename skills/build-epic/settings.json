@@ -1,3 +1,5 @@
 {
+  "max_parallel": { "shared": true },
+  "tracker": { "shared": true },
   "in_progress": { "kind": "string", "default": null, "meaning": "How to mark a started ticket when not the default (GitHub: an `in progress` label), e.g. a GitHub Projects status field and value." }
 }

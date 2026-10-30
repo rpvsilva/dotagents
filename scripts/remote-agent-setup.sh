@@ -42,27 +42,31 @@ ask() {
 # sq quotes a value for the sourced file.
 # shellcheck source=remote-backends/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/remote-backends/lib.sh"
+# shellcheck source=remote-settings.sh disable=SC1091
+. "$REPO/scripts/remote-settings.sh"
 
 # Runs scripts/settings.sh outside any repo, so only the machine Level counts.
 settings() { "$REPO/scripts/settings.sh" --dir / "$@"; }
-# The REMOTE_* variable of Setting $1.
-var() { printf 'REMOTE_%s' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 # Prints remote.env's own value of variable $1 (the environment's does not count), or nothing.
 legacy() {
   [ -f "$FILE" ] || return 0
   # shellcheck disable=SC1090
   (unset "$1" CLAUDE_CODE_OAUTH_TOKEN; set +u; . "$FILE" >/dev/null 2>&1; printf '%s' "${!1-}")
 }
-# Prints the default for Setting $1: the machine Level's value, else remote.env's, else the Declaration's.
+# Prints the default for Setting $1: the machine Level's value, else remote.env's, else fallback $2, else the
+# Declaration's.
 old() {
   local v
   v="$(settings get remote "$1" --machine)"
-  [ -n "$v" ] || v="$(legacy "$(var "$1")")"
+  [ -n "$v" ] || v="$(legacy "$(remote_var "$1")")"
+  [ -n "$v" ] || v="${2:-}"
   [ -n "$v" ] || v="$(jq -r --arg k "$1" '.[$k].default // empty' "$REPO/remote/settings.json")"
   printf '%s' "$v"
 }
 
 echo "Sets up remote subagents (the remote Settings in $CONFIG/settings.json, the token in $FILE)." >&2
+# A bad value already in settings.json stops here, before anything is asked or written.
+settings check >/dev/null || exit 1
 # Answers, as "<setting> <value>" lines.
 answers=()
 old_backend="$(old backend)"
@@ -71,10 +75,7 @@ answers+=("backend $backend")
 mode=""
 case "$backend" in
   cluster)
-    current="$(kubectl config current-context 2>/dev/null || true)"
-    saved="$(settings get remote context --machine)"
-    [ -n "$saved" ] || saved="$(legacy REMOTE_CONTEXT)"
-    context="$(ask "Kube context" "${saved:-${current:-$(old context)}}")"
+    context="$(ask "Kube context" "$(old context "$(kubectl config current-context 2>/dev/null || true)")")"
     namespace="$(ask "Namespace" "$(old namespace)")"
     pool="$(ask "Warm pool" "$(old pool)")"
     answers+=("context $context" "namespace $namespace" "pool $pool")
@@ -105,19 +106,17 @@ while [ -z "$token" ]; do
 done
 
 # Every answer is in: from here on, write. First the Settings left in remote.env that it does not ask about.
-if [ -f "$FILE" ]; then
-  while IFS= read -r name; do
-    key="$(printf '%s' "${name#REMOTE_}" | tr '[:upper:]' '[:lower:]')"
-    [[ " $ASKED " != *" $key "* ]] || continue
-    code=0
-    settings get remote "$key" --machine >/dev/null 2>&1 || code=$?
-    if [ "$code" = 2 ]; then
-      echo "remote.env: $name is not a remote Setting; dropped" >&2
-    elif [ -z "$(settings get remote "$key" --machine)" ]; then
-      settings set remote "$key" "$(legacy "$name")" --machine || echo "remote.env: $name not moved (see above); dropped" >&2
-    fi
-  done < <(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?(REMOTE_[A-Za-z0-9_]+)=.*/\2/p' "$FILE" | sort -u)
-fi
+for name in $(remote_leftovers); do
+  key="$(remote_key "$name")"
+  [[ " $ASKED " != *" $key "* ]] || continue
+  code=0
+  current="$(settings get remote "$key" --machine 2>/dev/null)" || code=$?
+  if [ "$code" = 2 ]; then
+    echo "remote.env: $name is not a remote Setting; dropped" >&2
+  elif [ -z "$current" ]; then
+    settings set remote "$key" "$(legacy "$name")" --machine || echo "remote.env: $name not moved (see above); dropped" >&2
+  fi
+done
 for key in $ASKED; do
   value=""
   for a in "${answers[@]}"; do [ "${a%% *}" != "$key" ] || value="${a#* }"; done

@@ -25,11 +25,12 @@ for d in skills/*/; do
 done
 
 # Settings Declarations: valid JSON, each key with a known kind, a meaning, a default of its kind (null for unset),
-# choices for an enum, known Levels; no skill redeclares a shared key (skills/_shared/settings.json).
+# choices for an enum, known Levels. A skill reads a shared key (skills/_shared/settings.json) by opting in with
+# {"shared": true}, never by redeclaring it, and only opts in to a key that exists.
 for f in skills/*/settings.json remote/settings.json; do
   [ -f "$f" ] || continue
   jq -e 'type == "object"' "$f" >/dev/null 2>&1 || { fail "$f: not a JSON object"; continue; }
-  while read -r bad; do fail "$f: $bad"; done < <(jq -r 'to_entries[] | .key as $k | .value as $d
+  while read -r bad; do fail "$f: $bad"; done < <(jq -r 'to_entries[] | select(.value != {"shared": true}) | .key as $k | .value as $d
     | if ($d | type) != "object" then "\($k): not an object"
       elif ([$d.kind] | inside(["int", "bool", "string", "enum", "list"]) | not) then "\($k): unknown kind \($d.kind)"
       elif ($d.meaning | type) != "string" or $d.meaning == "" then "\($k): no meaning"
@@ -44,10 +45,22 @@ for f in skills/*/settings.json remote/settings.json; do
       else empty end' "$f")
   case "$f" in
     skills/_shared/*) ;;
-    *) while read -r k; do fail "$f: redeclares $k, a shared Setting (skills/_shared/settings.json)"; done < <(
-      jq -rn --slurpfile a "$f" --slurpfile s skills/_shared/settings.json '$a[0] | keys[] | select(. as $k | $s[0] | has($k))') ;;
+    *) while read -r bad; do fail "$f: $bad"; done < <(jq -rn --slurpfile a "$f" --slurpfile s skills/_shared/settings.json \
+      '$a[0] | to_entries[] | .key as $k | ($s[0] | has($k)) as $shared
+       | if .value == {"shared": true} and ($shared | not) then "\($k): opts in to a shared Setting that does not exist"
+         elif .value != {"shared": true} and $shared then "\($k): redeclares a shared Setting; opt in with {\"shared\": true}"
+         else empty end') ;;
   esac
 done
+
+# Skills read Settings through ~/.agents/bin/settings, never from a notes file: a skill or brief line naming a
+# declared key next to a notes file must call it a Setting.
+keys="$(jq -rs 'map(keys[]) | unique[]' skills/*/settings.json remote/settings.json)"
+while IFS= read -r line; do
+  for k in $keys; do
+    case "$line" in *"\`$k\`"*) [[ "$line" == *Setting* ]] || fail "${line%%:*}: names \`$k\` next to a notes file, not as a Setting" ;; esac
+  done
+done < <(grep -n -i 'notes' skills/*/*.md | sed 's/^\([^:]*\):\([0-9]*\):/\1:\2: /')
 
 # Relative markdown links resolve.
 while read -r md; do
