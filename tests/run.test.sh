@@ -12,12 +12,13 @@ fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 # A repo holding tests/run.sh, the pins, one shell script and one passing suite.
 R="$SANDBOX/repo"
 mkdir -p "$R/tests" "$R/scripts"
-cp "$REPO/tests/run.sh" "$R/tests/run.sh"
+cp "$REPO/tests/run.sh" "$REPO/tests/affected.sh" "$R/tests/"
+printf 'shellcheck *.sh\nok.test.sh\n' >"$R/tests/suites.txt"
 echo 0.11.0 >"$R/scripts/shellcheck-version"
 echo "koalaman/shellcheck:v0.11.0@sha256:abc" >"$R/scripts/shellcheck-image"
 printf '#!/bin/sh\necho hi\n' >"$R/a.sh"
 printf '#!/bin/sh\nexit 0\n' >"$R/tests/ok.test.sh"
-chmod +x "$R/tests/run.sh" "$R/tests/ok.test.sh"
+chmod +x "$R/tests/run.sh" "$R/tests/affected.sh" "$R/tests/ok.test.sh"
 git -C "$R" init -q
 git -C "$R" add .
 
@@ -59,11 +60,11 @@ EOF
 ran() { cat "$SANDBOX/log" 2>/dev/null || true; }
 
 expect 0.11.0 running 0 "== shellcheck$"
-[ "$(ran)" = "shellcheck a.sh tests/ok.test.sh tests/run.sh" ] || fail "matching shellcheck: did not lint with it: $(ran)"
+[ "$(ran)" = "shellcheck a.sh tests/affected.sh tests/ok.test.sh tests/run.sh" ] || fail "matching shellcheck: did not lint with it: $(ran)"
 
 expect 0.10.0 running 0 "== shellcheck (koalaman/shellcheck:v0.11.0@sha256:abc)"
 case "$(ran)" in
-  "docker run --rm -v "*":/mnt:ro -w /mnt koalaman/shellcheck:v0.11.0@sha256:abc a.sh tests/ok.test.sh tests/run.sh") ;;
+  "docker run --rm -v "*":/mnt:ro -w /mnt koalaman/shellcheck:v0.11.0@sha256:abc a.sh tests/affected.sh tests/ok.test.sh tests/run.sh") ;;
   *) fail "mismatch with docker: not the pinned image on a read-only mount: $(ran)" ;;
 esac
 
