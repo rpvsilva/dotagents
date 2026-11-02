@@ -37,6 +37,7 @@ for s in "${skills[@]}"; do
 done
 assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
 assert_link "$home/.agents/bin/remote-agent" "$REPO/scripts/remote-agent.sh"
+assert_link "$home/.agents/bin/settings" "$REPO/scripts/settings.sh"
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
 assert_link "$home/.codex/AGENTS.md" "$REPO/global/AGENTS.md"
 for a in "$REPO"/adapters/claude/agents/*.md; do assert_link "$home/.claude/agents/$(basename "$a")" "$a"; done

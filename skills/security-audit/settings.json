@@ -1,0 +1,4 @@
+{
+  "max_parallel": { "shared": true },
+  "area_budget": { "kind": "int", "default": 4000, "min": 1, "meaning": "Most lines of code one reviewer subagent takes as one area." }
+}

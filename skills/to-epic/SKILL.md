@@ -14,7 +14,7 @@ Input: any mix of pasted text, file paths and links (docs, Notion, Google Docs, 
 
 ## Steps
 
-1. **Set up.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/to-epic-notes.md`: the tracker, labels to apply and an issue template, falling back to the repo's issue templates (`.github/ISSUE_TEMPLATE/`) and existing labels. Create the run folder. Done when you can name the tracker, the identity and the labels (or know there are none).
+1. **Set up.** [Learn the rules](../_shared/conventions.md#learn-the-rules) with notes file `.agents/to-epic-notes.md` and the `tracker`, `labels` and `issue_template` Settings, falling back to the repo's issue templates (`.github/ISSUE_TEMPLATE/`) and existing labels. Create the run folder. Done when you can name the tracker, the identity and the labels (or know there are none).
 
 2. **Read the sources.** Read short text (under about 100 lines: a pasted paragraph, a page of notes) yourself. For each longer source, and each link, start a `source-reader` subagent with [reader-brief.md](reader-brief.md) as in [Subagents](../_shared/conventions.md#subagents); give it the source (path or link) and `sources/<name>.md` as its output, and run them in parallel. Done when every source is read or has a note.
 

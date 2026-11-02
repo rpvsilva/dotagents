@@ -26,13 +26,13 @@ make_worktree "$W"
 # This machine's Claude config, where `remote-agent resume` places a run's session.
 CC="$SANDBOX/claude-config"
 
-# Runs remote-agent.sh in $W with the remote.env lines given after the fake run's exit code $1 and patch $2; with
-# NAME set, as --name NAME.
+# Runs remote-agent.sh in $W with the remote Settings given (REMOTE_<KEY>=<value>, see remote_config) after the fake
+# run's exit code $1 and patch $2; with none given, the config stays as it is. With NAME set, as --name NAME.
 run() {
   echo "$1" >"$S/code"
   printf '%s' "$2" >"$S/patch"
   shift 2
-  { echo "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret"; printf '%s\n' "$@"; } >"$SANDBOX/config/dotagents/remote.env"
+  [ $# -eq 0 ] || remote_config "$SANDBOX/config" "$@" || return 1
   rm -rf "$S/calls" "$S/stdin"
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
     CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" ${NAME:+--name "$NAME"} "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
@@ -101,7 +101,7 @@ rm -rf "${S:?}/containers/$c"
 : >"$S/hang"
 echo 0 >"$S/code"
 : >"$S/patch"
-printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=docker\n' >"$SANDBOX/config/dotagents/remote.env"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=docker
 rm -rf "$S/calls" "$S/started"
 (cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
   "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
@@ -163,11 +163,14 @@ code=0; run 5 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box || 
 [ "$code" = 5 ] || fail "ssh failed run: wanted exit 5, got $code"
 gone "$(container)" || fail "ssh failed run: container not removed"
 
-# Unknown mode or no host: the run stops naming what is wrong, and nothing reaches the host.
-code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_MODE=pod || code=$?
+# An unknown mode (hand-edited into settings.json) or no host: the run stops naming what is wrong, and nothing
+# reaches the host.
+remote_config "$SANDBOX/config"
+echo '{"remote": {"backend": "ssh", "ssh_host": "me@build-box", "ssh_mode": "pod"}}' >"$SANDBOX/config/dotagents/settings.json"
+code=0; run 0 "$HELLO_PATCH" || code=$?
 [ "$code" != 0 ] || fail "ssh unknown mode: exited 0"
-grep -q "REMOTE_SSH_MODE=pod.*container.*bare" "$SANDBOX/out" || fail "ssh unknown mode: message: $(cat "$SANDBOX/out")"
-[ "$(grep -c 'REMOTE_SSH_MODE' "$SANDBOX/out")" = 1 ] || fail "ssh unknown mode: said more than once: $(cat "$SANDBOX/out")"
+grep -q "ssh_mode is \"pod\".*container, bare" "$SANDBOX/out" || fail "ssh unknown mode: message: $(cat "$SANDBOX/out")"
+[ "$(grep -c 'ssh_mode' "$SANDBOX/out")" = 1 ] || fail "ssh unknown mode: said more than once: $(cat "$SANDBOX/out")"
 [ ! -e "$S/calls" ] || fail "ssh unknown mode: something reached the host: $(cat "$S/calls")"
 code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh || code=$?
 [ "$code" != 0 ] || fail "ssh no host: exited 0"
@@ -180,8 +183,7 @@ make_worktree "$W2"
 : >"$S/pair"
 echo 0 >"$S/code"
 printf '%s' "$HELLO_PATCH" >"$S/patch"
-printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\nREMOTE_BACKEND=ssh\nREMOTE_SSH_HOST=me@build-box\n' \
-  >"$SANDBOX/config/dotagents/remote.env"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
 rm -rf "$S/calls" "$S/seen"
 pids=()
 for w in "$W" "$W2"; do
@@ -291,8 +293,7 @@ grep -q "sk-claude-secret" "$f/progress.log" 2>/dev/null && fail "bare keep: the
 # TERM mid-run stops the run on the host too: no claude (no ssh client, here) outlives remote-agent.
 : >"$S/hang"
 rm -f "$S/started" "$S/claude.pid"
-printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret\n' >"$SANDBOX/config/dotagents/remote.env"
-printf '%s\n' "${bare[@]}" >>"$SANDBOX/config/dotagents/remote.env"
+remote_config "$SANDBOX/config" "${bare[@]}"
 (cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
   "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
 pid=$!
@@ -468,7 +469,9 @@ if [ -n "${REMOTE_DOCKER_IMAGE_TEST:-}" ]; then
   else
     R="$SANDBOX/real"
     make_worktree "$R"
-    printf 'REMOTE_BACKEND=docker\nREMOTE_IMAGE=%s\n' "$REMOTE_DOCKER_IMAGE_TEST" >"$SANDBOX/config/dotagents/remote.env"
+    remote_config "$SANDBOX/config" REMOTE_BACKEND=docker "REMOTE_IMAGE=$REMOTE_DOCKER_IMAGE_TEST"
+    # The real token comes from the environment.
+    rm "$SANDBOX/config/dotagents/remote.env"
     (cd "$R" && HOME="$H" XDG_CONFIG_HOME="$SANDBOX/config" \
       "$REPO/scripts/remote-agent.sh" "Create hello.txt containing the word hello.") >"$SANDBOX/out" 2>&1 \
       || fail "real docker: exited non-zero: $(tail -5 "$SANDBOX/out")"
