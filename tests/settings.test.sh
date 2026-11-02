@@ -107,7 +107,9 @@ loud() {
   local why="$1" file="$2" key="$3"; shift 3
   local code=0; s -- get "$@" || code=$?
   [ "$code" = 1 ] || fail "get $* with $why: exit $code, not 1"
-  grep -q "$file" "$SANDBOX/err" && grep -q "$key" "$SANDBOX/err" || fail "get $* with $why: message does not name $file and $key: $(err)"
+  # From the sandbox's own folder on: Windows prints the path as C:/.../Temp/tmp.XXXX/..., not /tmp/tmp.XXXX/...
+  file="${SANDBOX##*/}/${file#"$SANDBOX"/}"
+  grep -qF "$file" "$SANDBOX/err" && grep -qF "$key" "$SANDBOX/err" || fail "get $* with $why: message does not name $file and $key: $(err)"
 }
 echo '{"max_parallel": "four"}' >"$MACHINE"
 loud "a string for an int" "$MACHINE" max_parallel build-epic max_parallel
