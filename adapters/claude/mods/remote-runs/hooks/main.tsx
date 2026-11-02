@@ -3,7 +3,7 @@
 // .ts files (runs.ts, transcript.ts); this module only calls `$` and draws. Every `$.fs` and `$.process` call is caught and means "no data": a hook that
 // throws prints a failed-hook line, and `$.process` fails on surfaces without processes (desktop, VS Code).
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, FsEntry, Register } from 'claude-code'
+import type { EngineInterface, FsEntry, Register, RenderSurface } from 'claude-code'
 
 import {
   applyLiveness,
@@ -23,11 +23,11 @@ import {
   statusText,
 } from './runs.ts'
 import type { Ticker, View } from './state.d.ts'
-import { oneLine, renderTranscript, WAITING } from './transcript.ts'
+import { copiedText, oneLine, renderTranscript, resumeHint, WAITING } from './transcript.ts'
 
 const PANE = 'remote-runs'
 const TICK_MS = 1500
-const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-2' })
+const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-3' })
 const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null } as Ticker, {
   shape: 'ticker-1',
 })
@@ -84,7 +84,8 @@ async function runFiles($: EngineInterface, folder: string, id: string): Promise
   const file = (name: string) => listed.find(e => e.name === name && e.kind === 'file')
   const json = file('run.json')
   const log = file('progress.log')
-  const key = [json?.size, json?.mtimeMs, log?.size, log?.mtimeMs].join(':')
+  const session = file('session.jsonl') !== undefined
+  const key = [json?.size, json?.mtimeMs, log?.size, log?.mtimeMs, session].join(':')
   if (cached && cached.key === key) return cached.files
   const files: RunFiles = {
     id,
@@ -92,6 +93,7 @@ async function runFiles($: EngineInterface, folder: string, id: string): Promise
     runJson: json ? await text($, `${folder}/run.json`) : null,
     progress: log ? await text($, `${folder}/progress.log`) : null,
     changed: Math.floor(Math.max(json?.mtimeMs ?? 0, log?.mtimeMs ?? 0) / 1000),
+    session,
   }
   const { state } = parseRun(files)
   seen.set(folder, { key, files, isFinal: state === 'done' || state === 'failed' })
@@ -212,6 +214,16 @@ async function tick($: EngineInterface): Promise<void> {
   }
 }
 
+/** Copies `path` on the surface that pressed, and toasts `copied` or why not; the path stays drawn either way. */
+async function copyPath($: EngineInterface, path: string, surface: RenderSurface): Promise<void> {
+  try {
+    const got = await $.ui.copy({ text: path, surface })
+    $.ui.toast(copiedText(got.isCopied ? null : got.reason))
+  } catch {
+    $.ui.toast(copiedText('refused'))
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'remote-runs', description: 'Show the remote-agent runs of this repo in a pane' })
@@ -248,12 +260,18 @@ export const register: Register = on => {
               <Text dimColor>{row.status}</Text>
             </Text>
           </Box>
-          <Text dimColor wrap="truncate-end">
-            {oneLine(open.transcript, 1000)}
-          </Text>
+          <Box columnGap={1}>
+            <Button key="copy" hotkey="c" onPress={press => copyPath($, open.transcript, press.surface)}>
+              Copy path
+            </Button>
+            <Text dimColor wrap="truncate-end">{oneLine(open.transcript, 1000)}</Text>
+          </Box>
           {lines.length === 0 && <Text dimColor>{WAITING}</Text>}
           {lines.map(line => (
             <Text wrap="truncate-end">{line}</Text>
+          ))}
+          {resumeHint(open, open.session).map(line => (
+            <Text dimColor>{line}</Text>
           ))}
         </Box>
       )

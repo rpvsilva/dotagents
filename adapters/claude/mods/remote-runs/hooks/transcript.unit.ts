@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { mask, oneLine, parseLines, renderEvent, renderTranscript, type TranscriptEvent } from './transcript.ts'
+import { parseRun } from './runs.ts'
+import { copiedText, mask, oneLine, parseLines, renderEvent, renderTranscript, resumeHint, type TranscriptEvent } from './transcript.ts'
 
 // A transcript's text: one JSON line per event, each ended with a newline.
 const jsonl = (...events: unknown[]) => events.map(e => `${JSON.stringify(e)}\n`).join('')
@@ -153,6 +154,49 @@ test('a line has ANSI escapes and control characters stripped and fits one row',
   const long = oneLine('y'.repeat(500))
   assert.equal(long.length, 160)
   assert.ok(long.endsWith('…'))
+})
+
+// A row of the pane in `state`, for the run folder `/repo/.git/remote-agent/<id>/`, with `worktree` from run.json.
+const row = (state: string, worktree: string | null = '/repo', id = 'agent-20261102-100000-7') =>
+  parseRun({ id, folder: `/repo/.git/remote-agent/${id}`, runJson: JSON.stringify({ state, worktree }), progress: null, changed: 0 })
+
+test('a finished run with a session says how to resume it, and warns the sandbox wrote the session', () => {
+  for (const state of ['done', 'failed']) {
+    const [command, warning, ...rest] = resumeHint(row(state), true)
+    assert.equal(command, 'to resume: remote-agent resume agent-20261102-100000-7 /repo')
+    assert.match(warning, /sandbox wrote/)
+    assert.match(warning, /forged turns/)
+    assert.ok(warning.includes('/repo/.git/remote-agent/agent-20261102-100000-7/session.jsonl'), warning)
+    assert.deepEqual(rest, [])
+  }
+  const stopped = { ...row('running'), state: 'stopped' as const }
+  assert.equal(resumeHint(stopped, true)[0], 'to resume: remote-agent resume agent-20261102-100000-7 /repo')
+})
+
+test('a run still going, or one with no run.json, shows no resume hint', () => {
+  for (const state of ['starting', 'running', 'not-a-state']) {
+    assert.deepEqual(resumeHint(row(state), true), [])
+    assert.deepEqual(resumeHint(row(state), false), [])
+  }
+})
+
+test('a finished run with no session.jsonl says it cannot be resumed', () => {
+  for (const state of ['done', 'failed']) assert.deepEqual(resumeHint(row(state), false), ['no session came back: this run cannot be resumed'])
+})
+
+test('the worktree in the resume command is shell-quoted', () => {
+  const command = (wt: string | null) => resumeHint(row('done', wt), true)[0]
+  assert.equal(command('/Users/me/My Projects/repo'), "to resume: remote-agent resume agent-20261102-100000-7 '/Users/me/My Projects/repo'")
+  assert.equal(command("/tmp/it's"), "to resume: remote-agent resume agent-20261102-100000-7 '/tmp/it'\\''s'")
+  assert.equal(command('/tmp/$(rm -rf ~)'), "to resume: remote-agent resume agent-20261102-100000-7 '/tmp/$(rm -rf ~)'")
+  assert.equal(command(null), 'to resume: remote-agent resume agent-20261102-100000-7')
+})
+
+test('copying the path toasts copied, or why not', () => {
+  assert.equal(copiedText(null), 'copied')
+  assert.match(copiedText('no-surface'), /^not copied \(this surface has no clipboard\)/)
+  assert.match(copiedText('no-clipboard'), /^not copied \(no clipboard tool\)/)
+  assert.match(copiedText('refused'), /^not copied \(refused\)/)
 })
 
 test('mask covers every token shape the README lists', () => {

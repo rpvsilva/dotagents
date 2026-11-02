@@ -30,6 +30,8 @@ export type Run = {
   pid_start: string | null
   worktree: string | null
   transcript: string
+  /** Whether the run folder holds session.jsonl, which `remote-agent resume` places for /resume. */
+  session: boolean
 }
 
 /**
