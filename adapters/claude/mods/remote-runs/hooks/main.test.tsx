@@ -451,3 +451,70 @@ test('a notification that throws is marked all the same, and the store drops the
   await w.clock.advance(4500)
   expect(w.notified.length).toBe(1)
 })
+
+const TRANSCRIPT = '/repo/.git/remote-agent/agent-1/transcript.jsonl'
+const jsonl = (...events: unknown[]) => events.map(e => `${JSON.stringify(e)}\n`).join('')
+// Built from parts so no secret scanner flags this file.
+const GHP = ['ghp', 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'].join('_')
+
+// A world with one running run, its rows drawn by a tick, and `transcript` as its transcript.jsonl (null: none).
+async function withLog($: any, on: any, transcript: string | null) {
+  const w = engine(on, { ps: psAlive([42]) })
+  addRun(w, '/repo/.git', 'agent-1', runJson(), 'claimed in 3s\n')
+  if (transcript === null) delete w.files[TRANSCRIPT]
+  else w.files[TRANSCRIPT] = { text: transcript, mtimeMs: NOW }
+  await start($)
+  await w.clock.advance(1500)
+  return w
+}
+
+test('pressing a run shows its log in order, and Back returns to the list with its rows', async ($, on) => {
+  await withLog($, on, jsonl(
+    { type: 'system', subtype: 'init', model: 'claude-opus' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Reading the code.' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt\nb.txt' }] } },
+    { type: 'result', subtype: 'success', is_error: false, duration_ms: 4000, total_cost_usd: 0.12 },
+  ) + '{"type":"assistant","mess')
+  const list = await words($)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'run:agent-1' })
+    expect((await ui.find({ key: 'back' }))?.props.hotkey).toBe('b')
+    const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+    expect(shown.slice(-5)).toEqual(['session started (claude-opus)', 'Reading the code.', '-> Bash ls', '<- Bash: a.txt', 'done in 4s, $0.12'])
+    expect(shown).toContain(TRANSCRIPT)
+    expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(true)
+    await ui.press({ key: 'back' })
+    await ui.unmount()
+    expect(await words($, surface)).toEqual(list)
+  }
+})
+
+test('a run with an empty, missing or unreadable transcript says it waits for the first event', async ($, on) => {
+  const w = await withLog($, on, '')
+  for (const transcript of ['', null, 'unreadable']) {
+    if (transcript === null) delete w.files[TRANSCRIPT]
+    w.readFails = transcript === 'unreadable'
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      await ui.press({ key: 'run:agent-1' })
+      const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+      expect(shown[shown.length - 1]).toBe('waiting for the first event')
+      await ui.press({ key: 'back' })
+      await ui.unmount()
+    }
+  }
+})
+
+test('a token-shaped string in the transcript is masked in every line drawn', async ($, on) => {
+  await withLog($, on, jsonl(
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `echo ${GHP}` } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `\u001b[31m${GHP}\u001b[0m` }] } },
+  ))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  const shown = (await ui.findAll({})).map((el: any) => el.text ?? '')
+  await ui.unmount()
+  expect(shown.filter((t: string) => t.includes(GHP) || t.includes('\u001b'))).toEqual([])
+  expect(shown).toContain('<- Bash: [masked]')
+})
