@@ -1,7 +1,7 @@
 # Which checks cover which files, read by tests/affected.sh: `<check> <pattern>...`. Patterns match the repo-relative
 # path as in bash `[[ $path == $pattern ]]`, so `*` also matches `/`. A suite's own file always selects it, and a file
 # matching `all` selects every check. Every tests/*.test.sh has a line (tests/repo.test.sh checks it).
-all tests/suites.txt tests/affected.sh .github/workflows/ci.yml
+all tests/suites.txt tests/affected.sh tests/parallel.sh .github/workflows/ci.yml .github/workflows/portability.yml
 shellcheck *.sh scripts/shellcheck-version scripts/shellcheck-image
 actionlint .github/workflows/*
 repo.test.sh *
@@ -19,4 +19,5 @@ remote-agent.test.sh scripts/remote-agent* scripts/remote-backends/* scripts/hoo
 remote-backends.test.sh scripts/remote-agent* scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
 remote-agent-setup.test.sh scripts/remote-agent* scripts/remote-backends/*
 remote-agent-check.test.sh scripts/remote-agent* scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
+parallel.test.sh tests/parallel.sh
 run.test.sh tests/run.sh scripts/shellcheck-version scripts/shellcheck-image

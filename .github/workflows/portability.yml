@@ -26,6 +26,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # The suites covering the PR's changed files (tests/affected.sh), at once through tests/parallel.sh, as ci.yml
+      # runs them; every suite when run by hand.
       - name: tests/*.test.sh
         shell: bash
-        run: for t in tests/*.test.sh; do echo "== $t"; "$t"; done
+        run: |
+          if [ -n "$GITHUB_BASE_REF" ]; then args=(--base "origin/$GITHUB_BASE_REF"); else args=(--all); fi
+          checks=" $(tests/affected.sh "${args[@]}" | tr '\n' ' ')"
+          echo "checks:$checks"
+          suites=()
+          for t in tests/*.test.sh; do case "$checks " in *" ${t##*/} "*) suites+=("$t") ;; esac; done
+          tests/parallel.sh ${suites[@]+"${suites[@]}"}
