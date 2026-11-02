@@ -91,7 +91,8 @@ refuse "no Level" build-epic max_parallel 3
 refuse "a shared key the section does not read" remote tracker jira --machine
 refuse "a shared key the skill does not read" fix-pr max_parallel 2 --machine
 refuse "a repo-only key" remote allowed false --machine
-grep -q "one of: cluster, docker, ssh" <(s -- set remote backend k8s --machine; err) || fail "set enum: message does not list the choices"
+s -- set remote backend k8s --machine || true
+grep -q "one of: cluster, docker, ssh" "$SANDBOX/err" || fail "set enum: message does not list the choices"
 code=0; s -- get build-epic max_paralel || code=$?
 [ "$code" = 2 ] || fail "get unknown key: exit $code, not 2"
 
