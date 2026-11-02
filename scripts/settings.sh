@@ -37,9 +37,6 @@ REPO="$(cd "$(dirname "$src")/.." && pwd)"
 MACHINE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents/settings.json"
 
 die() { echo "settings: $*" >&2; exit 1; }
-# jq on Windows ends its lines with CRLF: drop the CR, so its output compares and is written as on Unix. pipefail
-# keeps jq's exit status.
-jq() { command jq "$@" | tr -d '\r'; }
 usage() { grep -E "^# +(Usage: )?settings " "$src" | sed -E "s/^# +(Usage: )?/usage: /" >&2; exit 2; }
 
 dir="$PWD"
@@ -54,28 +51,39 @@ cmd="${1:-}"
 REPO_FILE=""
 if root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then REPO_FILE="$root/.agents/settings.json"; fi
 
-# Every Declaration as one object: {"shared": {...}, "<skill>": {...}, "remote": {...}}.
-decls() {
-  local d f s
-  # Every skill is a section, with or without Settings of its own.
-  for d in "$REPO"/skills/*/ "$REPO/remote/"; do
-    s="$(basename "$d")"
-    [ "$s" != _shared ] || s=shared
-    f="${d%/}/settings.json"
-    if [ -f "$f" ]; then
-      jq --arg s "$s" '{($s): .}' "$f" || die "$f: invalid JSON"
-    else
-      jq -n --arg s "$s" '{($s): {}}'
-    fi
-  done | jq -s add
-}
+# Each command is one jq run: starting a process costs ~100 ms on Windows, and scripts call this often. So this
+# script forks as little as it can: the Declaration files go to jq as input files, the settings files are read with
+# the `read` builtin, and jq answers with the command's output or one `!<exit code> <message>` line.
 
-# Prints a settings file's content, or null when it does not exist.
-content() {
-  [ -n "$1" ] && [ -f "$1" ] || { echo null; return; }
-  jq -e 'type == "object"' "$1" >/dev/null 2>&1 || die "$1: not a JSON object"
-  cat "$1"
-}
+# Every skill is a section, with or without Settings of its own; `sections` names them, `decl_files` holds the
+# Declarations that exist.
+sections=""
+decl_files=()
+for d in "$REPO"/skills/*/ "$REPO/remote/"; do
+  d="${d%/}"
+  s="${d##*/}"
+  [ "$s" != _shared ] || s=shared
+  sections="$sections $s"
+  [ ! -f "$d/settings.json" ] || decl_files+=("$d/settings.json")
+done
+
+# Each settings file's text, and whether it exists (`read` returns non-zero at end of file, which is expected).
+machine_raw="" has_machine=0 repo_raw="" has_repo=0
+if [ -f "$MACHINE_FILE" ]; then IFS= read -r -d '' machine_raw <"$MACHINE_FILE" || true; has_machine=1; fi
+if [ -n "$REPO_FILE" ] && [ -f "$REPO_FILE" ]; then IFS= read -r -d '' repo_raw <"$REPO_FILE" || true; has_repo=1; fi
+
+# Binds $decls ({"shared": {...}, "<skill>": {...}, "remote": {...}}), $machine and $repo (a settings file's object,
+# or null when it does not exist) for LIB, or stops on a settings file that is not a JSON object.
+PRE='
+def parsefile($raw; $has):
+  if $has == 0 then null else ($raw | try fromjson catch null) as $j | if ($j | type) == "object" then $j else "bad" end end;
+(reduce inputs as $d ({}; . + {(input_filename | gsub("\\\\"; "/") | split("/") | .[-2]
+  | if . == "_shared" then "shared" else . end): $d})) as $loaded
+| (($sections | split(" ") | map(select(. != "") | {(.): {}}) | add // {}) + $loaded) as $decls
+| parsefile($machine_raw; $has_machine) as $machine | parsefile($repo_raw; $has_repo) as $repo
+| if $machine == "bad" then "!1 settings: \($machinefile): not a JSON object"
+  elif $repo == "bad" then "!1 settings: \($repofile): not a JSON object"
+  else ('
 
 LIB='
 def describe($d):
@@ -132,13 +140,21 @@ def resolve($s; $k):
 def show: if type == "array" then join(",") elif . == null then "" else tostring end;
 '
 
-# Runs jq program $1 (after LIB) with the Declarations and both files; extra jq arguments follow.
+# Runs jq program $1 (after PRE and LIB), extra jq arguments following, and leaves its output in $out. On a
+# `!<code> <message>` answer, prints the message and exits with the code.
 q() {
-  local prog="$1" d m r
+  local prog="$1"
   shift
-  d="$(decls)" && m="$(content "$MACHINE_FILE")" && r="$(content "$REPO_FILE")" || exit 1
-  jq -nr --argjson decls "$d" --argjson machine "$m" --argjson repo "$r" --arg machinefile "$MACHINE_FILE" \
-    --arg repofile "$REPO_FILE" --arg only "${ONLY:-}" "$LIB $prog" "$@"
+  out="$(jq -nr --arg sections "$sections" --arg machine_raw "$machine_raw" --argjson has_machine "$has_machine" \
+    --arg repo_raw "$repo_raw" --argjson has_repo "$has_repo" --arg machinefile "$MACHINE_FILE" \
+    --arg repofile "$REPO_FILE" --arg only "${ONLY:-}" "$@" "$PRE $LIB $prog) end" ${decl_files[@]+"${decl_files[@]}"})" \
+    || exit 1
+  # jq on Windows ends its lines with CRLF: drop the CR, so the output compares and is written as on Unix.
+  out="${out//$'\r'/}"
+  if [[ "$out" == '!'* ]]; then
+    printf '%s\n' "${out:3}" >&2
+    exit "${out:1:1}"
+  fi
 }
 
 # Sets $level from a --machine or --repo argument, and $file from it.
@@ -153,72 +169,73 @@ level_file() {
   esac
 }
 
-# Writes JSON on stdin to file $1 through a temp file in the same folder.
+# Writes $out, a JSON object, to file $1 through a temp file in the same folder.
 write() {
   local tmp
-  mkdir -p "$(dirname "$1")"
-  tmp="$(mktemp "$(dirname "$1")/.settings.json.XXXXXX")"
-  if ! jq -e 'if type == "object" then . else error("not an object") end' >"$tmp"; then rm -f "$tmp"; die "could not write $1"; fi
+  mkdir -p "${1%/*}"
+  tmp="$(mktemp "${1%/*}/.settings.json.XXXXXX")"
+  if ! printf '%s\n' "$out" >"$tmp"; then rm -f "$tmp"; die "could not write $1"; fi
   mv -f "$tmp" "$1"
 }
 
-# Exits 2 when $1.$2 is not declared.
-known() {
-  q 'decl($s; $k) != null' --arg s "$1" --arg k "$2" | grep -q true || { echo "settings: unknown setting $1.$2" >&2; exit 2; }
-}
+# The file at the Level being written, as LIB binds it.
+CUR='(if $level == "machine" then $machine else $repo end)'
+UNKNOWN='"!2 settings: unknown setting \($s).\($k)"'
 
 case "$cmd" in
   get)
     [ $# -ge 2 ] && [ $# -le 3 ] || usage
     ONLY=""
     if [ $# -eq 3 ]; then level_file "$3"; ONLY="$level"; fi
-    r="$(ONLY="$ONLY" q 'resolve($s; $k)' --arg s "$1" --arg k "$2")"
-    if [ "$(jq -r '.unknown // false' <<<"$r")" = true ]; then echo "settings: $(jq -r .error <<<"$r")" >&2; exit 2; fi
-    [ "$(jq -r '.error // empty' <<<"$r")" = "" ] || die "$(jq -r .error <<<"$r")"
-    jq -r '.value | if type == "array" then .[] elif . == null then empty else tostring end' <<<"$r"
+    q 'resolve($s; $k) as $r
+      | if $r.unknown then "!2 settings: \($r.error)" elif $r.error then "!1 settings: \($r.error)"
+        else $r.value | if type == "array" then .[] elif . == null then empty else tostring end end' --arg s "$1" --arg k "$2"
+    [ -z "$out" ] || printf '%s\n' "$out"
     ;;
   set)
     [ $# -eq 4 ] || usage
     level_file "$4"
-    known "$1" "$2"
-    r="$(q 'decl($s; $k).d as $d
-      | if (allowed($d) | index($level)) == null then {error: "\($s).\($k) can only be set at the \(allowed($d) | join(" or ")) Level"}
-        else coerce($d; $v) end' --arg s "$1" --arg k "$2" --arg v "$3" --arg level "$level")"
-    [ "$(jq -r '.error // empty' <<<"$r")" = "" ] || die "$1.$2: $(jq -r .error <<<"$r")"
-    new="$(q '($old // {}) | if $s != "shared" and (.[$s] | type) != "object" and .[$s] != null then error("\($s) is not an object")
-        else setpath(target($s; $k); $v) end' --arg s "$1" --arg k "$2" --argjson v "$(jq -c .value <<<"$r")" \
-      --argjson old "$(content "$file")")" || die "could not write $file"
-    write "$file" <<<"$new"
+    q "decl(\$s; \$k) as \$x
+      | if \$x == null then $UNKNOWN
+        elif (allowed(\$x.d) | index(\$level)) == null then
+          \"!1 settings: \(\$s).\(\$k): can only be set at the \(allowed(\$x.d) | join(\" or \")) Level\"
+        else coerce(\$x.d; \$v) as \$c
+          | if \$c.error then \"!1 settings: \(\$s).\(\$k): \(\$c.error)\"
+            else ($CUR // {}) | if \$s != \"shared\" and (.[\$s] | type) != \"object\" and .[\$s] != null
+              then \"!1 settings: \(\$file): \(\$s) is not an object\" else setpath(target(\$s; \$k); \$c.value) end end end" \
+      --arg s "$1" --arg k "$2" --arg v "$3" --arg level "$level" --arg file "$file"
+    write "$file"
     ;;
   unset)
     [ $# -eq 3 ] || usage
     level_file "$3"
-    known "$1" "$2"
-    [ -f "$file" ] || exit 0
-    new="$(q '$old | delpaths([target($s; $k)]) | if $s != "shared" and .[$s] == {} then del(.[$s]) else . end' \
-      --arg s "$1" --arg k "$2" --argjson old "$(content "$file")")" || die "could not write $file"
-    write "$file" <<<"$new"
+    q "if decl(\$s; \$k) == null then $UNKNOWN elif $CUR == null then empty
+      else $CUR | delpaths([target(\$s; \$k)]) | if \$s != \"shared\" and .[\$s] == {} then del(.[\$s]) else . end end" \
+      --arg s "$1" --arg k "$2" --arg level "$level"
+    [ -z "$out" ] || write "$file"
     ;;
   list)
-    if [ $# -eq 0 ]; then
-      # shellcheck disable=SC2046 # section names hold no spaces
-      set -- $(decls | jq -r 'keys_unsorted | (map(select(. == "shared")) + map(select(. != "shared")))[]')
-    fi
-    for s in "$@"; do q '$decls[$s] != null' --arg s "$s" | grep -q true || {
-      echo "settings: unknown section $s" >&2; exit 2; }; done
-    lines="$(q '$ARGS.positional[] as $s | $decls[$s] | keys_unsorted | sort[] as $k | resolve($s; $k) as $r
-         | decl($s; $k).d as $d
-         | "\($s).\($k)\t\(if $r.error then "ERROR: " + $r.error else ($r.value | show) end)\t\($r.level // "")\t\($d.meaning) (\(describe($d)))"' --args "$@")"
-    printf '%s\n' "$lines"
-    if grep -q $'\tERROR: ' <<<"$lines"; then exit 1; fi
+    # The named sections, else every one: shared first.
+    q '($wanted | split(" ") | map(select(. != ""))) as $w
+      | (if $w == [] then ["shared"] + ($decls | keys_unsorted | map(select(. != "shared"))) else $w end) as $ss
+      | ($ss | map(select($decls[.] == null))) as $bad
+      | if $bad != [] then "!2 settings: unknown section \($bad[0])" else
+        $ss[] as $s | $decls[$s] | keys_unsorted | sort[] as $k | resolve($s; $k) as $r | decl($s; $k).d as $d
+        | "\($s).\($k)\t\(if $r.error then "ERROR: " + $r.error else ($r.value | show) end)\t\($r.level // "")\t\($d.meaning) (\(describe($d)))"
+        end' --arg wanted "$*"
+    printf '%s\n' "$out"
+    if [[ "$out" == *$'\tERROR: '* ]]; then exit 1; fi
     ;;
   env)
     [ $# -eq 1 ] || usage
-    r="$(q '[$decls[$s] // {} | to_entries[] | select(.value.env != null) | .key as $k | .value.env as $e
-      | resolve($s; $k) | if .error then {error} else {e: $e, v: .value} end]' --arg s "$1")"
-    err="$(jq -r 'map(.error // empty) | first // empty' <<<"$r")"
-    [ -z "$err" ] || die "$err"
-    jq -r '.[] | select(.v != null) | if .v == false then "unset \(.e)" else "export \(.e)=\(if .v == true then "1" else (.v | if type == "array" then join(",") else tostring end) end | @sh)" end' <<<"$r"
+    q '[$decls[$s] // {} | to_entries[] | select(.value.env != null) | .key as $k | .value.env as $e
+        | resolve($s; $k) | if .error then {error} else {e: $e, v: .value} end] as $all
+      | (first($all[] | .error // empty) // null) as $err
+      | if $err then "!1 settings: \($err)" else
+        $all[] | select(.v != null) | if .v == false then "unset \(.e)"
+          else "export \(.e)=\(if .v == true then "1" else (.v | if type == "array" then join(",") else tostring end) end | @sh)" end
+        end' --arg s "$1"
+    [ -z "$out" ] || printf '%s\n' "$out"
     ;;
   check)
     [ $# -eq 0 ] || usage
@@ -228,8 +245,9 @@ case "$cmd" in
          elif $decls.shared[$e.key] != null then empty
          else "\($l.file): unknown setting \($e.key)" end] as $unknown
        | [$decls | to_entries[] | .key as $s | (.value | keys_unsorted[]) as $k | resolve($s; $k) | .error // empty] as $bad
-       | ($unknown + $bad | unique) as $all | if $all == [] then "ok" else ($all[] | "settings: " + .) end' \
-      | { read -r first; if [ "$first" = ok ]; then echo ok; else { echo "$first"; cat; } >&2; exit 1; fi; }
+       | ($unknown + $bad | unique) as $all
+       | if $all == [] then "ok" else "!1 " + ($all | map("settings: " + .) | join("\n")) end'
+    printf '%s\n' "$out"
     ;;
   *) usage ;;
 esac
