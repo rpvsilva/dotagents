@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const PANE = {
   plugin: 'remote-runs',
@@ -15,98 +15,237 @@ const PANE = {
 } as const
 const SURFACES = ['terminal', 'desktop', 'vscode', 'mobile'] as const
 const GIT_OK = { value: { exitCode: 0, stdout: '/repo/.git\n', stderr: '' } }
+const LSTART = 'Mon Nov  2 10:00:00 2026'
+const NOW = 2_000_000_000_000 // ms
 
-// Stands for the engine beneath the mod: `git` answers the `process.run` call, `dirs` maps a listed path to its
-// folders (a path it lacks is missing), `files` to its plain files, and `placed` is what `ui.open` answers.
-// Returns the pane ids `ui.open` was asked for.
-function engine(
-  on: any,
-  git: (e: any) => unknown,
-  dirs: Record<string, string[]>,
-  { files = {}, placed = true }: { files?: Record<string, string[]>; placed?: boolean } = {},
-): string[] {
-  const opened: string[] = []
+// The world beneath the mod, which a test changes between ticks: `dirs` maps a path to its folders, `files` a
+// file's path to its text and mtime (a path neither holds is missing), `git` and `ps` answer `process.run`.
+type World = {
+  dirs: Record<string, string[]>
+  files: Record<string, { text: string; mtimeMs: number }>
+  git: unknown
+  ps: unknown
+  placed: boolean
+  opened: string[]
+  readFails: boolean
+  sets: number
+  psCalls: string[][]
+  clock: ReturnType<typeof mock.clock>
+}
+
+function engine(on: any, over: Partial<World> = {}): World {
+  const clock = mock.clock(on, { now: NOW })
+  const w: World = {
+    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, opened: [], sets: 0, psCalls: [], clock, ...over,
+  }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('ui.open', (_: unknown, e: any) => {
-    opened.push(e.id)
-    return { value: { isPlaced: placed } }
+    w.opened.push(e.id)
+    return { value: { isPlaced: w.placed } }
   })
-  on('process.run', (_: unknown, e: any) => git(e))
+  on('process.run', (_: unknown, e: any) => {
+    if (e.argv[0] === 'ps') {
+      w.psCalls.push(e.argv)
+      return w.ps
+    }
+    return w.git
+  })
   on('fs.list', (_: unknown, e: any) => {
-    const names = dirs[e.path]
-    if (!names) throw new Error(`ENOENT: ${e.path}`)
-    const entry = (name: string, kind: string) => ({ name, kind, size: 0, mtimeMs: 0, isLink: false })
-    return { value: [...(files[e.path] ?? []).map(n => entry(n, 'file')), ...names.map(n => entry(n, 'dir'))] }
+    const files = Object.keys(w.files).filter(p => p.slice(0, p.lastIndexOf('/')) === e.path)
+    const names = w.dirs[e.path]
+    if (!names && files.length === 0) throw new Error(`ENOENT: ${e.path}`)
+    const dir = (name: string) => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })
+    const file = (p: string) => ({
+      name: p.slice(p.lastIndexOf('/') + 1), kind: 'file', size: w.files[p].text.length, mtimeMs: w.files[p].mtimeMs, isLink: false,
+    })
+    return { value: [...files.map(file), ...(names ?? []).map(dir)] }
   })
-  return opened
+  on('fs.read', (_: unknown, e: any) => {
+    const f = w.readFails ? undefined : w.files[e.path]
+    if (!f) throw new Error(`ENOENT: ${e.path}`)
+    return { value: f.text }
+  })
+  on('state.set', (_: unknown, e: any, next: any) => {
+    w.sets++
+    return next(e)
+  })
+  return w
 }
 
-// Runs /remote-runs, then reads the pane's words on every surface. The command's own answer proves its hook ran
-// to the end: a hook that threw would be skipped, with a failed-hook line.
-async function paneTexts($: any): Promise<string[]> {
+function psAlive(pids: number[], start = LSTART) {
+  return { value: { exitCode: pids.length ? 0 : 1, stdout: pids.map(p => `  ${p} ${start}\n`).join(''), stderr: '' } }
+}
+
+// Puts a run folder `<git dir>/remote-agent/<id>/` in the world, with run.json (unless `json` is null) and
+// progress.log (unless `progress` is null).
+function addRun(w: World, gitDir: string, id: string, json: Record<string, unknown> | null, progress: string | null = null) {
+  const parent = `${gitDir}/remote-agent`
+  w.dirs[parent] = [...(w.dirs[parent] ?? []), id]
+  w.dirs[`${parent}/${id}`] = []
+  if (json) write(w, `${parent}/${id}/run.json`, JSON.stringify(json))
+  if (progress !== null) write(w, `${parent}/${id}/progress.log`, progress)
+  w.files[`${parent}/${id}/transcript.jsonl`] = { text: '', mtimeMs: NOW }
+}
+
+function write(w: World, path: string, text: string) {
+  w.files[path] = { text, mtimeMs: (w.files[path]?.mtimeMs ?? NOW - 60_000) + 1000 }
+}
+
+function runJson(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    run: 'agent-1', name: 'TT-01-list', worktree: '/repo', started: NOW / 1000 - 30, pid: 42, pid_start: LSTART,
+    state: 'running', exit_code: null, ended: null, claim_s: 3, send_s: 5, first_event_s: 12, ...over,
+  }
+}
+
+async function start($: any) {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+}
+
+// Runs /remote-runs and checks its answer: a hook that threw would be skipped, with a failed-hook line.
+async function open($: any) {
   const { text } = await $.command.run({ command: 'remote-runs' })
   expect(text).toBe('Remote runs pane opened.')
-  const seen: string[] = []
-  for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    seen.push((await ui.find({ type: 'Text' }))?.text ?? '')
-    await ui.unmount()
-  }
+}
+
+// Every word the pane shows on `surface`, in order: Button labels and Text.
+async function words($: any, surface: (typeof SURFACES)[number] = 'terminal'): Promise<string[]> {
+  const ui = await $.ui.mount({ ...PANE, surface })
+  const found = (await ui.findAll({})).filter((el: any) => el.type === 'Button' || el.type === 'Text')
+  const seen = found.map((el: any) => el.text)
+  await ui.unmount()
   return seen
 }
 
 test('/remote-runs opens the remote-runs pane', async ($, on) => {
-  const opened = engine(on, () => GIT_OK, {})
-  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'remote-runs' })
-  expect(opened).toEqual(['remote-runs'])
+  const w = engine(on)
+  await start($)
+  await open($)
+  expect(w.opened).toEqual(['remote-runs'])
 })
 
-test('the pane says no remote runs when the run folders are missing', async ($, on) => {
-  engine(on, () => GIT_OK, {})
-  expect(await paneTexts($)).toEqual(SURFACES.map(() => 'no remote runs in this repo'))
+test('the pane says no remote runs when the run folders are missing, outside git, or without processes', async ($, on) => {
+  const w = engine(on)
+  for (const git of [GIT_OK, { value: { exitCode: 128, stdout: '', stderr: 'fatal' } }, { deny: 'no processes' }]) {
+    w.git = git
+    await start($)
+    await open($)
+    for (const surface of SURFACES) expect(await words($, surface)).toEqual(['no remote runs in this repo'])
+  }
 })
 
-test('the pane says no remote runs outside a git repo', async ($, on) => {
-  engine(on, () => ({ value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' } }), {})
-  expect(await paneTexts($)).toEqual(SURFACES.map(() => 'no remote runs in this repo'))
-})
-
-test('the pane says no remote runs when git cannot run', async ($, on) => {
-  engine(on, () => ({ deny: 'no processes on this surface' }), {})
-  expect(await paneTexts($)).toEqual(SURFACES.map(() => 'no remote runs in this repo'))
-})
-
-test('the pane lists a run folder from a linked worktree', async ($, on) => {
-  engine(on, () => GIT_OK, { '/repo/.git/worktrees': ['w1'], '/repo/.git/worktrees/w1/remote-agent': ['run-1'] })
-  expect(await paneTexts($)).toEqual(SURFACES.map(() => 'run-1'))
-})
-
-test('the pane lists the main git dir runs, then each worktree runs, and skips files', async ($, on) => {
-  engine(
-    on,
-    () => GIT_OK,
-    {
-      '/repo/.git/remote-agent': ['run-a'],
-      '/repo/.git/worktrees': ['w2', 'w1'],
-      '/repo/.git/worktrees/w1/remote-agent': ['run-b'],
-      '/repo/.git/worktrees/w2/remote-agent': ['run-c'],
-    },
-    { files: { '/repo/.git/remote-agent': ['notes.txt'] } },
-  )
-  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'remote-runs' })
+test('the pane lists runs of the main git dir and of each linked worktree, with every column', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  w.dirs['/repo/.git/worktrees'] = ['w1']
+  addRun(w, '/repo/.git', 'agent-main', runJson({ name: 'main-run', state: 'done', exit_code: 0, ended: NOW / 1000 - 10, started: NOW / 1000 - 93 }), 'done\n')
+  addRun(w, '/repo/.git/worktrees/w1', 'agent-wt', runJson(), 'claimed in 3s\nfirst agent event after 12s\n')
+  w.files['/repo/.git/remote-agent/notes.txt'] = { text: 'x', mtimeMs: 0 }
+  await start($)
+  await open($)
+  expect(await words($)).toEqual([
+    'TT-01-list running <1m', 'running <1m', '   claim 3s · send 5s · first 12s · first agent event after 12s',
+    'main-run done 1m23s', 'done 1m23s', '   claim 3s · send 5s · first 12s · done',
+  ])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.findAll({ type: 'Text' })).map((t: any) => t.text)).toEqual(['run-a', 'run-b', 'run-c'])
+  expect((await ui.find({ key: 'run:agent-wt' }))?.props.hotkey).toBe('1')
+  expect((await ui.find({ key: 'run:agent-main' }))?.props.hotkey).toBe('2')
   await ui.unmount()
 })
 
+test('a folder with no run.json, or an empty transcript, shows a row and nothing fails', async ($, on) => {
+  const w = engine(on)
+  addRun(w, '/repo/.git', 'agent-20261102-100000-1', null)
+  for (const surface of SURFACES) {
+    await start($)
+    await open($)
+    expect(await words($, surface)).toEqual(['agent-20261102-100000-1 unknown', 'unknown'])
+  }
+})
+
+test('a running run whose pid is dead or started at another time shows stopped', async ($, on) => {
+  const w = engine(on, { ps: psAlive([]) })
+  addRun(w, '/repo/.git', 'agent-dead', runJson({ name: 'dead', pid: 7 }))
+  addRun(w, '/repo/.git', 'agent-reused', runJson({ name: 'reused', pid: 8, started: NOW / 1000 - 40 }))
+  w.ps = psAlive([8], 'Tue Nov  3 09:00:00 2026')
+  await start($)
+  await open($)
+  const shown = await words($)
+  expect(shown.filter(t => / stopped/.test(t) && !t.startsWith(' '))).toEqual(['dead stopped 0s', 'reused stopped 0s'])
+  expect(w.psCalls).toEqual([['ps', '-o', 'pid=,lstart=', '-p', '7,8']])
+})
+
+test('a run left running after its remote-agent is gone stays stopped when ps cannot run', async ($, on) => {
+  const w = engine(on, { ps: { deny: 'no processes' } })
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await open($)
+  expect((await words($))[0]).toBe('TT-01-list running <1m')
+})
+
+test('more than 20 runs keep every unfinished one and drop the oldest finished', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  for (let i = 0; i < 25; i++) {
+    addRun(w, '/repo/.git', `agent-f${String(i).padStart(2, '0')}`, runJson({ name: `f${i}`, state: 'done', exit_code: 0, started: 1000 + i, ended: 1001 + i }))
+  }
+  addRun(w, '/repo/.git', 'agent-old', runJson({ name: 'old-running', started: 1 }))
+  await start($)
+  await open($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const keys = (await ui.findAll({ type: 'Button' })).map((b: any) => b.key)
+  await ui.unmount()
+  expect(keys.length).toBe(20)
+  expect(keys[0]).toBe('run:agent-old')
+  expect(keys[1]).toBe('run:agent-f24')
+  expect(keys[19]).toBe('run:agent-f06')
+})
+
+test('a changed run.json or a new progress line shows after one tick, with no command typed', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const { clock } = w
+  await start($)
+  await clock.advance(1500)
+  expect(await words($)).toEqual(['no remote runs in this repo'])
+
+  addRun(w, '/repo/.git', 'agent-1', runJson({ state: 'starting' }))
+  await clock.advance(1500)
+  expect((await words($))[0]).toBe('TT-01-list starting <1m')
+
+  write(w, '/repo/.git/remote-agent/agent-1/progress.log', 'claimed in 3s\n')
+  await clock.advance(1500)
+  expect((await words($))[2]).toBe('   claim 3s · send 5s · first 12s · claimed in 3s')
+
+  write(w, '/repo/.git/remote-agent/agent-1/run.json', JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 5 })))
+  await clock.advance(1500)
+  expect((await words($))[0]).toBe('TT-01-list done 35s')
+})
+
+test('an unchanged tick does not set state', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const { clock } = w
+  addRun(w, '/repo/.git', 'agent-1', runJson(), 'claimed in 3s\n')
+  await start($)
+  await clock.advance(1500)
+  const after = w.sets
+  expect(after).toBe(1)
+  await clock.advance(1500)
+  await clock.advance(1500)
+  expect(w.sets).toBe(after)
+})
+
+test('failing file reads and processes on every tick leave no failed hook', async ($, on) => {
+  const w = engine(on, { ps: { deny: 'no processes' }, readFails: true })
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  await open($)
+  expect((await words($))[0]).toBe('agent-1 unknown')
+})
+
 test('/remote-runs says the pane waits for a wider terminal when it is not placed', async ($, on) => {
-  engine(on, () => GIT_OK, {}, { placed: false })
-  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  engine(on, { placed: false })
+  await start($)
   const { text } = await $.command.run({ command: 'remote-runs' })
   expect(text).toBe('Remote runs pane opens once the terminal is wider.')
 })

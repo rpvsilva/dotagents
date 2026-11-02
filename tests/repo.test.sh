@@ -107,7 +107,7 @@ while read -r id source; do
     p="${source#./}/${src#./}/.claude-plugin/plugin.json"
     [ "$(jq -r .name "$p" 2>/dev/null | tr -d '\r')" = "$name" ] || fail "$m: plugin $name has no $p named $name"
   done < <(jq -r '.plugins[] | "\(.name) \(.source)"' "$m" | tr -d '\r')
-done <adapters/claude/plugins.txt
+done < <(tr -d '\r' <adapters/claude/plugins.txt) # a CRLF checkout (Windows) leaves \r on each line
 # Every mod folder is listed in the mods marketplace.
 for d in adapters/claude/mods/*/; do
   [ -d "$d" ] || continue

@@ -8,8 +8,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 list="${1:?usage: claude-plugins.sh <plugins.txt>}"
-marketplaces="$(claude plugin marketplace list --json | jq -r '.[].name')"
-installed="$(claude plugin list --json | jq -r '.[].id')"
+marketplaces="$(claude plugin marketplace list --json | jq -r '.[].name' | tr -d '\r')"
+installed="$(claude plugin list --json | jq -r '.[].id' | tr -d '\r')"
 failed=0
 
 while read -r id source; do
@@ -29,6 +29,6 @@ while read -r id source; do
     echo "  plugin $id: install failed"
     failed=1
   fi
-done <"$list"
+done < <(tr -d '\r' <"$list") # a CRLF checkout (Windows) must not leave \r on a source
 
 exit "$failed"
