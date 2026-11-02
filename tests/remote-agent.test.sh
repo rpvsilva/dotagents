@@ -377,25 +377,25 @@ code=0; STUB_WINPATH="C:\\$(printf 'a%.0s' $(seq 200))" RESUME_PATH="$SANDBOX/wi
 grep -q "over Claude Code's 200" "$SANDBOX/err" || fail "long path: not said: $(cat "$SANDBOX/err")"
 [ ! -e "$CC/projects" ] || fail "long path: something placed: $(find "$CC" -type f)"
 rm -rf "$hand" "$CC"
-# A run whose session is missing still applies its patch, and says so.
+# A run whose session is missing still applies its patch, and says so. Without a main-process stdout (SSH bare mode)
+# the sandbox's log is ~/progress.log.
 rm -f "$W/hello.txt"
 : >"$SANDBOX/nosession"
+: >"$SANDBOX/nomain"
 run 0 "" || fail "real no session: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "real no session: patch not applied"
-grep -q "== no session file" "$POD/main-stdout" || fail "real no session: the sandbox did not report it: $(cat "$SANDBOX/err")"
+grep -q "== no session file" "$POD/progress.log" 2>/dev/null || fail "real no session: the sandbox did not report it: $(cat "$SANDBOX/err")"
 grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "real no session: not reported: $(cat "$SANDBOX/err")"
 [ ! -e "$CC/projects" ] || fail "real no session: something placed: $(find "$CC" -type f)"
-rm -f "$SANDBOX/nosession"
-# Without a main-process stdout (SSH bare mode) the log is ~/progress.log.
-rm -f "$W/hello.txt"
-: >"$SANDBOX/nomain"
-run 0 "" || fail "progress.log: exited non-zero: $(cat "$SANDBOX/out")"
 grep -q "→ Write hello.txt" "$POD/progress.log" 2>/dev/null || fail "progress.log: Claude's progress missing"
 grep -q "snapshot: " "$POD/progress.log" 2>/dev/null || fail "progress.log: client progress missing"
-rm -f "$W/hello.txt" "$SANDBOX/nomain" "$SANDBOX/real"
+rm -f "$W/hello.txt" "$SANDBOX/nosession" "$SANDBOX/nomain" "$SANDBOX/real"
 
-# --name labels the claim and its pod with the task and tags the progress; it is made a valid label value.
-run 0 "$patch" --name "07-Visible runs!" || fail "name: exited non-zero: $(cat "$SANDBOX/out")"
+# --name labels the claim and its pod with the task and tags the progress; it is made a valid label value. run.json
+# keeps the name though --attach comes after it.
+mkdir -p "$SANDBOX/att"
+printf 'ticket\n' >"$SANDBOX/att/ticket.md"
+run 0 "$patch" --name "07-Visible runs!" --attach "$SANDBOX/att/ticket.md" || fail "name: exited non-zero: $(cat "$SANDBOX/out")"
 claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
 [ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim, sandbox.users.io/remote-agent-task: 07-visible-runs" ] || fail "name: pod labels are $(pod_labels)"
 grep -qF "sandbox.users.io/remote-agent-task: 07-visible-runs" "$SANDBOX/claim.yaml" || fail "name: claim not labelled"
@@ -403,16 +403,17 @@ logged_all "[07-visible-runs]" "$POD/main-stdout" "name"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "name: stdout changed: $(cat "$SANDBOX/report")"
 run_data "name run data" "done" 0 07-visible-runs
 rm -f "$W/hello.txt"
-# run.json keeps the name though --attach comes after it.
-mkdir -p "$SANDBOX/att"
-printf 'ticket\n' >"$SANDBOX/att/ticket.md"
-run 0 "$patch" --name "07-Visible runs!" --attach "$SANDBOX/att/ticket.md" || fail "name, attach: exited non-zero: $(cat "$SANDBOX/out")"
-run_data "name with attach run data" "done" 0 07-visible-runs
-rm -f "$W/hello.txt"
-run 0 "$patch" --name "$(printf 'A%.0s' $(seq 80))_x" || fail "long name: exited non-zero: $(cat "$SANDBOX/out")"
+# A long name is cut to 63 characters. Settings left in remote.env from before settings.json are ignored, and the run
+# names them and how to move them.
+echo "REMOTE_BACKEND=docker" >>"$SANDBOX/config/dotagents/remote.env"
+run 0 "$patch" --name "$(printf 'A%.0s' $(seq 80))_x" || fail "long name, leftover: exited non-zero: $(cat "$SANDBOX/out")"
 task="$(pod_labels | sed -n 's/.*sandbox\.users\.io\/remote-agent-task: //p')"
 [ "$task" = "$(printf 'a%.0s' $(seq 63))" ] || fail "long name: wanted 63 a's, got $task"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "leftover: patch not applied: $(cat "$SANDBOX/out")"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "leftover: the old REMOTE_BACKEND was used, not settings.json"
+grep -q "REMOTE_BACKEND.*remote-agent setup" "$SANDBOX/err" || fail "leftover: not named: $(cat "$SANDBOX/err")"
 rm -f "$W/hello.txt"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 code=0; run 0 "$patch" --name "!!" || code=$?
 if [ "$code" != 1 ] || [ -e "$SANDBOX/calls" ]; then fail "name without letters or digits: not refused"; fi
 
@@ -453,15 +454,6 @@ rm -rf "$POD" "$SANDBOX/calls"
 rm -f "$W/hello.txt"
 code=0; (cd "$W" && PATH="$SANDBOX/bin:$PATH" remote-agent --attach "$SANDBOX/nope" "x") >/dev/null 2>&1 || code=$?
 [ "$code" = 1 ] || fail "attach: a missing path was not refused"
-
-# Settings left in remote.env from before settings.json are ignored, and the run names them and how to move them.
-echo "REMOTE_BACKEND=docker" >>"$SANDBOX/config/dotagents/remote.env"
-run 0 "$patch" || fail "leftover: exited non-zero: $(cat "$SANDBOX/out")"
-[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "leftover: patch not applied: $(cat "$SANDBOX/out")"
-grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "leftover: the old REMOTE_BACKEND was used, not settings.json"
-grep -q "REMOTE_BACKEND.*remote-agent setup" "$SANDBOX/err" || fail "leftover: not named: $(cat "$SANDBOX/err")"
-rm -f "$W/hello.txt"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 
 # Refused before anything is staged or sent: an unknown backend (hand-edited, naming the known ones), no backend
 # (remote is off; pointing to setup), and a repo that sets remote.allowed to false.
