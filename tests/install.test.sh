@@ -16,8 +16,13 @@ assert_link() {
   [ "$got" = "$want" ] || fail "$dest -> $got, want $want"
 }
 
-# Prints the target of every symlink under $1, so two runs can be compared.
-snapshot() { find "$1" -type l | sort | while read -r l; do echo "$l -> $(readlink "$l")"; done; }
+# Prints the target of every symlink under $1, so two runs can be compared: the sorted paths, then their targets in
+# the same order, from one readlink for all (one each took seconds).
+snapshot() {
+  find "$1" -type l | sort >"$SANDBOX/links"
+  cat "$SANDBOX/links"
+  tr '\n' '\0' <"$SANDBOX/links" | xargs -0 readlink
+}
 
 run() { HOME="$1" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" "${@:2}"; }
 

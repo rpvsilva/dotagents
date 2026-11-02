@@ -22,8 +22,12 @@ stub_docker() {
 state="$state"
 EOF
   cat >>"$bin/docker" <<'EOF'
+# One line per call. A multi-line argument (a script) goes through tr: bash 3.2's ${x//$'\n'/ } takes seconds on one.
 args="$*"
-printf '%s\n' "${args//$'\n'/ }" >>"$state/calls"
+case "$args" in
+  *$'\n'*) { printf '%s' "$args" | tr '\n' ' '; echo; } >>"$state/calls" ;;
+  *) printf '%s\n' "$args" >>"$state/calls" ;;
+esac
 op="$1"
 shift
 case "$op" in
@@ -108,8 +112,12 @@ stub_ssh() {
 state="$state"
 EOF
   cat >>"$bin/ssh" <<'EOF'
+# As the docker stub: tr for a multi-line command, which bash 3.2's ${x//$'\n'/ } would take seconds on.
 args="ssh $*"
-printf '%s\n' "${args//$'\n'/ }" >>"$state/calls"
+case "$args" in
+  *$'\n'*) { printf '%s' "$args" | tr '\n' ' '; echo; } >>"$state/calls" ;;
+  *) printf '%s\n' "$args" >>"$state/calls" ;;
+esac
 while [ $# -gt 0 ]; do
   case "$1" in
     -o|-p|-i|-l|-F) shift 2 ;;
@@ -126,7 +134,16 @@ if [ -n "${STUB_SSH_HOME:-}" ]; then
   export HOME="$STUB_SSH_HOME"
   [ -z "${STUB_SSH_PATH:-}" ] || export PATH="$STUB_SSH_PATH"
   : >>"$state/host-main-stdout"
-  cmd="${cmd//\/proc\/1\/fd\/1/$state\/host-main-stdout}"
+  # awk, not ${cmd//...}: the command can hold the whole sandbox script, and bash 3.2 takes seconds on that.
+  case "$cmd" in
+    */proc/1/fd/1*)
+      cmd="$(printf '%s\n' "$cmd" | to="$state/host-main-stdout" awk '{
+        s = $0; out = ""
+        while ((i = index(s, "/proc/1/fd/1")) > 0) { out = out substr(s, 1, i - 1) ENVIRON["to"]; s = substr(s, i + 12) }
+        print out s
+      }')"
+      ;;
+  esac
 fi
 exec "$sh" -c "$cmd"
 EOF
@@ -154,11 +171,12 @@ make_worktree() {
   printf 'KEY=1\n' >"$w/.env"
 }
 
-# Succeeds when process <pid> is still running 3 seconds on (a stopped process may take a moment to go); fails at
-# once for an empty pid.
+# Succeeds when process <pid> is still running <tenths> tenths of a second on (default 30: a stopped process may take
+# a moment to go); fails at once for an empty pid. A process nothing may signal needs only a short look (5), checked
+# once the call that could have signalled it has returned.
 alive() {
   [ -n "$1" ] || return 1
-  for _ in $(seq 30); do kill -0 "$1" 2>/dev/null || return 1; sleep 0.1; done
+  for _ in $(seq "${2:-30}"); do kill -0 "$1" 2>/dev/null || return 1; sleep 0.1; done
 }
 
 # A patch adding hello.txt, and one that does not apply to make_worktree's tracked.txt.

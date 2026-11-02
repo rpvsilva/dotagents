@@ -80,7 +80,11 @@ mkdir -p "$SANDBOX/bin" "$SANDBOX/config/dotagents"
 cat >"$SANDBOX/bin/kubectl" <<EOF
 #!/usr/bin/env bash
 args="\$*"
-printf '%s\n' "\${args//\$'\\n'/ }" >>"$SANDBOX/calls"
+# tr for a multi-line argument (a script): bash 3.2's \${x//\$'\\n'/ } takes seconds on one.
+case "\$args" in
+  *\$'\\n'*) { printf '%s' "\$args" | tr '\\n' ' '; echo; } >>"$SANDBOX/calls" ;;
+  *) printf '%s\n' "\$args" >>"$SANDBOX/calls" ;;
+esac
 mkdir -p "$POD"
 [ -e "$SANDBOX/nomain" ] || touch "$POD/main-stdout"
 case " \$* " in
@@ -526,6 +530,26 @@ if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
   kill "$(cat "$SANDBOX/backend.pid")"
 fi
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
+
+# Refused before anything reaches the cluster, each naming why: an empty brief, two attachments with one name, a
+# snapshot over REMOTE_MAX_MB.
+refused() {
+  local want="$1" code=0
+  shift
+  rm -f "$SANDBOX/calls"
+  (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    "$@") >"$SANDBOX/out" 2>&1 || code=$?
+  [ "$code" = 1 ] || fail "refused ($want): wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q -- "$want" "$SANDBOX/out" || fail "refused ($want): not said: $(cat "$SANDBOX/out")"
+  [ ! -e "$SANDBOX/calls" ] || fail "refused ($want): kubectl was called: $(cat "$SANDBOX/calls")"
+}
+refused "empty brief" "$REPO/scripts/remote-agent.sh" ""
+mkdir -p "$SANDBOX/a/notes"
+refused "two attachments named notes" "$REPO/scripts/remote-agent.sh" --attach "$SANDBOX/run/notes" --attach "$SANDBOX/a/notes" "x"
+# 2 MB of random bytes against the smallest limit the Setting allows (1 MB; 0 is refused as a bad value).
+head -c 2097152 /dev/urandom >"$W/big.bin"
+refused "over REMOTE_MAX_MB=1" env REMOTE_MAX_MB=1 "$REPO/scripts/remote-agent.sh" "x"
+rm -f "$W/big.bin"
 
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"

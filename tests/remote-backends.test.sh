@@ -62,25 +62,27 @@ grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "docker: the token 
 gone "$c" || fail "docker: container $c not removed after success"
 rm -f "$W/hello.txt"
 
-# Settings: image, platform and hours.
-run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_IMAGE=local/runner:dev REMOTE_PLATFORM=linux/arm64 REMOTE_HOURS=1 \
+# Settings: image, platform and hours. The brief comes from a file (@file).
+printf 'line one\nline two\n' >"$SANDBOX/brief.md"
+BRIEF="@$SANDBOX/brief.md" \
+  run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_IMAGE=local/runner:dev REMOTE_PLATFORM=linux/arm64 REMOTE_HOURS=1 \
   || fail "docker settings: exited non-zero: $(cat "$SANDBOX/out")"
 grep -q "^run -d --rm .*--platform linux/arm64 local/runner:dev sleep 3600\$" "$S/calls" \
   || fail "docker settings: image, platform or hours not used: $(grep '^run' "$S/calls")"
+[ "$(sed -n '2,$p' "$S/stdin")" = "line one
+line two" ] || fail "docker @file: the brief is not the file's text: $(sed -n '2,$p' "$S/stdin")"
 rm -f "$W/hello.txt"
 
-# --name labels the container with the task, under the cluster's key.
-NAME="09-Review fixes" run 0 "" REMOTE_BACKEND=docker || true
+# No changes: exit 3. --name labels the container with the task, under the cluster's key.
+code=0; NAME="09-Review fixes" run 0 "" REMOTE_BACKEND=docker || code=$?
+[ "$code" = 3 ] || fail "docker no changes: wanted exit 3, got $code"
+gone "$(container)" || fail "docker no changes: container not removed"
 grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " "$S/calls" \
   || fail "docker name: container not labelled with the task: $(grep '^run' "$S/calls")"
 
-# No changes: exit 3.
-code=0; run 0 "" REMOTE_BACKEND=docker || code=$?
-[ "$code" = 3 ] || fail "docker no changes: wanted exit 3, got $code"
-gone "$(container)" || fail "docker no changes: container not removed"
-
-# A failed run keeps its exit code, applies nothing, and removes the container.
-code=0; run 5 "$HELLO_PATCH" REMOTE_BACKEND=docker || code=$?
+# A failed run keeps its exit code, applies nothing, and removes the container. The brief comes from stdin (-).
+code=0; BRIEF=- run 5 "$HELLO_PATCH" REMOTE_BACKEND=docker <<<"brief from stdin" || code=$?
+[ "$(sed -n '2,$p' "$S/stdin")" = "brief from stdin" ] || fail "docker -: the brief is not stdin: $(sed -n '2,$p' "$S/stdin")"
 [ "$code" = 5 ] || fail "docker failed run: wanted exit 5, got $code"
 [ ! -e "$W/hello.txt" ] || fail "docker failed run: patch applied anyway"
 gone "$(container)" || fail "docker failed run: container not removed"
@@ -133,10 +135,9 @@ grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\
 grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
   || fail "ssh: container not labelled with its run: $(grep '^run' "$S/calls")"
 # Compared without CRs: a Windows checkout may turn the file's LFs into CRLFs, and the shell drops the CRs in transit.
-want="$(cat "$REPO/scripts/remote-agent-sandbox.sh")"
-want="${want//$'\r'/}"
-got="$(cat "$S/script" 2>/dev/null)"
-got="${got//$'\r'/}"
+# tr, not ${x//$'\r'/}: bash 3.2 takes seconds on a string this long.
+want="$(tr -d '\r' <"$REPO/scripts/remote-agent-sandbox.sh")"
+got="$(tr -d '\r' 2>/dev/null <"$S/script" || true)"
 if [ "$got" != "$want" ]; then
   printf '%s' "$want" >"$SANDBOX/script.want"
   printf '%s' "$got" >"$SANDBOX/script.got"
@@ -400,20 +401,26 @@ bare_op release agent-sweep 2>/dev/null || true
 rm -rf "$runs"/agent-future "$runs"/agent-live
 
 # A hard limit: once the host's clock is more than 10 minutes past a folder's .expires, the next acquire kills what
-# still runs there (through .pid, as release does) and removes it, though its heartbeat is fresh.
-rm -f "$S/stubborn.pid" "$S/stubborn-child.pid" "$S/stdout-closed"
+# still runs there (through .pid, as release does) and removes it, though its heartbeat is fresh. The run here goes
+# on TERM: the KILL that follows a TERM ignored is the same stop as release's, checked with the stubborn run above.
+printf '#!/bin/sh
+echo $$ >"%s"
+exec sleep 60
+' "$S/polite.pid" >"$HB/polite"
+chmod +x "$HB/polite"
+rm -f "$S/polite.pid"
 h="$(bare_op acquire agent-overdue 2>/dev/null)" || fail "bare hard limit: acquire failed"
-(bare_op run agent-overdue "$h" "$HB/stubborn" </dev/null >/dev/null 2>&1) &
+(bare_op run agent-overdue "$h" "$HB/polite" </dev/null >/dev/null 2>&1) &
 pid=$!
-for _ in $(seq 100); do [ -e "$S/stubborn.pid" ] && break; sleep 0.1; done
+for _ in $(seq 100); do [ -e "$S/polite.pid" ] && break; sleep 0.1; done
 echo $(($(date +%s) - 86400)) >"$h/.expires"
 touch "$h/.heartbeat"
 h2="$(bare_op acquire agent-sweep 2>/dev/null)" || fail "bare hard limit: the next acquire failed"
 bare_op release agent-sweep 2>/dev/null || true
 [ ! -e "$h" ] || fail "bare hard limit: a folder long past its .expires, with a fresh heartbeat, was kept"
-if alive "$(cat "$S/stubborn.pid" 2>/dev/null)"; then
+if alive "$(cat "$S/polite.pid" 2>/dev/null)"; then
   fail "bare hard limit: the run long past its .expires outlived the next acquire"
-  kill -KILL "$(cat "$S/stubborn.pid")"
+  kill -KILL "$(cat "$S/polite.pid")"
 fi
 kill -KILL "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
@@ -426,14 +433,14 @@ other=$!
 h="$(bare_op acquire agent-reused 2>/dev/null)" || fail "bare reused pid: acquire failed"
 printf '%s group\n%s\n' "$other" "$other" >"$h/.pid"
 bare_op release agent-reused 2>/dev/null || true
-alive "$other" || fail "bare reused pid: release signalled a process outside the run folder"
+alive "$other" 5 || fail "bare reused pid: release signalled a process outside the run folder"
 mkdir -p "$runs/agent-reused"
 echo $(($(date +%s) - 86400)) >"$runs/agent-reused/.expires"
 printf '%s group\n%s\n' "$other" "$other" >"$runs/agent-reused/.pid"
 h="$(bare_op acquire agent-sweep 2>/dev/null)" || fail "bare reused pid: the next acquire failed"
 bare_op release agent-sweep 2>/dev/null || true
 [ ! -e "$runs/agent-reused" ] || fail "bare reused pid: the expired folder was kept"
-alive "$other" || fail "bare reused pid: acquire's cleanup signalled a process outside the run folder"
+alive "$other" 5 || fail "bare reused pid: acquire's cleanup signalled a process outside the run folder"
 kill "$other" 2>/dev/null || true
 wait "$other" 2>/dev/null || true
 
