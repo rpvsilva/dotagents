@@ -289,8 +289,17 @@ k="$(kept)"
 [ "$(cat "$k/summary.md" 2>/dev/null)" = "did the thing" ] || fail "hostile out: summary.md not kept"
 [ -s "$k/changes.patch" ] || fail "hostile out: changes.patch not kept"
 [ -s "$k/stream.jsonl" ] || fail "hostile out: stream.jsonl not kept"
-[ ! -e "$k/session.jsonl" ] || fail "hostile out: a linked session.jsonl was read in: $(cat "$k/session.jsonl")"
-rm -f "$W/hello.txt"
+# Where ln -s and tar make a link a copy of its target (Git Bash without native symlinks), the archive's session.jsonl
+# is a regular file, read in as data; so this holds only where a probe link survives a tar round trip.
+mkdir -p "$SANDBOX/probe/in" "$SANDBOX/probe/out"
+ln -s "$SANDBOX/victim" "$SANDBOX/probe/in/link" 2>/dev/null || true
+(cd "$SANDBOX/probe/in" && tar -cf - .) | (cd "$SANDBOX/probe/out" && tar -xf -) 2>/dev/null || true
+if [ -L "$SANDBOX/probe/out/link" ]; then
+  [ ! -e "$k/session.jsonl" ] || fail "hostile out: a linked session.jsonl was read in: $(cat "$k/session.jsonl")"
+else
+  echo "remote-agent.test.sh: links are copies here (ln -s or tar), hostile out's linked session.jsonl check skipped"
+fi
+rm -rf "$SANDBOX/probe" "$W/hello.txt"
 
 # The real sandbox script copies its own progress (Claude's lines) to the pod's log; the token stays out of it.
 : >"$SANDBOX/real"
