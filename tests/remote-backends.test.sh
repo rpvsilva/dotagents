@@ -399,20 +399,26 @@ bare_op release agent-sweep 2>/dev/null || true
 rm -rf "$runs"/agent-future "$runs"/agent-live
 
 # A hard limit: once the host's clock is more than 10 minutes past a folder's .expires, the next acquire kills what
-# still runs there (through .pid, as release does) and removes it, though its heartbeat is fresh.
-rm -f "$S/stubborn.pid" "$S/stubborn-child.pid" "$S/stdout-closed"
+# still runs there (through .pid, as release does) and removes it, though its heartbeat is fresh. The run here goes
+# on TERM: the KILL that follows a TERM ignored is the same stop as release's, checked with the stubborn run above.
+printf '#!/bin/sh
+echo $$ >"%s"
+exec sleep 60
+' "$S/polite.pid" >"$HB/polite"
+chmod +x "$HB/polite"
+rm -f "$S/polite.pid"
 h="$(bare_op acquire agent-overdue 2>/dev/null)" || fail "bare hard limit: acquire failed"
-(bare_op run agent-overdue "$h" "$HB/stubborn" </dev/null >/dev/null 2>&1) &
+(bare_op run agent-overdue "$h" "$HB/polite" </dev/null >/dev/null 2>&1) &
 pid=$!
-for _ in $(seq 100); do [ -e "$S/stubborn.pid" ] && break; sleep 0.1; done
+for _ in $(seq 100); do [ -e "$S/polite.pid" ] && break; sleep 0.1; done
 echo $(($(date +%s) - 86400)) >"$h/.expires"
 touch "$h/.heartbeat"
 h2="$(bare_op acquire agent-sweep 2>/dev/null)" || fail "bare hard limit: the next acquire failed"
 bare_op release agent-sweep 2>/dev/null || true
 [ ! -e "$h" ] || fail "bare hard limit: a folder long past its .expires, with a fresh heartbeat, was kept"
-if alive "$(cat "$S/stubborn.pid" 2>/dev/null)"; then
+if alive "$(cat "$S/polite.pid" 2>/dev/null)"; then
   fail "bare hard limit: the run long past its .expires outlived the next acquire"
-  kill -KILL "$(cat "$S/stubborn.pid")"
+  kill -KILL "$(cat "$S/polite.pid")"
 fi
 kill -KILL "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
