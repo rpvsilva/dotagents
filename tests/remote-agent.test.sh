@@ -526,6 +526,11 @@ for _ in $(seq 100); do
 done
 [ -n "$live" ] || fail "live run data: not running with its timings during the run: $(cat "$W"/.git/remote-agent/*/run.json "$W"/.git/remote-agent/*/progress.log 2>/dev/null)"
 kill -0 "$pid" 2>/dev/null || fail "live transcript: the run ended before the check"
+# pid and pid_start name the live remote-agent, so a reader can tell it from a reused pid (null where ps has no lstart).
+ps_start="$(ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//')" || ps_start=""
+jq -e --argjson pid "$pid" --arg ps "$ps_start" '.pid == $pid and .pid_start == (if $ps == "" then null else $ps end)' \
+  "$W"/.git/remote-agent/*/run.json >/dev/null 2>&1 \
+  || fail "live run data: pid and pid_start not the run's ($pid, $ps_start): $(cat "$W"/.git/remote-agent/*/run.json 2>/dev/null)"
 : >"$SANDBOX/go"
 wait "$pid" || fail "live transcript: exited non-zero: $(cat "$SANDBOX/err")"
 claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
@@ -623,8 +628,8 @@ jq -e --argjson pid "$pid" '.state == "running" and .pid == $pid and .exit_code 
 alive "$(jq -r .pid "$k/run.json" 2>/dev/null | tr -d '\r')" && fail "kill -9: the recorded pid is still alive"
 grep -qF "client says [redacted]" "$k/progress.log" || fail "kill -9: the backend's line not in progress.log, redacted: $(cat "$k/progress.log")"
 grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "kill -9: the token is in run.json or progress.log"
-# What kill -9 left running: the backend's client.
-if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then kill "$(cat "$SANDBOX/backend.pid")"; fi
+# What kill -9 left running: the backend's client. It is meant to be alive here, so stop it without waiting.
+kill "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" 2>/dev/null || true
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
 # Refused before anything reaches the cluster, each naming why: an empty brief, two attachments with one name, a
