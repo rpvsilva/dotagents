@@ -4,7 +4,7 @@
 // this module only calls `$` and draws. Every `$.fs` and `$.process` call is caught and means "no data": a hook that
 // throws prints a failed-hook line, and `$.process` fails on surfaces without processes (desktop, VS Code).
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, FsEntry, Register } from 'claude-code'
+import type { EngineInterface, FsEntry, Register, RenderSurface } from 'claude-code'
 
 import {
   applyLiveness,
@@ -26,19 +26,22 @@ import {
 import type { Log, Ticker, View } from './state.d.ts'
 import {
   byteSlice,
+  copiedText,
   EARLIER,
   NO_LOG,
   oneLine,
   readChunk,
   readFrom,
+  resumeHint,
   scrollLog,
   WAITING,
   windowLines,
+  wrappedRows,
 } from './transcript.ts'
 
 const PANE = 'remote-runs'
 const TICK_MS = 1500
-const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-2' })
+const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-3' })
 const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null } as Ticker, {
   shape: 'ticker-1',
 })
@@ -46,10 +49,14 @@ const view = atom({ plugin: 'remote-runs', key: 'view' } as const, { runId: null
 const log = atom({ plugin: 'remote-runs', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
 // A transcript under this size is read with $.fs.read (which refuses one over 4 MiB); a bigger one with tail.
 const FS_READ_MAX = 3 << 20
-// The pane's rows above the log: Back and the run, then the transcript path; and the note when earlier events
-// are not shown.
+// The pane's rows above the log: Back and the run, then Copy path and the transcript path.
 const HEADER_ROWS = 2
-const logRows = (bodyRows: number, l: Log) => Math.max(1, bodyRows - HEADER_ROWS - (l.truncated ? 1 : 0))
+/**
+ * How many log lines fit in a body of `bodyRows`: what the header, the earlier-events note and the resume hint
+ * (`below`, which wraps at `columns`) leave.
+ */
+const logRows = (bodyRows: number, l: Log, below: readonly string[] = [], columns = 80) =>
+  Math.max(1, bodyRows - HEADER_ROWS - (l.truncated ? 1 : 0) - below.reduce((n, line) => n + wrappedRows(line, columns), 0))
 // $.store key per common git dir: the folders of its runs already notified (or marked so), kept across processes,
 // newest last. Past NOTIFIED_MAX, only folders gone from disk are dropped.
 const notifiedKey = (common: string) => `notified:${common}`
@@ -64,6 +71,8 @@ let isTicking = false
 // unchanged file is not read again; and the queue its reads go through.
 let logCache = { runId: null as string | null, names: new Map<string, string>(), size: -1 }
 let logQueue: Promise<void> = Promise.resolve()
+// The log lines the last draw of the open log showed at once, which a scroll moves by (its input has no columns).
+let drawnRows = { runId: null as string | null, rows: 1 }
 
 /** The entries of `path`; none when it is missing or unreadable. */
 async function entries($: EngineInterface, path: string): Promise<FsEntry[]> {
@@ -106,7 +115,8 @@ async function runFiles($: EngineInterface, folder: string, id: string): Promise
   const file = (name: string) => listed.find(e => e.name === name && e.kind === 'file')
   const json = file('run.json')
   const log = file('progress.log')
-  const key = [json?.size, json?.mtimeMs, log?.size, log?.mtimeMs].join(':')
+  const session = file('session.jsonl') !== undefined
+  const key = [json?.size, json?.mtimeMs, log?.size, log?.mtimeMs, session].join(':')
   if (cached && cached.key === key) return cached.files
   const files: RunFiles = {
     id,
@@ -114,6 +124,7 @@ async function runFiles($: EngineInterface, folder: string, id: string): Promise
     runJson: json ? await text($, `${folder}/run.json`) : null,
     progress: log ? await text($, `${folder}/progress.log`) : null,
     changed: Math.floor(Math.max(json?.mtimeMs ?? 0, log?.mtimeMs ?? 0) / 1000),
+    session,
   }
   const { state } = parseRun(files)
   seen.set(folder, { key, files, isFinal: state === 'done' || state === 'failed' })
@@ -308,6 +319,16 @@ async function back($: EngineInterface): Promise<void> {
   await update($, log, () => NO_LOG)
 }
 
+/** Copies `path` on the surface that pressed, and toasts `copied` or why not; the path stays drawn either way. */
+async function copyPath($: EngineInterface, path: string, surface: RenderSurface): Promise<void> {
+  try {
+    const got = await $.ui.copy({ text: path, surface })
+    $.ui.toast(copiedText(got.isCopied ? null : got.reason))
+  } catch {
+    $.ui.toast(copiedText('refused'))
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'remote-runs', description: 'Show the remote-agent runs of this repo in a pane' })
@@ -328,7 +349,8 @@ export const register: Register = on => {
     const { runId } = await read($, view)
     if (runId === null) return next(e)
     const l = await read($, log)
-    if (l.runId === runId) await update($, log, () => scrollLog(l, e.by, logRows(e.bodyRows, l)))
+    const rows = drawnRows.runId === runId ? drawnRows.rows : logRows(e.bodyRows, l)
+    if (l.runId === runId) await update($, log, () => scrollLog(l, e.by, rows))
     return {}
   })
 
@@ -342,7 +364,9 @@ export const register: Register = on => {
       const row = formatRow(open)
       const l = await read($, log)
       const shown = l.runId === open.id ? l : { ...NO_LOG, runId: open.id }
-      const rows = logRows(e.props.scroll.bodyRows, shown)
+      const hint = resumeHint(open, open.session)
+      const rows = logRows(e.props.scroll.bodyRows, shown, hint, e.props.bodyColumns)
+      drawnRows = { runId: open.id, rows }
       return (
         <Box flexDirection="column">
           <Box>
@@ -357,13 +381,19 @@ export const register: Register = on => {
               <Text dimColor>{row.status}</Text>
             </Text>
           </Box>
-          <Text dimColor wrap="truncate-end">
-            {oneLine(open.transcript, 1000)}
-          </Text>
+          <Box columnGap={1}>
+            <Button key="copy" hotkey="c" onPress={press => copyPath($, open.transcript, press.surface)}>
+              Copy path
+            </Button>
+            <Text dimColor wrap="truncate-end">{oneLine(open.transcript, 1000)}</Text>
+          </Box>
           {shown.truncated && <Text dimColor wrap="truncate-end">{EARLIER}</Text>}
           {shown.lines.length === 0 && <Text dimColor>{WAITING}</Text>}
           {windowLines(shown.lines, shown.follow, shown.top, rows).map(line => (
             <Text wrap="truncate-end">{line}</Text>
+          ))}
+          {hint.map(line => (
+            <Text dimColor>{line}</Text>
           ))}
         </Box>
       )
