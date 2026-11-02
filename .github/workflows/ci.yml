@@ -65,7 +65,11 @@ jobs:
         shell: bash
         env:
           CHECKS: ${{ steps.affected.outputs.checks }}
-        run: for t in tests/*.test.sh; do case " $CHECKS " in *" ${t##*/} "*) echo "== $t"; "$t" ;; esac; done
+        # At once, through tests/parallel.sh, as tests/run.sh runs them.
+        run: |
+          suites=()
+          for t in tests/*.test.sh; do case " $CHECKS " in *" ${t##*/} "*) suites+=("$t") ;; esac; done
+          tests/parallel.sh ${suites[@]+"${suites[@]}"}
 
   secrets:
     runs-on: ubuntu-latest

@@ -48,7 +48,8 @@ fi
 
 suites=()
 for t in tests/*.test.sh; do want "${t##*/}" && suites+=("$t"); done
-for t in ${suites[@]+"${suites[@]}"}; do step "$t" "$t"; done
+# At once, through tests/parallel.sh (TEST_JOBS caps how many).
+[ "${#suites[@]}" -eq 0 ] || step "tests/*.test.sh" tests/parallel.sh "${suites[@]}"
 
 # macOS: run the suites again under /bin/bash 3.2. A `bash -> /bin/bash` shim first on PATH,
 # for this pass only, makes the scripts they call through `#!/usr/bin/env bash` run under 3.2 too.
@@ -56,7 +57,7 @@ if [ "$(uname -s)" = Darwin ] && [ -x /bin/bash ] && [ "${#suites[@]}" -gt 0 ]; 
   shim="$(mktemp -d)"
   trap 'rm -rf "$shim"' EXIT
   ln -s /bin/bash "$shim/bash"
-  for t in "${suites[@]}"; do step "$t (bash 3.2)" env PATH="$shim:$PATH" /bin/bash "$t"; done
+  step "tests/*.test.sh (bash 3.2)" env PATH="$shim:$PATH" /bin/bash tests/parallel.sh "${suites[@]}"
 fi
 
 [ -z "$skipped" ] || echo "== not run, no changed file they cover (tests/suites.txt; --all runs them):$skipped"

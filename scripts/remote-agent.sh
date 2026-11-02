@@ -155,7 +155,7 @@ say() { echo "remote-agent: $*" | progress; }
 with_progress() {
   local opt=""
   if [ "$1" = --no-log ]; then opt="$1"; shift; fi
-  { "$@" 2>&1 >&4 | progress ${opt:+"$opt"}; } 4>&1
+  { "$@" 2>&1 >&4 4>&- | progress ${opt:+"$opt"}; } 4>&1
 }
 # The sandbox's log is REMOTE_AGENT_LOG when the backend's run sets it, else its main process's stdout
 # (/proc/1/fd/1 in a pod or container), else ~/progress.log; scripts/remote-agent-sandbox.sh picks it the same way.
