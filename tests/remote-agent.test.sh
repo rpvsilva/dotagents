@@ -250,7 +250,7 @@ grep -q "→ Write hello.txt" "$POD/main-stdout" || fail "real sandbox: Claude's
 grep -q "sk-claude-secret" "$POD/main-stdout" "$SANDBOX/out" && fail "real sandbox: the token reached a log"
 # Its raw events come back on the run's stdout into the transcript, not onto stdout.
 t="$W/.git/remote-agent/$claim/transcript.jsonl"
-[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr '\n' ' ')" = "system user assistant result " ] \
+[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr -d '\r' | tr '\n' ' ')" = "system user assistant result " ] \
   || fail "real sandbox: transcript does not hold Claude's events: $(cat "$t" 2>/dev/null)"
 grep -q "first agent event after [0-9]*s" "$SANDBOX/err" || fail "real sandbox: no first-event time"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "real sandbox: stdout is not just the summary: $(cat "$SANDBOX/report")"
