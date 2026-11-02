@@ -1,31 +1,40 @@
 #!/usr/bin/env bash
 # Checks the remote-agent setup, run as `remote-agent check`: remote.env exists and holds a Claude token (never
-# printed), the backend's own requirements (`<backend> check`: one line per missing thing), then a dry run: acquire a
-# sandbox, put a one-file snapshot in ~/work, run a trivial command that copies it to ~/out and finds claude, get
-# ~/out back, compare, release. No Claude call, so no tokens spent. The sandbox is released even when a step fails.
+# printed) and no Settings left from before settings.json, a remote.backend is set, the backend's own requirements
+# (`<backend> check`: one line per missing thing), then a dry run: acquire a sandbox, put a one-file snapshot in
+# ~/work, run a trivial command that copies it to ~/out and finds claude, get ~/out back, compare, release. No Claude call, so no tokens spent. The sandbox is released even when a step fails.
 # The dry run is skipped when a requirement is missing. Exit 0 only when everything passes; prints ok at the end.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
+# shellcheck source=remote-settings.sh disable=SC1091
+. "$REPO/scripts/remote-settings.sh"
 
 say() { echo "remote-agent: $*" >&2; }
 
-if [ ! -f "$CONFIG/remote.env" ]; then
-  echo "no $CONFIG/remote.env: run \`remote-agent setup\` (without it, skills run subagents on this machine)"
+if [ ! -f "$REMOTE_SECRET_FILE" ]; then
+  echo "no $REMOTE_SECRET_FILE: run \`remote-agent setup\` (without it, skills run subagents on this machine)"
   exit 1
 fi
-# shellcheck disable=SC1091
-. "$CONFIG/remote.env"
 problems=0
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-  echo "CLAUDE_CODE_OAUTH_TOKEN is not set in $CONFIG/remote.env (from \`claude setup-token\`)"
+if [ -z "$(remote_token)" ]; then
+  echo "CLAUDE_CODE_OAUTH_TOKEN is not set in $REMOTE_SECRET_FILE (from \`claude setup-token\`)"
   problems=1
 fi
 # The dry run needs no token: keep it away from the backend.
 unset CLAUDE_CODE_OAUTH_TOKEN
+left="$(remote_leftovers)"
+if [ -n "$left" ]; then
+  echo "$REMOTE_SECRET_FILE still sets $left, now ignored: run \`remote-agent setup\` to move them to settings.json"
+  problems=1
+fi
+remote_settings "$PWD" || exit 1
+if [ -z "${REMOTE_BACKEND:-}" ]; then
+  echo "no remote.backend set: run \`remote-agent setup\` (until then, skills run subagents on this machine)"
+  exit 1
+fi
 
-backend_name="${REMOTE_BACKEND:-cluster}"
+backend_name="$REMOTE_BACKEND"
 known=()
 for f in "$REPO"/scripts/remote-backends/*.sh; do
   [ "$(basename "$f")" = lib.sh ] || known+=("$(basename "$f" .sh)")

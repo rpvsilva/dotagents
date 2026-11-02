@@ -1,0 +1,3 @@
+{
+  "resolve": { "kind": "enum", "choices": ["fixed", "none"], "default": "fixed", "meaning": "Which review threads the author resolves after replying: fixed (the ones you fixed; the reviewer resolves the rest) or none (the reviewer resolves every thread)." }
+}

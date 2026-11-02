@@ -26,7 +26,7 @@ Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at 
 
 ## Steps
 
-1. **Learn the rules** ([how](../_shared/conventions.md#learn-the-rules); notes file `.agents/security-audit-notes.md`). Besides the identity, note the local **checks** command, the **accepted risks**, `max_parallel` and `area_budget` (default 4000 lines) from the notes. Done when you know each of these.
+1. **Learn the rules** ([how](../_shared/conventions.md#learn-the-rules); notes file `.agents/security-audit-notes.md`). Besides the identity, note the local **checks** command, the **accepted risks**, and the `max_parallel` and `area_budget` Settings. Done when you know each of these.
 
 2. **Set up.** Create the run folder and check out the code in it: `git fetch origin && git worktree add --detach <run>/worktree origin/<default-branch>`. Clone first, into a temporary folder, when the repo is not local. Seed `findings.md` with the accepted risks as `declined`. Done when the worktree's HEAD is the remote default branch.
 

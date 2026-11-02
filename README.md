@@ -25,6 +25,10 @@ git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
 
 Everything is symlinked, so editing the repo updates every tool at once. Re-run `install.sh` after adding a skill. Anything it replaces is moved to `~/.dotagents-backup/`.
 
+## Settings
+
+Values skills and scripts act on (`max_parallel`, `tracker`, the remote backend, ...) are **Settings**: each skill declares the ones it reads in `skills/<skill>/settings.json` (shared ones in `skills/_shared/settings.json`, remote ones in `remote/settings.json`). Values live at two Levels: `~/.config/dotagents/settings.json` for this machine and `.agents/settings.json`, committed, for one repo; the repo's win. Read and change them with the `configure` skill or `~/.agents/bin/settings` (`list`, `get`, `set`, `unset`, `check`); usage at the top of `scripts/settings.sh`. Secrets never go there: they stay in `~/.config/dotagents/*.env`, each written by its own command.
+
 ## Contributing
 
 Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGENTS.md).
@@ -36,6 +40,7 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 | `add-plugin` | Add a Claude Code plugin: show what it adds and costs, then list it in `plugins.txt`, install it and ship the change |
 | `address-review` | Work through a PR's open review threads: verify each claim, fix what holds up test-first, reply to the rest; pushback and design calls go to Rui first |
 | `build-epic` | Take an epic or issue from the tracker to one reviewed PR per ticket, built from one PR per task: planner, explorer and implementer subagents, each task followed by a `test-tuner` task PR, one human approval of the plan |
+| `configure` | Show or change the Settings skills and scripts read (subagents at once, tracker, labels, remote backend), for this machine or this repo; repo changes ship as a PR |
 | `fix-pr` | Make one PR's failing checks pass and push; also the brief for the `pr-fixer` subagent |
 | `remember` | After a skill run, save what it learned about the repo into `.agents/<skill>-notes.md`, after Rui sees the diff; repo-wide or skill-wide lessons become proposals |
 | `renovate-prs` | Fix, verify and merge open Renovate PRs, one isolated subagent per PR |
