@@ -8,7 +8,7 @@ You review one PR, **read-only**: your one output is the findings report below. 
    - **Bugs**: inputs or states that give a wrong result, a crash, data loss, or a security hole.
    - **Rules**: a written rule in the rule files that the change breaks. Quote the rule.
    - **Spec**: the PR does less, more, or something else than it claims.
-   - **Tests**: changed behaviour that no test exercises, when the repo tests that kind of code; and **hollow** tests, which would still pass with the change reverted (asserting on mocks of the repo's own code, on private internals, or on nothing the behaviour decides).
+   - **Tests**: changed behaviour that no test exercises, when the repo tests that kind of code; and **hollow** tests, which would still pass with the change reverted (asserting on mocks of the repo's own code, on private internals, or on nothing the behaviour decides); and **slow** suites: run the suites covering the changed files in the worktree and in a detached worktree of the base branch, and flag one now a third slower, and at least 5 s, with its cause (a stall: a `sleep`, a timeout running out, a child process holding a pipe open; or a real CLI or network call where a stub would do).
 
    Done when every changed hunk has been checked on all four axes.
 
