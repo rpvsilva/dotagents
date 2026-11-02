@@ -177,7 +177,8 @@ run_json() {
 # remote-agent died without saying so. Timings are whole seconds, null until known.
 { printf '{}\n' >"$keep/run.json.tmp" && mv "$keep/run.json.tmp" "$keep/run.json"; } 2>/dev/null || true
 run_name="$name" # before --attach reuses $name
-pid_start="$(ps -o lstart= -p $$ 2>/dev/null | sed 's/^ *//; s/ *$//')" || pid_start=""
+# In the C locale: lstart follows it on macOS, and a reader compares it with its own ps.
+pid_start="$(LC_ALL=C ps -o lstart= -p $$ 2>/dev/null | sed 's/^ *//; s/ *$//')" || pid_start=""
 # The worktree as a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
 # shellcheck disable=SC2016 # jq's variables
 run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, pid: $pid,
@@ -222,12 +223,10 @@ redact_awk='function redact(s,  out, i) {
   }
   return out s
 }'
-# Rewrites file $1, if there, with the token's value redacted.
+# Writes file $1 to $2 with the token's value redacted.
 scrub() {
-  [ -f "$1" ] || return 0
   scrub_token="$claude_token" awk "$redact_awk"'
-    { print redact($0) }' "$1" >"$1.scrubbed"
-  mv "$1.scrubbed" "$1"
+    { print redact($0) }' "$1" >"$2"
 }
 # Appends the JSON lines on stdin to file $1 as they come, each flushed, the token's value redacted; anything else
 # (an ssh banner, a kubectl warning) is dropped. awk marks the first event on its stderr, which becomes the
@@ -338,10 +337,17 @@ set +m
 wait "$runner" || status=$?
 runner=""
 
-# Drained after extracting, so the sender's trailing padding does not hit a closed pipe (tar stops at the end marker).
-with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$keep" 2>/dev/null; cat >/dev/null; } || true
-# The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
-for f in stream.jsonl session.jsonl summary.md; do scrub "$keep/$f"; done
+# The sandbox's ~/out is unpacked in $stage/out, never in $keep: only its regular files of the names below are copied
+# into $keep, so a link in it cannot aim a write of this script (run.json, progress.log) at another file, nor can it
+# replace run.json. Drained after extracting, so the sender's trailing padding does not hit a closed pipe (tar stops
+# at the end marker).
+mkdir -p "$stage/out"
+with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$stage/out" 2>/dev/null; cat >/dev/null; } || true
+for f in changes.patch stream.jsonl session.jsonl summary.md; do
+  if [ -L "$stage/out/$f" ] || [ ! -f "$stage/out/$f" ]; then continue; fi
+  # The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
+  if [ "$f" = changes.patch ]; then cp "$stage/out/$f" "$keep/$f"; else scrub "$stage/out/$f" "$keep/$f"; fi
+done
 # The session stays here: the sandbox wrote it, so placing it for /resume is the human's call (remote-agent resume).
 if [ -s "$keep/session.jsonl" ]; then
   say "session: $keep/session.jsonl (from the sandbox, not placed for /resume; to place it: remote-agent resume $run $(printf '%q' "$root"))"

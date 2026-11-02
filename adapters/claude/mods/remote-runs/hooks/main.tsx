@@ -13,6 +13,7 @@ import {
   formatRow,
   gitDirs,
   livePids,
+  markNotified,
   notifyText,
   parseRun,
   pickRows,
@@ -29,8 +30,9 @@ const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], 
 const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null } as Ticker, {
   shape: 'ticker-1',
 })
-// $.store key: the folders of runs already notified (or marked so), kept across processes, newest last.
-const NOTIFIED = 'notified'
+// $.store key per common git dir: the folders of its runs already notified (or marked so), kept across processes,
+// newest last. Past NOTIFIED_MAX, only folders gone from disk are dropped.
+const notifiedKey = (common: string) => `notified:${common}`
 const NOTIFIED_MAX = 1000
 
 // Per-process caches (a reload starts them empty, which only costs one full read): the common git dir per cwd,
@@ -117,14 +119,34 @@ async function scan($: EngineInterface): Promise<{ common: string; found: Run[] 
   return { common, found }
 }
 
-/** `ps -o pid=,lstart=` for `pids`, in one call; '' with no pid, null when ps cannot run. */
+/**
+ * `ps -o pid=,lstart=` for `pids`, in one call, in the C locale as remote-agent wrote pid_start (lstart follows the
+ * locale on macOS); '' with no pid, null when ps cannot run.
+ */
 async function ps($: EngineInterface, pids: number[]): Promise<string | null> {
   if (pids.length === 0) return ''
   try {
-    return (await $.process.run(['ps', '-o', 'pid=,lstart=', '-p', pids.join(',')])).stdout
+    return (await $.process.run(['env', 'LC_ALL=C', 'ps', '-o', 'pid=,lstart=', '-p', pids.join(',')])).stdout
   } catch {
     return null
   }
+}
+
+/**
+ * `judged` (`found` after applyLiveness) with each run it calls stopped read again: one that wrote done or failed
+ * between the scan and `ps` ended on its own, so it takes its run.json's state rather than stopped.
+ */
+async function recheckStopped($: EngineInterface, judged: Run[]): Promise<Run[]> {
+  const out: Run[] = []
+  for (const r of judged) {
+    if (r.state !== 'stopped') {
+      out.push(r)
+      continue
+    }
+    const again = parseRun({ id: r.id, folder: r.folder, runJson: await text($, `${r.folder}/run.json`), progress: null, changed: r.changed })
+    out.push(again.state === 'done' || again.state === 'failed' ? { ...again, step: r.step } : r)
+  }
+  return out
 }
 
 /**
@@ -135,7 +157,7 @@ async function ps($: EngineInterface, pids: number[]): Promise<string | null> {
 async function notifyEnded($: EngineInterface, common: string, all: readonly Run[], t: Ticker): Promise<Ticker> {
   let stored: unknown
   try {
-    stored = await $.store.get(NOTIFIED)
+    stored = await $.store.get(notifiedKey(common))
   } catch {
     return t // no store, no memory: notifying now would repeat every tick
   }
@@ -150,7 +172,8 @@ async function notifyEnded($: EngineInterface, common: string, all: readonly Run
         // a refused or failed write: marked all the same
       }
     }
-    await $.store.set(NOTIFIED, [...notified, ...ended.map(r => r.folder)].slice(-NOTIFIED_MAX))
+    const present = new Set(all.map(r => r.folder))
+    await $.store.set(notifiedKey(common), markNotified(notified, ended, present, NOTIFIED_MAX))
   }
   return isSeeded ? t : { ...t, seeded: [...t.seeded, common] }
 }
@@ -167,7 +190,7 @@ async function tick($: EngineInterface): Promise<void> {
     const now = Math.floor((await $.clock.now()) / 1000)
     const got = await scan($)
     const found = got?.found ?? []
-    const all = applyLiveness(found, await ps($, livePids(found)))
+    const all = await recheckStopped($, applyLiveness(found, await ps($, livePids(found))))
     const rows = pickRows(all, now)
     if (signature(rows) !== signature(await read($, runs))) await update($, runs, () => rows)
 

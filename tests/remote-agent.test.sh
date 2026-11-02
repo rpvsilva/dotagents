@@ -112,6 +112,13 @@ case " \$* " in
     cat >"$SANDBOX/stdin"
     cp "$POD/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
     mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"; echo "did the thing" >"$POD/out/summary.md"
+    # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
+    # it read the victim in as the session, and a forged run.json.
+    if [ -e "$SANDBOX/evil" ]; then
+      for l in run.json.tmp run.json.first progress.log stream.jsonl.scrubbed summary.md.scrubbed session.jsonl; do ln -s "$SANDBOX/victim" "$POD/out/\$l"; done
+      echo '{"type":"result"}' >"$POD/out/stream.jsonl"
+      echo '{"run":"forged","name":"forged","state":"done","exit_code":0,"pid":1}' >"$POD/out/run.json"
+    fi
     exit "\$(cat "$SANDBOX/code")" ;;
   *" exec "*)
     while [ "\$1" != "-c" ]; do shift; done
@@ -268,6 +275,22 @@ code=0; run 0 "$stale" || code=$?
 [ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
 [ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
 run_data "stale patch run data" failed 4
+
+# A hostile sandbox's out archive cannot write outside the run folder through links, nor replace run.json: its links
+# named after the files the host writes (run.json.tmp, progress.log, the scrub's temporaries) aim at $SANDBOX/victim.
+printf 'untouched\n' >"$SANDBOX/victim"
+: >"$SANDBOX/evil"
+run 0 "$patch" || fail "hostile out: exited non-zero: $(cat "$SANDBOX/out")"
+rm -f "$SANDBOX/evil"
+[ "$(cat "$SANDBOX/victim")" = "untouched" ] || fail "hostile out: a file outside the run folder was written: $(cat "$SANDBOX/victim")"
+run_data "hostile out run data" "done" 0
+k="$(kept)"
+[ -z "$(find "$k" -type l)" ] || fail "hostile out: links kept in the run folder: $(find "$k" -type l)"
+[ "$(cat "$k/summary.md" 2>/dev/null)" = "did the thing" ] || fail "hostile out: summary.md not kept"
+[ -s "$k/changes.patch" ] || fail "hostile out: changes.patch not kept"
+[ -s "$k/stream.jsonl" ] || fail "hostile out: stream.jsonl not kept"
+[ ! -e "$k/session.jsonl" ] || fail "hostile out: a linked session.jsonl was read in: $(cat "$k/session.jsonl")"
+rm -f "$W/hello.txt"
 
 # The real sandbox script copies its own progress (Claude's lines) to the pod's log; the token stays out of it.
 : >"$SANDBOX/real"
@@ -501,7 +524,10 @@ EOF
 chmod +x "$SANDBOX/bin/kubectl"
 printf '%s' "$patch" >"$SANDBOX/patch"
 rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started" "$SANDBOX/go" "$W/.git/remote-agent"
-(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+# Under a German locale where there is one: ps -o lstart= follows it on macOS, and pid_start must not.
+de="$(locale -a 2>/dev/null | grep -iE '^de_DE\.utf-?8$' | head -1)" || de=""
+[ -n "$de" ] || echo "remote-agent.test.sh: no de_DE.UTF-8 locale, pid_start locale case runs in the current one"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN ${de:+LC_ALL="$de"} HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
   "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" &
 pid=$!
 for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
@@ -526,8 +552,9 @@ for _ in $(seq 100); do
 done
 [ -n "$live" ] || fail "live run data: not running with its timings during the run: $(cat "$W"/.git/remote-agent/*/run.json "$W"/.git/remote-agent/*/progress.log 2>/dev/null)"
 kill -0 "$pid" 2>/dev/null || fail "live transcript: the run ended before the check"
-# pid and pid_start name the live remote-agent, so a reader can tell it from a reused pid (null where ps has no lstart).
-ps_start="$(ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//')" || ps_start=""
+# pid and pid_start name the live remote-agent, so a reader can tell it from a reused pid (null where ps has no lstart),
+# in the C locale whatever remote-agent's.
+ps_start="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//')" || ps_start=""
 jq -e --argjson pid "$pid" --arg ps "$ps_start" '.pid == $pid and .pid_start == (if $ps == "" then null else $ps end)' \
   "$W"/.git/remote-agent/*/run.json >/dev/null 2>&1 \
   || fail "live run data: pid and pid_start not the run's ($pid, $ps_start): $(cat "$W"/.git/remote-agent/*/run.json 2>/dev/null)"

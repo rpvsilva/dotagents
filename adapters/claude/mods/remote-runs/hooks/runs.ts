@@ -34,8 +34,16 @@ export function gitDirs(common: string, worktrees: readonly string[]): string[] 
   return [common, ...[...worktrees].sort().map(w => `${common}/worktrees/${w}`)]
 }
 
+/**
+ * `text` without its C0 and C1 control characters (tab kept): what the sandbox or a run folder wrote may hold
+ * terminal escapes (an OSC 52 clipboard write, an OSC 8 link, cursor moves) that must never reach the terminal.
+ */
+export function printable(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/g, '')
+}
+
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+const str = (v: unknown): string | null => (typeof v === 'string' && printable(v) !== '' ? printable(v) : null)
 
 /** Epoch seconds from a run id `agent-YYYYmmdd-HHMMSS-N` (local time, as remote-agent's `date` wrote it). */
 function idStarted(id: string): number | null {
@@ -46,9 +54,9 @@ function idStarted(id: string): number | null {
   return Number.isFinite(t) ? t / 1000 : null
 }
 
-/** The last non-empty line of a text, without a carriage return. */
+/** The last non-empty line of a text, without control characters. */
 function lastLine(text: string | null): string | null {
-  const lines = (text ?? '').split('\n').map(l => l.replace(/\r$/, '').trim()).filter(Boolean)
+  const lines = (text ?? '').split('\n').map(l => printable(l).trim()).filter(Boolean)
   return lines.length ? lines[lines.length - 1] : null
 }
 
@@ -179,6 +187,16 @@ export function statusText(runs: readonly Run[], now: number): string | undefine
 /** The runs that ended (done, failed or stopped) and whose folder is not in `notified`. */
 export function endedRuns(runs: readonly Run[], notified: ReadonlySet<string>): Run[] {
   return runs.filter(r => (r.state === 'done' || r.state === 'failed' || r.state === 'stopped') && !notified.has(r.folder))
+}
+
+/**
+ * The notified folders after marking `ended`, newest last. Past `max`, the oldest folders not in `present` (the
+ * folders the scan found) go first; a folder still on disk is never dropped, so it is never notified twice.
+ */
+export function markNotified(notified: readonly string[], ended: readonly Run[], present: ReadonlySet<string>, max: number): string[] {
+  const next = [...notified, ...ended.map(r => r.folder)]
+  let extra = next.length - max
+  return extra <= 0 ? next : next.filter(f => present.has(f) || extra-- <= 0)
 }
 
 /** A finished run's notification text: `<name> done`, `<name> failed (exit <code>)` or `<name> stopped`. */
