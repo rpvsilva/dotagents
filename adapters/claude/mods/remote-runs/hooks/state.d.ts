@@ -43,9 +43,23 @@ export type Ticker = { seeded: string[]; status: string | null }
 /** What the pane shows: the list (`runId` null), or the log of the run with that id. */
 export type View = { runId: string | null }
 
+/**
+ * The open run's log, which the timer reads on: the transcript's bytes read so far (`offset`, always just past a
+ * newline), the lines they render to (the last 2000), and the window over them: at the end while `follow`, else
+ * from line `top`. `truncated` when earlier events are not in `lines`. `runId` null: no log open.
+ */
+export type Log = {
+  runId: string | null
+  offset: number
+  lines: string[]
+  follow: boolean
+  top: number
+  truncated: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     // Change an atom's shape tag when its fields change: it declines what an earlier version stored.
-    'remote-runs': { runs: Shaped<Run[]>; ticker: Shaped<Ticker>; view: Shaped<View> }
+    'remote-runs': { runs: Shaped<Run[]>; ticker: Shaped<Ticker>; view: Shaped<View>; log: Shaped<Log> }
   }
 }

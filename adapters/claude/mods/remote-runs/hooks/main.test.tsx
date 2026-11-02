@@ -35,9 +35,15 @@ type World = {
   sent: unknown
   /** The `runs` atom's writes, the status lines set and the notifications raised. */
   sets: number
+  /** The `log` atom's writes. */
+  logSets: number
   status: (string | undefined)[]
   notified: { title?: string; text: string }[]
   psCalls: string[][]
+  /** Files too big to hold: a path's size, and what `tail` answers when asked from 1-based byte `+n`. */
+  big: Record<string, { size: number; tail: (n: number) => string }>
+  /** The argv of every `sh -c 'tail ... | head ...'` read. */
+  tails: string[][]
   /** What `ui.copy` answers (an Error: it throws), what it was asked to copy where, and the toasts shown. */
   copy: unknown
   copies: { text: string; surface: string }[]
@@ -48,7 +54,8 @@ type World = {
 function engine(on: any, over: Partial<World> = {}): World {
   const clock = mock.clock(on, { now: NOW })
   const w: World = {
-    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, psCalls: [], clock,
+    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, logSets: 0, psCalls: [], clock,
+    big: {}, tails: [],
     sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], copy: { isCopied: true }, copies: [], toasts: [], ...over,
   }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
@@ -59,6 +66,13 @@ function engine(on: any, over: Partial<World> = {}): World {
     return { value: { isPlaced: w.placed } }
   })
   on('process.run', (_: unknown, e: any) => {
+    if (e.argv[0] === 'sh') {
+      // sh -c 'tail -c "+$1" "$2" | head -c "$3"' sh <+n> <path> <max bytes>
+      w.tails.push(e.argv)
+      const big = w.big[e.argv[5]]
+      if (!big) return { value: { exitCode: 1, stdout: '', stderr: 'no such file' } }
+      return { value: { exitCode: 0, stdout: big.tail(Number(e.argv[4])).slice(0, Number(e.argv[6])), stderr: '' } }
+    }
     if (e.argv.includes('ps')) {
       w.psCalls.push(e.argv)
       return typeof w.ps === 'function' ? w.ps() : w.ps
@@ -75,6 +89,12 @@ function engine(on: any, over: Partial<World> = {}): World {
     })
     return { value: [...files.map(file), ...(names ?? []).map(dir)] }
   })
+  on('fs.stat', (_: unknown, e: any) => {
+    const f = w.files[e.path]
+    if (w.big[e.path]) return { value: { kind: 'file', size: w.big[e.path].size, mtimeMs: NOW, isLink: false } }
+    if (!f) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'file', size: new TextEncoder().encode(f.text).length, mtimeMs: f.mtimeMs, isLink: false } }
+  })
   on('fs.read', (_: unknown, e: any) => {
     w.reads.push(e.path)
     const f = w.readFails ? undefined : w.files[e.path]
@@ -83,6 +103,7 @@ function engine(on: any, over: Partial<World> = {}): World {
   })
   on('state.set', (_: unknown, e: any, next: any) => {
     if (e.key === 'runs') w.sets++
+    if (e.key === 'log') w.logSets++
     return next(e)
   })
   on('ui.status', (_: unknown, e: any) => {
@@ -532,6 +553,133 @@ test('a token-shaped string in the transcript is masked in every line drawn', as
   expect(shown).toContain('<- Bash: [masked]')
 })
 
+const say = (text: string) => jsonl({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+const says = (count: number, from = 0) => Array.from({ length: count }, (_, i) => say(`line ${from + i}`)).join('')
+const names = (count: number, from = 0) => Array.from({ length: count }, (_, i) => `line ${from + i}`)
+// The pane is 20 rows: two header rows, 18 rows of log.
+const ROWS = 18
+const scroll = (by: number) => ({ component: 'Pane', requestId: 'remote-runs', offset: 0, by, bodyRows: 20, contentRows: 20, origin: { kind: 'person' } })
+
+// The log lines the pane draws (each Text after the path, but the notes and the resume hint), the hint, and all its
+// Text, as `surface` shows them.
+async function logView($: any, surface: (typeof SURFACES)[number] = 'terminal') {
+  const ui = await $.ui.mount({ ...PANE, surface })
+  const texts = await ui.findAll({ type: 'Text' })
+  await ui.unmount()
+  const notes = ['(earlier events not shown: open the file)', 'waiting for the first event']
+  const isHint = (t: any) => /^(to resume: |warning: |no session came back)/.test(t.text)
+  const after = texts.slice(texts.findIndex((t: any) => t.text.endsWith('/transcript.jsonl')) + 1)
+  const lines = after.filter((t: any) => !notes.includes(t.text) && !isHint(t))
+  for (const t of lines) expect(t.props.wrap).toBe('truncate-end')
+  return { lines: lines.map((t: any) => t.text), hint: after.filter(isHint).map((t: any) => t.text), texts: texts.map((t: any) => t.text) }
+}
+
+async function press($: any, key: string) {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key })
+  await ui.unmount()
+}
+
+function append(w: World, text: string) {
+  write(w, TRANSCRIPT, w.files[TRANSCRIPT].text + text)
+}
+
+test('an open log draws exactly its rows and shows new events within one tick', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(names(ROWS, 12))
+  append(w, says(2, 30))
+  await w.clock.advance(1500)
+  for (const surface of SURFACES) expect((await logView($, surface)).lines).toEqual(names(ROWS, 14))
+})
+
+test('scrolled up, new events leave the window; End, or scrolling back to the end, follows again', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  await press($, 'run:agent-1')
+  await $.ui.scroll(scroll(-5))
+  expect((await logView($)).lines).toEqual(names(ROWS, 7))
+  append(w, says(3, 30))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 7))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'end' }))?.props.hotkey).toBe('e')
+  await ui.press({ key: 'end' })
+  await ui.unmount()
+  expect((await logView($)).lines).toEqual(names(ROWS, 15))
+  append(w, says(1, 33))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 16))
+
+  await $.ui.scroll(scroll(-1))
+  append(w, says(1, 34))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 15))
+  await $.ui.scroll(scroll(20))
+  append(w, says(1, 35))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 18))
+})
+
+test('a half-written last line is not drawn until whole, then drawn once', async ($, on) => {
+  const w = await withLog($, on, says(2))
+  const next = say('héllo → wörld')
+  append(w, next.slice(0, 25))
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(names(2))
+  const sets = w.logSets
+  const reads = w.reads.length
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(2))
+  expect([w.logSets, w.reads.length]).toEqual([sets, reads])
+  append(w, next.slice(25))
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual([...names(2), 'héllo → wörld'])
+})
+
+test('a transcript over 4 MiB opens through tail, showing its last part under the earlier-events note', async ($, on) => {
+  const w = await withLog($, on, null)
+  const MiB = 1 << 20
+  // The file: a 5 MiB head of one long line, then the events; tail answers from byte +n.
+  let events = says(3)
+  const head = 5 * MiB
+  w.big[TRANSCRIPT] = {
+    get size() { return head + events.length },
+    tail: n => (n - 1 < head ? `${'x'.repeat(head - n)}\n` : '') + events.slice(Math.max(0, n - 1 - head)),
+  }
+  await press($, 'run:agent-1')
+  const shown = await logView($)
+  expect(shown.lines).toEqual(names(3))
+  expect(shown.texts).toContain('(earlier events not shown: open the file)')
+  expect(w.reads).not.toContain(TRANSCRIPT)
+  expect(w.tails[0]).toEqual(['sh', '-c', 'tail -c "+$1" -- "$2" | head -c "$3"', 'sh', String(head + events.length - MiB), TRANSCRIPT, String(MiB + 1)])
+
+  events += says(1, 3)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(4))
+  expect(w.tails[w.tails.length - 1][4]).toBe(String(head + says(3).length + 1))
+})
+
+test('switching runs or going Back starts the log again', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  addRun(w, '/repo/.git', 'agent-2', runJson({ name: 'second' }))
+  w.files['/repo/.git/remote-agent/agent-2/transcript.jsonl'] = { text: say('other run'), mtimeMs: NOW }
+  await w.clock.advance(1500)
+  await press($, 'run:agent-1')
+  await $.ui.scroll(scroll(-5))
+  await press($, 'back')
+  append(w, says(1, 30))
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(names(ROWS, 13))
+
+  await $.ui.scroll(scroll(-5))
+  await press($, 'back')
+  await press($, 'run:agent-2')
+  expect((await logView($)).lines).toEqual(['other run'])
+})
+
 const SESSION = '/repo/.git/remote-agent/agent-1/session.jsonl'
 const RESUME = 'to resume: remote-agent resume agent-1 /repo'
 
@@ -632,4 +780,18 @@ test('an open log whose run folder is removed shows the list again', async ($, o
   expect(shown).not.toContain(TRANSCRIPT)
   expect(shown.some((t: string) => t.startsWith('other '))).toBe(true)
   expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(false)
+})
+
+test('a finished run draws fewer log lines, so its wrapped resume hint fits the body too', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  await press($, 'run:agent-1')
+  // 20 rows at 60 columns: two header rows, the command on one, the 152-character warning wrapped to three.
+  const shown = await logView($)
+  expect(shown.hint[0]).toBe(RESUME)
+  expect(shown.lines).toEqual(names(14, 16))
+  await $.ui.scroll(scroll(-1))
+  expect((await logView($)).lines).toEqual(names(14, 15))
 })
