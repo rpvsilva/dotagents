@@ -198,3 +198,29 @@ test('copying the path toasts copied, or why not', () => {
   assert.match(copiedText('no-clipboard'), /^not copied \(no clipboard tool\)/)
   assert.match(copiedText('refused'), /^not copied \(refused\)/)
 })
+
+test('mask covers every token shape the README lists', () => {
+  const tail = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'
+  const shapes = [
+    ...['gho', 'ghu', 'ghs', 'ghr'].map(p => [p, tail].join('_')),
+    ['xoxb', '123456789012', 'abcdefABCDEF'].join('-'),
+    ['AKIA', 'IOSFODNN7EXAMPLE'].join(''),
+  ]
+  for (const s of shapes) assert.equal(mask(`x ${s} y`), 'x [masked] y', s)
+  assert.equal(mask(`Authorization: Basic ${BEARER_VALUE}`), 'Authorization: Basic [masked]')
+  assert.equal(mask(`AWS_SECRET_ACCESS_KEY=${ENV_VALUE} DB_PASSWORD: ${ENV_VALUE}`), 'AWS_SECRET_ACCESS_KEY=[masked] DB_PASSWORD: [masked]')
+})
+
+test('a top-level tool_result, an init with no model and a non-string tool input render too', () => {
+  const names = new Map([['t', 'Bash']])
+  assert.deepEqual(renderEvent({ type: 'tool_result', tool_use_id: 't', content: 'out\nmore', is_error: true }, names), ['<- ERROR Bash: out'])
+  assert.deepEqual(renderEvent({ type: 'system', subtype: 'init' }, new Map()), ['session started'])
+  assert.deepEqual(renderEvent(call('x', 'Glob', { path: ['a', 'b'] }) as TranscriptEvent, new Map()), ['-> Glob ["a","b"]'])
+  assert.deepEqual(renderTranscript(jsonl({ type: 'result', total_cost_usd: 1.5 })), ['done $1.50'])
+})
+
+test('oneLine keeps up to max characters when given a wider max', () => {
+  const path = `/repo/.git/${'d/'.repeat(100)}transcript.jsonl`
+  assert.equal(oneLine(path, 1000), path)
+  assert.equal(oneLine(path).length, 160)
+})
