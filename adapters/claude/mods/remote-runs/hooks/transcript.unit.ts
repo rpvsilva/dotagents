@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { mask, oneLine, parseLines, renderEvent, renderTranscript, type TranscriptEvent } from './transcript.ts'
+import {
+  appendLines,
+  byteSlice,
+  CHUNK,
+  type Log,
+  mask,
+  nextOffset,
+  NO_LOG,
+  oneLine,
+  parseLines,
+  readChunk,
+  readFrom,
+  renderEvent,
+  renderTranscript,
+  scrollLog,
+  type TranscriptEvent,
+  windowLines,
+} from './transcript.ts'
 
 // A transcript's text: one JSON line per event, each ended with a newline.
 const jsonl = (...events: unknown[]) => events.map(e => `${JSON.stringify(e)}\n`).join('')
@@ -153,4 +170,107 @@ test('a line has ANSI escapes and control characters stripped and fits one row',
   const long = oneLine('y'.repeat(500))
   assert.equal(long.length, 160)
   assert.ok(long.endsWith('…'))
+})
+
+const bytes = (s: string) => new TextEncoder().encode(s).length
+const n = (count: number, from = 0) => Array.from({ length: count }, (_, i) => `line ${from + i}`)
+
+test('nextOffset moves past the whole lines only, counting multi-byte characters as their UTF-8 bytes', () => {
+  assert.equal(nextOffset('ab\ncd\n', 10), 16)
+  assert.equal(nextOffset('é→😀\n', 0), bytes('é→😀\n'))
+  assert.equal(nextOffset('é→😀\n', 0), 10)
+  assert.equal(nextOffset('one\nhalf é wr', 5), 9)
+  assert.equal(nextOffset('no newline yet', 7), 7)
+  assert.equal(nextOffset('', 3), 3)
+})
+
+test('byteSlice cuts text by UTF-8 bytes, never inside a character', () => {
+  assert.equal(byteSlice('aé😀b', 1), 'é😀b')
+  assert.equal(byteSlice('aé😀b', 3), '😀b')
+  assert.equal(byteSlice('aé😀b', 0, 3), 'aé')
+  assert.equal(byteSlice('aé😀b', 0, 4), 'aé')
+  assert.equal(byteSlice('aé😀b', 3, 4), '😀')
+  assert.equal(byteSlice('abc', 9), '')
+})
+
+test('windowLines shows the last rows while following, and the rows from top otherwise', () => {
+  const lines = n(10)
+  assert.deepEqual(windowLines(lines, true, 0, 4), n(4, 6))
+  assert.deepEqual(windowLines(lines, false, 2, 4), n(4, 2))
+  assert.deepEqual(windowLines(lines, false, 9, 4), n(4, 6))
+  assert.deepEqual(windowLines(lines, false, -3, 4), n(4))
+  assert.deepEqual(windowLines(n(2), true, 0, 4), n(2))
+  assert.deepEqual(windowLines([], true, 0, 4), [])
+})
+
+const log = (over: Partial<Log> = {}): Log => ({ ...NO_LOG, runId: 'r', ...over })
+
+test('scrolling up stops following; scrolling back to the end follows again', () => {
+  const up = scrollLog(log({ lines: n(10) }), -3, 4)
+  assert.deepEqual([up.top, up.follow], [3, false])
+  assert.deepEqual(windowLines(up.lines, up.follow, up.top, 4), n(4, 3))
+  const top = scrollLog(up, -100, 4)
+  assert.deepEqual([top.top, top.follow], [0, false])
+  const back = scrollLog(top, 6, 4)
+  assert.deepEqual([back.top, back.follow], [6, true])
+  const short = scrollLog(log({ lines: n(2) }), -1, 4)
+  assert.equal(short.follow, true)
+})
+
+test('new lines leave a scrolled-up window where it was, and follow the end otherwise', () => {
+  const up = appendLines(scrollLog(log({ lines: n(10) }), -3, 4), n(5, 10))
+  assert.deepEqual(windowLines(up.lines, up.follow, up.top, 4), n(4, 3))
+  const following = appendLines(log({ lines: n(10) }), n(5, 10))
+  assert.deepEqual(windowLines(following.lines, following.follow, following.top, 4), n(4, 11))
+})
+
+test('lines past the cap drop the oldest, keep a scrolled window on the same lines, and mark the log truncated', () => {
+  const up = scrollLog(log({ lines: n(10) }), -3, 4)
+  const capped = appendLines(up, n(4, 10), 12)
+  assert.equal(capped.lines.length, 12)
+  assert.equal(capped.lines[0], 'line 2')
+  assert.equal(capped.truncated, true)
+  assert.deepEqual(windowLines(capped.lines, capped.follow, capped.top, 4), n(4, 3))
+  assert.equal(appendLines(log({ lines: n(3) }), n(1, 3), 12).truncated, false)
+})
+
+test('a first read starts at 0, or one byte before the last chunk of a file over a chunk; a shrunk file starts again', () => {
+  assert.deepEqual(readFrom(NO_LOG, 500), { from: 0, length: CHUNK, isTail: false, isReset: false })
+  assert.deepEqual(readFrom(NO_LOG, CHUNK), { from: 0, length: CHUNK, isTail: false, isReset: false })
+  assert.deepEqual(readFrom(NO_LOG, 5 * CHUNK), { from: 4 * CHUNK - 1, length: CHUNK + 1, isTail: true, isReset: false })
+  assert.deepEqual(readFrom(log({ offset: 300 }), 5 * CHUNK), { from: 300, length: CHUNK, isTail: false, isReset: false })
+  assert.deepEqual(readFrom(log({ offset: 300 }), 100), { from: 0, length: CHUNK, isTail: false, isReset: true })
+  assert.deepEqual(readFrom(log({ offset: 9 * CHUNK }), 5 * CHUNK), { from: 4 * CHUNK - 1, length: CHUNK + 1, isTail: true, isReset: true })
+})
+
+const event = (text: string) => jsonl(say(text))
+
+test('readChunk renders the whole lines and leaves a half-written last line to be read again', () => {
+  const whole = event('one') + event('twö')
+  const half = event('three').slice(0, 20)
+  const first = readChunk(log(), whole + half, { from: 0, length: CHUNK, isTail: false, isFull: false }, new Map())
+  assert.deepEqual(first.lines, ['one', 'twö'])
+  assert.equal(first.offset, bytes(whole))
+  const again = readChunk(first, half + event('three').slice(20), { from: first.offset, length: CHUNK, isTail: false, isFull: false }, new Map())
+  assert.deepEqual(again.lines, ['one', 'twö', 'three'])
+  assert.equal(again.offset, bytes(whole + event('three')))
+  assert.equal(readChunk(first, half, { from: first.offset, length: CHUNK, isTail: false, isFull: false }, new Map()), first)
+})
+
+test('a tail read drops the line cut at its start and marks the log truncated', () => {
+  const got = readChunk(log(), `t","x":1}\n${event('kept')}`, { from: 1000, length: CHUNK + 1, isTail: true, isFull: false }, new Map())
+  assert.deepEqual(got.lines, ['kept'])
+  assert.equal(got.truncated, true)
+  assert.equal(got.offset, 1000 + bytes(`t","x":1}\n${event('kept')}`))
+  const exact = readChunk(log(), `\n${event('first whole')}`, { from: 999, length: CHUNK + 1, isTail: true, isFull: false }, new Map())
+  assert.deepEqual(exact.lines, ['first whole'])
+})
+
+test('a full chunk with no newline is skipped whole, so one huge line never stalls the log', () => {
+  const huge = 'x'.repeat(50)
+  const got = readChunk(log({ offset: 200 }), huge, { from: 200, length: CHUNK, isTail: false, isFull: true }, new Map())
+  assert.equal(got.offset, 200 + CHUNK)
+  assert.deepEqual(got.lines, [])
+  const notFull = readChunk(log({ offset: 200 }), huge, { from: 200, length: CHUNK, isTail: false, isFull: false }, new Map())
+  assert.equal(notFull.offset, 200)
 })

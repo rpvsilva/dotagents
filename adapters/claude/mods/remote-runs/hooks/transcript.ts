@@ -3,6 +3,9 @@
 // (transcript.unit.ts). The reader never throws: a partial last line, a line that is not JSON and an event of an
 // odd shape are skipped.
 import { printable } from './runs.ts'
+import type { Log } from './state.d.ts'
+
+export type { Log }
 
 /** What the log says while the transcript holds no event yet. */
 export const WAITING = 'waiting for the first event'
@@ -162,4 +165,132 @@ export function renderEvent(ev: TranscriptEvent, toolNames: Map<string, string>)
 export function renderTranscript(text: string): string[] {
   const toolNames = new Map<string, string>()
   return parseLines(text).events.flatMap(ev => renderEvent(ev, toolNames))
+}
+
+// The open log, read a chunk at a time as the run writes. Byte offsets count the file's UTF-8 bytes and stop at the
+// last newline read, so a half-written last line is read again whole on the next tick.
+
+/** The most bytes one read takes: the tail shown on first opening a longer transcript, and each read after. */
+export const CHUNK = 1 << 20
+
+/** The most log lines kept; past it the oldest go. */
+export const LINES_MAX = 2000
+
+/** The note over a log that does not start at the transcript's first event. */
+export const EARLIER = '(earlier events not shown: open the file)'
+
+/** No log: what Back and a switch to another run start from. */
+export const NO_LOG: Log = { runId: null, offset: 0, lines: [], follow: true, top: 0, truncated: false }
+
+const encoder = new TextEncoder()
+
+/** `offset` moved past the whole lines of `text`, the bytes read from it: up to and including its last newline. */
+export function nextOffset(text: string, offset: number): number {
+  return offset + encoder.encode(text.slice(0, text.lastIndexOf('\n') + 1)).length
+}
+
+const utf8Length = (cp: number) => (cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4)
+
+/**
+ * The characters of `text` from UTF-8 byte `start`, at most `length` bytes of them; a character the cut would
+ * split at the end is left out, one split at the start too.
+ */
+export function byteSlice(text: string, start: number, length = Infinity): string {
+  let at = 0
+  let from = -1
+  let i = 0
+  for (; i < text.length; ) {
+    if (from < 0 && at >= start) from = i
+    const cp = text.codePointAt(i) as number
+    const size = utf8Length(cp)
+    if (from >= 0 && at + size > start + length) break
+    at += size
+    i += cp > 0xffff ? 2 : 1
+  }
+  if (from < 0) return ''
+  return text.slice(from, i)
+}
+
+/** Where a read starts in the transcript, how many bytes it takes, and what readChunk is to make of them. */
+export type ReadAt = { from: number; length: number; isTail: boolean; isReset: boolean }
+
+/**
+ * Where to read next in a transcript of `size` bytes: a chunk at the log's offset; on a first read of a file longer
+ * than a chunk, its last chunk and the byte before it (`isTail`: up to the first newline is dropped, so a line cut
+ * there goes and one starting there stays). A file now shorter than the offset was written anew: it is read as
+ * a first read again (`isReset`).
+ */
+export function readFrom(log: Log, size: number): ReadAt {
+  const isReset = size < log.offset
+  if (!isReset && (log.offset > 0 || log.lines.length > 0)) return { from: log.offset, length: CHUNK, isTail: false, isReset }
+  if (size > CHUNK) return { from: size - CHUNK - 1, length: CHUNK + 1, isTail: true, isReset }
+  return { from: 0, length: CHUNK, isTail: false, isReset }
+}
+
+/**
+ * `log` with the lines of `chunk`, the text read from byte `from`, and its offset moved past them. A tail read
+ * drops the text up to its first newline. A full chunk with no newline (`isFull`: the file had all `length` bytes)
+ * is part of one huge line: it is skipped whole, and the line's end fails to parse and is skipped too.
+ * `toolNames` keeps the run's tool call ids across reads. The same `log` when nothing changed.
+ */
+export function readChunk(
+  log: Log,
+  chunk: string,
+  at: { from: number; length: number; isTail: boolean; isFull: boolean },
+  toolNames: Map<string, string>,
+): Log {
+  let text = chunk
+  let from = at.from
+  let truncated = log.truncated
+  if (at.isTail) {
+    const cut = text.indexOf('\n')
+    if (cut < 0) return at.isFull ? { ...log, offset: from + at.length, truncated: true } : log
+    from += encoder.encode(text.slice(0, cut + 1)).length
+    text = text.slice(cut + 1)
+    truncated = true
+  }
+  const offset = nextOffset(text, from)
+  if (offset === from) {
+    if (at.isFull) return { ...log, offset: at.from + at.length, truncated }
+    return offset === log.offset && truncated === log.truncated ? log : { ...log, offset, truncated }
+  }
+  const { events } = parseLines(text.slice(0, text.lastIndexOf('\n') + 1))
+  const added = events.flatMap(ev => renderEvent(ev, toolNames))
+  return appendLines({ ...log, offset, truncated }, added)
+}
+
+/**
+ * `log` with `added` at its end, keeping the last `max` lines. A window scrolled up stays on the same lines: its
+ * top moves back by the lines dropped.
+ */
+export function appendLines(log: Log, added: readonly string[], max = LINES_MAX): Log {
+  if (added.length === 0) return log
+  const all = [...log.lines, ...added]
+  const dropped = Math.max(0, all.length - max)
+  return {
+    ...log,
+    lines: dropped ? all.slice(dropped) : all,
+    top: Math.max(0, log.top - dropped),
+    truncated: log.truncated || dropped > 0,
+  }
+}
+
+/** The last line a window of `rows` may start at. */
+const lastTop = (lines: readonly string[], rows: number) => Math.max(0, lines.length - rows)
+
+/**
+ * `log` with its window of `rows` moved `by` lines (negative: up). It follows the end again once it reaches it.
+ */
+export function scrollLog(log: Log, by: number, rows: number): Log {
+  const last = lastTop(log.lines, rows)
+  const now = log.follow ? last : Math.min(Math.max(log.top, 0), last)
+  const top = Math.min(Math.max(now + by, 0), last)
+  return { ...log, top, follow: top >= last }
+}
+
+/** The `rows` lines a window shows: the last ones while following, else those from `top`. */
+export function windowLines(lines: readonly string[], follow: boolean, top: number, rows: number): string[] {
+  const last = lastTop(lines, rows)
+  const start = follow ? last : Math.min(Math.max(top, 0), last)
+  return lines.slice(start, start + rows)
 }
