@@ -546,9 +546,9 @@ refused() {
 refused "empty brief" "$REPO/scripts/remote-agent.sh" ""
 mkdir -p "$SANDBOX/a/notes"
 refused "two attachments named notes" "$REPO/scripts/remote-agent.sh" --attach "$SANDBOX/run/notes" --attach "$SANDBOX/a/notes" "x"
-# Random bytes: no file system stores them in under 1 KB.
-head -c 8192 /dev/urandom >"$W/big.bin"
-refused "over REMOTE_MAX_MB=0" env REMOTE_MAX_MB=0 "$REPO/scripts/remote-agent.sh" "x"
+# 2 MB of random bytes against the smallest limit the Setting allows (1 MB; 0 is refused as a bad value).
+head -c 2097152 /dev/urandom >"$W/big.bin"
+refused "over REMOTE_MAX_MB=1" env REMOTE_MAX_MB=1 "$REPO/scripts/remote-agent.sh" "x"
 rm -f "$W/big.bin"
 
 # Without a token nothing reaches the cluster.
