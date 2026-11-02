@@ -78,6 +78,14 @@ plugins ok
 not_called "add"
 not_called "install"
 
+# A CRLF plugins file (a Windows checkout) reads the same: no carriage return reaches a source or an id.
+printf 'remote-runs@dotagents-mods ./adapters/claude/mods\r\n' >"$SANDBOX/plugins.txt"
+: >"$SANDBOX/markets"
+: >"$SANDBOX/plugins"
+plugins ok
+called "plugin marketplace add $REPO/adapters/claude/mods"
+called "plugin install remote-runs@dotagents-mods --scope user"
+
 # A failed install is reported, the rest still installs, and the exit is non-zero.
 printf 'broken@m o/m\nlate@m o/m\n' >"$SANDBOX/plugins.txt"
 plugins fail

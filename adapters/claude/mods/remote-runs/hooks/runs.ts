@@ -1,10 +1,27 @@
 // The remote-runs mod's plain logic. No claude-code import at run time, so `node --test` runs it beside the
 // engine (runs.unit.ts); main.tsx keeps only the calls on `$` and the drawing.
+import type { Run, RunState } from './state.d.ts'
 
-export type { Run } from './state.d.ts'
+export type { Run, RunState } from './state.d.ts'
 
 /** What the pane says when it has no run to show, whatever the reason (no repo, no git, no folders). */
 export const EMPTY = 'no remote runs in this repo'
+
+/** How many rows the pane shows at most. */
+export const MAX_ROWS = 20
+
+/** A run folder's files as main.tsx read them: run.json's and progress.log's text (null when missing). */
+export type RunFiles = {
+  id: string
+  folder: string
+  runJson: string | null
+  progress: string | null
+  /** Epoch seconds of the last change to run.json or progress.log; 0 when neither is there. */
+  changed: number
+}
+
+const STATES: readonly RunState[] = ['starting', 'running', 'done', 'failed']
+const UNFINISHED: readonly RunState[] = ['starting', 'running', 'stopped']
 
 /** The repo's common git dir from `git rev-parse --path-format=absolute --git-common-dir`, or null on failure. */
 export function commonDir(exitCode: number, stdout: string): string | null {
@@ -15,4 +32,129 @@ export function commonDir(exitCode: number, stdout: string): string | null {
 /** The git dirs whose remote-agent/ folders hold this repo's runs: the common one, then each linked worktree's. */
 export function gitDirs(common: string, worktrees: readonly string[]): string[] {
   return [common, ...[...worktrees].sort().map(w => `${common}/worktrees/${w}`)]
+}
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+
+/** Epoch seconds from a run id `agent-YYYYmmdd-HHMMSS-N` (local time, as remote-agent's `date` wrote it). */
+function idStarted(id: string): number | null {
+  const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(id)
+  if (!m) return null
+  const [y, mo, d, h, mi, s] = m.slice(1).map(Number)
+  const t = new Date(y, mo - 1, d, h, mi, s).getTime()
+  return Number.isFinite(t) ? t / 1000 : null
+}
+
+/** The last non-empty line of a text, without a carriage return. */
+function lastLine(text: string | null): string | null {
+  const lines = (text ?? '').split('\n').map(l => l.replace(/\r$/, '').trim()).filter(Boolean)
+  return lines.length ? lines[lines.length - 1] : null
+}
+
+/** A row from a run folder's files; `unknown` when run.json is missing or not a JSON object. */
+export function parseRun(f: RunFiles): Run {
+  let j: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = f.runJson === null ? null : JSON.parse(f.runJson)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) j = parsed as Record<string, unknown>
+  } catch {
+    // an unreadable run.json reads as none
+  }
+  const state = STATES.find(s => s === j.state) ?? 'unknown'
+  return {
+    id: f.id,
+    folder: f.folder,
+    name: str(j.name),
+    state,
+    started: num(j.started) ?? idStarted(f.id),
+    ended: num(j.ended),
+    changed: f.changed,
+    elapsed: '',
+    step: lastLine(f.progress),
+    claim_s: num(j.claim_s),
+    send_s: num(j.send_s),
+    first_event_s: num(j.first_event_s),
+    exit_code: num(j.exit_code),
+    pid: num(j.pid),
+    pid_start: str(j.pid_start),
+    worktree: str(j.worktree),
+    transcript: `${f.folder}/transcript.jsonl`,
+  }
+}
+
+const isLive = (r: Run) => r.state === 'starting' || r.state === 'running'
+
+/** The pids whose liveness decides a row: those of starting and running runs, for one `ps -p` call. */
+export function livePids(runs: readonly Run[]): number[] {
+  return [...new Set(runs.filter(r => isLive(r) && r.pid !== null).map(r => r.pid as number))]
+}
+
+const squash = (s: string) => s.trim().replace(/\s+/g, ' ')
+
+/**
+ * Marks `stopped` each starting or running run whose pid is not in `ps -o pid=,lstart=` output, or is there with
+ * another start time (the pid was reused). `ps` null (it could not run) changes nothing.
+ */
+export function applyLiveness(runs: readonly Run[], ps: string | null): Run[] {
+  if (ps === null) return [...runs]
+  const alive = new Map<number, string>()
+  for (const line of ps.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*\S)\s*$/.exec(line)
+    if (m) alive.set(Number(m[1]), squash(m[2]))
+  }
+  return runs.map(r => {
+    if (!isLive(r) || r.pid === null) return r
+    const start = alive.get(r.pid)
+    const same = start !== undefined && (r.pid_start === null || squash(r.pid_start) === start)
+    return same ? r : { ...r, state: 'stopped' }
+  })
+}
+
+/** Seconds as `5s`, `1m23s`, `1h02m`; to the minute (`<1m`, `4m`, `1h02m`) when `coarse`. */
+function duration(seconds: number, coarse: boolean): string {
+  const s = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (h > 0) return `${h}h${String(m).padStart(2, '0')}m`
+  if (coarse) return m > 0 ? `${m}m` : '<1m'
+  return m > 0 ? `${m}m${String(s % 60).padStart(2, '0')}s` : `${s}s`
+}
+
+/** The elapsed time a row shows at `now` (epoch seconds). */
+function elapsed(r: Run, now: number): string {
+  if (r.started === null) return ''
+  if (r.state === 'done' || r.state === 'failed') return r.ended === null ? '' : duration(r.ended - r.started, false)
+  if (r.state === 'stopped') return duration(r.changed - r.started, false)
+  if (isLive(r)) return duration(now - r.started, true)
+  return ''
+}
+
+const newestFirst = (a: Run, b: Run) => (b.started ?? 0) - (a.started ?? 0) || (a.id < b.id ? 1 : -1)
+
+/**
+ * The rows the pane shows at `now`: every starting, running or stopped run, then the newest finished (done,
+ * failed, unknown), MAX_ROWS in all, each group newest first, with its elapsed time.
+ */
+export function pickRows(runs: readonly Run[], now: number): Run[] {
+  const open = runs.filter(r => UNFINISHED.includes(r.state)).sort(newestFirst)
+  const finished = runs.filter(r => !UNFINISHED.includes(r.state)).sort(newestFirst)
+  return [...open, ...finished].slice(0, MAX_ROWS).map(r => ({ ...r, elapsed: elapsed(r, now) }))
+}
+
+/** A key that changes exactly when the rows would draw differently: the pane redraws only then. */
+export function signature(rows: readonly Run[]): string {
+  return JSON.stringify(rows)
+}
+
+/** A row's words: the run's name (else its id); its state and elapsed time; its timings and last step. */
+export function formatRow(r: Run): { label: string; status: string; detail: string } {
+  const timings = ([['claim', r.claim_s], ['send', r.send_s], ['first', r.first_event_s]] as const)
+    .filter(([, s]) => s !== null)
+    .map(([what, s]) => `${what} ${s}s`)
+  return {
+    label: r.name ?? r.id,
+    status: [r.state, r.elapsed].filter(Boolean).join(' '),
+    detail: [...timings, ...(r.step ? [r.step] : [])].join(' · '),
+  }
 }
