@@ -38,7 +38,7 @@ type World = {
   status: (string | undefined)[]
   notified: { title?: string; text: string }[]
   psCalls: string[][]
-  /** What `ui.copy` answers, what it was asked to copy where, and the toasts shown. */
+  /** What `ui.copy` answers (an Error: it throws), what it was asked to copy where, and the toasts shown. */
   copy: unknown
   copies: { text: string; surface: string }[]
   toasts: string[]
@@ -91,6 +91,7 @@ function engine(on: any, over: Partial<World> = {}): World {
   })
   on('ui.copy', (_: unknown, e: any) => {
     w.copies.push({ text: e.text, surface: e.surface })
+    if (w.copy instanceof Error) throw w.copy
     return { value: w.copy }
   })
   on('ui.toast', (_: unknown, e: any) => {
@@ -593,6 +594,27 @@ test('a worktree path with spaces is quoted in the resume command', async ($, on
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 1, ended: NOW / 1000 + 2, worktree: '/My Repo' })))
   await w.clock.advance(1500)
   expect(await logLines($)).toContain("to resume: remote-agent resume agent-1 '/My Repo'")
+})
+
+test('a copy that throws toasts not copied, and the path stays drawn', async ($, on) => {
+  const w = await withLog($, on, '')
+  w.copy = new Error('refused')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  await ui.press({ key: 'copy' })
+  expect((await ui.findAll({ type: 'Text' })).map((el: any) => el.text)).toContain(TRANSCRIPT)
+  await ui.unmount()
+  expect(w.toasts).toEqual(['not copied (refused): select the path shown instead'])
+})
+
+test('a stopped run shows how to resume it once its session.jsonl appears', async ($, on) => {
+  const w = await withLog($, on, '')
+  w.ps = psAlive([])
+  await w.clock.advance(1500)
+  expect((await logLines($)).slice(-1)).toEqual(['no session came back: this run cannot be resumed'])
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  await w.clock.advance(1500)
+  expect(await logLines($)).toContain(RESUME)
 })
 
 test('an open log whose run folder is removed shows the list again', async ($, on) => {
