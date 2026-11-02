@@ -10,7 +10,6 @@ install.test.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* sc
 affected.test.sh
 claude-plugins.test.sh scripts/claude-plugins.sh adapters/claude/plugins.txt
 gh-app-token.test.sh scripts/gh-app-token.sh
-gh-runner.test.sh scripts/gh-runner.sh scripts/gh-app-token.sh
 guard-merge.test.sh scripts/hooks/* scripts/merge-pr.sh scripts/gh-app-token.sh
 guard-secrets.test.sh scripts/hooks/* scripts/gh-app-token.sh
 merge-json.test.sh scripts/merge-json.sh
