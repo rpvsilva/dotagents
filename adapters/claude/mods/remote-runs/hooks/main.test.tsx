@@ -38,6 +38,10 @@ type World = {
   status: (string | undefined)[]
   notified: { title?: string; text: string }[]
   psCalls: string[][]
+  /** What `ui.copy` answers, what it was asked to copy where, and the toasts shown. */
+  copy: unknown
+  copies: { text: string; surface: string }[]
+  toasts: string[]
   clock: ReturnType<typeof mock.clock>
 }
 
@@ -45,7 +49,7 @@ function engine(on: any, over: Partial<World> = {}): World {
   const clock = mock.clock(on, { now: NOW })
   const w: World = {
     dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, psCalls: [], clock,
-    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], ...over,
+    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], copy: { isCopied: true }, copies: [], toasts: [], ...over,
   }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -83,6 +87,14 @@ function engine(on: any, over: Partial<World> = {}): World {
   })
   on('ui.status', (_: unknown, e: any) => {
     w.status.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.copy', (_: unknown, e: any) => {
+    w.copies.push({ text: e.text, surface: e.surface })
+    return { value: w.copy }
+  })
+  on('ui.toast', (_: unknown, e: any) => {
+    w.toasts.push(e.text)
     return { value: undefined }
   })
   on('ui.notify', (_: unknown, e: any) => {
@@ -517,4 +529,68 @@ test('a token-shaped string in the transcript is masked in every line drawn', as
   await ui.unmount()
   expect(shown.filter((t: string) => t.includes(GHP) || t.includes('\u001b'))).toEqual([])
   expect(shown).toContain('<- Bash: [masked]')
+})
+
+const SESSION = '/repo/.git/remote-agent/agent-1/session.jsonl'
+const RESUME = 'to resume: remote-agent resume agent-1 /repo'
+
+// The Text lines the log of agent-1 shows on the terminal.
+async function logLines($: any): Promise<string[]> {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+  await ui.press({ key: 'back' })
+  await ui.unmount()
+  return shown
+}
+
+test('Copy path copies the exact transcript path on the pressing surface, and toasts the result', async ($, on) => {
+  const w = await withLog($, on, '')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'run:agent-1' })
+    expect((await ui.find({ key: 'copy' }))?.props.hotkey).toBe('c')
+    await ui.press({ key: 'copy' })
+    w.copy = { isCopied: false, reason: 'no-clipboard' }
+    await ui.press({ key: 'copy' })
+    const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+    expect(shown).toContain(TRANSCRIPT)
+    await ui.press({ key: 'back' })
+    await ui.unmount()
+    w.copy = { isCopied: true }
+  }
+  expect(w.copies.map(c => [c.text, c.surface])).toEqual([
+    [TRANSCRIPT, 'terminal'], [TRANSCRIPT, 'terminal'], [TRANSCRIPT, 'desktop'], [TRANSCRIPT, 'desktop'],
+  ])
+  expect(w.toasts.map(t => t.split(' (')[0])).toEqual(['copied', 'not copied', 'copied', 'not copied'])
+})
+
+test('a finished run with a session ends its log with how to resume it, and a running one does not', async ($, on) => {
+  const w = await withLog($, on, jsonl({ type: 'result', subtype: 'success', is_error: false, duration_ms: 4000 }))
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  let shown = await logLines($)
+  expect(shown.filter((t: string) => t.startsWith('to resume') || t.startsWith('no session'))).toEqual([])
+
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  shown = await logLines($)
+  expect(shown.slice(-3, -1)).toEqual(['done in 4s', RESUME])
+  expect(shown[shown.length - 1]).toMatch(/sandbox wrote.*forged turns.*session\.jsonl first$/)
+})
+
+test('a finished run with no session.jsonl says it cannot be resumed', async ($, on) => {
+  const w = await withLog($, on, '')
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 1, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  const shown = await logLines($)
+  expect(shown[shown.length - 1]).toBe('no session came back: this run cannot be resumed')
+  expect(shown.filter((t: string) => t.startsWith('to resume'))).toEqual([])
+})
+
+test('a worktree path with spaces is quoted in the resume command', async ($, on) => {
+  const w = await withLog($, on, '')
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 1, ended: NOW / 1000 + 2, worktree: '/My Repo' })))
+  await w.clock.advance(1500)
+  expect(await logLines($)).toContain("to resume: remote-agent resume agent-1 '/My Repo'")
 })

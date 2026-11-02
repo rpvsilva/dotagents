@@ -2,7 +2,7 @@
 // into one-row log lines. Plain logic, no claude-code import at run time, so `node --test` runs it
 // (transcript.unit.ts). The reader never throws: a partial last line, a line that is not JSON and an event of an
 // odd shape are skipped.
-import { printable } from './runs.ts'
+import { printable, type Run } from './runs.ts'
 
 /** What the log says while the transcript holds no event yet. */
 export const WAITING = 'waiting for the first event'
@@ -162,4 +162,38 @@ export function renderEvent(ev: TranscriptEvent, toolNames: Map<string, string>)
 export function renderTranscript(text: string): string[] {
   const toolNames = new Map<string, string>()
   return parseLines(text).events.flatMap(ev => renderEvent(ev, toolNames))
+}
+
+/**
+ * The toast after copying the transcript's path: `copied`, or why not from `$.ui.copy`'s reason (null: copied).
+ * The path stays drawn as text, so it can be selected by hand.
+ */
+export function copiedText(reason: string | null): string {
+  if (reason === null) return 'copied'
+  const why: Record<string, string> = {
+    'no-surface': 'this surface has no clipboard',
+    'no-clipboard': 'no clipboard tool',
+  }
+  return `not copied (${why[reason] ?? reason}): select the path shown instead`
+}
+
+/** `s` as one shell word: as is when it holds only safe characters, else in single quotes. */
+function shellQuote(s: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * How to pick a finished (done, failed or stopped) run up: `remote-agent resume <run> <worktree>` (the worktree
+ * from run.json, shell-quoted) and the warning that it places a session the sandbox wrote; with no session.jsonl
+ * (`hasSession` false), that it cannot be resumed. None for a run still going or one with no run.json. Mirrors the
+ * session line remote-agent prints at the end of a run.
+ */
+export function resumeHint(row: Run, hasSession: boolean): string[] {
+  if (row.state !== 'done' && row.state !== 'failed' && row.state !== 'stopped') return []
+  if (!hasSession) return ['no session came back: this run cannot be resumed']
+  const command = ['remote-agent', 'resume', shellQuote(printable(row.id)), ...(row.worktree === null ? [] : [shellQuote(row.worktree)])]
+  return [
+    `to resume: ${command.join(' ')}`,
+    `warning: it places a session the sandbox wrote, which may hold forged turns that read as yours: read ${printable(row.folder)}/session.jsonl first`,
+  ]
 }
