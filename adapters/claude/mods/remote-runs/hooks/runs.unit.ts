@@ -87,6 +87,11 @@ test('livePids lists the pids of starting and running runs only', () => {
   assert.deepEqual(livePids(rows), [1, 2])
 })
 
+test('livePids lists a shared pid once and skips a live run with no pid', () => {
+  const rows = [run('a', 'running', 1, { pid: 5 }), run('b', 'starting', 1, { pid: 5 }), run('c', 'running', 1, { pid: null })]
+  assert.deepEqual(livePids(rows), [5])
+})
+
 test('applyLiveness stops a run whose pid is dead or started at another time, and keeps a live one', () => {
   const rows = [
     run('alive', 'running', 1, { pid: 1 }),
@@ -96,6 +101,16 @@ test('applyLiveness stops a run whose pid is dead or started at another time, an
   ]
   const ps = `    1 Mon Nov  2 10:00:00 2026\n    3 Tue Nov  3 09:00:00 2026\n`
   assert.deepEqual(applyLiveness(rows, ps).map(r => r.state), ['running', 'stopped', 'stopped', 'done'])
+})
+
+test('applyLiveness keeps a live run with no recorded start or no pid, whatever the spacing of ps', () => {
+  const rows = [
+    run('no-start', 'running', 1, { pid: 1, pid_start: null }),
+    run('no-pid', 'running', 1, { pid: null }),
+    run('spaced', 'running', 1, { pid: 3, pid_start: ' Mon Nov 2  10:00:00 2026 ' }),
+  ]
+  const ps = `1 Tue Nov  3 09:00:00 2026\n    3 Mon  Nov  2 10:00:00   2026  \n`
+  assert.deepEqual(applyLiveness(rows, ps).map(r => r.state), ['running', 'running', 'running'])
 })
 
 test('applyLiveness changes nothing when ps could not run', () => {
@@ -128,6 +143,20 @@ test('pickRows shows elapsed exactly for an ended run and to the minute for one 
   ], 1000)
   rows.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id))
   assert.deepEqual(rows.map(r => r.elapsed), ['1m23s', '5s', '1h02m', '<1m', '30s', ''])
+})
+
+test('pickRows shows no elapsed time for an ended run with no end or a run with no start', () => {
+  const rows = pickRows([
+    run('done', 'done', 1000, { ended: null }),
+    run('failed', 'failed', 900, { ended: null }),
+    run('running', 'running', 900, { started: null }),
+  ], 1000)
+  assert.deepEqual(rows.map(r => [r.id, r.elapsed]), [['running', ''], ['done', ''], ['failed', '']])
+})
+
+test('pickRows orders runs started at the same second by id, newest id first', () => {
+  const rows = pickRows([run('agent-a', 'done', 500), run('agent-c', 'done', 500), run('agent-b', 'done', 500)], 1000)
+  assert.deepEqual(rows.map(r => r.id), ['agent-c', 'agent-b', 'agent-a'])
 })
 
 test('signature is the same for rows that draw the same, and differs on a new step or state', () => {
