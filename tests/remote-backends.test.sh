@@ -69,15 +69,12 @@ grep -q "^run -d --rm .*--platform linux/arm64 local/runner:dev sleep 3600\$" "$
   || fail "docker settings: image, platform or hours not used: $(grep '^run' "$S/calls")"
 rm -f "$W/hello.txt"
 
-# --name labels the container with the task, under the cluster's key.
-NAME="09-Review fixes" run 0 "" REMOTE_BACKEND=docker || true
-grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " "$S/calls" \
-  || fail "docker name: container not labelled with the task: $(grep '^run' "$S/calls")"
-
-# No changes: exit 3.
-code=0; run 0 "" REMOTE_BACKEND=docker || code=$?
+# No changes: exit 3. --name labels the container with the task, under the cluster's key.
+code=0; NAME="09-Review fixes" run 0 "" REMOTE_BACKEND=docker || code=$?
 [ "$code" = 3 ] || fail "docker no changes: wanted exit 3, got $code"
 gone "$(container)" || fail "docker no changes: container not removed"
+grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " "$S/calls" \
+  || fail "docker name: container not labelled with the task: $(grep '^run' "$S/calls")"
 
 # A failed run keeps its exit code, applies nothing, and removes the container.
 code=0; run 5 "$HELLO_PATCH" REMOTE_BACKEND=docker || code=$?
