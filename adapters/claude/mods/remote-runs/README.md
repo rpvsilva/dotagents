@@ -6,12 +6,14 @@ One row per run: its name (else the run id), state, elapsed time, the claim / se
 
 A timer reads the folders every 1.5 s, from session start, so the pane is current without a command; it rereads `run.json` and `progress.log` only when their size or mtime changed, never rereads a done or failed run, runs one `ps` per tick for the live runs, and redraws only when a row would show something new. Elapsed time is shown to the minute while a run goes on, so a running run does not redraw every tick.
 
+The same timer, pane open or not, keeps a status line (`remote: 2 running, 1 failed`; a zero part left out, cleared when both are zero; starting runs count as running, and failed or stopped runs count for 60 minutes after they ended) and raises one native notification per run that ends, titled `remote run`: `<name> done`, `<name> failed (exit <code>)` or `<name> stopped`. The status line is set only when its text changes. The notified run folders are kept in the mod's store (`notified`, the newest 1,000), so a reload or a new Claude Code process does not notify again; the first tick of a process marks every run already finished without notifying, and a notification no channel sent (notifications turned off) is marked too, not retried.
+
 Installed by `./install.sh claude` from the `dotagents-mods` marketplace (`../.claude-plugin/marketplace.json`) and read from this folder: after editing it, run `/reload-plugins` in a session.
 
 ## Files
 
-- `hooks/main.tsx`: the hooks module. Registers `/remote-runs`, starts the timer, opens the pane, reads the run folders, draws the pane. Every `$.fs` and `$.process` call is caught and means "no data", so a missing folder or a failing `git` never prints a failed-hook line.
-- `hooks/runs.ts`: plain logic (parsing a run folder, liveness, which rows, their words) with no `claude-code` import at run time, tested by `hooks/runs.unit.ts` under `node --test`.
+- `hooks/main.tsx`: the hooks module. Registers `/remote-runs`, starts the timer, opens the pane, reads the run folders, draws the pane, sets the status line and notifies. Every `$.fs` and `$.process` call is caught and means "no data", so a missing folder or a failing `git` never prints a failed-hook line.
+- `hooks/runs.ts`: plain logic (parsing a run folder, liveness, which rows, their words, the status line and notification texts) with no `claude-code` import at run time, tested by `hooks/runs.unit.ts` under `node --test`.
 - `hooks/state.d.ts`: the state contract (`plugin.json` `types`). Change an atom's `shape` tag when its fields change.
 - `hooks/main.test.tsx`: engine tests under `claude plugin test`, with the engine's answers faked.
 
