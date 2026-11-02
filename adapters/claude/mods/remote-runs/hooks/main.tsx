@@ -1,6 +1,6 @@
 // The remote-runs mod: `/remote-runs` opens a pane listing the remote-agent runs of the session's repo, read from
-// `<git dir>/remote-agent/<run>/`, and a timer keeps it current. Logic sits in plain .ts files (runs.ts); this
-// module only calls `$` and draws. Every `$.fs` and `$.process` call is caught and means "no data": a hook that
+// `<git dir>/remote-agent/<run>/`, and a timer keeps it current; pressing a run shows its log. Logic sits in plain
+// .ts files (runs.ts, transcript.ts); this module only calls `$` and draws. Every `$.fs` and `$.process` call is caught and means "no data": a hook that
 // throws prints a failed-hook line, and `$.process` fails on surfaces without processes (desktop, VS Code).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, FsEntry, Register } from 'claude-code'
@@ -22,7 +22,8 @@ import {
   signature,
   statusText,
 } from './runs.ts'
-import type { Ticker } from './state.d.ts'
+import type { Ticker, View } from './state.d.ts'
+import { oneLine, renderTranscript, WAITING } from './transcript.ts'
 
 const PANE = 'remote-runs'
 const TICK_MS = 1500
@@ -30,6 +31,7 @@ const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], 
 const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null } as Ticker, {
   shape: 'ticker-1',
 })
+const view = atom({ plugin: 'remote-runs', key: 'view' } as const, { runId: null } as View, { shape: 'view-1' })
 // $.store key per common git dir: the folders of its runs already notified (or marked so), kept across processes,
 // newest last. Past NOTIFIED_MAX, only folders gone from disk are dropped.
 const notifiedKey = (common: string) => `notified:${common}`
@@ -228,6 +230,34 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, runs)
+    const { runId } = await read($, view)
+    // The open run's log; a run gone from the list (its folder removed) draws the list again.
+    const open = runId === null ? undefined : list.find(r => r.id === runId)
+    if (open) {
+      const row = formatRow(open)
+      const transcript = await text($, open.transcript)
+      const lines = transcript === null ? [] : renderTranscript(transcript)
+      return (
+        <Box flexDirection="column">
+          <Box>
+            <Button key="back" hotkey="b" onPress={() => update($, view, () => ({ runId: null }))}>
+              Back
+            </Button>
+            <Text wrap="truncate-end">
+              {` ${oneLine(row.label)} `}
+              <Text dimColor>{row.status}</Text>
+            </Text>
+          </Box>
+          <Text dimColor wrap="truncate-end">
+            {oneLine(open.transcript, 1000)}
+          </Text>
+          {lines.length === 0 && <Text dimColor>{WAITING}</Text>}
+          {lines.map(line => (
+            <Text wrap="truncate-end">{line}</Text>
+          ))}
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="column">
         {list.length === 0 && <Text dimColor>{EMPTY}</Text>}
@@ -235,8 +265,12 @@ export const register: Register = on => {
           const row = formatRow(run)
           return (
             <Box flexDirection="column">
-              {/* Ticket 02 opens the run's log on a press. */}
-              <Button key={`run:${run.id}`} plain {...(i < 9 ? { hotkey: String(i + 1) } : {})} onPress={() => {}}>
+              <Button
+                key={`run:${run.id}`}
+                plain
+                {...(i < 9 ? { hotkey: String(i + 1) } : {})}
+                onPress={() => update($, view, () => ({ runId: run.id }))}
+              >
                 {row.label} <Text dimColor>{row.status}</Text>
               </Button>
               {row.detail !== '' && <Text dimColor wrap="truncate-end">{`   ${row.detail}`}</Text>}

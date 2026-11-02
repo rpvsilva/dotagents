@@ -38,9 +38,12 @@ export type Run = {
  */
 export type Ticker = { seeded: string[]; status: string | null }
 
+/** What the pane shows: the list (`runId` null), or the log of the run with that id. */
+export type View = { runId: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     // Change an atom's shape tag when its fields change: it declines what an earlier version stored.
-    'remote-runs': { runs: Shaped<Run[]>; ticker: Shaped<Ticker> }
+    'remote-runs': { runs: Shaped<Run[]>; ticker: Shaped<Ticker>; view: Shaped<View> }
   }
 }
