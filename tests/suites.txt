@@ -17,6 +17,7 @@ merge-pr.test.sh scripts/merge-pr.sh scripts/gh-app-token.sh
 mcp-servers.test.sh scripts/mcp-servers.sh scripts/merge-json.sh mcp/*
 remote-agent.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
 remote-backends.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
+remote-smoke.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh
 remote-agent-setup.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/*
 remote-agent-check.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
 parallel.test.sh tests/parallel.sh

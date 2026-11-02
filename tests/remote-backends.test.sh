@@ -4,7 +4,7 @@
 # sandbox goes away after success, failure and TERM. The ssh backend runs against a stub ssh that hands the remote
 # command to a local `sh -c`, with the docker stub behind it; in bare mode, the stub ssh plays a host whose home is a
 # throwaway folder, and the real sandbox script runs there with a fake claude.
-# Opt-in real run: REMOTE_DOCKER_IMAGE_TEST=<image> runs one task in a real container of <image> (needs Docker).
+# Real runs on each backend: tests/remote-smoke.test.sh (opt-in).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -468,25 +468,6 @@ grep -q "tar -x" "$S/calls" && fail "bare no claude: files sent anyway"
 [ -z "$(ls "$runs" 2>/dev/null)" ] || fail "bare no claude: run folder created: $(ls "$runs")"
 [ ! -e "$W/hello.txt" ] || fail "bare no claude: patch applied"
 unset STUB_SSH_HOME STUB_SSH_PATH
-
-# Opt-in: one real task in a real container of the image named, with the real token from the environment.
-if [ -n "${REMOTE_DOCKER_IMAGE_TEST:-}" ]; then
-  if ! docker info >/dev/null 2>&1 || [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-    fail "real docker: REMOTE_DOCKER_IMAGE_TEST needs Docker running and CLAUDE_CODE_OAUTH_TOKEN set"
-  else
-    R="$SANDBOX/real"
-    make_worktree "$R"
-    remote_config "$SANDBOX/config" REMOTE_BACKEND=docker "REMOTE_IMAGE=$REMOTE_DOCKER_IMAGE_TEST"
-    # The real token comes from the environment.
-    rm "$SANDBOX/config/dotagents/remote.env"
-    (cd "$R" && HOME="$H" XDG_CONFIG_HOME="$SANDBOX/config" \
-      "$REPO/scripts/remote-agent.sh" "Create hello.txt containing the word hello.") >"$SANDBOX/out" 2>&1 \
-      || fail "real docker: exited non-zero: $(tail -5 "$SANDBOX/out")"
-    [ -f "$R/hello.txt" ] || fail "real docker: hello.txt not created"
-    left="$(docker ps -aq --filter label=sandbox.users.io/remote-agent-run)"
-    [ -z "$left" ] || fail "real docker: containers left behind: $left"
-  fi
-fi
 
 [ "$fails" -eq 0 ] || { echo "remote-backends.test.sh: $fails failure(s)"; exit 1; }
 echo "remote-backends.test.sh: ok"
