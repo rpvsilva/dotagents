@@ -28,6 +28,7 @@ type World = {
   placed: boolean
   opened: string[]
   readFails: boolean
+  reads: string[]
   sets: number
   psCalls: string[][]
   clock: ReturnType<typeof mock.clock>
@@ -36,7 +37,7 @@ type World = {
 function engine(on: any, over: Partial<World> = {}): World {
   const clock = mock.clock(on, { now: NOW })
   const w: World = {
-    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, opened: [], sets: 0, psCalls: [], clock, ...over,
+    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, psCalls: [], clock, ...over,
   }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -63,6 +64,7 @@ function engine(on: any, over: Partial<World> = {}): World {
     return { value: [...files.map(file), ...(names ?? []).map(dir)] }
   })
   on('fs.read', (_: unknown, e: any) => {
+    w.reads.push(e.path)
     const f = w.readFails ? undefined : w.files[e.path]
     if (!f) throw new Error(`ENOENT: ${e.path}`)
     return { value: f.text }
@@ -162,6 +164,7 @@ test('a folder with no run.json, or an empty transcript, shows a row and nothing
     await open($)
     expect(await words($, surface)).toEqual(['agent-20261102-100000-1 unknown', 'unknown'])
   }
+  expect(w.psCalls).toEqual([])
 })
 
 test('a running run whose pid is dead or started at another time shows stopped', async ($, on) => {
@@ -193,12 +196,15 @@ test('more than 20 runs keep every unfinished one and drop the oldest finished',
   await start($)
   await open($)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  const keys = (await ui.findAll({ type: 'Button' })).map((b: any) => b.key)
+  const buttons = await ui.findAll({ type: 'Button' })
+  const keys = buttons.map((b: any) => b.key)
+  const hotkeys = buttons.map((b: any) => b.props.hotkey)
   await ui.unmount()
   expect(keys.length).toBe(20)
   expect(keys[0]).toBe('run:agent-old')
   expect(keys[1]).toBe('run:agent-f24')
   expect(keys[19]).toBe('run:agent-f06')
+  expect(hotkeys).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', ...Array(11).fill(undefined)])
 })
 
 test('a changed run.json or a new progress line shows after one tick, with no command typed', async ($, on) => {
@@ -219,6 +225,22 @@ test('a changed run.json or a new progress line shows after one tick, with no co
   write(w, '/repo/.git/remote-agent/agent-1/run.json', JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 5 })))
   await clock.advance(1500)
   expect((await words($))[0]).toBe('TT-01-list done 35s')
+})
+
+test('a removed run folder leaves the pane, and a finished run is read once', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const { clock } = w
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  addRun(w, '/repo/.git', 'agent-2', runJson({ name: 'finished', state: 'done', exit_code: 0, ended: NOW / 1000 }), 'done\n')
+  await start($)
+  await clock.advance(1500)
+  expect((await words($)).filter(t => /^(TT-01-list|finished) /.test(t))).toEqual(['TT-01-list running <1m', 'finished done 30s'])
+  write(w, '/repo/.git/remote-agent/agent-2/progress.log', 'done\nlater line\n')
+  w.dirs['/repo/.git/remote-agent'] = ['agent-2']
+  const reads = w.reads.length
+  await clock.advance(1500)
+  expect(w.reads.length).toBe(reads)
+  expect(await words($)).toEqual(['finished done 30s', 'done 30s', '   claim 3s · send 5s · first 12s · done'])
 })
 
 test('an unchanged tick does not set state', async ($, on) => {
