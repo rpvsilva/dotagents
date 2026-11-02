@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Installs the Claude Code plugins listed in a plugins file, adding their marketplaces first.
 # Only installs what is missing: a plugin already installed, even disabled, is left as it is.
-# A marketplace source starting with ./ is a folder of this repo, passed to claude as its absolute path;
-# any other source (owner/repo, a URL, an absolute path) is passed as written.
 # Usage: scripts/claude-plugins.sh <plugins.txt>
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 list="${1:?usage: claude-plugins.sh <plugins.txt>}"
 marketplaces="$(claude plugin marketplace list --json | jq -r '.[].name' | tr -d '\r')"
 installed="$(claude plugin list --json | jq -r '.[].id' | tr -d '\r')"
@@ -14,7 +11,6 @@ failed=0
 
 while read -r id source; do
   case "$id" in '' | '#'*) continue ;; esac
-  case "$source" in ./*) source="$REPO/${source#./}" ;; esac
   market="${id#*@}"
   if ! grep -qxF "$market" <<<"$marketplaces"; then
     claude plugin marketplace add "$source" >/dev/null || { echo "  plugin marketplace $source: add failed"; failed=1; continue; }

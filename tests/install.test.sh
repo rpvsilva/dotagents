@@ -40,6 +40,15 @@ for s in "${skills[@]}"; do
   assert_link "$home/.claude/skills/$s" "$home/.agents/skills/$s"
   [[ "$s" == _* ]] || [ -f "$home/.claude/skills/$s/SKILL.md" ] || fail "$s/SKILL.md not reachable through ~/.claude/skills"
 done
+# Claude mods (a folder with .claude-plugin/plugin.json) sit beside the skills: Claude Code loads each as a plugin.
+mods=0
+for m in "$REPO"/adapters/claude/mods/*/; do
+  [ -f "$m.claude-plugin/plugin.json" ] || continue
+  m="${m%/}"
+  assert_link "$home/.claude/skills/${m##*/}" "$m"
+  mods=$((mods + 1))
+done
+[ "$mods" -gt 0 ] || fail "no mod found under adapters/claude/mods"
 assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
 assert_link "$home/.agents/bin/remote-agent" "$REPO/scripts/remote-agent.sh"
 assert_link "$home/.agents/bin/settings" "$REPO/scripts/settings.sh"
@@ -85,6 +94,7 @@ home="$SANDBOX/claude"
 mkdir -p "$home"
 run "$home" claude >/dev/null
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
+assert_link "$home/.claude/skills/remote-runs" "$REPO/adapters/claude/mods/remote-runs"
 [ ! -e "$home/.codex" ] || fail "install.sh claude touched ~/.codex"
 run "$home" codex | grep -q "skipping" || fail "codex without ~/.codex did not skip"
 run "$home" cursor | grep -q "skipping" || fail "cursor without ~/.cursor did not skip"
