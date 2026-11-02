@@ -623,8 +623,8 @@ jq -e --argjson pid "$pid" '.state == "running" and .pid == $pid and .exit_code 
 alive "$(jq -r .pid "$k/run.json" 2>/dev/null | tr -d '\r')" && fail "kill -9: the recorded pid is still alive"
 grep -qF "client says [redacted]" "$k/progress.log" || fail "kill -9: the backend's line not in progress.log, redacted: $(cat "$k/progress.log")"
 grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "kill -9: the token is in run.json or progress.log"
-# What kill -9 left running: the backend's client.
-if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then kill "$(cat "$SANDBOX/backend.pid")"; fi
+# What kill -9 left running: the backend's client. It is meant to be alive here, so stop it without waiting.
+kill "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" 2>/dev/null || true
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
 # Refused before anything reaches the cluster, each naming why: an empty brief, two attachments with one name, a
