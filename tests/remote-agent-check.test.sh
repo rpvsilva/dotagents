@@ -38,7 +38,6 @@ for d in "${dirs[@]}"; do
       case "$b" in claude | claude.* | kubectl | kubectl.*) continue ;; esac
       if [ -f "$f" ] && [ -x "$f" ] && [ ! -e "$SHIM/$b" ]; then
         printf '#!/bin/sh\nexec "%s" "$@"\n' "$f" >"$SHIM/$b"
-        chmod +x "$SHIM/$b"
       fi
     done
     base_path="$base_path:$SHIM"
@@ -46,6 +45,8 @@ for d in "${dirs[@]}"; do
     base_path="$base_path:$d"
   fi
 done
+# One chmod for all: such a folder can hold hundreds of commands (Homebrew's bin), and a chmod each takes seconds.
+[ -z "$(ls -A "$SHIM")" ] || chmod +x "$SHIM"/*
 printf '#!/bin/sh\necho "claude called" >>"%s/claude-called"\n' "$S" >"$CB/claude"
 printf '#!/bin/sh\nexit 0\n' >"$CB/node"
 chmod +x "$CB/claude" "$CB/node"
