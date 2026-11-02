@@ -57,6 +57,12 @@ install_shared() {
 install_claude() {
   echo "claude"
   for s in $(skills); do link "$SHARED_SKILLS/$s" "$HOME/.claude/skills/$s"; done
+  # A mod (a plugin folder with a hooks module) in ~/.claude/skills is loaded as a plugin and watched: a saved file reloads it.
+  for m in "$REPO"/adapters/claude/mods/*/; do
+    [ -f "$m.claude-plugin/plugin.json" ] || continue
+    m="${m%/}"
+    link "$m" "$HOME/.claude/skills/${m##*/}"
+  done
   link "$REPO/global/AGENTS.md" "$HOME/.claude/CLAUDE.md"
   for a in "$REPO"/adapters/claude/agents/*.md; do
     [ -e "$a" ] && link "$a" "$HOME/.claude/agents/$(basename "$a")"

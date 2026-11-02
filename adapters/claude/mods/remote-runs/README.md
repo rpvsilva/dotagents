@@ -8,7 +8,7 @@ A timer reads the folders every 1.5 s, from session start, so the pane is curren
 
 The same timer, pane open or not, keeps a status line (`remote: 2 running, 1 failed`; a zero part left out, cleared when both are zero; starting runs count as running, and failed or stopped runs count for 60 minutes after they ended) and raises one native notification per run that ends, titled `remote run`: `<name> done`, `<name> failed (exit <code>)` or `<name> stopped`. The status line is set only when its text changes. The notified run folders are kept in the mod's store, per repo (`notified:<common git dir>`; past 1,000, the oldest folders no longer on disk are dropped, never one still there), so a reload or a new Claude Code process does not notify again; the first tick of a process marks every run already finished without notifying, and a notification no channel sent (notifications turned off) is marked too, not retried.
 
-Installed by `./install.sh claude` from the `dotagents-mods` marketplace (`../.claude-plugin/marketplace.json`) and read from this folder: after editing it, run `/reload-plugins` in a session.
+`./install.sh claude` links this folder to `~/.claude/skills/remote-runs`, where Claude Code loads it as a plugin and watches it: saving a file here reloads it in a running session.
 
 ## Files
 
