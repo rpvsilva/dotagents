@@ -179,6 +179,7 @@ run_json() {
 run_name="$name" # before --attach reuses $name
 pid_start="$(ps -o lstart= -p $$ 2>/dev/null | sed 's/^ *//; s/ *$//')" || pid_start=""
 # The worktree as a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
+# shellcheck disable=SC2016 # jq's variables
 run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, pid: $pid,
   pid_start: (if $ps == "" then null else $ps end), state: "starting", exit_code: null, ended: null, claim_s: null,
   send_s: null, first_event_s: null}' --arg run "$run" --arg name "$run_name" \
@@ -245,6 +246,7 @@ transcript_to() {
       line="$((SECONDS - t0))"
       say "first agent event after ${line}s"
       run_json_tmp=first
+      # shellcheck disable=SC2016 # jq's variables
       run_json '.first_event_s = $s' --argjson s "$line"
     else
       say "$line"
@@ -262,7 +264,8 @@ cleanup() {
   send_log
   [ -z "$acquired" ] || with_progress "$backend" release "$run" || true
   # Last, so a first_event_s write the stopped run had under way lands before it.
-  case "$rc" in 0 | 3) state=done ;; esac
+  case "$rc" in 0 | 3) state="done" ;; esac
+  # shellcheck disable=SC2016 # jq's variables
   run_json '.state = $state | .exit_code = $rc | .ended = $ended' --arg state "$state" --argjson rc "$rc" \
     --argjson ended "$(date +%s)"
   rm -f "$keep/run.json.tmp" "$keep/run.json.first"
@@ -304,6 +307,7 @@ t0=$SECONDS
 handle="$(with_progress "$backend" acquire "$run")"
 took=$((SECONDS - t0))
 say "claimed in ${took}s"
+# shellcheck disable=SC2016 # jq's variables
 run_json '.claim_s = $s' --argjson s "$took"
 
 # macOS tar would add AppleDouble files and xattr headers.
@@ -313,6 +317,7 @@ tar -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
 (cd "$root" && tar -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
 took=$((SECONDS - t0))
 say "sent setup and snapshot in ${took}s"
+# shellcheck disable=SC2016 # jq's variables
 run_json '.send_s = $s' --argjson s "$took"
 send_log
 

@@ -240,14 +240,14 @@ grep -q "delete sandboxclaim $claim " "$SANDBOX/calls" || fail "claim not delete
 grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "no session: not reported: $(cat "$SANDBOX/err")"
 grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not delete on shutdown"
 # Beside the transcript: run.json says what the run is and how it ended, progress.log every progress line.
-run_data "success run data" done 0
+run_data "success run data" "done" 0
 rm "$W/hello.txt"
 
 # No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
 [ "$code" = 3 ] || fail "no changes: wanted exit 3, got $code"
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "no changes: claim not deleted"
-run_data "no changes run data" done 3
+run_data "no changes run data" "done" 3
 
 # A failed run: non-zero, nothing applied, claim deleted.
 code=0; run 1 "$patch" || code=$?
@@ -378,13 +378,13 @@ claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
 grep -qF "sandbox.users.io/remote-agent-task: 07-visible-runs" "$SANDBOX/claim.yaml" || fail "name: claim not labelled"
 logged_all "[07-visible-runs]" "$POD/main-stdout" "name"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "name: stdout changed: $(cat "$SANDBOX/report")"
-run_data "name run data" done 0 07-visible-runs
+run_data "name run data" "done" 0 07-visible-runs
 rm -f "$W/hello.txt"
 # run.json keeps the name though --attach comes after it.
 mkdir -p "$SANDBOX/att"
 printf 'ticket\n' >"$SANDBOX/att/ticket.md"
 run 0 "$patch" --name "07-Visible runs!" --attach "$SANDBOX/att/ticket.md" || fail "name, attach: exited non-zero: $(cat "$SANDBOX/out")"
-run_data "name with attach run data" done 0 07-visible-runs
+run_data "name with attach run data" "done" 0 07-visible-runs
 rm -f "$W/hello.txt"
 run 0 "$patch" --name "$(printf 'A%.0s' $(seq 80))_x" || fail "long name: exited non-zero: $(cat "$SANDBOX/out")"
 task="$(pod_labels | sed -n 's/.*sandbox\.users\.io\/remote-agent-task: //p')"
@@ -546,7 +546,7 @@ if [ -z "$p" ] || [ -z "$c" ] || [ "$p" -ge "$c" ]; then fail "live transcript: 
 logged_all "[$claim]" "$POD/main-stdout" "live transcript"
 git -C "$W" status --porcelain | grep -q "transcript" && fail "live transcript: the transcript shows in the worktree"
 grep -q "transcript" "$W/.git/remote-agent/$claim/changes.patch" && fail "live transcript: the transcript is in the patch"
-run_data "live run data" done 0
+run_data "live run data" "done" 0
 jq -e '.first_event_s | type == "number"' "$(kept)/run.json" >/dev/null 2>&1 || fail "live run data: first_event_s lost at the end"
 rm -f "$W/hello.txt" "$SANDBOX/started" "$SANDBOX/go"
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
@@ -583,6 +583,7 @@ jq -e '.state == "failed" and .exit_code == 143 and (.ended | type) == "number"'
 # sets it back to the default before running remote-agent.
 if command -v perl >/dev/null 2>&1; then
   rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started"
+  # shellcheck disable=SC2016 # perl's variables
   (cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
     perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
   pid=$!
