@@ -29,10 +29,28 @@ run() { HOME="$1" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" "${@:2}"; }
 skills=()
 for d in "$REPO"/skills/*/; do skills+=("$(basename "$d")"); done
 
-# all: a pre-existing real file is backed up, then everything is linked.
+# The single-tool targets get homes of their own, installed in the background while the all target runs; the
+# assertions on them come after `wait`. Each step's output lands in $SANDBOX/<step>.out.
+(
+  home="$SANDBOX/claude"
+  mkdir -p "$home"
+  run "$home" claude >"$SANDBOX/claude.out"
+  [ ! -e "$home/.codex" ] || touch "$SANDBOX/claude-touched-codex"
+  run "$home" codex >"$SANDBOX/codex.out"
+  run "$home" cursor >"$SANDBOX/cursor.out"
+  home="$SANDBOX/shared"
+  mkdir -p "$home"
+  run "$home" shared >"$SANDBOX/shared.out"
+  if run "$SANDBOX/bad" nope >/dev/null 2>&1; then touch "$SANDBOX/bad-exited-0"; fi
+) &
+single=$!
+
+# all: a pre-existing real file is backed up, then everything is linked. Cursor's hooks.json already holds another
+# tool's hook, which the merge keeps.
 home="$SANDBOX/all"
 mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
 echo "old instructions" >"$home/.claude/CLAUDE.md"
+echo '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' >"$home/.cursor/hooks.json"
 run "$home" all >/dev/null
 
 for s in "${skills[@]}"; do
@@ -60,9 +78,15 @@ for r in "$REPO"/adapters/codex/rules/*.rules; do assert_link "$home/.codex/rule
 for a in "$REPO"/adapters/cursor/agents/*.md; do assert_link "$home/.cursor/agents/$(basename "$a")" "$a"; done
 grep -rqx "old instructions" "$home/.dotagents-backup" 2>/dev/null || fail "replaced CLAUDE.md was not backed up"
 
-# Hook and settings snippets are merged into each tool's config, next to what is already there.
-echo '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' >"$home/.cursor/hooks.json"
-run "$home" all >/dev/null
+# Second run, with no target (the default, all): same links, nothing backed up, every tool installed again.
+before="$(snapshot "$home")"
+out="$(run "$home")"
+[ "$before" = "$(snapshot "$home")" ] || fail "second run changed the links"
+if grep -q "backed up" <<<"$out"; then fail "second run backed something up"; fi
+for t in shared claude codex cursor; do grep -qx "$t" <<<"$out" || fail "install.sh with no target did not install $t"; done
+
+# Hook and settings snippets are merged into each tool's config, next to what is already there, and the second run
+# doubles none of them.
 has_guard() {
   local g
   for g in guard-merge guard-secrets; do
@@ -83,24 +107,24 @@ if [ -n "$remote" ]; then
   jq -e --arg n "$remote" '.mcpServers[$n]' "$home/.cursor/mcp.json" >/dev/null || fail "MCP server $remote not in Cursor config"
 fi
 
-# Second run: same links, nothing backed up.
-before="$(snapshot "$home")"
-out="$(run "$home" all)"
-[ "$before" = "$(snapshot "$home")" ] || fail "second run changed the links"
-if grep -q "backed up" <<<"$out"; then fail "second run backed something up"; fi
+wait "$single" || fail "a single-tool install failed"
 
-# claude: no codex links; codex: skipped cleanly when ~/.codex is missing.
+# claude: no codex links; codex and cursor: skipped cleanly when their folder is missing.
 home="$SANDBOX/claude"
-mkdir -p "$home"
-run "$home" claude >/dev/null
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
 assert_link "$home/.claude/skills/remote-runs" "$REPO/adapters/claude/mods/remote-runs"
-[ ! -e "$home/.codex" ] || fail "install.sh claude touched ~/.codex"
-run "$home" codex | grep -q "skipping" || fail "codex without ~/.codex did not skip"
-run "$home" cursor | grep -q "skipping" || fail "cursor without ~/.cursor did not skip"
+[ ! -e "$SANDBOX/claude-touched-codex" ] || fail "install.sh claude touched ~/.codex"
+grep -q "skipping" "$SANDBOX/codex.out" || fail "codex without ~/.codex did not skip"
+grep -q "skipping" "$SANDBOX/cursor.out" || fail "cursor without ~/.cursor did not skip"
+
+# shared: ~/.agents only, no tool's folder.
+home="$SANDBOX/shared"
+assert_link "$home/.agents/skills/${skills[0]}" "$REPO/skills/${skills[0]}"
+assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
+for d in .claude .codex .cursor; do [ ! -e "$home/$d" ] || fail "install.sh shared created ~/$d"; done
 
 # Unknown target exits non-zero.
-if run "$SANDBOX/bad" nope >/dev/null 2>&1; then fail "unknown target exited 0"; fi
+[ ! -e "$SANDBOX/bad-exited-0" ] || fail "unknown target exited 0"
 
 [ "$fails" -eq 0 ] || { echo "install.test.sh: $fails failure(s)"; exit 1; }
 echo "install.test.sh: ok"
