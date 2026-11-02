@@ -10,7 +10,7 @@ Run `~/.agents/bin/settings list <skill>` in the repo: the skill's **Settings**,
 
 Start the named agent if your harness defines it, otherwise a general-purpose subagent told to follow the brief. Hand over the inputs the brief lists as **paths**, never summaries, so its read is not anchored on yours. If your harness has no subagents, follow each brief yourself, one at a time, writing the same files.
 
-At most **N** subagents run at once (the **slots**): `--parallel N`, else the skill's `max_parallel` Setting.
+At most **N** subagents run at once on this machine (the **slots**): `--parallel N`, else the skill's `max_parallel` Setting. [Remote subagents](#remote-subagents) take **remote slots** instead, counted apart: at most `~/.agents/bin/settings get remote max_sandboxes` at once, whatever the skill. When a skill says "while a slot is free", it means a slot of the kind the subagent will use, so a run with remote on can have N local and the remote slots' worth of subagents going at once.
 
 ## Remote subagents
 
@@ -18,7 +18,7 @@ A subagent the skill marks **remote-capable** (it only changes its worktree) run
 
 1. Create the worktree as for a local subagent.
 2. Write the message you would hand the subagent into a file. Name the worktree as `~/work`, and every other input as `~/attached/<its file or folder name>`. Attach only what its brief reads, never a whole run folder holding other worktrees.
-3. Run `remote-agent --name <task> --attach <path>... @<message file> <worktree>` in the background, with a short task name the skill gives (e.g. a build-epic task's `TT-NN-<slug>`). `remote-agent` is `~/.agents/bin/remote-agent`. It takes a slot like a local subagent. Its stdout is the subagent's report; its stderr is progress, one line per step, each starting with `[<task>]`.
+3. Run `remote-agent --name <task> --attach <path>... @<message file> <worktree>` in the background, with a short task name the skill gives (e.g. a build-epic task's `TT-NN-<slug>`). `remote-agent` is `~/.agents/bin/remote-agent`. It takes a remote slot, not a local one. Its stdout is the subagent's report; its stderr is progress, one line per step, each starting with `[<task>]`.
    - Do not redirect its stderr: no `2>file`, no `2>&1 | <filter>`, no `2>/dev/null`. Left alone, each progress line shows to the human as it arrives; a run that only shows its result at the end looks like no agent is attached.
    - When the run starts, give the human the transcript path from its `transcript:` line on stderr. That file holds the subagent's full event stream as it arrives.
    - If your harness cannot show a background command's output while it runs, give the human the transcript path and read the run's stderr between other work.

@@ -91,6 +91,11 @@ refuse "no Level" build-epic max_parallel 3
 refuse "a shared key the section does not read" remote tracker jira --machine
 refuse "a shared key the skill does not read" fix-pr max_parallel 2 --machine
 refuse "a repo-only key" remote allowed false --machine
+# The remote cap is the backend's, apart from the skills' max_parallel: machine Level only, at least 1, default 4.
+refuse "no sandboxes" remote max_sandboxes 0 --machine
+refuse "a machine-only key" remote max_sandboxes 8 --repo
+expect remote max_sandboxes 4
+s REMOTE_MAX_SANDBOXES=2 -- get remote max_sandboxes; [ "$(out)" = 2 ] || fail "REMOTE_MAX_SANDBOXES: printed '$(out)', not 2"
 s -- set remote backend k8s --machine || true
 grep -q "one of: cluster, docker, ssh" "$SANDBOX/err" || fail "set enum: message does not list the choices"
 code=0; s -- get build-epic max_paralel || code=$?
@@ -163,7 +168,7 @@ grep -qF $'build-epic.max_parallel\t3\tmachine\tSubagents running at once' "$SAN
 grep -qF $'build-epic.in_progress\t\tdefault\t' "$SANDBOX/out" || fail "list: in_progress line: $(out)"
 grep -q $'^remote.backend\t.*one of: cluster, docker, ssh' <(s -- list remote; out) || fail "list: no accepted values in the meaning column"
 s -- list; grep -q '^remote.backend' "$SANDBOX/out" && grep -q '^shared.max_parallel' "$SANDBOX/out" || fail "list with no section: $(out)"
-s -- list remote; grep -q max_parallel "$SANDBOX/out" && fail "list remote: shows a shared key remote does not read: $(out)"
+s -- list remote; grep -q "^remote.max_parallel" "$SANDBOX/out" && fail "list remote: shows a shared key remote does not read: $(out)"
 echo '{"max_parallel": 0}' >"$MACHINE"
 code=0; s -- list build-epic || code=$?
 [ "$code" = 1 ] && grep -q $'build-epic.max_parallel\tERROR: ' "$SANDBOX/out" || fail "list with a bad value: exit $code, $(out)"
