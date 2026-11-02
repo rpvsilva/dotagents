@@ -10,7 +10,8 @@ fails=0
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
 # Stub claude: lists come from $SANDBOX/{markets,plugins} (one name per line), add/install append to them
-# and log the call; a plugin named "broken@m" fails to install.
+# and log the call; a plugin named "broken@m" fails to install. An added marketplace is named after its source's
+# last part.
 mkdir "$SANDBOX/bin"
 cat >"$SANDBOX/bin/claude" <<EOF
 #!/usr/bin/env bash
@@ -18,7 +19,7 @@ echo "\$*" >>"$SANDBOX/calls"
 case "\$2 \$3 \$4" in
   "marketplace list --json") jq -R '{name: .}' "$SANDBOX/markets" | jq -s . ;;
   "list --json "*) jq -R '{id: .}' "$SANDBOX/plugins" | jq -s . ;;
-  "marketplace add "*) echo "\${4#*/}" >>"$SANDBOX/markets" ;;
+  "marketplace add "*) echo "\${4##*/}" >>"$SANDBOX/markets" ;;
   "install "*) [ "\$3" = broken@m ] && exit 1; echo "\$3" >>"$SANDBOX/plugins" ;;
 esac
 EOF
@@ -57,6 +58,22 @@ plugins ok
 not_called "add"
 not_called "install"
 grep -q "already installed" "$SANDBOX/out" || fail "second run did not say already installed"
+
+# A CRLF plugins file (a Windows checkout) reads the same: no carriage return reaches a source or an id.
+printf 'new@extra owner/extra\r\n' >"$SANDBOX/plugins.txt"
+: >"$SANDBOX/markets"
+: >"$SANDBOX/plugins"
+plugins ok
+called "plugin marketplace add owner/extra"
+called "plugin install new@extra --scope user"
+
+# CRLF in what claude lists (claude.exe on Windows) still matches: a present marketplace and plugin are left alone.
+printf 'official\r\n' >"$SANDBOX/markets"
+printf 'have@official\r\n' >"$SANDBOX/plugins"
+echo 'have@official owner/official' >"$SANDBOX/plugins.txt"
+plugins ok
+not_called "add"
+not_called "install"
 
 # A failed install is reported, the rest still installs, and the exit is non-zero.
 printf 'broken@m o/m\nlate@m o/m\n' >"$SANDBOX/plugins.txt"
