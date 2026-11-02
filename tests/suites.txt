@@ -9,6 +9,7 @@ python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/*
 install.test.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
 affected.test.sh
 claude-plugins.test.sh scripts/claude-plugins.sh adapters/claude/plugins.txt
+mod.test.sh adapters/claude/mods/*
 gh-app-token.test.sh scripts/gh-app-token.sh
 guard-merge.test.sh scripts/hooks/* scripts/merge-pr.sh scripts/gh-app-token.sh
 guard-secrets.test.sh scripts/hooks/* scripts/gh-app-token.sh

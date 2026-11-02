@@ -96,6 +96,16 @@ for h in adapters/*/hooks/*.json; do
   jq -e '[.. | .command? | strings | select(test("\\.agents/hooks/"))] | length > 0' "$h" >/dev/null 2>&1 || fail "$h: calls no script in ~/.agents/hooks/"
 done
 
+# Claude mods: install.sh links each folder of adapters/claude/mods/ into ~/.claude/skills/ beside the skills, so a
+# mod is named in its plugin.json as its folder, and no mod shares a name with a skill.
+for d in adapters/claude/mods/*/; do
+  [ -d "$d" ] || continue
+  d="${d%/}"
+  m="${d##*/}"
+  [ "$(jq -r .name "$d/.claude-plugin/plugin.json" 2>/dev/null | tr -d '\r')" = "$m" ] || fail "$d/.claude-plugin/plugin.json: missing or not named $m"
+  [ ! -e "skills/$m" ] || fail "$d: a skill has the same name, both would be ~/.claude/skills/$m"
+done
+
 # MCP: valid JSON, and every env/header value is a ${VAR} reference.
 if ! jq -e '.mcpServers | type == "object"' mcp/servers.json >/dev/null; then
   fail "mcp/servers.json: invalid JSON or no mcpServers object"
