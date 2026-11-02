@@ -4,14 +4,17 @@ import { test } from 'node:test'
 import {
   applyLiveness,
   commonDir,
+  endedRuns,
   formatRow,
   gitDirs,
   livePids,
+  notifyText,
   parseRun,
   pickRows,
   type Run,
   type RunFiles,
   signature,
+  statusText,
 } from './runs.ts'
 
 const LSTART = 'Mon Nov  2 10:00:00 2026'
@@ -172,4 +175,47 @@ test('formatRow names the run, else its id, with its state, elapsed time, timing
   })
   const [bare] = pickRows([parseRun(files('agent-2', null))], 1000)
   assert.deepEqual(formatRow(bare), { label: 'agent-2', status: 'unknown', detail: '' })
+})
+
+test('statusText counts running and starting runs, and failed or stopped ones, leaving out a zero part', () => {
+  const now = 10_000
+  const running = [run('r', 'running', 1), run('s', 'starting', 1)]
+  const failed = [run('f', 'failed', 1, { ended: now - 60 })]
+  assert.equal(statusText([], now), undefined)
+  assert.equal(statusText(running, now), 'remote: 2 running')
+  assert.equal(statusText(failed, now), 'remote: 1 failed')
+  assert.equal(statusText([...running, ...failed], now), 'remote: 2 running, 1 failed')
+})
+
+test('statusText counts a stopped run as failed, and ignores done and unknown runs', () => {
+  const now = 10_000
+  const rows = [run('st', 'stopped', 1, { changed: now - 5 }), run('d', 'done', 1, { ended: now }), run('u', 'unknown', 1)]
+  assert.equal(statusText(rows, now), 'remote: 1 failed')
+})
+
+test('statusText counts failed and stopped runs only for 60 minutes after they ended', () => {
+  const now = 10_000
+  const at = (ago: number) => [
+    run('f', 'failed', 1, { ended: now - ago }),
+    run('st', 'stopped', 1, { changed: now - ago }),
+  ]
+  assert.equal(statusText(at(3600), now), 'remote: 2 failed')
+  assert.equal(statusText(at(3601), now), undefined)
+  assert.equal(statusText([run('f', 'failed', 1, { ended: null, changed: now - 10 })], now), 'remote: 1 failed')
+})
+
+test('endedRuns lists done, failed and stopped runs not yet notified', () => {
+  const rows = [
+    run('d', 'done', 1), run('f', 'failed', 1), run('st', 'stopped', 1),
+    run('r', 'running', 1), run('s', 'starting', 1), run('u', 'unknown', 1), run('old', 'done', 1),
+  ]
+  const seen = new Set([rows[6].folder])
+  assert.deepEqual(endedRuns(rows, seen).map(r => r.id), ['d', 'f', 'st'])
+})
+
+test('notifyText names the run, else its id, and how it ended', () => {
+  assert.equal(notifyText(run('a', 'done', 1)), 'TT-01-list done')
+  assert.equal(notifyText(run('a', 'failed', 1, { exit_code: 2 })), 'TT-01-list failed (exit 2)')
+  assert.equal(notifyText(run('a', 'failed', 1, { exit_code: null })), 'TT-01-list failed')
+  assert.equal(notifyText(run('agent-9', 'stopped', 1, { name: null })), 'agent-9 stopped')
 })

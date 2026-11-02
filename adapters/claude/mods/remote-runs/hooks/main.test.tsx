@@ -28,8 +28,14 @@ type World = {
   placed: boolean
   opened: string[]
   readFails: boolean
+  /** The paths `fs.read` was asked for. */
   reads: string[]
+  /** What `ui.notify` answers. */
+  sent: unknown
+  /** The `runs` atom's writes, the status lines set and the notifications raised. */
   sets: number
+  status: (string | undefined)[]
+  notified: { title?: string; text: string }[]
   psCalls: string[][]
   clock: ReturnType<typeof mock.clock>
 }
@@ -37,7 +43,8 @@ type World = {
 function engine(on: any, over: Partial<World> = {}): World {
   const clock = mock.clock(on, { now: NOW })
   const w: World = {
-    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, psCalls: [], clock, ...over,
+    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, psCalls: [], clock,
+    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], ...over,
   }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -70,8 +77,16 @@ function engine(on: any, over: Partial<World> = {}): World {
     return { value: f.text }
   })
   on('state.set', (_: unknown, e: any, next: any) => {
-    w.sets++
+    if (e.key === 'runs') w.sets++
     return next(e)
+  })
+  on('ui.status', (_: unknown, e: any) => {
+    w.status.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.notify', (_: unknown, e: any) => {
+    w.notified.push({ title: e.title, text: e.text })
+    return { value: w.sent }
   })
   return w
 }
@@ -270,4 +285,97 @@ test('/remote-runs says the pane waits for a wider terminal when it is not place
   await start($)
   const { text } = await $.command.run({ command: 'remote-runs' })
   expect(text).toBe('Remote runs pane opens once the terminal is wider.')
+})
+
+const RUN_JSON = '/repo/.git/remote-agent/agent-1/run.json'
+
+test('a run that ends notifies once and clears the status line, with the pane closed', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  mock.store(on)
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  expect(w.status).toEqual(['remote: 1 running'])
+  expect(w.notified).toEqual([])
+
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
+  expect(w.status).toEqual(['remote: 1 running', undefined])
+
+  await w.clock.advance(1500)
+  await start($)
+  await w.clock.advance(3000)
+  expect(w.notified.length).toBe(1)
+  expect(w.status.length).toBe(2)
+  expect(w.opened).toEqual([])
+})
+
+test('a run that fails notifies with its exit code and counts as failed in the status line', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  mock.store(on)
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  // It ended 59m50s ago as this tick sees it: the status line drops it ten seconds on.
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 2, ended: NOW / 1000 + 3 - 3590 })))
+  await w.clock.advance(1500)
+  expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list failed (exit 2)' }])
+  expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed'])
+
+  await w.clock.advance(4500)
+  expect(w.status.length).toBe(2)
+  await w.clock.advance(7500)
+  expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed', undefined])
+  expect(w.notified.length).toBe(1)
+})
+
+test('a run whose remote-agent died notifies stopped', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  mock.store(on)
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  w.ps = psAlive([])
+  await w.clock.advance(1500)
+  expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list stopped' }])
+  expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed'])
+})
+
+test('runs already finished at the first tick are not notified, nor are those an earlier process notified', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const earlier = '/repo/.git/remote-agent/agent-earlier'
+  mock.store(on, { notified: [earlier] })
+  addRun(w, '/repo/.git', 'agent-earlier', runJson({ name: 'earlier', state: 'done', exit_code: 0, ended: NOW / 1000 - 100 }))
+  addRun(w, '/repo/.git', 'agent-old', runJson({ name: 'old', state: 'failed', exit_code: 1, ended: NOW / 1000 - 5000 }))
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect(w.notified).toEqual([])
+
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
+})
+
+test('a notification no channel sent is not tried again', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]), sent: { isSent: false, reason: 'disabled' } })
+  mock.store(on)
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect(w.notified.length).toBe(1)
+})
+
+test('with no run the status line is never set', async ($, on) => {
+  const w = engine(on)
+  mock.store(on)
+  await start($)
+  await w.clock.advance(4500)
+  expect(w.status).toEqual([])
 })

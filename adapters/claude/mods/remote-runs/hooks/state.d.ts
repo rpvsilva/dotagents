@@ -32,9 +32,15 @@ export type Run = {
   transcript: string
 }
 
+/**
+ * What the timer keeps for the session (survives a hot reload, not a new process): the common git dirs whose
+ * finished runs it has marked notified without notifying, and the status line it last set (null: none).
+ */
+export type Ticker = { seeded: string[]; status: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     // Change an atom's shape tag when its fields change: it declines what an earlier version stored.
-    'remote-runs': { runs: Shaped<Run[]> }
+    'remote-runs': { runs: Shaped<Run[]>; ticker: Shaped<Ticker> }
   }
 }

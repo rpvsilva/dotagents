@@ -9,19 +9,29 @@ import {
   applyLiveness,
   commonDir,
   EMPTY,
+  endedRuns,
   formatRow,
   gitDirs,
   livePids,
+  notifyText,
   parseRun,
   pickRows,
   type Run,
   type RunFiles,
   signature,
+  statusText,
 } from './runs.ts'
+import type { Ticker } from './state.d.ts'
 
 const PANE = 'remote-runs'
 const TICK_MS = 1500
 const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-2' })
+const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null } as Ticker, {
+  shape: 'ticker-1',
+})
+// $.store key: the folders of runs already notified (or marked so), kept across processes, newest last.
+const NOTIFIED = 'notified'
+const NOTIFIED_MAX = 1000
 
 // Per-process caches (a reload starts them empty, which only costs one full read): the common git dir per cwd,
 // and each run folder's files with the sizes and mtimes they were read at. A done or failed run is not reread.
@@ -84,10 +94,13 @@ async function runFiles($: EngineInterface, folder: string, id: string): Promise
   return files
 }
 
-/** Every run of the repo: the folders under the common git dir's and each linked worktree's remote-agent/. */
-async function scan($: EngineInterface): Promise<Run[]> {
+/**
+ * Every run of the repo: the folders under the common git dir's and each linked worktree's remote-agent/, and
+ * that dir; null without one.
+ */
+async function scan($: EngineInterface): Promise<{ common: string; found: Run[] } | null> {
   const common = await repoGitDir($)
-  if (!common) return []
+  if (!common) return null
   const worktrees = (await entries($, `${common}/worktrees`)).filter(e => e.kind === 'dir').map(e => e.name)
   const found: Run[] = []
   const kept = new Map<string, { key: string; files: RunFiles; isFinal: boolean }>()
@@ -101,7 +114,7 @@ async function scan($: EngineInterface): Promise<Run[]> {
     }
   }
   seen = kept
-  return found
+  return { common, found }
 }
 
 /** `ps -o pid=,lstart=` for `pids`, in one call; '' with no pid, null when ps cannot run. */
@@ -114,15 +127,59 @@ async function ps($: EngineInterface, pids: number[]): Promise<string | null> {
   }
 }
 
-/** Reads every run and sets the rows only when they would draw differently. Never throws. */
+/**
+ * Notifies each run that ended since the last tick, once: the notified folders live in $.store, so a reload or a
+ * new process does not notify again. The first tick of a process for a git dir marks every finished run without
+ * notifying. A run is marked even when no channel sent it, so a disabled channel is not tried every tick.
+ */
+async function notifyEnded($: EngineInterface, common: string, all: readonly Run[], t: Ticker): Promise<Ticker> {
+  let stored: unknown
+  try {
+    stored = await $.store.get(NOTIFIED)
+  } catch {
+    return t // no store, no memory: notifying now would repeat every tick
+  }
+  const notified = Array.isArray(stored) ? stored.filter((f): f is string => typeof f === 'string') : []
+  const ended = endedRuns(all, new Set(notified))
+  const isSeeded = t.seeded.includes(common)
+  if (ended.length > 0) {
+    for (const r of isSeeded ? ended : []) {
+      try {
+        await $.ui.notify(notifyText(r), { title: 'remote run' })
+      } catch {
+        // a refused or failed write: marked all the same
+      }
+    }
+    await $.store.set(NOTIFIED, [...notified, ...ended.map(r => r.folder)].slice(-NOTIFIED_MAX))
+  }
+  return isSeeded ? t : { ...t, seeded: [...t.seeded, common] }
+}
+
+/**
+ * Reads every run, sets the rows only when they would draw differently, the status line only when its text
+ * changed, and notifies the runs that ended. Runs from the timer, so all of it works with the pane closed. Never
+ * throws.
+ */
 async function tick($: EngineInterface): Promise<void> {
   if (isTicking) return
   isTicking = true
   try {
     const now = Math.floor((await $.clock.now()) / 1000)
-    const found = await scan($)
-    const rows = pickRows(applyLiveness(found, await ps($, livePids(found))), now)
+    const got = await scan($)
+    const found = got?.found ?? []
+    const all = applyLiveness(found, await ps($, livePids(found)))
+    const rows = pickRows(all, now)
     if (signature(rows) !== signature(await read($, runs))) await update($, runs, () => rows)
+
+    const was = await read($, ticker)
+    let t = was
+    const status = statusText(all, now)
+    if ((status ?? null) !== t.status) {
+      $.ui.status(status)
+      t = { ...t, status: status ?? null }
+    }
+    if (got) t = await notifyEnded($, got.common, all, t)
+    if (t !== was) await update($, ticker, () => t)
   } catch {
     // no data this tick; the next one tries again
   } finally {

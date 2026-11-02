@@ -158,3 +158,32 @@ export function formatRow(r: Run): { label: string; status: string; detail: stri
     detail: [...timings, ...(r.step ? [r.step] : [])].join(' · '),
   }
 }
+
+/** How long a failed or stopped run counts in the status line after it ended, in seconds. */
+export const FAILED_WINDOW_S = 60 * 60
+
+/**
+ * The status line at `now` (epoch seconds): `remote: 2 running, 1 failed`, a zero part left out; undefined (the
+ * line cleared) when both are zero. Starting runs count as running; failed and stopped runs count for
+ * FAILED_WINDOW_S after they ended (a stopped run, or a failed one with no `ended`, after its files last changed).
+ */
+export function statusText(runs: readonly Run[], now: number): string | undefined {
+  const running = runs.filter(isLive).length
+  const failed = runs.filter(
+    r => (r.state === 'failed' || r.state === 'stopped') && now - ((r.state === 'failed' ? r.ended : null) ?? r.changed) <= FAILED_WINDOW_S,
+  ).length
+  const parts = [running ? `${running} running` : '', failed ? `${failed} failed` : ''].filter(Boolean)
+  return parts.length ? `remote: ${parts.join(', ')}` : undefined
+}
+
+/** The runs that ended (done, failed or stopped) and whose folder is not in `notified`. */
+export function endedRuns(runs: readonly Run[], notified: ReadonlySet<string>): Run[] {
+  return runs.filter(r => (r.state === 'done' || r.state === 'failed' || r.state === 'stopped') && !notified.has(r.folder))
+}
+
+/** A finished run's notification text: `<name> done`, `<name> failed (exit <code>)` or `<name> stopped`. */
+export function notifyText(r: Run): string {
+  const name = r.name ?? r.id
+  if (r.state === 'failed') return r.exit_code === null ? `${name} failed` : `${name} failed (exit ${r.exit_code})`
+  return `${name} ${r.state}`
+}
