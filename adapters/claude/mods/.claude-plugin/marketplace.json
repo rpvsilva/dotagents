@@ -1,0 +1,5 @@
+{
+  "name": "dotagents-mods",
+  "owner": { "name": "Rui Silva" },
+  "plugins": [{ "name": "remote-runs", "source": "./remote-runs" }]
+}
