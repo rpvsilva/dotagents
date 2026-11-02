@@ -24,6 +24,7 @@ type World = {
   dirs: Record<string, string[]>
   files: Record<string, { text: string; mtimeMs: number }>
   git: unknown
+  /** What `ps` answers, or a function making the answer when it is called. */
   ps: unknown
   placed: boolean
   opened: string[]
@@ -54,9 +55,9 @@ function engine(on: any, over: Partial<World> = {}): World {
     return { value: { isPlaced: w.placed } }
   })
   on('process.run', (_: unknown, e: any) => {
-    if (e.argv[0] === 'ps') {
+    if (e.argv.includes('ps')) {
       w.psCalls.push(e.argv)
-      return w.ps
+      return typeof w.ps === 'function' ? w.ps() : w.ps
     }
     return w.git
   })
@@ -191,7 +192,8 @@ test('a running run whose pid is dead or started at another time shows stopped',
   await open($)
   const shown = await words($)
   expect(shown.filter(t => / stopped/.test(t) && !t.startsWith(' '))).toEqual(['dead stopped 0s', 'reused stopped 0s'])
-  expect(w.psCalls).toEqual([['ps', '-o', 'pid=,lstart=', '-p', '7,8']])
+  // In the C locale, as remote-agent writes pid_start: lstart follows the locale on macOS.
+  expect(w.psCalls).toEqual([['env', 'LC_ALL=C', 'ps', '-o', 'pid=,lstart=', '-p', '7,8']])
 })
 
 test('a run left running after its remote-agent is gone stays stopped when ps cannot run', async ($, on) => {
@@ -342,10 +344,39 @@ test('a run whose remote-agent died notifies stopped', async ($, on) => {
   expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed'])
 })
 
+test('a run that ends between reading run.json and ps notifies how it ended, not stopped', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  mock.store(on)
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  // The tick read run.json as running; remote-agent then writes done and exits before ps runs.
+  w.ps = () => {
+    write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+    return psAlive([])
+  }
+  await w.clock.advance(1500)
+  expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
+  await w.clock.advance(3000)
+  expect(w.notified.length).toBe(1)
+  expect((await words($))[0]).toBe('TT-01-list done 32s')
+})
+
+test('more finished runs on disk than the store keeps are never notified again', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  mock.store(on)
+  for (let i = 0; i < 1005; i++) addRun(w, '/repo/.git', `agent-${String(i).padStart(4, '0')}`, runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 - 100 }))
+  await start($)
+  await w.clock.advance(1500 * 4)
+  expect(w.notified).toEqual([])
+})
+
+const NOTIFIED = 'notified:/repo/.git'
+
 test('runs already finished at the first tick are not notified, nor are those an earlier process notified', async ($, on) => {
   const w = engine(on, { ps: psAlive([42]) })
   const earlier = '/repo/.git/remote-agent/agent-earlier'
-  mock.store(on, { notified: [earlier] })
+  mock.store(on, { [NOTIFIED]: [earlier] })
   addRun(w, '/repo/.git', 'agent-earlier', runJson({ name: 'earlier', state: 'done', exit_code: 0, ended: NOW / 1000 - 100 }))
   addRun(w, '/repo/.git', 'agent-old', runJson({ name: 'old', state: 'failed', exit_code: 1, ended: NOW / 1000 - 5000 }))
   addRun(w, '/repo/.git', 'agent-1', runJson())
@@ -391,9 +422,11 @@ test('without a store a run that ends is not notified, and the status line still
   expect(w.status).toEqual(['remote: 1 running', undefined])
 })
 
-test('a notification that throws is marked all the same, and the store keeps the newest 1000 folders', async ($, on) => {
+test('a notification that throws is marked all the same, and the store drops the oldest folders gone from disk past 1000', async ($, on) => {
   const w = engine(on, { ps: psAlive([42]) })
-  const kept: Record<string, unknown> = { notified: Array.from({ length: 1000 }, (_, i) => `/old/${i}`) }
+  // The oldest folder kept is still on disk: it stays, and a folder no longer there goes in its place.
+  const present = '/repo/.git/remote-agent/agent-old'
+  const kept: Record<string, unknown> = { [NOTIFIED]: [present, ...Array.from({ length: 999 }, (_, i) => `/repo/.git/remote-agent/gone-${i}`)] }
   const writes: unknown[][] = []
   on('store.get', (_: unknown, e: any) => ({ value: kept[e.key] }))
   on('store.set', (_: unknown, e: any) => {
@@ -402,6 +435,7 @@ test('a notification that throws is marked all the same, and the store keeps the
     return { value: undefined }
   })
   Object.defineProperty(w, 'sent', { get: () => { throw new Error('refused') } })
+  addRun(w, '/repo/.git', 'agent-old', runJson({ name: 'old', state: 'done', exit_code: 0, ended: NOW / 1000 - 100 }))
   addRun(w, '/repo/.git', 'agent-1', runJson())
   await start($)
   await w.clock.advance(1500)
@@ -410,6 +444,10 @@ test('a notification that throws is marked all the same, and the store keeps the
   expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
   expect(writes.length).toBe(1)
   expect(writes[0].length).toBe(1000)
-  expect(writes[0][0]).toBe('/old/1')
+  expect(writes[0][0]).toBe(present)
+  expect(writes[0][1]).toBe('/repo/.git/remote-agent/gone-1')
   expect(writes[0][999]).toBe('/repo/.git/remote-agent/agent-1')
+  await start($)
+  await w.clock.advance(4500)
+  expect(w.notified.length).toBe(1)
 })

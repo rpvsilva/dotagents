@@ -8,9 +8,11 @@ import {
   formatRow,
   gitDirs,
   livePids,
+  markNotified,
   notifyText,
   parseRun,
   pickRows,
+  printable,
   type Run,
   type RunFiles,
   signature,
@@ -80,6 +82,24 @@ test('parseRun shows a folder with no run.json, or an unreadable one, as unknown
 test('parseRun drops fields of the wrong type and an unknown state', () => {
   const r = parseRun(files('a', runJson({ name: 7, claim_s: 'x', pid: '42', state: 'weird' }), ''))
   assert.deepEqual([r.name, r.claim_s, r.pid, r.state, r.step], [null, null, null, 'unknown', null])
+})
+
+// Control bytes a sandbox could put in its files: ESC, a whole OSC 52 clipboard write ended by BEL, an OSC 8 link,
+// a cursor move and C1 controls (CSI, OSC, NEL).
+const ESC = '\u001b'
+const BEL = '\u0007'
+const HOSTILE = `a${ESC}]52;c;aGk=${BEL}b${ESC}]8;;http://x${ESC}\\c${ESC}[2Ad\u009b31m\u009d0;t\u0085e\u0000\u007f\tf`
+
+test('printable drops every C0 and C1 control character but tab', () => {
+  assert.equal(printable(HOSTILE), 'a]52;c;aGk=b]8;;http://x\\c[2Ad31m0;te\tf')
+  assert.equal(printable('plain · text é'), 'plain · text é')
+})
+
+test('parseRun strips control characters from the name, the worktree and the last progress line', () => {
+  const r = parseRun(files('agent-1', runJson({ name: HOSTILE, worktree: HOSTILE }), `first\n${HOSTILE}\n`))
+  const clean = printable(HOSTILE)
+  assert.deepEqual([r.name, r.worktree, r.step], [clean, clean, clean])
+  for (const field of [r.name, r.worktree, r.step]) assert.doesNotMatch(field ?? '', /[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/)
 })
 
 test('livePids lists the pids of starting and running runs only', () => {
@@ -211,6 +231,14 @@ test('endedRuns lists done, failed and stopped runs not yet notified', () => {
   ]
   const seen = new Set([rows[6].folder])
   assert.deepEqual(endedRuns(rows, seen).map(r => r.id), ['d', 'f', 'st'])
+})
+
+test('markNotified adds the ended folders newest last, and past the cap drops the oldest gone from disk only', () => {
+  const ended = [run('new', 'done', 1)]
+  assert.deepEqual(markNotified(['/a'], ended, new Set(), 3), ['/a', ended[0].folder])
+  const kept = markNotified(['/on-disk', '/gone-1', '/gone-2'], ended, new Set(['/on-disk', ended[0].folder]), 3)
+  assert.deepEqual(kept, ['/on-disk', '/gone-2', ended[0].folder])
+  assert.deepEqual(markNotified(['/x', '/y'], ended, new Set(['/x', '/y', ended[0].folder]), 2), ['/x', '/y', ended[0].folder])
 })
 
 test('notifyText names the run, else its id, and how it ended', () => {
