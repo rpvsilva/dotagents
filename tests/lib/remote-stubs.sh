@@ -171,11 +171,12 @@ make_worktree() {
   printf 'KEY=1\n' >"$w/.env"
 }
 
-# Succeeds when process <pid> is still running 3 seconds on (a stopped process may take a moment to go); fails at
-# once for an empty pid.
+# Succeeds when process <pid> is still running <tenths> tenths of a second on (default 30: a stopped process may take
+# a moment to go); fails at once for an empty pid. A process nothing may signal needs only a short look (5), checked
+# once the call that could have signalled it has returned.
 alive() {
   [ -n "$1" ] || return 1
-  for _ in $(seq 30); do kill -0 "$1" 2>/dev/null || return 1; sleep 0.1; done
+  for _ in $(seq "${2:-30}"); do kill -0 "$1" 2>/dev/null || return 1; sleep 0.1; done
 }
 
 # A patch adding hello.txt, and one that does not apply to make_worktree's tracked.txt.

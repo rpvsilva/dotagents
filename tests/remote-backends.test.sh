@@ -425,14 +425,14 @@ other=$!
 h="$(bare_op acquire agent-reused 2>/dev/null)" || fail "bare reused pid: acquire failed"
 printf '%s group\n%s\n' "$other" "$other" >"$h/.pid"
 bare_op release agent-reused 2>/dev/null || true
-alive "$other" || fail "bare reused pid: release signalled a process outside the run folder"
+alive "$other" 5 || fail "bare reused pid: release signalled a process outside the run folder"
 mkdir -p "$runs/agent-reused"
 echo $(($(date +%s) - 86400)) >"$runs/agent-reused/.expires"
 printf '%s group\n%s\n' "$other" "$other" >"$runs/agent-reused/.pid"
 h="$(bare_op acquire agent-sweep 2>/dev/null)" || fail "bare reused pid: the next acquire failed"
 bare_op release agent-sweep 2>/dev/null || true
 [ ! -e "$runs/agent-reused" ] || fail "bare reused pid: the expired folder was kept"
-alive "$other" || fail "bare reused pid: acquire's cleanup signalled a process outside the run folder"
+alive "$other" 5 || fail "bare reused pid: acquire's cleanup signalled a process outside the run folder"
 kill "$other" 2>/dev/null || true
 wait "$other" 2>/dev/null || true
 
