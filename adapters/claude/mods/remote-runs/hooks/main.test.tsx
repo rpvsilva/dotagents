@@ -518,3 +518,20 @@ test('a token-shaped string in the transcript is masked in every line drawn', as
   expect(shown.filter((t: string) => t.includes(GHP) || t.includes('\u001b'))).toEqual([])
   expect(shown).toContain('<- Bash: [masked]')
 })
+
+test('an open log whose run folder is removed shows the list again', async ($, on) => {
+  const w = await withLog($, on, jsonl({ type: 'system', subtype: 'init', model: 'claude-opus' }))
+  addRun(w, '/repo/.git', 'agent-2', runJson({ name: 'other', pid: 43 }))
+  w.ps = psAlive([42, 43])
+  await w.clock.advance(1500)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  expect(await ui.find({ key: 'back' })).toBeTruthy()
+  await ui.unmount()
+  w.dirs['/repo/.git/remote-agent'] = ['agent-2']
+  await w.clock.advance(1500)
+  const shown = await words($)
+  expect(shown).not.toContain(TRANSCRIPT)
+  expect(shown.some((t: string) => t.startsWith('other '))).toBe(true)
+  expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(false)
+})
