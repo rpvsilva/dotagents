@@ -80,7 +80,11 @@ mkdir -p "$SANDBOX/bin" "$SANDBOX/config/dotagents"
 cat >"$SANDBOX/bin/kubectl" <<EOF
 #!/usr/bin/env bash
 args="\$*"
-printf '%s\n' "\${args//\$'\\n'/ }" >>"$SANDBOX/calls"
+# tr for a multi-line argument (a script): bash 3.2's \${x//\$'\\n'/ } takes seconds on one.
+case "\$args" in
+  *\$'\\n'*) { printf '%s' "\$args" | tr '\\n' ' '; echo; } >>"$SANDBOX/calls" ;;
+  *) printf '%s\n' "\$args" >>"$SANDBOX/calls" ;;
+esac
 mkdir -p "$POD"
 [ -e "$SANDBOX/nomain" ] || touch "$POD/main-stdout"
 case " \$* " in

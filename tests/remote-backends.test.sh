@@ -133,10 +133,9 @@ grep -q "^run -d --rm --name $c .*ghcr.io/xgeekshq/agent-runner:main sleep 7200\
 grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
   || fail "ssh: container not labelled with its run: $(grep '^run' "$S/calls")"
 # Compared without CRs: a Windows checkout may turn the file's LFs into CRLFs, and the shell drops the CRs in transit.
-want="$(cat "$REPO/scripts/remote-agent-sandbox.sh")"
-want="${want//$'\r'/}"
-got="$(cat "$S/script" 2>/dev/null)"
-got="${got//$'\r'/}"
+# tr, not ${x//$'\r'/}: bash 3.2 takes seconds on a string this long.
+want="$(tr -d '\r' <"$REPO/scripts/remote-agent-sandbox.sh")"
+got="$(tr -d '\r' 2>/dev/null <"$S/script" || true)"
 if [ "$got" != "$want" ]; then
   printf '%s' "$want" >"$SANDBOX/script.want"
   printf '%s' "$got" >"$SANDBOX/script.got"
