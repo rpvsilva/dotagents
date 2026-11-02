@@ -62,11 +62,15 @@ grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "docker: the token 
 gone "$c" || fail "docker: container $c not removed after success"
 rm -f "$W/hello.txt"
 
-# Settings: image, platform and hours.
-run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_IMAGE=local/runner:dev REMOTE_PLATFORM=linux/arm64 REMOTE_HOURS=1 \
+# Settings: image, platform and hours. The brief comes from a file (@file).
+printf 'line one\nline two\n' >"$SANDBOX/brief.md"
+BRIEF="@$SANDBOX/brief.md" \
+  run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_IMAGE=local/runner:dev REMOTE_PLATFORM=linux/arm64 REMOTE_HOURS=1 \
   || fail "docker settings: exited non-zero: $(cat "$SANDBOX/out")"
 grep -q "^run -d --rm .*--platform linux/arm64 local/runner:dev sleep 3600\$" "$S/calls" \
   || fail "docker settings: image, platform or hours not used: $(grep '^run' "$S/calls")"
+[ "$(sed -n '2,$p' "$S/stdin")" = "line one
+line two" ] || fail "docker @file: the brief is not the file's text: $(sed -n '2,$p' "$S/stdin")"
 rm -f "$W/hello.txt"
 
 # No changes: exit 3. --name labels the container with the task, under the cluster's key.
@@ -76,8 +80,9 @@ gone "$(container)" || fail "docker no changes: container not removed"
 grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " "$S/calls" \
   || fail "docker name: container not labelled with the task: $(grep '^run' "$S/calls")"
 
-# A failed run keeps its exit code, applies nothing, and removes the container.
-code=0; run 5 "$HELLO_PATCH" REMOTE_BACKEND=docker || code=$?
+# A failed run keeps its exit code, applies nothing, and removes the container. The brief comes from stdin (-).
+code=0; BRIEF=- run 5 "$HELLO_PATCH" REMOTE_BACKEND=docker <<<"brief from stdin" || code=$?
+[ "$(sed -n '2,$p' "$S/stdin")" = "brief from stdin" ] || fail "docker -: the brief is not stdin: $(sed -n '2,$p' "$S/stdin")"
 [ "$code" = 5 ] || fail "docker failed run: wanted exit 5, got $code"
 [ ! -e "$W/hello.txt" ] || fail "docker failed run: patch applied anyway"
 gone "$(container)" || fail "docker failed run: container not removed"
