@@ -356,3 +356,37 @@ test('with no run the status line is never set', async ($, on) => {
   await w.clock.advance(4500)
   expect(w.status).toEqual([])
 })
+
+test('without a store a run that ends is not notified, and the status line still follows it', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(4500)
+  expect(w.notified).toEqual([])
+  expect(w.status).toEqual(['remote: 1 running', undefined])
+})
+
+test('a notification that throws is marked all the same, and the store keeps the newest 1000 folders', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const kept: Record<string, unknown> = { notified: Array.from({ length: 1000 }, (_, i) => `/old/${i}`) }
+  const writes: unknown[][] = []
+  on('store.get', (_: unknown, e: any) => ({ value: kept[e.key] }))
+  on('store.set', (_: unknown, e: any) => {
+    writes.push(e.value)
+    kept[e.key] = e.value
+    return { value: undefined }
+  })
+  Object.defineProperty(w, 'sent', { get: () => { throw new Error('refused') } })
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await start($)
+  await w.clock.advance(1500)
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(4500)
+  expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
+  expect(writes.length).toBe(1)
+  expect(writes[0].length).toBe(1000)
+  expect(writes[0][0]).toBe('/old/1')
+  expect(writes[0][999]).toBe('/repo/.git/remote-agent/agent-1')
+})
