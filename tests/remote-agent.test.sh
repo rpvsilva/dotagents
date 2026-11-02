@@ -112,6 +112,13 @@ case " \$* " in
     cat >"$SANDBOX/stdin"
     cp "$POD/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
     mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"; echo "did the thing" >"$POD/out/summary.md"
+    # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
+    # it read the victim in as the session, and a forged run.json.
+    if [ -e "$SANDBOX/evil" ]; then
+      for l in run.json.tmp run.json.first progress.log stream.jsonl.scrubbed summary.md.scrubbed session.jsonl; do ln -s "$SANDBOX/victim" "$POD/out/\$l"; done
+      echo '{"type":"result"}' >"$POD/out/stream.jsonl"
+      echo '{"run":"forged","name":"forged","state":"done","exit_code":0,"pid":1}' >"$POD/out/run.json"
+    fi
     exit "\$(cat "$SANDBOX/code")" ;;
   *" exec "*)
     while [ "\$1" != "-c" ]; do shift; done
@@ -184,6 +191,26 @@ logged_all() {
     esac
   done <"$SANDBOX/err"
 }
+# The run folder of the last run (its claim's name, from the stub's claim.yaml).
+kept() { echo "$W/.git/remote-agent/$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"; }
+# Fails ($1 names the case) unless the last run's run.json is valid JSON saying state $2 and exit code $3, with its
+# name $4 (null without), its run id, pid, start and end, and the claim and send times; no run.json.tmp is left; its
+# progress.log holds stderr's lines without the tag; the token is in neither file.
+run_data() {
+  local k run
+  k="$(kept)"
+  run="$(basename "$k")"
+  jq -e --arg st "$2" --argjson rc "$3" --arg name "${4:-}" --arg run "$run" '.state == $st and .exit_code == $rc
+    and .name == (if $name == "" then null else $name end) and .run == $run and (.pid | type) == "number"
+    and (.started | type) == "number" and .ended >= .started and (.claim_s | type) == "number"
+    and (.send_s | type) == "number" and (.worktree | type) == "string"' "$k/run.json" >/dev/null 2>&1 \
+    || fail "$1: run.json is not $2 with exit $3 and name ${4:-null}: $(cat "$k/run.json" 2>/dev/null)"
+  [ -z "$(find "$k" -name 'run.json.*')" ] || fail "$1: a temporary run.json left: $(find "$k" -name 'run.json.*')"
+  [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null)" = "$(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //")" ] \
+    || fail "$1: progress.log is not stderr without the tag: $(cat "$k/progress.log" 2>/dev/null)"
+  grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "$1: the token is in run.json or progress.log"
+  return 0
+}
 # The labels the claim asks for on its pod.
 pod_labels() { sed -n '/additionalPodMetadata/,$ s/^    labels: {\(.*\)}$/\1/p' "$SANDBOX/claim.yaml"; }
 patch='diff --git a/hello.txt b/hello.txt
@@ -219,18 +246,22 @@ grep -qF "sandbox.users.io/remote-agent-run: $claim" "$SANDBOX/claim.yaml" || fa
 grep -q "delete sandboxclaim $claim " "$SANDBOX/calls" || fail "claim not deleted"
 grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "no session: not reported: $(cat "$SANDBOX/err")"
 grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not delete on shutdown"
+# Beside the transcript: run.json says what the run is and how it ended, progress.log every progress line.
+run_data "success run data" "done" 0
 rm "$W/hello.txt"
 
 # No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
 [ "$code" = 3 ] || fail "no changes: wanted exit 3, got $code"
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "no changes: claim not deleted"
+run_data "no changes run data" "done" 3
 
 # A failed run: non-zero, nothing applied, claim deleted.
 code=0; run 1 "$patch" || code=$?
 [ "$code" = 1 ] || fail "failed run: wanted exit 1, got $code"
 [ ! -e "$W/hello.txt" ] || fail "failed run: patch applied anyway"
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
+run_data "failed run data" failed 1
 
 # A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched.
 stale='diff --git a/tracked.txt b/tracked.txt
@@ -243,6 +274,32 @@ stale='diff --git a/tracked.txt b/tracked.txt
 code=0; run 0 "$stale" || code=$?
 [ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
 [ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
+run_data "stale patch run data" failed 4
+
+# A hostile sandbox's out archive cannot write outside the run folder through links, nor replace run.json: its links
+# named after the files the host writes (run.json.tmp, progress.log, the scrub's temporaries) aim at $SANDBOX/victim.
+printf 'untouched\n' >"$SANDBOX/victim"
+: >"$SANDBOX/evil"
+run 0 "$patch" || fail "hostile out: exited non-zero: $(cat "$SANDBOX/out")"
+rm -f "$SANDBOX/evil"
+[ "$(cat "$SANDBOX/victim")" = "untouched" ] || fail "hostile out: a file outside the run folder was written: $(cat "$SANDBOX/victim")"
+run_data "hostile out run data" "done" 0
+k="$(kept)"
+[ -z "$(find "$k" -type l)" ] || fail "hostile out: links kept in the run folder: $(find "$k" -type l)"
+[ "$(cat "$k/summary.md" 2>/dev/null)" = "did the thing" ] || fail "hostile out: summary.md not kept"
+[ -s "$k/changes.patch" ] || fail "hostile out: changes.patch not kept"
+[ -s "$k/stream.jsonl" ] || fail "hostile out: stream.jsonl not kept"
+# Where ln -s and tar make a link a copy of its target (Git Bash without native symlinks), the archive's session.jsonl
+# is a regular file, read in as data; so this holds only where a probe link survives a tar round trip.
+mkdir -p "$SANDBOX/probe/in" "$SANDBOX/probe/out"
+ln -s "$SANDBOX/victim" "$SANDBOX/probe/in/link" 2>/dev/null || true
+(cd "$SANDBOX/probe/in" && tar -cf - .) | (cd "$SANDBOX/probe/out" && tar -xf -) 2>/dev/null || true
+if [ -L "$SANDBOX/probe/out/link" ]; then
+  [ ! -e "$k/session.jsonl" ] || fail "hostile out: a linked session.jsonl was read in: $(cat "$k/session.jsonl")"
+else
+  echo "remote-agent.test.sh: links are copies here (ln -s or tar), hostile out's linked session.jsonl check skipped"
+fi
+rm -rf "$SANDBOX/probe" "$W/hello.txt"
 
 # The real sandbox script copies its own progress (Claude's lines) to the pod's log; the token stays out of it.
 : >"$SANDBOX/real"
@@ -329,35 +386,43 @@ code=0; STUB_WINPATH="C:\\$(printf 'a%.0s' $(seq 200))" RESUME_PATH="$SANDBOX/wi
 grep -q "over Claude Code's 200" "$SANDBOX/err" || fail "long path: not said: $(cat "$SANDBOX/err")"
 [ ! -e "$CC/projects" ] || fail "long path: something placed: $(find "$CC" -type f)"
 rm -rf "$hand" "$CC"
-# A run whose session is missing still applies its patch, and says so.
+# A run whose session is missing still applies its patch, and says so. Without a main-process stdout (SSH bare mode)
+# the sandbox's log is ~/progress.log.
 rm -f "$W/hello.txt"
 : >"$SANDBOX/nosession"
+: >"$SANDBOX/nomain"
 run 0 "" || fail "real no session: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "real no session: patch not applied"
-grep -q "== no session file" "$POD/main-stdout" || fail "real no session: the sandbox did not report it: $(cat "$SANDBOX/err")"
+grep -q "== no session file" "$POD/progress.log" 2>/dev/null || fail "real no session: the sandbox did not report it: $(cat "$SANDBOX/err")"
 grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "real no session: not reported: $(cat "$SANDBOX/err")"
 [ ! -e "$CC/projects" ] || fail "real no session: something placed: $(find "$CC" -type f)"
-rm -f "$SANDBOX/nosession"
-# Without a main-process stdout (SSH bare mode) the log is ~/progress.log.
-rm -f "$W/hello.txt"
-: >"$SANDBOX/nomain"
-run 0 "" || fail "progress.log: exited non-zero: $(cat "$SANDBOX/out")"
 grep -q "→ Write hello.txt" "$POD/progress.log" 2>/dev/null || fail "progress.log: Claude's progress missing"
 grep -q "snapshot: " "$POD/progress.log" 2>/dev/null || fail "progress.log: client progress missing"
-rm -f "$W/hello.txt" "$SANDBOX/nomain" "$SANDBOX/real"
+rm -f "$W/hello.txt" "$SANDBOX/nosession" "$SANDBOX/nomain" "$SANDBOX/real"
 
-# --name labels the claim and its pod with the task and tags the progress; it is made a valid label value.
-run 0 "$patch" --name "07-Visible runs!" || fail "name: exited non-zero: $(cat "$SANDBOX/out")"
+# --name labels the claim and its pod with the task and tags the progress; it is made a valid label value. run.json
+# keeps the name though --attach comes after it.
+mkdir -p "$SANDBOX/att"
+printf 'ticket\n' >"$SANDBOX/att/ticket.md"
+run 0 "$patch" --name "07-Visible runs!" --attach "$SANDBOX/att/ticket.md" || fail "name: exited non-zero: $(cat "$SANDBOX/out")"
 claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
 [ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim, sandbox.users.io/remote-agent-task: 07-visible-runs" ] || fail "name: pod labels are $(pod_labels)"
 grep -qF "sandbox.users.io/remote-agent-task: 07-visible-runs" "$SANDBOX/claim.yaml" || fail "name: claim not labelled"
 logged_all "[07-visible-runs]" "$POD/main-stdout" "name"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "name: stdout changed: $(cat "$SANDBOX/report")"
+run_data "name run data" "done" 0 07-visible-runs
 rm -f "$W/hello.txt"
-run 0 "$patch" --name "$(printf 'A%.0s' $(seq 80))_x" || fail "long name: exited non-zero: $(cat "$SANDBOX/out")"
+# A long name is cut to 63 characters. Settings left in remote.env from before settings.json are ignored, and the run
+# names them and how to move them.
+echo "REMOTE_BACKEND=docker" >>"$SANDBOX/config/dotagents/remote.env"
+run 0 "$patch" --name "$(printf 'A%.0s' $(seq 80))_x" || fail "long name, leftover: exited non-zero: $(cat "$SANDBOX/out")"
 task="$(pod_labels | sed -n 's/.*sandbox\.users\.io\/remote-agent-task: //p')"
 [ "$task" = "$(printf 'a%.0s' $(seq 63))" ] || fail "long name: wanted 63 a's, got $task"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "leftover: patch not applied: $(cat "$SANDBOX/out")"
+grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "leftover: the old REMOTE_BACKEND was used, not settings.json"
+grep -q "REMOTE_BACKEND.*remote-agent setup" "$SANDBOX/err" || fail "leftover: not named: $(cat "$SANDBOX/err")"
 rm -f "$W/hello.txt"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 code=0; run 0 "$patch" --name "!!" || code=$?
 if [ "$code" != 1 ] || [ -e "$SANDBOX/calls" ]; then fail "name without letters or digits: not refused"; fi
 
@@ -398,15 +463,6 @@ rm -rf "$POD" "$SANDBOX/calls"
 rm -f "$W/hello.txt"
 code=0; (cd "$W" && PATH="$SANDBOX/bin:$PATH" remote-agent --attach "$SANDBOX/nope" "x") >/dev/null 2>&1 || code=$?
 [ "$code" = 1 ] || fail "attach: a missing path was not refused"
-
-# Settings left in remote.env from before settings.json are ignored, and the run names them and how to move them.
-echo "REMOTE_BACKEND=docker" >>"$SANDBOX/config/dotagents/remote.env"
-run 0 "$patch" || fail "leftover: exited non-zero: $(cat "$SANDBOX/out")"
-[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "leftover: patch not applied: $(cat "$SANDBOX/out")"
-grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "leftover: the old REMOTE_BACKEND was used, not settings.json"
-grep -q "REMOTE_BACKEND.*remote-agent setup" "$SANDBOX/err" || fail "leftover: not named: $(cat "$SANDBOX/err")"
-rm -f "$W/hello.txt"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
 
 # Refused before anything is staged or sent: an unknown backend (hand-edited, naming the known ones), no backend
 # (remote is off; pointing to setup), and a repo that sets remote.allowed to false.
@@ -469,7 +525,10 @@ EOF
 chmod +x "$SANDBOX/bin/kubectl"
 printf '%s' "$patch" >"$SANDBOX/patch"
 rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started" "$SANDBOX/go" "$W/.git/remote-agent"
-(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+# Under a German locale where there is one: ps -o lstart= follows it on macOS, and pid_start must not.
+de="$(locale -a 2>/dev/null | grep -iE '^de_DE\.utf-?8$' | head -1)" || de=""
+[ -n "$de" ] || echo "remote-agent.test.sh: no de_DE.UTF-8 locale, pid_start locale case runs in the current one"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN ${de:+LC_ALL="$de"} HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
   "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/report" 2>"$SANDBOX/err" &
 pid=$!
 for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
@@ -479,7 +538,27 @@ for _ in $(seq 100); do
   sleep 0.1
 done
 [ -n "$live" ] || fail "live transcript: event not in transcript.jsonl during the run"
+# While the run goes on, run.json (valid at every read) says running, with the three timings, and progress.log already
+# holds their lines.
+live=""
+for _ in $(seq 100); do
+  for k in "$W"/.git/remote-agent/*/; do
+    jq -e . "$k/run.json" >/dev/null 2>&1 || fail "live run data: run.json not valid JSON: $(cat "$k/run.json" 2>/dev/null)"
+  done
+  if jq -e '.state == "running" and ([.claim_s, .send_s, .first_event_s] | all(type == "number"))' \
+    "$W"/.git/remote-agent/*/run.json >/dev/null 2>&1 \
+    && [ "$(grep -cE '^remote-agent: (claimed in|sent setup and snapshot in|first agent event after) [0-9]+s$' \
+      "$W"/.git/remote-agent/*/progress.log 2>/dev/null)" = 3 ]; then live=1; break; fi
+  sleep 0.1
+done
+[ -n "$live" ] || fail "live run data: not running with its timings during the run: $(cat "$W"/.git/remote-agent/*/run.json "$W"/.git/remote-agent/*/progress.log 2>/dev/null)"
 kill -0 "$pid" 2>/dev/null || fail "live transcript: the run ended before the check"
+# pid and pid_start name the live remote-agent, so a reader can tell it from a reused pid (null where ps has no lstart),
+# in the C locale whatever remote-agent's.
+ps_start="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//; s/ *$//')" || ps_start=""
+jq -e --argjson pid "$pid" --arg ps "$ps_start" '.pid == $pid and .pid_start == (if $ps == "" then null else $ps end)' \
+  "$W"/.git/remote-agent/*/run.json >/dev/null 2>&1 \
+  || fail "live run data: pid and pid_start not the run's ($pid, $ps_start): $(cat "$W"/.git/remote-agent/*/run.json 2>/dev/null)"
 : >"$SANDBOX/go"
 wait "$pid" || fail "live transcript: exited non-zero: $(cat "$SANDBOX/err")"
 claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
@@ -500,6 +579,8 @@ if [ -z "$p" ] || [ -z "$c" ] || [ "$p" -ge "$c" ]; then fail "live transcript: 
 logged_all "[$claim]" "$POD/main-stdout" "live transcript"
 git -C "$W" status --porcelain | grep -q "transcript" && fail "live transcript: the transcript shows in the worktree"
 grep -q "transcript" "$W/.git/remote-agent/$claim/changes.patch" && fail "live transcript: the transcript is in the patch"
+run_data "live run data" "done" 0
+jq -e '.first_event_s | type == "number"' "$(kept)/run.json" >/dev/null 2>&1 || fail "live run data: first_event_s lost at the end"
 rm -f "$W/hello.txt" "$SANDBOX/started" "$SANDBOX/go"
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
@@ -529,6 +610,54 @@ if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
   fail "TERM: the backend's kubectl exec outlived remote-agent"
   kill "$(cat "$SANDBOX/backend.pid")"
 fi
+jq -e '.state == "failed" and .exit_code == 143 and (.ended | type) == "number"' "$(kept)/run.json" >/dev/null 2>&1 \
+  || fail "TERM: run.json not failed with exit 143: $(cat "$(kept)/run.json" 2>/dev/null)"
+# INT does the same, exit 130. A background job of a script starts with INT ignored, which bash cannot undo: perl
+# sets it back to the default before running remote-agent.
+if command -v perl >/dev/null 2>&1; then
+  rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started"
+  # shellcheck disable=SC2016 # perl's variables
+  (cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
+  pid=$!
+  for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
+  kill -INT "$pid"
+  code=0; wait "$pid" || code=$?
+  [ "$code" = 130 ] || fail "INT: wanted exit 130, got $code: $(cat "$SANDBOX/out")"
+  grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "INT: claim not deleted"
+  jq -e '.state == "failed" and .exit_code == 130 and (.ended | type) == "number"' "$(kept)/run.json" >/dev/null 2>&1 \
+    || fail "INT: run.json not failed with exit 130: $(cat "$(kept)/run.json" 2>/dev/null)"
+  if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then kill "$(cat "$SANDBOX/backend.pid")"; fi
+else
+  echo "remote-agent.test.sh: no perl, INT case skipped"
+fi
+# kill -9 runs no trap: run.json stays running, with a pid no longer alive (a reader's stopped run). The backend's
+# stderr here carries the token: progress.log has it redacted.
+cat >"$SANDBOX/bin/kubectl" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" remote-agent-sandbox"*)
+    echo "client says sk-claude-secret" >&2
+    echo \$\$ >"$SANDBOX/backend.pid"; : >"$SANDBOX/started"; exec sleep 30 ;;
+esac
+exec "$SANDBOX/kubectl.real" "\$@"
+EOF
+rm -rf "$POD" "$SANDBOX/calls" "$SANDBOX/started"
+(cd "$W" && exec env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" "add a hello file") >"$SANDBOX/out" 2>&1 &
+pid=$!
+for _ in $(seq 100); do [ -e "$SANDBOX/started" ] && break; sleep 0.1; done
+for _ in $(seq 50); do grep -qs "client says" "$(kept)/progress.log" && break; sleep 0.1; done
+kill -9 "$pid"
+wait "$pid" 2>/dev/null || true
+k="$(kept)"
+jq -e --argjson pid "$pid" '.state == "running" and .pid == $pid and .exit_code == null' "$k/run.json" >/dev/null 2>&1 \
+  || fail "kill -9: run.json not running with pid $pid: $(cat "$k/run.json" 2>/dev/null)"
+alive "$(jq -r .pid "$k/run.json" 2>/dev/null | tr -d '\r')" && fail "kill -9: the recorded pid is still alive"
+grep -qF "client says [redacted]" "$k/progress.log" || fail "kill -9: the backend's line not in progress.log, redacted: $(cat "$k/progress.log")"
+grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "kill -9: the token is in run.json or progress.log"
+# What kill -9 left running: the backend's client. It is meant to be alive here, so stop it without waiting.
+kill "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" 2>/dev/null || true
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
 # Refused before anything reaches the cluster, each naming why: an empty brief, two attachments with one name, a
