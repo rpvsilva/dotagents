@@ -3,8 +3,6 @@ name: CI
 # Runs on PRs into main only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run.
 # PRs into other branches (build-epic's task PRs into a ticket branch) run their checks locally, to save runners.
 # macOS and Windows run in portability.yml, only when shell code changes.
-# Jobs run on GitHub-hosted runners, or on self-hosted ones while the repo variable CI_RUNNER names their label
-# (scripts/gh-runner.sh serves them from local Docker). Steps install what the runner image lacks.
 on:
   pull_request:
     branches: [main]
@@ -19,7 +17,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,39 +33,20 @@ jobs:
           echo "checks: $checks"
           echo "checks=$checks" >>"$GITHUB_OUTPUT"
       - name: shellcheck
-        if: ${{ !vars.CI_RUNNER && contains(format(' {0} ', steps.affected.outputs.checks), ' shellcheck ') }}
+        if: ${{ contains(format(' {0} ', steps.affected.outputs.checks), ' shellcheck ') }}
         # The image pinned by digest in scripts/shellcheck-image, which tests/run.sh also runs. Read-only mount:
         # the image cannot write to the checkout.
         run: |
           image="$(cat scripts/shellcheck-image)"
           git ls-files -z '*.sh' | xargs -0 docker run --rm -v "$PWD:/mnt:ro" -w /mnt "$image"
-      # self-hosted: the runners in Docker have no Docker daemon, so they run the release binary of the version in
-      # scripts/shellcheck-version, checked against its sha256 (a version bump needs new sums). Python unpacks it: the
-      # runner image has no xz.
-      - name: shellcheck (self-hosted)
-        if: ${{ vars.CI_RUNNER && contains(format(' {0} ', steps.affected.outputs.checks), ' shellcheck ') }}
-        run: |
-          pin="$(tr -d '\r\n' <scripts/shellcheck-version)"
-          case "$pin $(uname -m)" in
-            "0.11.0 x86_64") sum=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198 ;;
-            "0.11.0 aarch64") sum=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588 ;;
-            *) echo "no sha256 for shellcheck $pin on $(uname -m)"; exit 1 ;;
-          esac
-          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
-            "https://github.com/koalaman/shellcheck/releases/download/v$pin/shellcheck-v$pin.linux.$(uname -m).tar.xz"
-          echo "$sum  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
-          python3 -c 'import sys, tarfile; tarfile.open(sys.argv[1], "r:xz").extractall(sys.argv[2], filter="data")' \
-            "$RUNNER_TEMP/shellcheck.tar.xz" "$RUNNER_TEMP"
-          git ls-files -z '*.sh' | xargs -0 "$RUNNER_TEMP/shellcheck-v$pin/shellcheck"
-      # The release binary, not the docker:// action: a self-hosted runner in Docker has no Docker daemon.
       - name: actionlint
         if: ${{ contains(format(' {0} ', steps.affected.outputs.checks), ' actionlint ') }}
-        run: |
-          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
-          ./actionlint -color
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
 
   test:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,7 +68,7 @@ jobs:
         run: for t in tests/*.test.sh; do case " $CHECKS " in *" ${t##*/} "*) echo "== $t"; "$t" ;; esac; done
 
   secrets:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
