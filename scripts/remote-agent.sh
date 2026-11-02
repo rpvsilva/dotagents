@@ -27,7 +27,10 @@
 # written as they arrive, its path printed before the sandbox is claimed, and session.jsonl: Claude's session. The
 # token's value is redacted in every kept file. The session is not placed for /resume at the end: the sandbox wrote it,
 # so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
-# in the worktree's project folder, its cwd the worktree, after a warning saying so.
+# in the worktree's project folder, its cwd the worktree, after a warning saying so. Beside the transcript, for any reader:
+# run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s;
+# state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
+# progress line, untagged), from the moment the folder is made.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
 # Settings: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
 # the remote Settings (remote/settings.json: backend, hours, max_mb, keep, and the backend's own) from
@@ -160,12 +163,36 @@ keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
 mkdir -p "$keep"
 : >>"$keep/transcript.jsonl"
 
-# Progress: each line on stdin goes to stderr behind the tag and, without --no-log, to $stage/log, which
-# send_log copies to the sandbox's log. The sandbox logs its own run's lines itself.
+# Rewrites run.json through jq filter $1 (jq options after it), by way of run.json.<run_json_tmp> and `mv`, so a
+# reader never sees a partial file. One temporary file per writer: the run's own subshell writes first_event_s.
+# Never fails the run, and holds only the fields below: never the brief or the token.
+run_json_tmp=tmp
+run_json() {
+  local f="$keep/run.json" tmp="$keep/run.json.$run_json_tmp" filter="$1"
+  shift
+  { jq -c "$@" "$filter" "$f" | tr -d '\r' >"$tmp" && mv "$tmp" "$f"; } 2>/dev/null || rm -f "$tmp"
+}
+# run.json: what the run is and where it stands, for any reader. state: starting, running, then done (exit 0 or 3) or
+# failed (any other exit); starting or running with a pid not alive (or alive with another pid_start) means
+# remote-agent died without saying so. Timings are whole seconds, null until known.
+{ printf '{}\n' >"$keep/run.json.tmp" && mv "$keep/run.json.tmp" "$keep/run.json"; } 2>/dev/null || true
+run_name="$name" # before --attach reuses $name
+pid_start="$(ps -o lstart= -p $$ 2>/dev/null | sed 's/^ *//; s/ *$//')" || pid_start=""
+# The worktree as a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
+run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, pid: $pid,
+  pid_start: (if $ps == "" then null else $ps end), state: "starting", exit_code: null, ended: null, claim_s: null,
+  send_s: null, first_event_s: null}' --arg run "$run" --arg name "$run_name" \
+  --argjson w "$(printf '%s' "$root" | jq -Rs . | tr -d '\r')" --argjson started "$(date +%s)" --argjson pid "$$" \
+  --arg ps "$pid_start"
+
+# Progress: each line on stdin goes to stderr behind the tag, to $keep/progress.log untagged with the token's value
+# redacted, and, without --no-log, to $stage/log, which send_log copies to the sandbox's log. The sandbox logs its own
+# run's lines itself.
 progress() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     printf '%s %s\n' "$tag" "$line" >&2
+    { printf '%s\n' "${line//"$claude_token"/[redacted]}" >>"$keep/progress.log"; } 2>/dev/null || true
     [ "${1:-}" = --no-log ] || printf '%s\n' "$line" >>"$stage/log"
   done
 }
@@ -214,7 +241,14 @@ transcript_to() {
       if (!seen++) { print "first" >"/dev/stderr"; fflush("/dev/stderr") }
     }' 2>&1 >>"$1" | while IFS= read -r line; do
     line="${line%$'\r'}"
-    if [ "$line" = first ]; then say "first agent event after $((SECONDS - t0))s"; else say "$line"; fi
+    if [ "$line" = first ]; then
+      line="$((SECONDS - t0))"
+      say "first agent event after ${line}s"
+      run_json_tmp=first
+      run_json '.first_event_s = $s' --argjson s "$line"
+    else
+      say "$line"
+    fi
   done
 }
 
@@ -222,10 +256,16 @@ acquired=""
 handle=""
 runner=""
 cleanup() {
+  local rc=$? state=failed
   # The run is its own process group (see below): stop all of it, the backend's client included.
   if [ -n "$runner" ]; then kill -TERM -- "-$runner" 2>/dev/null || kill "$runner" 2>/dev/null || true; fi
   send_log
   [ -z "$acquired" ] || with_progress "$backend" release "$run" || true
+  # Last, so a first_event_s write the stopped run had under way lands before it.
+  case "$rc" in 0 | 3) state=done ;; esac
+  run_json '.state = $state | .exit_code = $rc | .ended = $ended' --arg state "$state" --argjson rc "$rc" \
+    --argjson ended "$(date +%s)"
+  rm -f "$keep/run.json.tmp" "$keep/run.json.first"
   rm -rf "$stage"
 }
 trap cleanup EXIT
@@ -262,20 +302,25 @@ say "transcript: $keep/transcript.jsonl"
 acquired=1
 t0=$SECONDS
 handle="$(with_progress "$backend" acquire "$run")"
-say "claimed in $((SECONDS - t0))s"
+took=$((SECONDS - t0))
+say "claimed in ${took}s"
+run_json '.claim_s = $s' --argjson s "$took"
 
 # macOS tar would add AppleDouble files and xattr headers.
 export COPYFILE_DISABLE=1
 t0=$SECONDS
 tar -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
 (cd "$root" && tar -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
-say "sent setup and snapshot in $((SECONDS - t0))s"
+took=$((SECONDS - t0))
+say "sent setup and snapshot in ${took}s"
+run_json '.send_s = $s' --argjson s "$took"
 send_log
 
 # In the background, so INT or TERM reach the traps at once rather than when the run ends; with job control on, in
 # a process group of its own (numbered $runner), so cleanup stops the backend's client (ssh, docker, kubectl) with it.
 # The run's stdout is Claude's raw events: transcript_to keeps them, and says when the first one comes.
 status=0
+run_json '.state = "running"'
 t0=$SECONDS
 set -m
 (
