@@ -1,0 +1,4 @@
+{
+  "max_parallel": { "kind": "int", "default": 4, "min": 1, "meaning": "Subagents running at once, unless --parallel N says otherwise." },
+  "tracker": { "kind": "string", "default": null, "meaning": "Where tickets live (github, jira, linear, ...); unset: found from the repo's rules." }
+}

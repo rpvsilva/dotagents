@@ -1,0 +1,17 @@
+{
+  "backend": { "kind": "enum", "choices": ["cluster", "docker", "ssh"], "default": null, "levels": ["machine"], "env": "REMOTE_BACKEND", "meaning": "Where remote subagents run; unset: remote is off and skills run subagents on this machine." },
+  "allowed": { "kind": "bool", "default": true, "levels": ["repo"], "meaning": "false keeps a repo's worktree snapshots on this machine: its subagents always run locally." },
+  "context": { "kind": "string", "default": "maxibombo", "levels": ["machine"], "env": "REMOTE_CONTEXT", "meaning": "Cluster backend: the kube context." },
+  "namespace": { "kind": "string", "default": "agents", "levels": ["machine"], "env": "REMOTE_NAMESPACE", "meaning": "Cluster backend: the namespace sandboxes are claimed in." },
+  "pool": { "kind": "string", "default": "claude-runner", "levels": ["machine"], "env": "REMOTE_POOL", "meaning": "Cluster backend: the warm pool sandboxes are claimed from." },
+  "claim_timeout": { "kind": "int", "default": 180, "min": 1, "levels": ["machine"], "env": "REMOTE_CLAIM_TIMEOUT", "meaning": "Cluster backend: seconds to wait for a claimed sandbox to be ready." },
+  "ssh_host": { "kind": "string", "default": null, "levels": ["machine"], "env": "REMOTE_SSH_HOST", "meaning": "SSH backend: user@host or a ~/.ssh/config alias." },
+  "ssh_mode": { "kind": "enum", "choices": ["container", "bare"], "default": "container", "levels": ["machine"], "env": "REMOTE_SSH_MODE", "meaning": "SSH backend: a container per run, or bare (weaker isolation)." },
+  "ssh_dir": { "kind": "string", "default": ".remote-agent/runs", "levels": ["machine"], "env": "REMOTE_SSH_DIR", "meaning": "SSH backend, bare mode: the run folders, relative to the host's home." },
+  "image": { "kind": "string", "default": "ghcr.io/rpvsilva/agent-runner:main", "levels": ["machine"], "env": "REMOTE_IMAGE", "meaning": "Docker backend and SSH container mode: the runner image." },
+  "platform": { "kind": "string", "default": null, "levels": ["machine"], "env": "REMOTE_PLATFORM", "meaning": "Docker backend and SSH container mode: the image platform (e.g. linux/amd64); unset: the host's." },
+  "hours": { "kind": "int", "default": 2, "min": 1, "levels": ["machine"], "env": "REMOTE_HOURS", "meaning": "Hours after which a sandbox removes itself if a run never releases it." },
+  "keep": { "kind": "bool", "default": false, "levels": ["machine"], "env": "REMOTE_KEEP", "meaning": "Keep the sandbox after a run, to look inside it." },
+  "max_mb": { "kind": "int", "default": 200, "min": 1, "levels": ["machine"], "env": "REMOTE_MAX_MB", "meaning": "Largest worktree snapshot sent, in MB." },
+  "max_sandboxes": { "kind": "int", "default": 4, "min": 1, "levels": ["machine"], "env": "REMOTE_MAX_SANDBOXES", "meaning": "Most remote subagents running at once, whatever the skill: what the backend holds (a cluster's warm pool, an SSH host's cores). Apart from max_parallel, which caps subagents on this machine." }
+}

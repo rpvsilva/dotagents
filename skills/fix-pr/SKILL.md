@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Take one PR (or a few coupled ones sharing a branch) from **red** to **green**: reproduce the failure, fix its root cause, push. Merging belongs to whoever started you.
 
-Inputs: the PR number(s). When an orchestrator started you, its message may also carry the branch, the repo's commands, and an **extra brief**: steps for its kind of PR (e.g. Renovate's lock regeneration). Rules in the extra brief and in `.agents/fix-pr-notes.md` override the defaults below.
+Inputs: the PR number(s). When an orchestrator started you, its message may also carry the branch, the repo's commands, and an **extra brief**: steps for its kind of PR (e.g. Renovate's lock regeneration). Rules in the extra brief and the Lessons in `.agents/fix-pr-notes.md` override the steps below.
 
 ## Steps
 
