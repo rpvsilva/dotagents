@@ -60,7 +60,7 @@ old() {
   v="$(settings get remote "$1" --machine)"
   [ -n "$v" ] || v="$(legacy "$(remote_var "$1")")"
   [ -n "$v" ] || v="${2:-}"
-  [ -n "$v" ] || v="$(jq -r --arg k "$1" '.[$k].default // empty' "$REPO/remote/settings.json")"
+  [ -n "$v" ] || v="$(jq -r --arg k "$1" '.[$k].default // empty' "$REPO/remote/settings.json" | tr -d '\r')"
   printf '%s' "$v"
 }
 

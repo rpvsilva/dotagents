@@ -37,6 +37,9 @@ REPO="$(cd "$(dirname "$src")/.." && pwd)"
 MACHINE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents/settings.json"
 
 die() { echo "settings: $*" >&2; exit 1; }
+# jq on Windows ends its lines with CRLF: drop the CR, so its output compares and is written as on Unix. pipefail
+# keeps jq's exit status.
+jq() { command jq "$@" | tr -d '\r'; }
 usage() { grep -E "^# +(Usage: )?settings " "$src" | sed -E "s/^# +(Usage: )?/usage: /" >&2; exit 2; }
 
 dir="$PWD"
