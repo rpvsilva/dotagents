@@ -56,6 +56,7 @@ Run `tests/run.sh` before pushing. It runs only the checks covering the files ch
 - Never approve a PR. Approval is Rui's, and an agent approving with his login would fake it.
 - A PR touching a **high-tier** path (`.review-gate.yml`, mirrored in `CODEOWNERS`) needs Rui's approval. To make a path high-tier, add it to both files.
 - Merge only with `scripts/merge-pr.sh <number>`. It runs `agent-pr-gate check` (the gate's read-only CLI, pinned to the commit the gate workflow uses; needs `node`), which waits for CI and judges the PR by `.review-gate.yml`, and merges only when it passes, pinned to the head commit it judged. A PR into another branch (a `build-epic` task PR into its ticket branch) merges without the gate: run `tests/run.sh` on it first. CI and the gate run on PRs into `main` only, to save runners: Linux always (`ci.yml`), Windows when shell code changes (`portability.yml`); macOS is `tests/run.sh` on your machine. Never merge with `gh pr merge` or the web UI, and never push to `main`: the repo is private on GitHub Free, so GitHub enforces nothing and this script is the only gate. The `guard-merge` hook (`scripts/hooks/guard-merge.sh`, wired for Claude Code, Codex and Cursor) blocks those commands.
+- After opening or updating a PR, stay on it until it merges. Run `scripts/merge-pr.sh` once CI is green on a low or medium PR, which needs no approval; on a high PR, check its review every few minutes and run `scripts/merge-pr.sh` once Rui approves. Stop and tell Rui when he requests changes, the PR closes, or the gate refuses it.
 
 ## Commits
 
