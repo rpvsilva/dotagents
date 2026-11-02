@@ -10,7 +10,8 @@ fails=0
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
 # Stub claude: lists come from $SANDBOX/{markets,plugins} (one name per line), add/install append to them
-# and log the call; a plugin named "broken@m" fails to install.
+# and log the call; a plugin named "broken@m" fails to install. Adding a folder names the marketplace from its
+# .claude-plugin/marketplace.json, as the real claude does; any other source after its last part.
 mkdir "$SANDBOX/bin"
 cat >"$SANDBOX/bin/claude" <<EOF
 #!/usr/bin/env bash
@@ -18,7 +19,8 @@ echo "\$*" >>"$SANDBOX/calls"
 case "\$2 \$3 \$4" in
   "marketplace list --json") jq -R '{name: .}' "$SANDBOX/markets" | jq -s . ;;
   "list --json "*) jq -R '{id: .}' "$SANDBOX/plugins" | jq -s . ;;
-  "marketplace add "*) echo "\${4#*/}" >>"$SANDBOX/markets" ;;
+  "marketplace add "*)
+    if [ -d "\$4" ]; then jq -r .name "\$4/.claude-plugin/marketplace.json"; else echo "\${4##*/}"; fi >>"$SANDBOX/markets" ;;
   "install "*) [ "\$3" = broken@m ] && exit 1; echo "\$3" >>"$SANDBOX/plugins" ;;
 esac
 EOF
@@ -57,6 +59,24 @@ plugins ok
 not_called "add"
 not_called "install"
 grep -q "already installed" "$SANDBOX/out" || fail "second run did not say already installed"
+
+# A ./ source is a folder of this repo: added by its absolute path whatever the working directory, and a second
+# run adds and installs nothing. An absolute source is passed as written.
+cat >"$SANDBOX/plugins.txt" <<'EOF'
+remote-runs@dotagents-mods ./adapters/claude/mods
+abs@abs-market /abs/abs-market
+EOF
+: >"$SANDBOX/markets"
+: >"$SANDBOX/plugins"
+cd "$SANDBOX"
+plugins ok
+cd "$REPO"
+called "plugin marketplace add $REPO/adapters/claude/mods"
+called "plugin install remote-runs@dotagents-mods --scope user"
+called "plugin marketplace add /abs/abs-market"
+plugins ok
+not_called "add"
+not_called "install"
 
 # A failed install is reported, the rest still installs, and the exit is non-zero.
 printf 'broken@m o/m\nlate@m o/m\n' >"$SANDBOX/plugins.txt"

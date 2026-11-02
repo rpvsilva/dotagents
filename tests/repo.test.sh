@@ -96,6 +96,26 @@ for h in adapters/*/hooks/*.json; do
   jq -e '[.. | .command? | strings | select(test("\\.agents/hooks/"))] | length > 0' "$h" >/dev/null 2>&1 || fail "$h: calls no script in ~/.agents/hooks/"
 done
 
+# Claude plugins from a ./ folder of this repo (mods): the folder's marketplace.json is named as the line's
+# @marketplace, and each plugin it lists has a plugin.json of the same name.
+while read -r id source; do
+  case "$id" in '' | '#'*) continue ;; esac
+  case "$source" in ./*) ;; *) continue ;; esac
+  m="${source#./}/.claude-plugin/marketplace.json"
+  [ "$(jq -r .name "$m" 2>/dev/null | tr -d '\r')" = "${id#*@}" ] || { fail "adapters/claude/plugins.txt: $m is not named ${id#*@}"; continue; }
+  while read -r name src; do
+    p="${source#./}/${src#./}/.claude-plugin/plugin.json"
+    [ "$(jq -r .name "$p" 2>/dev/null | tr -d '\r')" = "$name" ] || fail "$m: plugin $name has no $p named $name"
+  done < <(jq -r '.plugins[] | "\(.name) \(.source)"' "$m" | tr -d '\r')
+done <adapters/claude/plugins.txt
+# Every mod folder is listed in the mods marketplace.
+for d in adapters/claude/mods/*/; do
+  [ -d "$d" ] || continue
+  d="$(basename "$d")"
+  jq -e --arg s "./$d" 'any(.plugins[]; .source == $s)' adapters/claude/mods/.claude-plugin/marketplace.json >/dev/null 2>&1 \
+    || fail "adapters/claude/mods/.claude-plugin/marketplace.json: mod $d not listed with source ./$d"
+done
+
 # MCP: valid JSON, and every env/header value is a ${VAR} reference.
 if ! jq -e '.mcpServers | type == "object"' mcp/servers.json >/dev/null; then
   fail "mcp/servers.json: invalid JSON or no mcpServers object"
