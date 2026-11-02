@@ -531,6 +531,26 @@ if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
 fi
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
+# Refused before anything reaches the cluster, each naming why: an empty brief, two attachments with one name, a
+# snapshot over REMOTE_MAX_MB.
+refused() {
+  local want="$1" code=0
+  shift
+  rm -f "$SANDBOX/calls"
+  (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    "$@") >"$SANDBOX/out" 2>&1 || code=$?
+  [ "$code" = 1 ] || fail "refused ($want): wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q -- "$want" "$SANDBOX/out" || fail "refused ($want): not said: $(cat "$SANDBOX/out")"
+  [ ! -e "$SANDBOX/calls" ] || fail "refused ($want): kubectl was called: $(cat "$SANDBOX/calls")"
+}
+refused "empty brief" "$REPO/scripts/remote-agent.sh" ""
+mkdir -p "$SANDBOX/a/notes"
+refused "two attachments named notes" "$REPO/scripts/remote-agent.sh" --attach "$SANDBOX/run/notes" --attach "$SANDBOX/a/notes" "x"
+# Random bytes: no file system stores them in under 1 KB.
+head -c 8192 /dev/urandom >"$W/big.bin"
+refused "over REMOTE_MAX_MB=0" env REMOTE_MAX_MB=0 "$REPO/scripts/remote-agent.sh" "x"
+rm -f "$W/big.bin"
+
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
 code=0; run 0 "$patch" || code=$?
