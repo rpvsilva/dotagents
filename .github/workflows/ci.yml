@@ -61,6 +61,10 @@ jobs:
           checks="$(tests/affected.sh "${args[@]}" | tr '\n' ' ')"
           echo "checks: $checks"
           echo "checks=$checks" >>"$GITHUB_OUTPUT"
+      # Node 22.6+ runs the mods' plain-logic tests (tests/mod.test.sh); claude plugin test stays local.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
       - name: tests/*.test.sh
         shell: bash
         env:

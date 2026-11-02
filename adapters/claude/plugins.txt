@@ -1,3 +1,5 @@
 # Claude Code plugins install.sh installs (scripts/claude-plugins.sh), one per line:
 # <plugin>@<marketplace> <marketplace source, as `claude plugin marketplace add` takes it>
+# A source starting with ./ is a folder of this repo (a local marketplace, read in place).
 mattpocock-skills@claude-plugins-official anthropics/claude-plugins-official
+remote-runs@dotagents-mods ./adapters/claude/mods
