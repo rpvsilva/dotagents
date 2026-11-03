@@ -223,6 +223,20 @@ class RepoAndDate(unittest.TestCase):
             run_ = run("--session", str(FIXTURES / "spans.jsonl"), "--cwd", str(top / "sub"))
         self.assertEqual(run_["repo"], str(top))
 
+    @unittest.skipIf(os.name == "nt", "a shell-script git stub cannot run on Windows; the test above covers it there")
+    def test_repo_is_in_the_os_native_form_whatever_git_prints(self):
+        # Git for Windows prints C:/Users/...; a run's repo must be the same string the OS's own paths give.
+        with tempfile.TemporaryDirectory() as folder:
+            stub = Path(folder) / "git"
+            stub.write_text('#!/bin/sh\necho "//work//dotagents/"\n')
+            stub.chmod(0o755)
+            env = {**os.environ, "PATH": folder + os.pathsep + os.environ.get("PATH", "")}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["repo"], str(Path("//work/dotagents")))
+
     def test_repo_is_null_outside_a_repo(self):
         with tempfile.TemporaryDirectory() as folder:
             env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(folder).resolve().parent)}

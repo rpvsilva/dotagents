@@ -203,13 +203,18 @@ def find_session(ref, cwd):
 
 
 def repo_of(cwd):
-    """The git top-level folder holding cwd; None outside a repo or without git."""
+    """The git top-level folder holding cwd, in the OS's native form; None outside a repo or without git.
+
+    Git for Windows prints C:/Users/...; Path turns that into C:\\Users\\..., the form every other
+    path takes, so runs from one repo always carry the same repo string.
+    """
     try:
         proc = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
                               capture_output=True, encoding="utf-8")
     except OSError:
         return None
-    return proc.stdout.strip() or None
+    top = proc.stdout.strip()
+    return str(Path(top)) if top else None
 
 
 def main():
