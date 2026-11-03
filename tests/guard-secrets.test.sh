@@ -124,6 +124,11 @@ cmd allow '! test -f .env || echo missing'
 cmd allow 'X=1 ls secrets/'
 cmd allow 'if [ -f .env ]; then echo yes; fi'
 cmd allow 'if false; then :; elif [ -f .env ]; then echo y; fi'
+cmd allow 'if false; then :; else ls .env; fi'
+cmd allow 'while [ -f .env ]; do sleep 1; done'
+cmd allow 'until test -f .env; do :; done'
+cmd allow 'for f in a; do ls .env; done'
+cmd allow 'time ls .env'
 cmd allow '{ ls .env; }'
 cmd allow 'ls .env 2>/dev/null'
 cmd allow 'test -f .env 2>/dev/null || echo none'
@@ -171,9 +176,12 @@ unstaged() {
   echo "token = $token" >>"$SANDBOX/unstaged/app.txt"
   cmd allow 'git commit -m "unstaged token is not committed"' unstaged
   cmd block 'git commit -am "commits the token"' unstaged
+  cmd block 'git commit --all -m x' unstaged
   cmd block "cd $SANDBOX/unstaged && git commit -a -m x" ''
   grep -q "app.txt" "$err" || fail "token: reason does not name the file"
   if grep -qF "$token" "$err"; then fail "token: reason echoes the token"; fi
+  # Two cds are not clear enough to follow: judged where it starts, outside any repo.
+  cmd allow "cd $SANDBOX/unstaged && cd . && git commit -a -m x" ''
 }
 spawn commit_case allow clean new.txt "base"
 spawn unstaged
