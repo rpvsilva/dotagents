@@ -103,6 +103,41 @@ class Save(unittest.TestCase):
             self.assertTrue((Path(repo) / ".agents" / "telemetry" / "base.json").is_file())
 
 
+RUN_STEPS = str(FIXTURES / "run-steps.json")
+STEP_KEYS = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent"}
+
+
+class RunWithSteps(unittest.TestCase):
+    """run-steps.json: a version 3 run with steps, repo, date and whole, as the extractor writes it."""
+
+    def test_fixture_has_steps_in_the_extractor_shape(self):
+        run = json.loads(Path(RUN_STEPS).read_text())
+        self.assertEqual(run["schemaVersion"], 3)
+        self.assertGreaterEqual(len(run["spans"]), 2)
+        span_names = {s["name"] for s in run["spans"]}
+        for step in run["steps"]:
+            self.assertEqual(STEP_KEYS, set(step) - {"background"}, step)
+            self.assertIn(step["span"], span_names)
+        self.assertEqual(run["steps"], sorted(run["steps"], key=lambda s: s["start"]))
+        self.assertTrue(any(s["subagent"] for s in run["steps"]))
+        self.assertTrue(any(s["failed"] for s in run["steps"]))
+
+    def test_renders_the_span_table(self):
+        # grill-with-docs: 0.05 + 0.20 + 0.06 + 0.10 = $0.41; renovate-prs: 0.06 + 0.30 + 0.08 + 0.20 = $0.64
+        out = report(RUN_STEPS)
+        self.assertIn("│ grill-with-docs │ 90 s   │ 6     │ 4     │ 50k  │ 20k │ 600k    │ 50k     │ 0      │ $0.41 │", out)
+        self.assertIn("│ renovate-prs    │ 90 s   │ 5     │ 4     │ 60k  │ 30k │ 800k    │ 100k    │ 1      │ $0.64 │", out)
+        self.assertIn("│ Total           │ 3m 00s │ 11    │ 8     │ 110k │ 50k │ 1.4M    │ 150k    │ 1      │ $1.05 │", out)
+
+    def test_save_keeps_steps_repo_date_and_whole(self):
+        source = json.loads(Path(RUN_STEPS).read_text())
+        with tempfile.TemporaryDirectory() as folder:
+            report(RUN_STEPS, "--save", "x", "--dir", folder)
+            run = json.loads((Path(folder) / "x.json").read_text())
+        for key in ("steps", "repo", "date", "whole", "schemaVersion"):
+            self.assertEqual(run[key], source[key], key)
+
+
 class PriceCheckHint(unittest.TestCase):
     """Fixture pricing.json is dated 2026-01-01."""
 
