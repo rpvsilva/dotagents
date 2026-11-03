@@ -97,6 +97,7 @@ has_guard() {
 has_guard "$home/.claude/settings.json"
 has_guard "$home/.codex/hooks.json"
 has_guard "$home/.cursor/hooks.json"
+jq -e '[.hooks.SessionEnd[]? | .. | .command? | strings | select(test("telemetry-save"))] | length == 1' "$home/.claude/settings.json" >/dev/null || fail "Claude SessionEnd telemetry-save hook missing or doubled"
 jq -e '.hooks.Stop[0].hooks[0].command == "orca"' "$home/.cursor/hooks.json" >/dev/null || fail "existing Cursor hook lost"
 jq -e '.permissions.deny | index("Bash(gh auth token:*)") != null' "$home/.claude/settings.json" >/dev/null || fail "Claude deny rules not merged"
 
