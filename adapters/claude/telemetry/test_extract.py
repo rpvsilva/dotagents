@@ -232,6 +232,15 @@ class RepoAndDate(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(json.loads(proc.stdout)["repo"])
 
+    def test_repo_is_null_without_git(self):
+        with tempfile.TemporaryDirectory() as empty:
+            env = {**os.environ, "PATH": empty}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(json.loads(proc.stdout)["repo"])
+
     def test_date_is_the_day_the_run_started(self):
         for args in ([], ["--whole"]):
             run_ = run(*args, "--session", str(FIXTURES / "spans.jsonl"))
