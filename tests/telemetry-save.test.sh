@@ -62,8 +62,8 @@ wait_for() {
   local i=0
   while ! eval "$1"; do
     i=$((i + 1))
-    [ "$i" -lt 100 ] || return 1
-    sleep 0.1
+    [ "$i" -lt 500 ] || return 1
+    sleep 0.02
   done
 }
 
