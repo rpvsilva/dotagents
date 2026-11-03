@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -26,10 +27,16 @@ def extract(*args):
     )
 
 
+_RUNS = {}
+
+
 def run(*args):
-    proc = extract(*args)
-    assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout)
+    """extract.py's report for these args; the fixtures never change, so each args list runs once."""
+    if args not in _RUNS:
+        proc = extract(*args)
+        assert proc.returncode == 0, proc.stderr
+        _RUNS[args] = json.loads(proc.stdout)
+    return copy.deepcopy(_RUNS[args])
 
 
 def by_name(run_):
@@ -216,11 +223,34 @@ class RepoAndDate(unittest.TestCase):
             run_ = run("--session", str(FIXTURES / "spans.jsonl"), "--cwd", str(top / "sub"))
         self.assertEqual(run_["repo"], str(top))
 
+    @unittest.skipIf(os.name == "nt", "a shell-script git stub cannot run on Windows; the test above covers it there")
+    def test_repo_is_in_the_os_native_form_whatever_git_prints(self):
+        # Git for Windows prints C:/Users/...; a run's repo must be the same string the OS's own paths give.
+        with tempfile.TemporaryDirectory() as folder:
+            stub = Path(folder) / "git"
+            stub.write_text('#!/bin/sh\necho "//work//dotagents/"\n')
+            stub.chmod(0o755)
+            env = {**os.environ, "PATH": folder + os.pathsep + os.environ.get("PATH", "")}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["repo"], str(Path("//work/dotagents")))
+
     def test_repo_is_null_outside_a_repo(self):
         with tempfile.TemporaryDirectory() as folder:
             env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(folder).resolve().parent)}
             proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
                                    str(FIXTURES / "spans.jsonl"), "--cwd", folder],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(json.loads(proc.stdout)["repo"])
+
+    def test_repo_is_null_without_git(self):
+        with tempfile.TemporaryDirectory() as empty:
+            env = {**os.environ, "PATH": empty}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
                                   capture_output=True, encoding="utf-8", env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(json.loads(proc.stdout)["repo"])
