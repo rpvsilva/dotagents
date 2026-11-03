@@ -1,0 +1,4 @@
+# Fake credentials in the step-masking tests of adapters/claude/telemetry/test_extract.py (commit 4049433); later commits build them from parts.
+4049433c5f43f8d391455e7487513d67e2f43c0d:adapters/claude/telemetry/test_extract.py:curl-auth-header:370
+4049433c5f43f8d391455e7487513d67e2f43c0d:adapters/claude/telemetry/test_extract.py:curl-auth-user:358
+4049433c5f43f8d391455e7487513d67e2f43c0d:adapters/claude/telemetry/test_extract.py:curl-auth-user:358

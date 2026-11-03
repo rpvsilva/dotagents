@@ -1,10 +1,31 @@
 #!/usr/bin/env bash
 # Shared by the hooks in this folder and scripts/remote-agent*.sh: source it, never run it.
 
-# True when path $1 looks like a secret file (.env, keys, certificates, credentials, secrets/),
-# unless it is an example (.example, .sample, .template).
-secret_re='(^|/)(\.env(\.[^/]*)?|[^/]+\.(env|pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.aws/credentials)$|(^|/)secrets/'
-example_re='\.(example|sample|template)$'
+# The secret rules come from secret-patterns.txt beside this file (see its header):
+# secret_re (secret file paths), example_re (examples of them, which pass) and token_re (tokens and
+# private keys in text). Without them it stops (exit 2): an empty regex would match every path.
+# Read in plain bash: every hook call sources this file, and each extra process costs it time.
+# A trailing CR is dropped (a CRLF checkout on Windows), else every rule would end in it.
+case "${BASH_SOURCE[0]}" in */*) secret_patterns="${BASH_SOURCE[0]%/*}" ;; *) secret_patterns=. ;; esac
+secret_patterns="$secret_patterns/secret-patterns.txt"
+secret_re="" example_re="" token_re=""
+if [ -f "$secret_patterns" ] && [ -r "$secret_patterns" ]; then
+  while IFS= read -r _secret_line || [ -n "$_secret_line" ]; do
+    _secret_line="${_secret_line%$'\r'}"
+    case "$_secret_line" in
+      'path '*) secret_re="${secret_re:+$secret_re|}${_secret_line#path }" ;;
+      'example '*) example_re="${example_re:+$example_re|}${_secret_line#example }" ;;
+      'token '*) token_re="${token_re:+$token_re|}${_secret_line#token }" ;;
+    esac
+  done <"$secret_patterns"
+  unset _secret_line
+fi
+if [ -z "$secret_re" ] || [ -z "$example_re" ] || [ -z "$token_re" ]; then
+  echo "lib.sh: cannot read secret-patterns.txt ($secret_patterns)" >&2
+  exit 2
+fi
+
+# True when path $1 looks like a secret file, unless it is an example.
 is_secret() { [[ "$1" =~ $secret_re ]] && ! [[ "$1" =~ $example_re ]]; }
 
 # Prints the directory command $1 runs in, starting from $2: a command that moves into another
