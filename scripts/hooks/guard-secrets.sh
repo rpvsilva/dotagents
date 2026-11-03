@@ -28,10 +28,13 @@ if [ $# -gt 0 ]; then
   path=""
   cwd="$PWD"
 else
-  input="$(cat)"
-  cmd="$(jq -r '.tool_input.command // .command // empty' <<<"$input")"
-  path="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // .file_path // empty' <<<"$input")"
-  cwd="$(jq -r '.cwd // empty' <<<"$input")"
+  # One jq call for all three fields (this runs on every tool call): it prints shell assignments,
+  # each value a single @sh-quoted word; a value that is not a string is quoted as its JSON text.
+  fields="$(jq -r 'def str: if type == "string" then . else tojson end;
+    @sh "cmd=\((.tool_input.command // .command // "") | str)",
+    @sh "path=\((.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // .file_path // "") | str)",
+    @sh "cwd=\((.cwd // "") | str)"')"
+  eval "$fields"
   cwd="${cwd:-$PWD}"
 fi
 
