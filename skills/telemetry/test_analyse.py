@@ -101,6 +101,17 @@ class Analyse(unittest.TestCase):
         rows = self.section(self.ok("deploy"), "Slowest")
         self.assertEqual([r[1:3] for r in rows], [["Read", "a.py"]])
 
+    def test_slowest_shows_minutes_past_two_minutes_and_two_decimals_under_a_second(self):
+        self.save(run("a", step("Bash", "build", 125), step("Bash", "lint", 1.5), step("Read", "a.py", 0.25)))
+        rows = self.section(self.ok("deploy"), "Slowest")
+        self.assertEqual([r[3] for r in rows], ["2m 05s", "1.5 s", "0.25 s"])
+
+    def test_slowest_breaks_a_median_tie_by_the_max(self):
+        self.save(run("a", step("Bash", "a", 5), step("Bash", "a", 5), step("Bash", "a", 6),
+                      step("Bash", "b", 5), step("Bash", "b", 5), step("Bash", "b", 9)))
+        rows = self.section(self.ok("deploy"), "Slowest")
+        self.assertEqual([r[2:5] for r in rows], [["b", "5.0 s", "9.0 s"], ["a", "5.0 s", "6.0 s"]])
+
     # Failing
 
     def test_failing_shows_failed_over_total_and_runs(self):
@@ -109,6 +120,13 @@ class Analyse(unittest.TestCase):
                   run("c", step("Bash", "npm test")))
         rows = self.section(self.ok("deploy"), "Failing")
         self.assertEqual(rows, [["deploy", "Bash", "npm test", "2/4", "2"]])
+
+    def test_failing_ranks_by_failures_then_by_share_failed(self):
+        self.save(run("a", step("Bash", "often", failed=True), step("Bash", "often", failed=True),
+                      *(step("Bash", "often") for _ in range(4)),
+                      step("Bash", "most", failed=True), step("Bash", "half", failed=True), step("Bash", "half")))
+        rows = self.section(self.ok("deploy"), "Failing")
+        self.assertEqual([r[2:4] for r in rows], [["often", "2/6"], ["most", "1/1"], ["half", "1/2"]])
 
     def test_failing_is_none_without_failures(self):
         self.save(run("a", step("Bash", "ls")))
@@ -159,6 +177,10 @@ class Analyse(unittest.TestCase):
 
     # Where
 
+    def test_steps_without_a_label_are_not_retries(self):
+        self.save(run("a", step("mcp__x__call", "", failed=True), step("mcp__x__call", "")))
+        self.assertIsNone(self.section(self.ok("deploy"), "Retries"))
+
     def test_findings_inside_a_subagent_name_the_subagent(self):
         self.save(run("a", step("Bash", "npm test", 5, failed=True, subagent="Explore"),
                       step("Bash", "npm test", 5, subagent="Explore")))
@@ -204,6 +226,21 @@ class Analyse(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(proc.stdout, "")
         self.assertIn("No saved run of review", proc.stderr)
+
+    def test_no_run_of_the_skill_still_names_the_skipped_files_on_stderr(self):
+        (self.dir / "bad.json").write_text("{", encoding="utf-8")
+        proc = self.analyse("deploy")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("Skipped 1 saved file", proc.stderr)
+
+    def test_dir_can_be_given_twice(self):
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        self.save(run("a", step("Bash", "here")))
+        (Path(other.name) / "b.json").write_text(json.dumps(run("b", step("Bash", "there"))), encoding="utf-8")
+        out = self.ok("--dir", other.name, "deploy")
+        self.assertIn("across 2 saved runs", out)
+        self.assertEqual(sorted(r[2] for r in self.section(out, "Slowest")), ["here", "there"])
 
     def test_reports_saved_files_that_could_not_be_read(self):
         self.save(run("a", step("Bash", "ls")))
