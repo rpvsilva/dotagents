@@ -194,6 +194,8 @@ test('byteSlice cuts text by UTF-8 bytes, never inside a character', () => {
   assert.equal(byteSlice('aé😀b', 0, 3), 'aé')
   assert.equal(byteSlice('aé😀b', 0, 4), 'aé')
   assert.equal(byteSlice('aé😀b', 3, 4), '😀')
+  assert.equal(byteSlice('aé😀b', 2), '😀b')
+  assert.equal(byteSlice('aé😀b', 4), 'b')
   assert.equal(byteSlice('abc', 9), '')
 })
 
@@ -277,6 +279,14 @@ test('a full chunk with no newline is skipped whole, so one huge line never stal
   assert.deepEqual(got.lines, [])
   const notFull = readChunk(log({ offset: 200 }), huge, { from: 200, length: CHUNK, isTail: false, isFull: false }, new Map())
   assert.equal(notFull.offset, 200)
+})
+
+test('a tail read with no newline skips its bytes when the file had them all, and waits for more otherwise', () => {
+  const huge = 'x'.repeat(50)
+  const full = readChunk(log(), huge, { from: 1000, length: CHUNK + 1, isTail: true, isFull: true }, new Map())
+  assert.deepEqual([full.offset, full.lines, full.truncated], [1000 + CHUNK + 1, [], true])
+  const start = log()
+  assert.equal(readChunk(start, huge, { from: 1000, length: CHUNK + 1, isTail: true, isFull: false }, new Map()), start)
 })
 
 // A row of the pane in `state`, for the run folder `/repo/.git/remote-agent/<id>/`, with `worktree` from run.json.

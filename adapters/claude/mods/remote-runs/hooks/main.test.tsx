@@ -40,8 +40,8 @@ type World = {
   status: (string | undefined)[]
   notified: { title?: string; text: string }[]
   psCalls: string[][]
-  /** Files too big to hold: a path's size, and what `tail` answers when asked from 1-based byte `+n`. */
-  big: Record<string, { size: number; tail: (n: number) => string }>
+  /** Files too big to hold: a path's size, and what `tail` answers when asked from 1-based byte `+n` (null: it fails). */
+  big: Record<string, { size: number; tail: (n: number) => string | null }>
   /** The argv of every `sh -c 'tail ... | head ...'` read. */
   tails: string[][]
   /** What `ui.copy` answers (an Error: it throws), what it was asked to copy where, and the toasts shown. */
@@ -69,9 +69,9 @@ function engine(on: any, over: Partial<World> = {}): World {
     if (e.argv[0] === 'sh') {
       // sh -c 'tail -c "+$1" "$2" | head -c "$3"' sh <+n> <path> <max bytes>
       w.tails.push(e.argv)
-      const big = w.big[e.argv[5]]
-      if (!big) return { value: { exitCode: 1, stdout: '', stderr: 'no such file' } }
-      return { value: { exitCode: 0, stdout: big.tail(Number(e.argv[4])).slice(0, Number(e.argv[6])), stderr: '' } }
+      const out = w.big[e.argv[5]]?.tail(Number(e.argv[4]))
+      if (out == null) return { value: { exitCode: 1, stdout: '', stderr: 'no such file' } }
+      return { value: { exitCode: 0, stdout: out.slice(0, Number(e.argv[6])), stderr: '' } }
     }
     if (e.argv.includes('ps')) {
       w.psCalls.push(e.argv)
@@ -794,4 +794,59 @@ test('a finished run draws fewer log lines, so its wrapped resume hint fits the 
   expect(shown.lines).toEqual(names(14, 16))
   await $.ui.scroll(scroll(-1))
   expect((await logView($)).lines).toEqual(names(14, 15))
+})
+
+test('a result read on a later tick names the tool called before it, and a transcript written anew starts the log again', async ($, on) => {
+  const call = jsonl({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } })
+  const result = (text: string) => jsonl({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] } })
+  const w = await withLog($, on, call)
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(['-> Bash ls'])
+  append(w, result('a.txt'))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(['-> Bash ls', '<- Bash: a.txt'])
+  // Shorter than what was read: a new file, whose result has no call before it.
+  write(w, TRANSCRIPT, result('b.txt'))
+  expect(result('b.txt').length).toBeLessThan((call + result('a.txt')).length)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(['<- b.txt'])
+})
+
+test('a transcript between 1 and 3 MiB is read whole and opens at its last MiB under the earlier-events note', async ($, on) => {
+  const MiB = 1 << 20
+  const w = await withLog($, on, say('x'.repeat(2 * MiB)) + says(30))
+  await press($, 'run:agent-1')
+  const shown = await logView($)
+  // 17 rows: the note takes one.
+  expect(shown.lines).toEqual(names(ROWS - 1, 13))
+  expect(shown.texts).toContain('(earlier events not shown: open the file)')
+  expect(w.tails).toEqual([])
+  // Read on from where it stopped: a window scrolled up stays put.
+  await $.ui.scroll(scroll(-5))
+  append(w, says(1, 30))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS - 1, 8))
+  await press($, 'end')
+  expect((await logView($)).lines).toEqual(names(ROWS - 1, 14))
+})
+
+test('a tail read that fails leaves the log waiting, and the next tick reads it', async ($, on) => {
+  const w = await withLog($, on, null)
+  const events = says(3)
+  const head = 5 * (1 << 20)
+  let isUp = false
+  w.big[TRANSCRIPT] = {
+    size: head + events.length,
+    tail: n => (isUp ? `${'x'.repeat(head - n)}\n${events}` : null),
+  }
+  await press($, 'run:agent-1')
+  let shown = await logView($)
+  expect(shown.lines).toEqual([])
+  expect(shown.texts).toContain('waiting for the first event')
+  expect(shown.texts).not.toContain('(earlier events not shown: open the file)')
+  isUp = true
+  await w.clock.advance(1500)
+  shown = await logView($)
+  expect(shown.lines).toEqual(names(3))
+  expect(shown.texts).toContain('(earlier events not shown: open the file)')
 })
