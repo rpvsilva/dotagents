@@ -15,6 +15,8 @@ import {
   gitDirs,
   livePids,
   markNotified,
+  newLiveRuns,
+  openPaneSetting,
   notifyText,
   parseRun,
   pickRows,
@@ -28,6 +30,7 @@ import {
   byteSlice,
   copiedText,
   EARLIER,
+  lineStyle,
   NO_LOG,
   oneLine,
   readChunk,
@@ -41,22 +44,28 @@ import {
 
 const PANE = 'remote-runs'
 const TICK_MS = 1500
-const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-3' })
-const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null } as Ticker, {
-  shape: 'ticker-1',
+const runs = atom({ plugin: 'remote-runs', key: 'runs' } as const, [] as Run[], { shape: 'runs-4' })
+const ticker = atom({ plugin: 'remote-runs', key: 'ticker' } as const, { seeded: [], status: null, opened: [] } as Ticker, {
+  shape: 'ticker-2',
 })
 const view = atom({ plugin: 'remote-runs', key: 'view' } as const, { runId: null } as View, { shape: 'view-1' })
 const log = atom({ plugin: 'remote-runs', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
 // A transcript under this size is read with $.fs.read (which refuses one over 4 MiB); a bigger one with tail.
 const FS_READ_MAX = 3 << 20
-// The pane's rows above the log: Back and the run, then Copy path and the transcript path.
-const HEADER_ROWS = 2
+// The pane's rows around the log: Back and the run, Copy path and the transcript path, and a blank row above; a blank
+// row and the follow bar below.
+const CHROME_ROWS = 5
+// The columns the pane keeps blank at each side.
+const PAD_X = 1
+// The list's footer and the log's follow bar: what the keys do.
+const LIST_KEYS = '1-9 open a run · esc close'
+const LOG_KEYS = 'b back · e end · c copy path · ↑↓ scroll'
 /**
  * How many log lines fit in a body of `bodyRows`: what the header, the earlier-events note and the resume hint
  * (`below`, which wraps at `columns`) leave.
  */
 const logRows = (bodyRows: number, l: Log, below: readonly string[], columns: number) =>
-  Math.max(1, bodyRows - HEADER_ROWS - (l.truncated ? 1 : 0) - below.reduce((n, line) => n + wrappedRows(line, columns), 0))
+  Math.max(1, bodyRows - CHROME_ROWS - (l.truncated ? 1 : 0) - below.reduce((n, line) => n + wrappedRows(line, columns), 0))
 // $.store key per common git dir: the folders of its runs already notified (or marked so), kept across processes,
 // newest last. Past NOTIFIED_MAX, only folders gone from disk are dropped.
 const notifiedKey = (common: string) => `notified:${common}`
@@ -67,6 +76,8 @@ const NOTIFIED_MAX = 1000
 let gitDir: { cwd: string; common: string } | null = null
 let seen = new Map<string, { key: string; files: RunFiles; isFinal: boolean }>()
 let isTicking = false
+// The run ids the last scan found, so a run that starts live after it opens the pane; null until the first scan.
+let knownRuns: Set<string> | null = null
 // The open log's tool call ids, so a result names its tool across reads, and the transcript size last read, so an
 // unchanged file is not read again; and the queue its reads go through.
 let logCache = { runId: null as string | null, names: new Map<string, string>(), size: -1 }
@@ -296,10 +307,18 @@ async function tick($: EngineInterface): Promise<void> {
 
     const was = await read($, ticker)
     let t = was
-    const status = statusText(all, now)
+    // Only folders still on disk stay opened, so the list never outgrows the runs.
+    const present = new Set(all.map(r => r.folder))
+    if (got && t.opened.some(f => !present.has(f))) t = { ...t, opened: t.opened.filter(f => present.has(f)) }
+    const status = statusText(all, now, new Set(t.opened))
     if ((status ?? null) !== t.status) {
       $.ui.status(status)
       t = { ...t, status: status ?? null }
+    }
+    if (got) {
+      const fresh = newLiveRuns(all, knownRuns)
+      knownRuns = fresh.known
+      if (fresh.started.length > 0) await openForNewRun($)
     }
     if (got) t = await notifyEnded($, got.common, all, t)
     if (t !== was) await update($, ticker, () => t)
@@ -311,9 +330,34 @@ async function tick($: EngineInterface): Promise<void> {
   }
 }
 
+/**
+ * Opens the pane, without taking the keyboard, for a run that just started, unless `remote.open_pane` is false
+ * (read through `settings`, only now, so a change applies with no reload). The engine waits to draw a pane opened
+ * unasked on a narrow terminal, and an open pane just stays open.
+ */
+async function openForNewRun($: EngineInterface): Promise<void> {
+  try {
+    const cwd = await $.session.cwd()
+    const got = await $.process.run(['sh', '-c', 'exec "$HOME/.agents/bin/settings" --dir "$1" get remote open_pane', 'sh', cwd])
+    if (!openPaneSetting(got.exitCode, got.stdout)) return
+  } catch {
+    // no settings to read: its default, open
+  }
+  try {
+    await $.ui.open({ id: PANE, title: 'Remote runs', closeOnEscape: true })
+  } catch {
+    // a surface with no panes
+  }
+}
+
 /** Shows run `runId`'s log, read at once rather than on the next tick. */
 async function openLog($: EngineInterface, runId: string): Promise<void> {
   await update($, view, () => ({ runId }))
+  // A failed or stopped run's log, once opened, has been seen: the status line stops counting it from the next tick.
+  const run = (await read($, runs)).find(r => r.id === runId)
+  if (run && (run.state === 'failed' || run.state === 'stopped')) {
+    await update($, ticker, t => (t.opened.includes(run.folder) ? t : { ...t, opened: [...t.opened, run.folder] }))
+  }
   await followLog($)
 }
 
@@ -356,7 +400,7 @@ export const register: Register = on => {
     let rows = drawnRows.rows
     if (drawnRows.runId !== runId) {
       const open = (await read($, runs)).find(r => r.id === runId)
-      rows = logRows(e.bodyRows, l, open ? resumeHint(open, open.session) : [], drawnColumns)
+      rows = logRows(e.bodyRows, l, open ? resumeHint(open, open.session) : [], drawnColumns - 2 * PAD_X)
     }
     if (l.runId === runId) await update($, log, () => scrollLog(l, e.by, rows))
     return {}
@@ -374,24 +418,23 @@ export const register: Register = on => {
       const l = await read($, log)
       const shown = l.runId === open.id ? l : { ...NO_LOG, runId: open.id }
       const hint = resumeHint(open, open.session)
-      const rows = logRows(e.props.scroll.bodyRows, shown, hint, e.props.bodyColumns)
+      const rows = logRows(e.props.scroll.bodyRows, shown, hint, e.props.bodyColumns - 2 * PAD_X)
       drawnRows = { runId: open.id, rows }
+      const isLive = open.state === 'starting' || open.state === 'running'
       return (
-        <Box flexDirection="column">
-          <Box>
+        <Box flexDirection="column" paddingX={PAD_X}>
+          <Box columnGap={1}>
             <Button key="back" hotkey="b" onPress={() => back($)}>
-              Back
-            </Button>
-            <Button key="end" hotkey="e" onPress={() => update($, log, l => ({ ...l, follow: true }))}>
-              End
+              ← Back
             </Button>
             <Text wrap="truncate-end">
-              {` ${oneLine(row.label)} `}
+              <Text color={row.tone}>{row.glyph}</Text>
+              {` ${oneLine(row.label)}  `}
               <Text dimColor>{row.status}</Text>
             </Text>
           </Box>
-          <Box columnGap={1}>
-            <Button key="copy" hotkey="c" onPress={press => copyPath($, open.transcript, press.surface)}>
+          <Box columnGap={1} marginBottom={1}>
+            <Button key="copy" hotkey="c" dimColor onPress={press => copyPath($, open.transcript, press.surface)}>
               Copy path
             </Button>
             <Text dimColor wrap="truncate-end">{oneLine(open.transcript, 1000)}</Text>
@@ -399,33 +442,55 @@ export const register: Register = on => {
           {shown.truncated && <Text dimColor wrap="truncate-end">{EARLIER}</Text>}
           {shown.lines.length === 0 && <Text dimColor>{WAITING}</Text>}
           {windowLines(shown.lines, shown.follow, shown.top, rows).map(line => (
-            <Text wrap="truncate-end">{line}</Text>
+            <Text wrap="truncate-end" {...lineStyle(line)}>{line}</Text>
           ))}
           {hint.map(line => (
             <Text dimColor>{line}</Text>
           ))}
+          <Box columnGap={2} marginTop={1}>
+            {shown.follow ? (
+              <Button key="end" hotkey="e" dimColor onPress={() => update($, log, l => ({ ...l, follow: true }))}>
+                {isLive ? '● Following live' : '■ End of log'}
+              </Button>
+            ) : (
+              <Button key="end" hotkey="e" variant="primary" onPress={() => update($, log, l => ({ ...l, follow: true }))}>
+                ↓ Jump to end
+              </Button>
+            )}
+            <Text dimColor wrap="truncate-end">{LOG_KEYS}</Text>
+          </Box>
         </Box>
       )
     }
+    // Live and recent runs first, then the old ones greyed out under a rule; pickRows already orders them so.
+    const firstOld = list.findIndex(r => r.isOld)
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" paddingX={PAD_X} rowGap={1}>
         {list.length === 0 && <Text dimColor>{EMPTY}</Text>}
         {list.map((run, i) => {
           const row = formatRow(run)
           return (
-            <Box flexDirection="column">
+            <Box key={`row:${run.id}`} flexDirection="column">
+              {i === firstOld && (
+                <Box marginBottom={1}>
+                  <Text dimColor>── older ──</Text>
+                </Box>
+              )}
               <Button
                 key={`run:${run.id}`}
                 plain
+                dimColor={run.isOld}
                 {...(i < 9 ? { hotkey: String(i + 1) } : {})}
                 onPress={() => openLog($, run.id)}
               >
-                {row.label} <Text dimColor>{row.status}</Text>
+                <Text {...(run.isOld ? { dimColor: true } : { color: row.tone })}>{row.glyph}</Text> {oneLine(row.label)}{'  '}
+                <Text dimColor>{row.status}</Text>
               </Button>
-              {row.detail !== '' && <Text dimColor wrap="truncate-end">{`   ${row.detail}`}</Text>}
+              {!run.isOld && row.detail !== '' && <Text dimColor wrap="truncate-end">{`     ${row.detail}`}</Text>}
             </Box>
           )
         })}
+        {list.length > 0 && <Text dimColor>{LIST_KEYS}</Text>}
       </Box>
     )
   })

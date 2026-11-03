@@ -81,6 +81,8 @@ export function parseRun(f: RunFiles): Run {
     ended: num(j.ended),
     changed: f.changed,
     elapsed: '',
+    ago: '',
+    isOld: false,
     step: lastLine(f.progress),
     claim_s: num(j.claim_s),
     send_s: num(j.send_s),
@@ -141,6 +143,24 @@ function elapsed(r: Run, now: number): string {
   return ''
 }
 
+/** How long after it ended a finished run is drawn grey, in seconds. */
+export const OLD_S = 30 * 60
+
+/** Epoch seconds a finished run ended: run.json's `ended`, else when its files last changed; null for one going on. */
+function endedAt(r: Run): number | null {
+  if (isLive(r)) return null
+  return (r.state === 'done' || r.state === 'failed' ? r.ended : null) ?? (r.changed || null)
+}
+
+/** Seconds as a coarse age: `<1m ago`, `4m ago`, `2h ago`, `3d ago`. */
+function age(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < 60) return '<1m ago'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
+}
+
 const newestFirst = (a: Run, b: Run) => (b.started ?? 0) - (a.started ?? 0) || (a.id < b.id ? 1 : -1)
 
 /**
@@ -150,7 +170,10 @@ const newestFirst = (a: Run, b: Run) => (b.started ?? 0) - (a.started ?? 0) || (
 export function pickRows(runs: readonly Run[], now: number): Run[] {
   const open = runs.filter(r => UNFINISHED.includes(r.state)).sort(newestFirst)
   const finished = runs.filter(r => !UNFINISHED.includes(r.state)).sort(newestFirst)
-  return [...open, ...finished].slice(0, MAX_ROWS).map(r => ({ ...r, elapsed: elapsed(r, now) }))
+  return [...open, ...finished].slice(0, MAX_ROWS).map(r => {
+    const end = endedAt(r)
+    return { ...r, elapsed: elapsed(r, now), ago: end === null ? '' : age(now - end), isOld: end !== null && now - end > OLD_S }
+  })
 }
 
 /** A key that changes exactly when the rows would draw differently: the pane redraws only then. */
@@ -158,15 +181,31 @@ export function signature(rows: readonly Run[]): string {
   return JSON.stringify(rows)
 }
 
-/** A row's words: the run's name (else its id); its state and elapsed time; its timings and last step. */
-export function formatRow(r: Run): { label: string; status: string; detail: string } {
+/** A theme key the pane colors a row's glyph with. */
+export type Tone = 'warning' | 'success' | 'error' | 'inactive'
+
+const LOOK: Record<RunState, { glyph: string; tone: Tone }> = {
+  starting: { glyph: '○', tone: 'warning' },
+  running: { glyph: '●', tone: 'warning' },
+  done: { glyph: '✓', tone: 'success' },
+  failed: { glyph: '✗', tone: 'error' },
+  stopped: { glyph: '■', tone: 'warning' },
+  unknown: { glyph: '?', tone: 'inactive' },
+}
+
+/**
+ * A row's words: the run's name (else its id); its state, elapsed time and, once finished, how long ago; its
+ * timings and last step; and the state's glyph and the theme color to draw it in.
+ */
+export function formatRow(r: Run): { label: string; status: string; detail: string; glyph: string; tone: Tone } {
   const timings = ([['claim', r.claim_s], ['send', r.send_s], ['first', r.first_event_s]] as const)
     .filter(([, s]) => s !== null)
     .map(([what, s]) => `${what} ${s}s`)
   return {
     label: r.name ?? r.id,
-    status: [r.state, r.elapsed].filter(Boolean).join(' '),
+    status: [[r.state, r.elapsed].filter(Boolean).join(' '), r.ago].filter(Boolean).join(' · '),
     detail: [...timings, ...(r.step ? [r.step] : [])].join(' · '),
+    ...LOOK[r.state],
   }
 }
 
@@ -174,17 +213,24 @@ export function formatRow(r: Run): { label: string; status: string; detail: stri
 export const FAILED_WINDOW_S = 60 * 60
 
 /**
- * The status line at `now` (epoch seconds): `remote: 2 running, 1 failed`, a zero part left out; undefined (the
- * line cleared) when both are zero. Starting runs count as running; failed and stopped runs count for
- * FAILED_WINDOW_S after they ended (a stopped run, or a failed one with no `ended`, after its files last changed).
+ * The status line at `now` (epoch seconds), beside the plugin's name the engine draws: `● 2 running · ✗ 1 failed`, a
+ * part naming its run when it holds one (`● build running`), a zero part left out; undefined (the line cleared) when
+ * both are zero. Starting runs count as running; failed and stopped runs count for FAILED_WINDOW_S after they ended
+ * (a stopped run, or a failed one with no `ended`, after its files last changed), unless their folder is in
+ * `opened` (the person opened that log, so it has been seen).
  */
-export function statusText(runs: readonly Run[], now: number): string | undefined {
-  const running = runs.filter(isLive).length
+export function statusText(runs: readonly Run[], now: number, opened: ReadonlySet<string> = new Set()): string | undefined {
+  const running = runs.filter(isLive)
   const failed = runs.filter(
-    r => (r.state === 'failed' || r.state === 'stopped') && now - ((r.state === 'failed' ? r.ended : null) ?? r.changed) <= FAILED_WINDOW_S,
-  ).length
-  const parts = [running ? `${running} running` : '', failed ? `${failed} failed` : ''].filter(Boolean)
-  return parts.length ? `remote: ${parts.join(', ')}` : undefined
+    r =>
+      (r.state === 'failed' || r.state === 'stopped') &&
+      !opened.has(r.folder) &&
+      now - ((r.state === 'failed' ? r.ended : null) ?? r.changed) <= FAILED_WINDOW_S,
+  )
+  const part = (glyph: string, list: readonly Run[], what: string) =>
+    list.length === 0 ? '' : `${glyph} ${list.length === 1 ? (list[0].name ?? list[0].id) : list.length} ${what}`
+  const parts = [part('●', running, 'running'), part('✗', failed, 'failed')].filter(Boolean)
+  return parts.length ? parts.join(' · ') : undefined
 }
 
 /** The runs that ended (done, failed or stopped) and whose folder is not in `notified`. */
@@ -207,4 +253,23 @@ export function notifyText(r: Run): string {
   const name = r.name ?? r.id
   if (r.state === 'failed') return r.exit_code === null ? `${name} failed` : `${name} failed (exit ${r.exit_code})`
   return `${name} ${r.state}`
+}
+
+/**
+ * The runs of `runs` that are starting or running and were not in `known`, and the ids to know next time (every
+ * run of `runs`). `known` null (the first scan of a process) names none, so a reload or a new session never opens
+ * the pane for runs already going.
+ */
+export function newLiveRuns(runs: readonly Run[], known: ReadonlySet<string> | null): { started: Run[]; known: Set<string> } {
+  const next = new Set(runs.map(r => r.id))
+  if (known === null) return { started: [], known: next }
+  return { started: runs.filter(r => isLive(r) && !known.has(r.id)), known: next }
+}
+
+/**
+ * `remote.open_pane` from `settings get remote open_pane`'s exit code (null: it could not run) and output: false only
+ * when it ran and printed `false`; its default, true, otherwise.
+ */
+export function openPaneSetting(exitCode: number | null, stdout: string): boolean {
+  return !(exitCode === 0 && stdout.trim() === 'false')
 }
