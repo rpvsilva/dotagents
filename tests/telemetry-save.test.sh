@@ -133,6 +133,24 @@ x="$(stub badsettings 'print("{}")')"
 quiet "$h" "$(payload "$t")" "bad settings file" TELEMETRY_EXTRACT="$x"
 wait_for '[ -s "$h/.agents/telemetry/sess-bad.json" ]' || fail "bad settings file: no save on the default"
 
+# A payload without cwd: the session's directory is the hook's working directory, passed on as --cwd.
+h="$(home nocwd)"
+t="$(transcript sess-nocwd)"
+x="$(stub nocwd 'print(json.dumps({"argv": sys.argv[1:]}))')"
+cd "$SANDBOX/proj"
+quiet "$h" "$(jq -n --arg t "$t" '{transcript_path: $t}')" "payload without cwd" TELEMETRY_EXTRACT="$x"
+cd - >/dev/null
+wait_for '[ -s "$h/.agents/telemetry/sess-nocwd.json" ]' || fail "payload without cwd: no save"
+jq -e '.argv[3] == "--cwd" and (.argv[4] | endswith("proj"))' "$h/.agents/telemetry/sess-nocwd.json" >/dev/null 2>&1 \
+  || fail "payload without cwd: wrong --cwd: $(cat "$h/.agents/telemetry/sess-nocwd.json" 2>/dev/null)"
+
+# No settings command (~/.agents/bin/settings missing) keeps the default (on).
+h="$(home nosettings)"
+rm "$h/.agents/bin/settings"
+t="$(transcript sess-nosettings)"
+quiet "$h" "$(payload "$t")" "no settings command" TELEMETRY_EXTRACT="$(stub nosettings 'print("{}")')"
+wait_for '[ -s "$h/.agents/telemetry/sess-nosettings.json" ]' || fail "no settings command: no save on the default"
+
 # Cases that must save nothing, each with a stub extractor that would leave a mark if it ran.
 h="$(home off)"
 t="$(transcript sess-off)"
