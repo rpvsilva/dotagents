@@ -79,12 +79,18 @@ else
 fi
 
 # The hook returns while a slow extractor still runs, and its output appears afterwards. The extractor gets the
-# transcript, the session's folder and --whole.
+# transcript, the session's folder and --whole. It blocks until the test writes its .go file (up to 10 s), which the
+# test does only once the hook has returned: a hook that waited for it would return late, with .done already there.
 h="$(home slow)"
 t="$(transcript sess-slow)"
-x="$(stub slow 'time.sleep(3); open(sys.argv[0] + ".done", "w").close(); print(json.dumps({"argv": sys.argv[1:]}))')"
+x="$(stub slow 'import os
+for _ in range(200):
+    if os.path.exists(sys.argv[0] + ".go"): break
+    time.sleep(0.05)
+open(sys.argv[0] + ".done", "w").close(); print(json.dumps({"argv": sys.argv[1:]}))')"
 quiet "$h" "$(payload "$t")" "slow extractor" TELEMETRY_EXTRACT="$x"
 [ ! -e "$x.done" ] || fail "slow extractor: the hook waited for the extractor to finish"
+touch "$x.go"
 saved="$h/.agents/telemetry/sess-slow.json"
 if wait_for '[ -s "$saved" ]'; then
   jq -e '.argv | length == 5 and .[0] == "--whole" and .[1] == "--session" and (.[2] | endswith("sess-slow.jsonl"))
