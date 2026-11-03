@@ -18,6 +18,8 @@ export type RunFiles = {
   progress: string | null
   /** Epoch seconds of the last change to run.json or progress.log; 0 when neither is there. */
   changed: number
+  /** Whether the folder holds session.jsonl (the session the run kept); missing reads as false. */
+  session?: boolean
 }
 
 const STATES: readonly RunState[] = ['starting', 'running', 'done', 'failed']
@@ -88,6 +90,7 @@ export function parseRun(f: RunFiles): Run {
     pid_start: str(j.pid_start),
     worktree: str(j.worktree),
     transcript: `${f.folder}/transcript.jsonl`,
+    session: f.session === true,
   }
 }
 
