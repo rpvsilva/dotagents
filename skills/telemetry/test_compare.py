@@ -136,6 +136,31 @@ class Compare(unittest.TestCase):
         (self.dir / "bad.json").write_text("{", encoding="utf-8")
         self.assertIn("Skipped 1 saved file", self.ok())
 
+    def test_no_matching_run_still_reports_skipped_files(self):
+        self.save(run("a", "2026-10-01", span("deploy")))
+        (self.dir / "bad.json").write_text("{", encoding="utf-8")
+        proc = self.compare("review")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("Skipped 1 saved file", proc.stderr)
+
+    def test_skills_are_listed_by_name_with_no_skill_last(self):
+        self.save(run("a", "2026-10-01", span(None), span("review"), span("deploy")))
+        names = [line for line in self.ok().splitlines() if line in ("deploy", "review", "no skill")]
+        self.assertEqual(names, ["deploy", "review", "no skill"])
+
+    def test_dir_is_repeatable_and_runs_from_every_folder_count(self):
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        self.save(run("a", "2026-10-01", span("deploy")))
+        Path(other.name, "b.json").write_text(json.dumps(run("b", "2026-10-02", span("deploy"))), encoding="utf-8")
+        proc = self.compare(dirs=[self.dir, other.name])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([r[0] for r in self.rows(proc.stdout, "deploy")], ["2026-10-01", "2026-10-02", "change"])
+
+    def test_an_unchanged_figure_shows_no_sign(self):
+        self.save(run("a", "2026-10-01", span("deploy", wall=60)), run("b", "2026-10-02", span("deploy", wall=60)))
+        self.assertEqual(self.rows(self.ok(), "deploy")[-1][2], "0 s (+0%)")
+
     def test_the_script_runs_as_a_command(self):
         self.save(run("a", "2026-10-01", span("deploy")))
         proc = subprocess.run(
