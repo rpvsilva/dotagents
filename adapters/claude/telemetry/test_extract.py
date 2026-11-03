@@ -20,9 +20,9 @@ def times(turn, n):
     return {kind: value * n for kind, value in turn.items()}
 
 
-def extract(*args):
+def extract(*args, script=HERE / "extract.py"):
     return subprocess.run(
-        [sys.executable, str(HERE / "extract.py"), *args],
+        [sys.executable, str(script), *args],
         capture_output=True, encoding="utf-8",
     )
 
@@ -30,13 +30,14 @@ def extract(*args):
 _RUNS = {}
 
 
-def run(*args):
-    """extract.py's report for these args; the fixtures never change, so each args list runs once."""
-    if args not in _RUNS:
-        proc = extract(*args)
+def run(*args, script=HERE / "extract.py"):
+    """extract.py's (or script's) report for these args; each (script, args) runs once, as its input never changes."""
+    key = (str(script), args)
+    if key not in _RUNS:
+        proc = extract(*args, script=script)
         assert proc.returncode == 0, proc.stderr
-        _RUNS[args] = json.loads(proc.stdout)
-    return copy.deepcopy(_RUNS[args])
+        _RUNS[key] = json.loads(proc.stdout)
+    return copy.deepcopy(_RUNS[key])
 
 
 def by_name(run_):
@@ -46,13 +47,14 @@ def by_name(run_):
 class Spans(unittest.TestCase):
     """spans.jsonl: chat, /grill-with-docs (loads grilling), /model, /renovate-prs twice, /telemetry."""
 
-    def setUp(self):
-        self.run = run("--session", str(FIXTURES / "spans.jsonl"))
-        self.spans = by_name(self.run)
+    @classmethod
+    def setUpClass(cls):
+        cls.out = run("--session", str(FIXTURES / "spans.jsonl"))
+        cls.spans = by_name(cls.out)
 
     def test_each_typed_skill_starts_a_span_in_order(self):
         # /model is a built-in command and loads no skill, so it starts no span.
-        self.assertEqual([s["name"] for s in self.run["spans"]],
+        self.assertEqual([s["name"] for s in self.out["spans"]],
                          ["no skill", "grill-with-docs", "renovate-prs", "renovate-prs-2"])
 
     def test_activity_before_any_skill_is_its_own_span(self):
@@ -88,9 +90,9 @@ class Spans(unittest.TestCase):
                          ("2026-10-23T09:05:00.000Z", 1, 4))
 
     def test_the_run_lasts_from_the_first_span_to_whatever_ends_last(self):
-        self.assertEqual(self.run["start"], "2026-10-23T09:00:00.000Z")
-        self.assertEqual(self.run["end"], "2026-10-23T09:06:00.000Z")
-        self.assertEqual(self.run["wallClockSeconds"], 360)
+        self.assertEqual(self.out["start"], "2026-10-23T09:00:00.000Z")
+        self.assertEqual(self.out["end"], "2026-10-23T09:06:00.000Z")
+        self.assertEqual(self.out["wallClockSeconds"], 360)
 
 
 class SkillNamed(unittest.TestCase):
@@ -186,6 +188,257 @@ class DefaultSession(unittest.TestCase):
                                   capture_output=True, encoding="utf-8", env=env)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session")
+
+
+SENTINEL = "SENTINEL-NEVER-STORED"
+
+
+def step_labels(calls, folder, script=HERE / "extract.py"):
+    """The labels extract.py (or script) gives each (tool, value) call, whose input is {key: value}, in one session written to folder."""
+    keys = {"Bash": "command", "Read": "file_path"}
+    lines = [{"type": "user", "timestamp": "2026-10-24T09:00:00.000Z", "message": {"role": "user", "content": "go"}}]
+    for i, (tool, value) in enumerate(calls):
+        # One call per second, so the steps come back in the order given.
+        lines.append({"type": "assistant", "timestamp": f"2026-10-24T09:{1 + i // 60:02d}:{i % 60:02d}.000Z",
+                      "requestId": f"q{i}", "message": {
+                          "model": "claude-opus-5-5", "role": "assistant", "usage": {},
+                          "content": [{"type": "tool_use", "id": f"t{i}", "name": tool, "input": {keys[tool]: value}}]}})
+    session = Path(folder) / "masked.jsonl"
+    session.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    steps = run("--session", str(session), script=script)["steps"]
+    assert len(steps) == len(calls), steps
+    return [step["label"] for step in steps]
+
+
+class Steps(unittest.TestCase):
+    """steps.jsonl: tool calls before any skill, /renovate-prs, and an Agent call whose subagent log has its own."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out = run("--session", str(FIXTURES / "steps.jsonl"))
+        cls.steps = cls.out["steps"]
+        cls.by_label = {(s["tool"], s["label"]): s for s in cls.steps}
+
+    def test_the_run_is_schema_version_3(self):
+        self.assertEqual(self.out["schemaVersion"], 3)
+
+    def test_one_step_per_tool_call_in_start_order_subagents_included(self):
+        self.assertEqual([(s["tool"], s["start"]) for s in self.steps], [
+            ("Bash", "2026-10-24T10:00:01.000Z"), ("Bash", "2026-10-24T10:00:02.000Z"),
+            ("Read", "2026-10-24T10:00:02.500Z"), ("Write", "2026-10-24T10:00:04.000Z"),
+            ("Edit", "2026-10-24T10:00:04.000Z"), ("NotebookEdit", "2026-10-24T10:00:04.000Z"),
+            ("Grep", "2026-10-24T10:00:05.000Z"), ("Glob", "2026-10-24T10:00:05.000Z"),
+            ("WebFetch", "2026-10-24T10:00:05.000Z"), ("WebSearch", "2026-10-24T10:00:05.000Z"),
+            ("AskUserQuestion", "2026-10-24T10:00:07.000Z"), ("mcp__srv__search", "2026-10-24T10:00:07.000Z"),
+            ("TodoWrite", "2026-10-24T10:00:07.000Z"), ("Bash", "2026-10-24T10:00:30.000Z"),
+            ("Skill", "2026-10-24T10:01:01.000Z"), ("Bash", "2026-10-24T10:01:02.000Z"),
+            ("Agent", "2026-10-24T10:01:03.000Z"), ("Read", "2026-10-24T10:01:04.000Z"),
+            ("Bash", "2026-10-24T10:01:05.000Z"), ("Bash", "2026-10-24T10:01:11.000Z"),
+        ])
+
+    def test_a_step_lasts_from_its_call_to_its_result_in_milliseconds(self):
+        self.assertEqual(self.by_label[("Bash", "git status")]["seconds"], 0.412)
+        self.assertEqual(self.by_label[("Read", "/repo/README.md")]["seconds"], 0.75)
+        self.assertEqual(self.by_label[("Agent", "general-purpose: Fix PR")]["seconds"], 7.0)
+
+    def test_a_call_with_no_result_has_null_seconds(self):
+        self.assertIsNone(self.by_label[("Bash", "make deploy")]["seconds"])
+        self.assertFalse(self.by_label[("Bash", "make deploy")]["failed"])
+
+    def test_a_result_flagged_as_an_error_marks_the_step_failed(self):
+        self.assertEqual([s["label"] for s in self.steps if s["failed"]], ["false", "pytest -q"])
+
+    def test_a_result_landing_in_the_next_span_is_timed_and_kept_in_the_span_of_its_call(self):
+        step = self.by_label[("Bash", "sleep 30")]
+        self.assertEqual((step["seconds"], step["span"], step["skill"]), (30.0, "no skill", None))
+
+    def test_each_step_names_its_span_and_skill(self):
+        step = self.by_label[("Skill", "grilling")]
+        self.assertEqual((step["span"], step["skill"], step["subagent"]), ("renovate-prs", "renovate-prs", None))
+        self.assertEqual([s["name"] for s in self.out["spans"]], ["no skill", "renovate-prs"])
+
+    def test_subagent_steps_are_tagged_with_its_agent_type(self):
+        tagged = [(s["tool"], s["label"], s["span"]) for s in self.steps if s["subagent"] == "general-purpose"]
+        self.assertEqual(tagged, [("Read", "/repo/x.py", "renovate-prs"), ("Bash", "pytest -q", "renovate-prs")])
+
+    def test_only_a_background_bash_is_flagged_background(self):
+        self.assertEqual([s["label"] for s in self.steps if "background" in s], ["npm test"])
+        self.assertIs(self.by_label[("Bash", "npm test")]["background"], True)
+
+    def test_each_step_holds_only_the_known_fields(self):
+        keys = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent"}
+        for step in self.steps:
+            self.assertEqual(set(step) - {"background"}, keys)
+
+    def test_labels_come_from_the_input_key_of_each_tool(self):
+        self.assertEqual([(s["tool"], s["label"]) for s in self.steps if s["subagent"] is None and s["tool"] != "Bash"], [
+            ("Read", "/repo/README.md"), ("Write", "/repo/new.txt"), ("Edit", "/repo/old.txt"),
+            ("NotebookEdit", "/repo/nb.ipynb"), ("Grep", "TODO in src"), ("Glob", "**/*.py"),
+            ("WebFetch", "https://example.com/docs"), ("WebSearch", "python re"),
+            ("AskUserQuestion", ""), ("mcp__srv__search", ""), ("TodoWrite", ""),
+            ("Skill", "grilling"), ("Agent", "general-purpose: Fix PR"),
+        ])
+
+    def test_a_label_keeps_only_the_first_line(self):
+        self.assertIn(("Bash", "git status"), self.by_label)
+
+    def test_no_prompt_reply_output_or_other_input_is_stored(self):
+        # The fixture puts the sentinel in content, old_string, new_string, prompt, questions,
+        # tool results, typed prompts and subagent messages.
+        fixture = (FIXTURES / "steps.jsonl").read_text()
+        for key in ("content", "old_string", "new_string", "prompt", "questions"):
+            self.assertIn(f'"{key}": ', fixture)
+        self.assertIn(SENTINEL, fixture)
+        self.assertNotIn(SENTINEL, json.dumps(self.out))
+
+    def labels_from_a_copy(self, patterns=None):
+        """Every label from a copy of the extractor whose tree holds this patterns text, or no patterns file."""
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "a" / "b" / "c" / "extract.py"
+            script.parent.mkdir(parents=True)
+            shutil.copy(HERE / "extract.py", script)
+            if patterns is not None:
+                rules = Path(folder) / "scripts" / "hooks" / "secret-patterns.txt"
+                rules.parent.mkdir(parents=True)
+                rules.write_text(patterns)
+            proc = subprocess.run([sys.executable, str(script), "--session", str(FIXTURES / "steps.jsonl")],
+                                  capture_output=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        steps = json.loads(proc.stdout)["steps"]
+        self.assertEqual(len(steps), len(self.steps))
+        return {s["label"] for s in steps}
+
+    def test_with_no_patterns_file_every_label_is_empty(self):
+        self.assertEqual(self.labels_from_a_copy(), {""})
+
+    def test_with_a_rule_that_does_not_compile_every_label_is_empty(self):
+        # A good rule beside the broken one does not unlock the labels: masking fails closed.
+        self.assertEqual(self.labels_from_a_copy("token ghp_[A-Za-z0-9]{36}\nlabel bearer (\n"), {""})
+
+    def test_a_patterns_file_with_rules_gives_labels(self):
+        # Guards the two tests above: the copied tree itself is not what empties the labels.
+        self.assertIn("git status", self.labels_from_a_copy("token ghp_[A-Za-z0-9]{36}\n"))
+
+
+class CrlfPatterns(unittest.TestCase):
+    """A patterns file with CRLF endings (a Windows checkout) masks labels the same as with LF."""
+
+    def test_token_and_label_rules_still_mask(self):
+        calls = [("Bash", "curl -d " + "ghp_" + "a" * 36 + " x"), ("Bash", "mysql --password=hunter2"),
+                 ("Bash", "echo hello")]
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "a" / "b" / "c" / "extract.py"
+            script.parent.mkdir(parents=True)
+            shutil.copy(HERE / "extract.py", script)
+            rules = Path(folder) / "scripts" / "hooks" / "secret-patterns.txt"
+            rules.parent.mkdir(parents=True)
+            lf = (HERE.parents[2] / "scripts" / "hooks" / "secret-patterns.txt").read_bytes().replace(b"\r\n", b"\n")
+            rules.write_bytes(lf.replace(b"\n", b"\r\n"))
+            labels = step_labels(calls, folder, script)
+        self.assertEqual(labels, ["curl -d *** x", "mysql --password=***", "echo hello"])
+
+
+class StepMasking(unittest.TestCase):
+    """Labels are masked with the token and label rules of scripts/hooks/secret-patterns.txt, then cut."""
+
+    # Built at runtime so no token-like text is committed.
+    TOKENS = {
+        "github": "ghp_" + "a" * 36,
+        "github fine-grained": "github_pat_" + "B" * 22,
+        "aws": "AKIA" + "C" * 16,
+        "slack": "xoxb-" + "1" * 10,
+        "anthropic": "sk-ant-" + "d" * 20,
+        "google": "AIza" + "e" * 35,
+        "private key": "-----BEGIN RSA " + "PRIVATE KEY-----",
+    }
+
+    PASSWORDS = {
+        "mysql --password=hunter2 db": "mysql --password=*** db",
+        "export API_KEY=abc123": "export API_KEY=***",
+        "DB_PASSWORD: s3cret make": "DB_PASSWORD: *** make",
+        "GITHUB_TOKEN=abc123 gh pr list": "GITHUB_TOKEN=*** gh pr list",
+        'curl -H "Authorization: ' + 'Bearer abc.def" x': 'curl -H "Authorization: ***" x',
+        "echo bearer abc.def": "echo ***",
+    }
+    # Each credential form a label rule masks; the label keeps the program, flags, host and path.
+    # Built at runtime where token- or credential-shaped, so no such text is committed
+    # (gitleaks flags a curl -u user:pass or Authorization header written out whole).
+    FORMS = {
+        "curl user:password": ("curl -u " + "admin" + ":" + "hunter2 https://x", "curl -u *** https://x"),
+        "curl --user": ("curl --user " + "admin" + ":" + "hunter2 https://x", "curl --user *** https://x"),
+        "mysql -p": ("mysql -u root -ps3cr3t db", "mysql -u root -p*** db"),
+        "--password=": ("mysql --password=s3cr3t db", "mysql --password=*** db"),
+        "--password value": ("mysql --password s3cr3t db", "mysql --password *** db"),
+        "NAME=value with PASS": ("DB_PASS=hunter2 ./run", "DB_PASS=*** ./run"),
+        "NAME=value with KEY": ("export STRIPE_KEY=sk_live_x", "export STRIPE_KEY=***"),
+        "NAME=value with SECRET": ("API_SECRET=x make", "API_SECRET=*** make"),
+        "NAME=value with PWD": ("db_pwd=x make", "db_pwd=*** make"),
+        "NAME=value with AUTH": ("MY_AUTH=x make", "MY_AUTH=*** make"),
+        "NAME=value with TOKEN": ("npm_token=x make", "npm_token=*** make"),
+        "URL userinfo": ("git clone https://rui:pw123@github.com/a/b", "git clone https://***@github.com/a/b"),
+        "URL query": ("curl https://x/api?key=abc&b=1", "curl https://x/api?***"),
+        "Authorization Basic": ('curl -H "Authorization: Basic ' + "YWRtaW46" + 'cGFzcw==" x', 'curl -H "Authorization: ***" x'),
+        "Authorization other scheme": ("curl -H 'Authorization: token abc' x", "curl -H 'Authorization: ***' x"),
+        "Authorization no scheme": ('curl -H "Authorization:abc" x', 'curl -H "Authorization:***" x'),
+        "OpenAI key": ("echo " + "sk-" + "proj-" + "a1" * 12, "echo ***"),
+        "Stripe key": ("echo " + "sk_" + "live_" + "b2" * 12, "echo ***"),
+    }
+    # Look like the forms above but hold no secret, so they are kept as they are.
+    KEPT = ["git push -u origin main", "mkdir -p src/a", "cp -pr a b", "ssh -p22 host",
+            "curl https://example.com/docs", "git log --format=%H", "echo desk-top"]
+    NEAR_CUT = "echo " + "x" * 65 + " " + TOKENS["github"] + " done"
+
+    @classmethod
+    def setUpClass(cls):
+        # Every case is one call in a single session, so the extractor runs once for the class.
+        calls = [("Bash", f"curl -d {token} x") for token in cls.TOKENS.values()]
+        calls += [("Read", "/tmp/" + cls.TOKENS["github"] + ".txt"), ("Bash", "echo " + "x" * 200), ("Bash", cls.NEAR_CUT)]
+        calls += [("Bash", command) for command in cls.PASSWORDS]
+        calls += [("Bash", command) for command, _ in cls.FORMS.values()]
+        calls += [("Bash", command) for command in cls.KEPT]
+        calls += [("Bash", "\n\n  \ngit push\nmore")]
+        with tempfile.TemporaryDirectory() as folder:
+            cls.labels = dict(zip(calls, step_labels(calls, folder)))
+
+    def label(self, tool, value):
+        return self.labels[(tool, value)]
+
+    def test_every_token_kind_becomes_stars(self):
+        for kind, token in self.TOKENS.items():
+            with self.subTest(kind):
+                self.assertEqual(self.label("Bash", f"curl -d {token} x"), "curl -d *** x")
+
+    def test_a_token_in_a_file_path_is_masked(self):
+        self.assertEqual(self.label("Read", "/tmp/" + self.TOKENS["github"] + ".txt"), "/tmp/***.txt")
+
+    def test_passwords_keys_and_bearer_tokens_become_stars(self):
+        for command, label in self.PASSWORDS.items():
+            with self.subTest(command):
+                self.assertEqual(self.label("Bash", command), label)
+
+    def test_each_credential_form_is_masked_keeping_the_rest(self):
+        for form, (command, label) in self.FORMS.items():
+            with self.subTest(form):
+                self.assertEqual(self.label("Bash", command), label)
+
+    def test_commands_with_no_secret_are_kept_whole(self):
+        for command in self.KEPT:
+            with self.subTest(command):
+                self.assertEqual(self.label("Bash", command), command)
+
+    def test_a_label_starts_at_the_first_non_blank_line(self):
+        self.assertEqual(self.label("Bash", "\n\n  \ngit push\nmore"), "git push")
+
+    def test_a_long_label_is_cut_to_80_characters(self):
+        label = self.label("Bash", "echo " + "x" * 200)
+        self.assertEqual(len(label), 80)
+        self.assertEqual(label, "echo " + "x" * 74 + "…")
+
+    def test_a_token_near_the_cut_is_masked_whole_before_cutting(self):
+        token = self.TOKENS["github"]
+        label = self.label("Bash", self.NEAR_CUT)
+        self.assertEqual(label, "echo " + "x" * 65 + " *** done")
+        self.assertNotIn(token[:8], label)
 
 
 class Whole(unittest.TestCase):

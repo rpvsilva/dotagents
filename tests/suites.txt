@@ -5,7 +5,7 @@ all tests/suites.txt tests/affected.sh tests/parallel.sh .github/workflows/ci.ym
 shellcheck *.sh scripts/shellcheck-version scripts/shellcheck-image
 actionlint .github/workflows/*
 repo.test.sh *
-python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/*
+python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/* scripts/hooks/secret-patterns.txt
 install.test.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
 affected.test.sh
 claude-plugins.test.sh scripts/claude-plugins.sh adapters/claude/plugins.txt
@@ -17,11 +17,11 @@ allow-task-cleanup.test.sh scripts/hooks/* adapters/claude/hooks/allow-task-clea
 merge-json.test.sh scripts/merge-json.sh
 merge-pr.test.sh scripts/merge-pr.sh scripts/gh-app-token.sh
 mcp-servers.test.sh scripts/mcp-servers.sh scripts/merge-json.sh mcp/*
-remote-agent.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
-remote-backends.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
-remote-smoke.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh
+remote-agent.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt tests/lib/*
+remote-backends.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt tests/lib/*
+remote-smoke.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt
 remote-agent-setup.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/*
-remote-agent-check.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh tests/lib/*
+remote-agent-check.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt tests/lib/*
 parallel.test.sh tests/parallel.sh
 run.test.sh tests/run.sh scripts/shellcheck-version scripts/shellcheck-image
 settings.test.sh scripts/settings.sh *settings.json
