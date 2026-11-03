@@ -87,7 +87,8 @@
       "failed": false,
       "span": "grill-with-docs",
       "skill": "mattpocock-skills:grill-with-docs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     },
     {
       "tool": "Read",
@@ -97,7 +98,8 @@
       "failed": false,
       "span": "grill-with-docs",
       "skill": "mattpocock-skills:grill-with-docs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     },
     {
       "tool": "Bash",
@@ -107,7 +109,8 @@
       "failed": true,
       "span": "grill-with-docs",
       "skill": "mattpocock-skills:grill-with-docs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     },
     {
       "tool": "AskUserQuestion",
@@ -117,7 +120,8 @@
       "failed": false,
       "span": "grill-with-docs",
       "skill": "mattpocock-skills:grill-with-docs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     },
     {
       "tool": "Bash",
@@ -127,7 +131,8 @@
       "failed": false,
       "span": "renovate-prs",
       "skill": "renovate-prs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     },
     {
       "tool": "Agent",
@@ -137,7 +142,8 @@
       "failed": false,
       "span": "renovate-prs",
       "skill": "renovate-prs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     },
     {
       "tool": "Glob",
@@ -147,7 +153,8 @@
       "failed": false,
       "span": "renovate-prs",
       "skill": "renovate-prs",
-      "subagent": "Explore"
+      "subagent": "Explore",
+      "subagentId": "agent-a1"
     },
     {
       "tool": "Read",
@@ -157,7 +164,8 @@
       "failed": false,
       "span": "renovate-prs",
       "skill": "renovate-prs",
-      "subagent": "Explore"
+      "subagent": "Explore",
+      "subagentId": "agent-a1"
     },
     {
       "tool": "Bash",
@@ -168,6 +176,7 @@
       "span": "renovate-prs",
       "skill": "renovate-prs",
       "subagent": null,
+      "subagentId": null,
       "background": true
     },
     {
@@ -178,7 +187,8 @@
       "failed": false,
       "span": "renovate-prs",
       "skill": "renovate-prs",
-      "subagent": null
+      "subagent": null,
+      "subagentId": null
     }
   ]
 }

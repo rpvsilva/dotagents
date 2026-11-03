@@ -95,7 +95,18 @@ def total_row(run, pricing):
                merged_tokens(spans), pricing)
 
 
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def printable(cell):
+    """The cell with each control character shown as \\xNN, so a saved file cannot repaint the terminal."""
+    return CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", cell)
+
+
 def table(body, total=None, headers=HEADERS, key=KEY):
+    headers = [printable(c) for c in headers]
+    body = [[printable(c) for c in r] for r in body]
+    total = [printable(c) for c in total] if total else total
     rows = [headers, *body, *([total] if total else [])]
     widths = [max(len(r[i]) for r in rows) + 2 for i in range(len(headers))]
 
