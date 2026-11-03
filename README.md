@@ -48,5 +48,5 @@ Principles and how to add a skill, tool, hook or MCP server: see [AGENTS.md](AGE
 | `security-audit` | Security-audit a repo of any size with subagents only: a `security-mapper` splits it into areas and flows, one `security-reviewer` per piece, gap sweeps until nothing new; fix the picked findings in a PR |
 | `ship-pr` | Take the current changes to a merged PR, following the repo's own branch, commit, check and merge rules |
 | `tune-tests` | Make the tests faster and their coverage wider in one PR: a `test-tuner` subagent profiles, fixes stalls and closes gaps; you verify before/after times. `build-epic` runs the same subagent after every task |
-| `telemetry` | Show what a finished run cost, one row per skill (time, turns, tool calls, tokens, cost); save it as JSON. Claude Code sessions are also saved automatically when they end (`auto_save` Setting) |
+| `telemetry` | Show what a finished run cost, one row per skill (time, turns, tool calls, tokens, cost); save it as JSON. Claude Code sessions are also saved automatically when they end (`auto_save` Setting); `compare` shows a skill's saved runs over time with the change from first to last |
 | `to-epic` | Turn meeting notes, docs or any source into an epic and its issues on the tracker, after one human approval of the draft |
