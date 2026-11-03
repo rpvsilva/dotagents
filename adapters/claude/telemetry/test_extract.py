@@ -39,13 +39,14 @@ def by_name(run_):
 class Spans(unittest.TestCase):
     """spans.jsonl: chat, /grill-with-docs (loads grilling), /model, /renovate-prs twice, /telemetry."""
 
-    def setUp(self):
-        self.run = run("--session", str(FIXTURES / "spans.jsonl"))
-        self.spans = by_name(self.run)
+    @classmethod
+    def setUpClass(cls):
+        cls.out = run("--session", str(FIXTURES / "spans.jsonl"))
+        cls.spans = by_name(cls.out)
 
     def test_each_typed_skill_starts_a_span_in_order(self):
         # /model is a built-in command and loads no skill, so it starts no span.
-        self.assertEqual([s["name"] for s in self.run["spans"]],
+        self.assertEqual([s["name"] for s in self.out["spans"]],
                          ["no skill", "grill-with-docs", "renovate-prs", "renovate-prs-2"])
 
     def test_activity_before_any_skill_is_its_own_span(self):
@@ -81,9 +82,9 @@ class Spans(unittest.TestCase):
                          ("2026-10-23T09:05:00.000Z", 1, 4))
 
     def test_the_run_lasts_from_the_first_span_to_whatever_ends_last(self):
-        self.assertEqual(self.run["start"], "2026-10-23T09:00:00.000Z")
-        self.assertEqual(self.run["end"], "2026-10-23T09:06:00.000Z")
-        self.assertEqual(self.run["wallClockSeconds"], 360)
+        self.assertEqual(self.out["start"], "2026-10-23T09:00:00.000Z")
+        self.assertEqual(self.out["end"], "2026-10-23T09:06:00.000Z")
+        self.assertEqual(self.out["wallClockSeconds"], 360)
 
 
 class SkillNamed(unittest.TestCase):
@@ -184,18 +185,21 @@ class DefaultSession(unittest.TestCase):
 SENTINEL = "SENTINEL-NEVER-STORED"
 
 
-def step_label(tool, value, folder):
-    """The label extract.py gives a lone `tool` call whose input is {key: value}, in a session written to folder."""
-    key = {"Bash": "command", "Read": "file_path"}[tool]
-    lines = [
-        {"type": "user", "timestamp": "2026-10-24T09:00:00.000Z", "message": {"role": "user", "content": "go"}},
-        {"type": "assistant", "timestamp": "2026-10-24T09:00:01.000Z", "requestId": "q", "message": {
-            "model": "claude-opus-5-5", "role": "assistant", "usage": {},
-            "content": [{"type": "tool_use", "id": "t", "name": tool, "input": {key: value}}]}},
-    ]
+def step_labels(calls, folder):
+    """The labels extract.py gives each (tool, value) call, whose input is {key: value}, in one session written to folder."""
+    keys = {"Bash": "command", "Read": "file_path"}
+    lines = [{"type": "user", "timestamp": "2026-10-24T09:00:00.000Z", "message": {"role": "user", "content": "go"}}]
+    for i, (tool, value) in enumerate(calls):
+        # One call per second, so the steps come back in the order given.
+        lines.append({"type": "assistant", "timestamp": f"2026-10-24T09:{1 + i // 60:02d}:{i % 60:02d}.000Z",
+                      "requestId": f"q{i}", "message": {
+                          "model": "claude-opus-5-5", "role": "assistant", "usage": {},
+                          "content": [{"type": "tool_use", "id": f"t{i}", "name": tool, "input": {keys[tool]: value}}]}})
     session = Path(folder) / "masked.jsonl"
     session.write_text("".join(json.dumps(line) + "\n" for line in lines))
-    return run("--session", str(session))["steps"][0]["label"]
+    steps = run("--session", str(session))["steps"]
+    assert len(steps) == len(calls), steps
+    return [step["label"] for step in steps]
 
 
 class Steps(unittest.TestCase):
@@ -307,12 +311,26 @@ class StepMasking(unittest.TestCase):
         "private key": "-----BEGIN RSA " + "PRIVATE KEY-----",
     }
 
-    def setUp(self):
-        self.folder = tempfile.TemporaryDirectory()
-        self.addCleanup(self.folder.cleanup)
+    PASSWORDS = {
+        "mysql --password=hunter2 db": "mysql --*** db",
+        "export API_KEY=abc123": "export ***",
+        "DB_PASSWORD: s3cret make": "*** make",
+        "GITHUB_TOKEN=abc123 gh pr list": "*** gh pr list",
+        'curl -H "Authorization: Bearer abc.def" x': 'curl -H "Authorization: ***" x',
+    }
+    NEAR_CUT = "echo " + "x" * 65 + " " + TOKENS["github"] + " done"
+
+    @classmethod
+    def setUpClass(cls):
+        # Every case is one call in a single session, so the extractor runs once for the class.
+        calls = [("Bash", f"curl -d {token} x") for token in cls.TOKENS.values()]
+        calls += [("Read", "/tmp/" + cls.TOKENS["github"] + ".txt"), ("Bash", "echo " + "x" * 200), ("Bash", cls.NEAR_CUT)]
+        calls += [("Bash", command) for command in cls.PASSWORDS]
+        with tempfile.TemporaryDirectory() as folder:
+            cls.labels = dict(zip(calls, step_labels(calls, folder)))
 
     def label(self, tool, value):
-        return step_label(tool, value, self.folder.name)
+        return self.labels[(tool, value)]
 
     def test_every_token_kind_becomes_stars(self):
         for kind, token in self.TOKENS.items():
@@ -323,14 +341,7 @@ class StepMasking(unittest.TestCase):
         self.assertEqual(self.label("Read", "/tmp/" + self.TOKENS["github"] + ".txt"), "/tmp/***.txt")
 
     def test_passwords_keys_and_bearer_tokens_become_stars(self):
-        cases = {
-            "mysql --password=hunter2 db": "mysql --*** db",
-            "export API_KEY=abc123": "export ***",
-            "DB_PASSWORD: s3cret make": "*** make",
-            "GITHUB_TOKEN=abc123 gh pr list": "*** gh pr list",
-            'curl -H "Authorization: Bearer abc.def" x': 'curl -H "Authorization: ***" x',
-        }
-        for command, label in cases.items():
+        for command, label in self.PASSWORDS.items():
             with self.subTest(command):
                 self.assertEqual(self.label("Bash", command), label)
 
@@ -341,7 +352,7 @@ class StepMasking(unittest.TestCase):
 
     def test_a_token_near_the_cut_is_masked_whole_before_cutting(self):
         token = self.TOKENS["github"]
-        label = self.label("Bash", "echo " + "x" * 65 + " " + token + " done")
+        label = self.label("Bash", self.NEAR_CUT)
         self.assertEqual(label, "echo " + "x" * 65 + " *** done")
         self.assertNotIn(token[:8], label)
 
