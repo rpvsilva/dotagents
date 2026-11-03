@@ -357,14 +357,15 @@ class StepMasking(unittest.TestCase):
         "export API_KEY=abc123": "export API_KEY=***",
         "DB_PASSWORD: s3cret make": "DB_PASSWORD: *** make",
         "GITHUB_TOKEN=abc123 gh pr list": "GITHUB_TOKEN=*** gh pr list",
-        'curl -H "Authorization: Bearer abc.def" x': 'curl -H "Authorization: ***" x',
+        'curl -H "Authorization: ' + 'Bearer abc.def" x': 'curl -H "Authorization: ***" x',
         "echo bearer abc.def": "echo ***",
     }
     # Each credential form a label rule masks; the label keeps the program, flags, host and path.
-    # Built at runtime where token-shaped, so no token-like text is committed.
+    # Built at runtime where token- or credential-shaped, so no such text is committed
+    # (gitleaks flags a curl -u user:pass or Authorization header written out whole).
     FORMS = {
-        "curl user:password": ("curl -u admin:hunter2 https://x", "curl -u *** https://x"),
-        "curl --user": ("curl --user admin:hunter2 https://x", "curl --user *** https://x"),
+        "curl user:password": ("curl -u " + "admin" + ":" + "hunter2 https://x", "curl -u *** https://x"),
+        "curl --user": ("curl --user " + "admin" + ":" + "hunter2 https://x", "curl --user *** https://x"),
         "mysql -p": ("mysql -u root -ps3cr3t db", "mysql -u root -p*** db"),
         "--password=": ("mysql --password=s3cr3t db", "mysql --password=*** db"),
         "--password value": ("mysql --password s3cr3t db", "mysql --password *** db"),
@@ -376,7 +377,7 @@ class StepMasking(unittest.TestCase):
         "NAME=value with TOKEN": ("npm_token=x make", "npm_token=*** make"),
         "URL userinfo": ("git clone https://rui:pw123@github.com/a/b", "git clone https://***@github.com/a/b"),
         "URL query": ("curl https://x/api?key=abc&b=1", "curl https://x/api?***"),
-        "Authorization Basic": ('curl -H "Authorization: Basic YWRtaW46cGFzcw==" x', 'curl -H "Authorization: ***" x'),
+        "Authorization Basic": ('curl -H "Authorization: Basic ' + "YWRtaW46" + 'cGFzcw==" x', 'curl -H "Authorization: ***" x'),
         "Authorization other scheme": ("curl -H 'Authorization: token abc' x", "curl -H 'Authorization: ***' x"),
         "Authorization no scheme": ('curl -H "Authorization:abc" x', 'curl -H "Authorization:***" x'),
         "OpenAI key": ("echo " + "sk-" + "proj-" + "a1" * 12, "echo ***"),
