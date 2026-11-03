@@ -55,7 +55,7 @@ const HEADER_ROWS = 2
  * How many log lines fit in a body of `bodyRows`: what the header, the earlier-events note and the resume hint
  * (`below`, which wraps at `columns`) leave.
  */
-const logRows = (bodyRows: number, l: Log, below: readonly string[] = [], columns = 80) =>
+const logRows = (bodyRows: number, l: Log, below: readonly string[], columns: number) =>
   Math.max(1, bodyRows - HEADER_ROWS - (l.truncated ? 1 : 0) - below.reduce((n, line) => n + wrappedRows(line, columns), 0))
 // $.store key per common git dir: the folders of its runs already notified (or marked so), kept across processes,
 // newest last. Past NOTIFIED_MAX, only folders gone from disk are dropped.
@@ -71,8 +71,10 @@ let isTicking = false
 // unchanged file is not read again; and the queue its reads go through.
 let logCache = { runId: null as string | null, names: new Map<string, string>(), size: -1 }
 let logQueue: Promise<void> = Promise.resolve()
-// The log lines the last draw of the open log showed at once, which a scroll moves by (its input has no columns).
+// The log lines the last draw of the open log showed at once, which a scroll moves by, and the pane's columns at
+// its last draw of any kind (a scroll's input has none), for a scroll before the log is drawn.
 let drawnRows = { runId: null as string | null, rows: 1 }
+let drawnColumns = 80
 
 /** The entries of `path`; none when it is missing or unreadable. */
 async function entries($: EngineInterface, path: string): Promise<FsEntry[]> {
@@ -115,7 +117,8 @@ async function runFiles($: EngineInterface, folder: string, id: string): Promise
   const file = (name: string) => listed.find(e => e.name === name && e.kind === 'file')
   const json = file('run.json')
   const log = file('progress.log')
-  const session = file('session.jsonl') !== undefined
+  // remote-agent offers resume only for a session.jsonl that is not empty.
+  const session = (file('session.jsonl')?.size ?? 0) > 0
   const key = [json?.size, json?.mtimeMs, log?.size, log?.mtimeMs, session].join(':')
   if (cached && cached.key === key) return cached.files
   const files: RunFiles = {
@@ -199,7 +202,8 @@ async function readLog($: EngineInterface): Promise<void> {
         const got = await chunk($, open.transcript, size, at.from, at.length)
         if (got !== null) {
           l = readChunk(l, got, { ...at, isFull: size - at.from >= at.length }, logCache.names)
-          logCache.size = size
+          // Only a read that reached the file's end may skip the next ticks: a capped one has more to read.
+          if (at.from + at.length >= size) logCache.size = size
         }
       }
     }
@@ -349,13 +353,18 @@ export const register: Register = on => {
     const { runId } = await read($, view)
     if (runId === null) return next(e)
     const l = await read($, log)
-    const rows = drawnRows.runId === runId ? drawnRows.rows : logRows(e.bodyRows, l)
+    let rows = drawnRows.rows
+    if (drawnRows.runId !== runId) {
+      const open = (await read($, runs)).find(r => r.id === runId)
+      rows = logRows(e.bodyRows, l, open ? resumeHint(open, open.session) : [], drawnColumns)
+    }
     if (l.runId === runId) await update($, log, () => scrollLog(l, e.by, rows))
     return {}
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    drawnColumns = e.props.bodyColumns
     const list = await read($, runs)
     const { runId } = await read($, view)
     // The open run's log; a run gone from the list (its folder removed) draws the list again.
