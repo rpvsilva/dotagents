@@ -54,6 +54,9 @@ file allow keys.ts
 file allow docs/environment.md
 run block '{"file_path": "/repo/.env", "hook_event_name": "beforeReadFile"}' "Cursor's top-level file_path"
 run block '{"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "secrets/"}}' "Grep on secrets/"
+run block '{"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "secrets/a.ipynb"}}' "NotebookEdit on secrets/"
+run block '{"command": "cat .env", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command"
+run allow '{"command": "cat .env.example", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command, an example"
 
 cmd block 'cat .env'
 cmd block 'head -5 ~/.config/dotagents/github-app.pem'
@@ -181,6 +184,8 @@ grep -v '^path ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secr
 check_closed "no path rule"
 grep -v '^token ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
 check_closed "no token rule"
+grep -v '^example ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
+check_closed "no example rule"
 
 # The command as an argument works too.
 "$HOOK" 'cat .env' 2>/dev/null && fail "argument form did not block"
