@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # Shared by the hooks in this folder and scripts/remote-agent*.sh: source it, never run it.
 
-# True when path $1 looks like a secret file (.env, keys, certificates, credentials, secrets/),
-# unless it is an example (.example, .sample, .template).
-secret_re='(^|/)(\.env(\.[^/]*)?|[^/]+\.(env|pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519)|\.netrc|\.aws/credentials)$|(^|/)secrets/'
-example_re='\.(example|sample|template)$'
+# The secret rules come from secret-patterns.txt beside this file (see its header):
+# secret_re (secret file paths), example_re (examples of them, which pass) and token_re (tokens and
+# private keys in text). Without them it stops (exit 2): an empty regex would match every path.
+secret_patterns="$(dirname "${BASH_SOURCE[0]}")/secret-patterns.txt"
+secret_rule() { sed -n "s/^$1 //p" "$secret_patterns" 2>/dev/null | paste -sd'|' - || true; }
+secret_re="$(secret_rule path)"
+example_re="$(secret_rule example)"
+token_re="$(secret_rule token)"
+if [ -z "$secret_re" ] || [ -z "$example_re" ] || [ -z "$token_re" ]; then
+  echo "lib.sh: cannot read secret-patterns.txt ($secret_patterns)" >&2
+  exit 2
+fi
+
+# True when path $1 looks like a secret file, unless it is an example.
 is_secret() { [[ "$1" =~ $secret_re ]] && ! [[ "$1" =~ $example_re ]]; }
 
 # Prints the directory command $1 runs in, starting from $2: a command that moves into another
