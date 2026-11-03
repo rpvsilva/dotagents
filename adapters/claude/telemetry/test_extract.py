@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 import os
 import re
@@ -7,7 +8,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
+
+import extract as extractor
 
 HERE = Path(__file__).parent
 FIXTURES = HERE / "fixtures"
@@ -20,11 +25,25 @@ def times(turn, n):
     return {kind: value * n for kind, value in turn.items()}
 
 
-def extract(*args, script=HERE / "extract.py"):
-    return subprocess.run(
-        [sys.executable, str(script), *args],
-        capture_output=True, encoding="utf-8",
-    )
+def extract(*args, script=HERE / "extract.py", env=None):
+    """extract.py's exit code, stdout and stderr for these args. The repo's own extract.py runs in this
+    process (a fresh interpreter per case costs ~60 ms); a copy elsewhere runs as a command, since it
+    finds its patterns file by its own path. env adds to or replaces environment variables for the run."""
+    if Path(script) != HERE / "extract.py":
+        return subprocess.run([sys.executable, str(script), *args], capture_output=True, encoding="utf-8")
+    argv = [str(script), *args]
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    with mock.patch.object(sys, "argv", argv), mock.patch.dict(os.environ, env or {}), \
+            redirect_stdout(out), redirect_stderr(err):
+        try:
+            extractor.main()
+        except SystemExit as e:
+            code = e.code
+    if isinstance(code, str):  # sys.exit("message") prints it and exits 1
+        err.write(code + "\n")
+        code = 1
+    return subprocess.CompletedProcess(argv, code or 0, out.getvalue(), err.getvalue())
 
 
 _RUNS = {}
@@ -169,9 +188,8 @@ class DefaultSession(unittest.TestCase):
             shutil.copy(FIXTURES / "model-invoked.jsonl", logs / "this-session.jsonl")
             shutil.copy(FIXTURES / "run-twice.jsonl", logs / "other-session.jsonl")
             os.utime(logs / "other-session.jsonl")  # the other session wrote last
-            env = {**os.environ, "HOME": home, "USERPROFILE": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
-            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--cwd", str(project_dir)],
-                                  capture_output=True, encoding="utf-8", env=env)
+            env = {"HOME": home, "USERPROFILE": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
+            proc = extract("--cwd", str(project_dir), env=env)
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session", proc.stderr)
 
     def test_finds_the_session_by_id_when_run_from_another_folder(self):
@@ -183,9 +201,8 @@ class DefaultSession(unittest.TestCase):
             logs = Path(home) / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(started_in.resolve()))
             logs.mkdir(parents=True)
             shutil.copy(FIXTURES / "model-invoked.jsonl", logs / "this-session.jsonl")
-            env = {**os.environ, "HOME": home, "USERPROFILE": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
-            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--cwd", str(run_from)],
-                                  capture_output=True, encoding="utf-8", env=env)
+            env = {"HOME": home, "USERPROFILE": home, "CLAUDE_CODE_SESSION_ID": "this-session"}
+            proc = extract("--cwd", str(run_from), env=env)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session")
 
@@ -261,12 +278,16 @@ class Steps(unittest.TestCase):
         tagged = [(s["tool"], s["label"], s["span"]) for s in self.steps if s["subagent"] == "general-purpose"]
         self.assertEqual(tagged, [("Read", "/repo/x.py", "renovate-prs"), ("Bash", "pytest -q", "renovate-prs")])
 
+    def test_subagent_steps_name_the_subagent_instance_and_others_null(self):
+        self.assertEqual({s["subagentId"] for s in self.steps if s["subagent"]}, {"agent-f"})
+        self.assertEqual({s["subagentId"] for s in self.steps if not s["subagent"]}, {None})
+
     def test_only_a_background_bash_is_flagged_background(self):
         self.assertEqual([s["label"] for s in self.steps if "background" in s], ["npm test"])
         self.assertIs(self.by_label[("Bash", "npm test")]["background"], True)
 
     def test_each_step_holds_only_the_known_fields(self):
-        keys = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent"}
+        keys = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent", "subagentId"}
         for step in self.steps:
             self.assertEqual(set(step) - {"background"}, keys)
 
@@ -483,28 +504,21 @@ class RepoAndDate(unittest.TestCase):
             stub = Path(folder) / "git"
             stub.write_text('#!/bin/sh\necho "//work//dotagents/"\n')
             stub.chmod(0o755)
-            env = {**os.environ, "PATH": folder + os.pathsep + os.environ.get("PATH", "")}
-            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
-                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
-                                  capture_output=True, encoding="utf-8", env=env)
+            env = {"PATH": folder + os.pathsep + os.environ.get("PATH", "")}
+            proc = extract("--session", str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE), env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)["repo"], str(Path("//work/dotagents")))
 
     def test_repo_is_null_outside_a_repo(self):
         with tempfile.TemporaryDirectory() as folder:
-            env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(folder).resolve().parent)}
-            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
-                                   str(FIXTURES / "spans.jsonl"), "--cwd", folder],
-                                  capture_output=True, encoding="utf-8", env=env)
+            env = {"GIT_CEILING_DIRECTORIES": str(Path(folder).resolve().parent)}
+            proc = extract("--session", str(FIXTURES / "spans.jsonl"), "--cwd", folder, env=env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(json.loads(proc.stdout)["repo"])
 
     def test_repo_is_null_without_git(self):
         with tempfile.TemporaryDirectory() as empty:
-            env = {**os.environ, "PATH": empty}
-            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
-                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
-                                  capture_output=True, encoding="utf-8", env=env)
+            proc = extract("--session", str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE), env={"PATH": empty})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(json.loads(proc.stdout)["repo"])
 
