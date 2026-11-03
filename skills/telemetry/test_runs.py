@@ -98,6 +98,13 @@ class SavedRuns(unittest.TestCase):
             "no_tokens": run("e", "2026-10-01T10:00:00.000Z", spans=[{k: v for k, v in good.items() if k != "tokensByModel"}]),
             "tokens_not_object": run("f", "2026-10-01T10:00:00.000Z", spans=[{**good, "tokensByModel": {"m": 3}}]),
             "skill_not_str": run("g", "2026-10-01T10:00:00.000Z", spans=[{**good, "skill": 7}]),
+            "date_not_str": run("h", "2026-10-01T10:00:00.000Z", date=20261001),
+            "no_turns": run("i", "2026-10-01T10:00:00.000Z", spans=[{k: v for k, v in good.items() if k != "turns"}]),
+            "tool_calls_not_number": run("j", "2026-10-01T10:00:00.000Z", spans=[{**good, "toolCalls": "3"}]),
+            "figure_is_bool": run("k", "2026-10-01T10:00:00.000Z", spans=[{**good, "wallClockSeconds": True}]),
+            "token_kind_missing": run("l", "2026-10-01T10:00:00.000Z", spans=[{**good, "tokensByModel": {"m": {"input": 1}}}]),
+            "token_kind_not_number": run("m", "2026-10-01T10:00:00.000Z", spans=[
+                {**good, "tokensByModel": {"m": {**good["tokensByModel"]["m"], "output": "0"}}}]),
         }
         for name, content in bad.items():
             write(folder, name + ".json", content)
@@ -109,8 +116,9 @@ class SavedRuns(unittest.TestCase):
         folder = self.tmp / "d"
         write(folder, "a.json", {"start": "2026-10-01T10:00:00.000Z", "spans": [], "label": "a"})
         write(folder, "b.json", {"start": "2026-10-02T10:00:00.000Z", "spans": [], "label": "b"})
+        write(folder, "c.json", {"start": "2026-10-02T10:00:00.000Z", "spans": [], "label": "c"})
         runs, _ = saved_runs([folder, folder])
-        self.assertEqual([r["label"] for r in runs], ["a", "b"])
+        self.assertEqual([r["label"] for r in runs], ["a", "b", "c"])
 
     def test_runs_are_sorted_by_start(self):
         folder = self.tmp / "d"
