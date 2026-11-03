@@ -283,18 +283,33 @@ class Steps(unittest.TestCase):
         self.assertIn(SENTINEL, fixture)
         self.assertNotIn(SENTINEL, json.dumps(self.out))
 
-    def test_with_no_patterns_file_every_label_is_empty(self):
-        # A copy of the extractor in a folder tree without scripts/hooks/secret-patterns.txt.
+    def labels_from_a_copy(self, patterns=None):
+        """Every label from a copy of the extractor whose tree holds this patterns text, or no patterns file."""
         with tempfile.TemporaryDirectory() as folder:
             copy = Path(folder) / "a" / "b" / "c" / "extract.py"
             copy.parent.mkdir(parents=True)
             shutil.copy(HERE / "extract.py", copy)
+            if patterns is not None:
+                rules = Path(folder) / "scripts" / "hooks" / "secret-patterns.txt"
+                rules.parent.mkdir(parents=True)
+                rules.write_text(patterns)
             proc = subprocess.run([sys.executable, str(copy), "--session", str(FIXTURES / "steps.jsonl")],
                                   capture_output=True, encoding="utf-8")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         steps = json.loads(proc.stdout)["steps"]
         self.assertEqual(len(steps), len(self.steps))
-        self.assertEqual({s["label"] for s in steps}, {""})
+        return {s["label"] for s in steps}
+
+    def test_with_no_patterns_file_every_label_is_empty(self):
+        self.assertEqual(self.labels_from_a_copy(), {""})
+
+    def test_with_a_rule_that_does_not_compile_every_label_is_empty(self):
+        # A good rule beside the broken one does not unlock the labels: masking fails closed.
+        self.assertEqual(self.labels_from_a_copy("token ghp_[A-Za-z0-9]{36}\nlabel bearer (\n"), {""})
+
+    def test_a_patterns_file_with_rules_gives_labels(self):
+        # Guards the two tests above: the copied tree itself is not what empties the labels.
+        self.assertIn("git status", self.labels_from_a_copy("token ghp_[A-Za-z0-9]{36}\n"))
 
 
 class StepMasking(unittest.TestCase):
