@@ -316,6 +316,15 @@ class DamagedLog(unittest.TestCase):
         self.assertSameRun(proc)
         self.assertTrue(any(s["subagents"] for s in json.loads(proc.stdout)["spans"]))
 
+    def test_a_subagent_meta_without_its_log_does_not_stop_the_save(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            shutil.copy(FIXTURES / "spans.jsonl", session)
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            (Path(folder) / "s" / "subagents" / "agent-z.meta.json").write_text('{"agentType": "Explore", "toolUseId": "zz"}')
+            proc = extract("--whole", "--session", str(session))
+        self.assertSameRun(proc)
+
 
 if __name__ == "__main__":
     unittest.main()

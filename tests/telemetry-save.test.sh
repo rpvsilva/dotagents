@@ -222,6 +222,12 @@ git -C "$SANDBOX/offrepo" init -q
 env HOME="$h" "$h/.agents/bin/settings" --dir "$SANDBOX/offrepo" set telemetry auto_save false --repo >/dev/null
 quiet "$h" "$(payload "$t" "$SANDBOX/offrepo/sub")" "repo Setting off" TELEMETRY_EXTRACT="$(stub repooff 'print("{}")')"
 
+# Neither the session_id nor the transcript's name is a safe file name.
+h="$(home neither)"
+t="$(transcript "sess neither")"
+json="$(jq -n --arg t "$t" --arg c "$SANDBOX/proj" '{session_id: "a/b", transcript_path: $t, cwd: $c}')"
+quiet "$h" "$json" "no safe name" TELEMETRY_EXTRACT="$(stub neither 'print("{}")')"
+
 h="$(home malformed)"
 quiet "$h" 'not json {' "malformed payload" TELEMETRY_EXTRACT="$(stub malformed 'print("{}")')"
 quiet "$h" '' "empty payload" TELEMETRY_EXTRACT="$(stub malformed 'print("{}")')"
@@ -267,8 +273,8 @@ h="$(home last)"
 t="$(transcript sess-last)"
 quiet "$h" "$(payload "$t")" "last save" TELEMETRY_EXTRACT="$(stub last 'print("{}")')"
 wait_for '[ -s "$h/.agents/telemetry/sess-last.json" ]' || fail "last save: never appeared"
-for m in off repooff malformed missing unwritable; do [ ! -e "$SANDBOX/marks/$m" ] || fail "$m: the extractor ran"; done
-for d in off repooff malformed missing nopython nojq copied; do
+for m in off repooff neither malformed missing unwritable; do [ ! -e "$SANDBOX/marks/$m" ] || fail "$m: the extractor ran"; done
+for d in off repooff neither malformed missing nopython nojq copied; do
   [ ! -e "$SANDBOX/$d/.agents/telemetry" ] || fail "$d: started a save"
 done
 [ "$(cat "$SANDBOX/unwritable/.agents/telemetry")" = keep ] || fail "unwritable folder: the file in its place changed"
