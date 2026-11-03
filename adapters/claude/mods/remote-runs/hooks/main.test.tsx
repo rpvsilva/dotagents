@@ -35,17 +35,28 @@ type World = {
   sent: unknown
   /** The `runs` atom's writes, the status lines set and the notifications raised. */
   sets: number
+  /** The `log` atom's writes. */
+  logSets: number
   status: (string | undefined)[]
   notified: { title?: string; text: string }[]
   psCalls: string[][]
+  /** Files too big to hold: a path's size, and what `tail` answers when asked from 1-based byte `+n` (null: it fails). */
+  big: Record<string, { size: number; tail: (n: number) => string | null }>
+  /** The argv of every `sh -c 'tail ... | head ...'` read. */
+  tails: string[][]
+  /** What `ui.copy` answers (an Error: it throws), what it was asked to copy where, and the toasts shown. */
+  copy: unknown
+  copies: { text: string; surface: string }[]
+  toasts: string[]
   clock: ReturnType<typeof mock.clock>
 }
 
 function engine(on: any, over: Partial<World> = {}): World {
   const clock = mock.clock(on, { now: NOW })
   const w: World = {
-    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, psCalls: [], clock,
-    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], ...over,
+    dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, logSets: 0, psCalls: [], clock,
+    big: {}, tails: [],
+    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], copy: { isCopied: true }, copies: [], toasts: [], ...over,
   }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -55,6 +66,13 @@ function engine(on: any, over: Partial<World> = {}): World {
     return { value: { isPlaced: w.placed } }
   })
   on('process.run', (_: unknown, e: any) => {
+    if (e.argv[0] === 'sh') {
+      // sh -c 'tail -c "+$1" "$2" | head -c "$3"' sh <+n> <path> <max bytes>
+      w.tails.push(e.argv)
+      const out = w.big[e.argv[5]]?.tail(Number(e.argv[4]))
+      if (out == null) return { value: { exitCode: 1, stdout: '', stderr: 'no such file' } }
+      return { value: { exitCode: 0, stdout: out.slice(0, Number(e.argv[6])), stderr: '' } }
+    }
     if (e.argv.includes('ps')) {
       w.psCalls.push(e.argv)
       return typeof w.ps === 'function' ? w.ps() : w.ps
@@ -71,6 +89,12 @@ function engine(on: any, over: Partial<World> = {}): World {
     })
     return { value: [...files.map(file), ...(names ?? []).map(dir)] }
   })
+  on('fs.stat', (_: unknown, e: any) => {
+    const f = w.files[e.path]
+    if (w.big[e.path]) return { value: { kind: 'file', size: w.big[e.path].size, mtimeMs: NOW, isLink: false } }
+    if (!f) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'file', size: new TextEncoder().encode(f.text).length, mtimeMs: f.mtimeMs, isLink: false } }
+  })
   on('fs.read', (_: unknown, e: any) => {
     w.reads.push(e.path)
     const f = w.readFails ? undefined : w.files[e.path]
@@ -79,10 +103,20 @@ function engine(on: any, over: Partial<World> = {}): World {
   })
   on('state.set', (_: unknown, e: any, next: any) => {
     if (e.key === 'runs') w.sets++
+    if (e.key === 'log') w.logSets++
     return next(e)
   })
   on('ui.status', (_: unknown, e: any) => {
     w.status.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.copy', (_: unknown, e: any) => {
+    w.copies.push({ text: e.text, surface: e.surface })
+    if (w.copy instanceof Error) throw w.copy
+    return { value: w.copy }
+  })
+  on('ui.toast', (_: unknown, e: any) => {
+    w.toasts.push(e.text)
     return { value: undefined }
   })
   on('ui.notify', (_: unknown, e: any) => {
@@ -450,4 +484,419 @@ test('a notification that throws is marked all the same, and the store drops the
   await start($)
   await w.clock.advance(4500)
   expect(w.notified.length).toBe(1)
+})
+
+const TRANSCRIPT = '/repo/.git/remote-agent/agent-1/transcript.jsonl'
+const jsonl = (...events: unknown[]) => events.map(e => `${JSON.stringify(e)}\n`).join('')
+// Built from parts so no secret scanner flags this file.
+const GHP = ['ghp', 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'].join('_')
+
+// A world with one running run, its rows drawn by a tick, and `transcript` as its transcript.jsonl (null: none).
+async function withLog($: any, on: any, transcript: string | null) {
+  const w = engine(on, { ps: psAlive([42]) })
+  addRun(w, '/repo/.git', 'agent-1', runJson(), 'claimed in 3s\n')
+  if (transcript === null) delete w.files[TRANSCRIPT]
+  else w.files[TRANSCRIPT] = { text: transcript, mtimeMs: NOW }
+  await start($)
+  await w.clock.advance(1500)
+  return w
+}
+
+test('pressing a run shows its log in order, and Back returns to the list with its rows', async ($, on) => {
+  await withLog($, on, jsonl(
+    { type: 'system', subtype: 'init', model: 'claude-opus' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Reading the code.' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt\nb.txt' }] } },
+    { type: 'result', subtype: 'success', is_error: false, duration_ms: 4000, total_cost_usd: 0.12 },
+  ) + '{"type":"assistant","mess')
+  const list = await words($)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'run:agent-1' })
+    expect((await ui.find({ key: 'back' }))?.props.hotkey).toBe('b')
+    const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+    expect(shown.slice(-5)).toEqual(['session started (claude-opus)', 'Reading the code.', '-> Bash ls', '<- Bash: a.txt', 'done in 4s, $0.12'])
+    expect(shown).toContain(TRANSCRIPT)
+    expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(true)
+    await ui.press({ key: 'back' })
+    await ui.unmount()
+    expect(await words($, surface)).toEqual(list)
+  }
+})
+
+test('a run with an empty, missing or unreadable transcript says it waits for the first event', async ($, on) => {
+  const w = await withLog($, on, '')
+  for (const transcript of ['', null, 'unreadable']) {
+    if (transcript === null) delete w.files[TRANSCRIPT]
+    w.readFails = transcript === 'unreadable'
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      await ui.press({ key: 'run:agent-1' })
+      const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+      expect(shown[shown.length - 1]).toBe('waiting for the first event')
+      await ui.press({ key: 'back' })
+      await ui.unmount()
+    }
+  }
+})
+
+test('a token-shaped string in the transcript is masked in every line drawn', async ($, on) => {
+  await withLog($, on, jsonl(
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `echo ${GHP}` } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `\u001b[31m${GHP}\u001b[0m` }] } },
+  ))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  const shown = (await ui.findAll({})).map((el: any) => el.text ?? '')
+  await ui.unmount()
+  expect(shown.filter((t: string) => t.includes(GHP) || t.includes('\u001b'))).toEqual([])
+  expect(shown).toContain('<- Bash: [masked]')
+})
+
+const say = (text: string) => jsonl({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+const says = (count: number, from = 0) => Array.from({ length: count }, (_, i) => say(`line ${from + i}`)).join('')
+const names = (count: number, from = 0) => Array.from({ length: count }, (_, i) => `line ${from + i}`)
+// The pane is 20 rows: two header rows, 18 rows of log.
+const ROWS = 18
+const scroll = (by: number) => ({ component: 'Pane', requestId: 'remote-runs', offset: 0, by, bodyRows: 20, contentRows: 20, origin: { kind: 'person' } })
+
+// The log lines the pane draws (each Text after the path, but the notes and the resume hint), the hint, and all its
+// Text, as `surface` shows them.
+async function logView($: any, surface: (typeof SURFACES)[number] = 'terminal') {
+  const ui = await $.ui.mount({ ...PANE, surface })
+  const texts = await ui.findAll({ type: 'Text' })
+  await ui.unmount()
+  const notes = ['(earlier events not shown: open the file)', 'waiting for the first event']
+  const isHint = (t: any) => /^(to resume: |warning: |no session came back)/.test(t.text)
+  const after = texts.slice(texts.findIndex((t: any) => t.text.endsWith('/transcript.jsonl')) + 1)
+  const lines = after.filter((t: any) => !notes.includes(t.text) && !isHint(t))
+  for (const t of lines) expect(t.props.wrap).toBe('truncate-end')
+  return { lines: lines.map((t: any) => t.text), hint: after.filter(isHint).map((t: any) => t.text), texts: texts.map((t: any) => t.text) }
+}
+
+async function press($: any, key: string) {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key })
+  await ui.unmount()
+}
+
+function append(w: World, text: string) {
+  write(w, TRANSCRIPT, w.files[TRANSCRIPT].text + text)
+}
+
+test('an open log draws exactly its rows and shows new events within one tick', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(names(ROWS, 12))
+  append(w, says(2, 30))
+  await w.clock.advance(1500)
+  for (const surface of SURFACES) expect((await logView($, surface)).lines).toEqual(names(ROWS, 14))
+})
+
+test('scrolled up, new events leave the window; End, or scrolling back to the end, follows again', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  await press($, 'run:agent-1')
+  await $.ui.scroll(scroll(-5))
+  expect((await logView($)).lines).toEqual(names(ROWS, 7))
+  append(w, says(3, 30))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 7))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'end' }))?.props.hotkey).toBe('e')
+  await ui.press({ key: 'end' })
+  await ui.unmount()
+  expect((await logView($)).lines).toEqual(names(ROWS, 15))
+  append(w, says(1, 33))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 16))
+
+  await $.ui.scroll(scroll(-1))
+  append(w, says(1, 34))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 15))
+  await $.ui.scroll(scroll(20))
+  append(w, says(1, 35))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS, 18))
+})
+
+test('a half-written last line is not drawn until whole, then drawn once', async ($, on) => {
+  const w = await withLog($, on, says(2))
+  const next = say('héllo → wörld')
+  append(w, next.slice(0, 25))
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(names(2))
+  const sets = w.logSets
+  const reads = w.reads.length
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(2))
+  expect([w.logSets, w.reads.length]).toEqual([sets, reads])
+  append(w, next.slice(25))
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual([...names(2), 'héllo → wörld'])
+})
+
+test('a transcript over 4 MiB opens through tail, showing its last part under the earlier-events note', async ($, on) => {
+  const w = await withLog($, on, null)
+  const MiB = 1 << 20
+  // The file: a 5 MiB head of one long line, then the events; tail answers from byte +n.
+  let events = says(3)
+  const head = 5 * MiB
+  w.big[TRANSCRIPT] = {
+    get size() { return head + events.length },
+    tail: n => (n - 1 < head ? `${'x'.repeat(head - n)}\n` : '') + events.slice(Math.max(0, n - 1 - head)),
+  }
+  await press($, 'run:agent-1')
+  const shown = await logView($)
+  expect(shown.lines).toEqual(names(3))
+  expect(shown.texts).toContain('(earlier events not shown: open the file)')
+  expect(w.reads).not.toContain(TRANSCRIPT)
+  expect(w.tails[0]).toEqual(['sh', '-c', 'tail -c "+$1" -- "$2" | head -c "$3"', 'sh', String(head + events.length - MiB), TRANSCRIPT, String(MiB + 1)])
+
+  events += says(1, 3)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(4))
+  expect(w.tails[w.tails.length - 1][4]).toBe(String(head + says(3).length + 1))
+})
+
+test('switching runs or going Back starts the log again', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  addRun(w, '/repo/.git', 'agent-2', runJson({ name: 'second' }))
+  w.files['/repo/.git/remote-agent/agent-2/transcript.jsonl'] = { text: say('other run'), mtimeMs: NOW }
+  await w.clock.advance(1500)
+  await press($, 'run:agent-1')
+  await $.ui.scroll(scroll(-5))
+  await press($, 'back')
+  append(w, says(1, 30))
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(names(ROWS, 13))
+
+  await $.ui.scroll(scroll(-5))
+  await press($, 'back')
+  await press($, 'run:agent-2')
+  expect((await logView($)).lines).toEqual(['other run'])
+})
+
+const SESSION = '/repo/.git/remote-agent/agent-1/session.jsonl'
+const RESUME = 'to resume: remote-agent resume agent-1 /repo'
+
+// The Text lines the log of agent-1 shows on the terminal.
+async function logLines($: any): Promise<string[]> {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+  await ui.press({ key: 'back' })
+  await ui.unmount()
+  return shown
+}
+
+test('Copy path copies the exact transcript path on the pressing surface, and toasts the result', async ($, on) => {
+  const w = await withLog($, on, '')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'run:agent-1' })
+    expect((await ui.find({ key: 'copy' }))?.props.hotkey).toBe('c')
+    await ui.press({ key: 'copy' })
+    w.copy = { isCopied: false, reason: 'no-clipboard' }
+    await ui.press({ key: 'copy' })
+    const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+    expect(shown).toContain(TRANSCRIPT)
+    await ui.press({ key: 'back' })
+    await ui.unmount()
+    w.copy = { isCopied: true }
+  }
+  expect(w.copies.map(c => [c.text, c.surface])).toEqual([
+    [TRANSCRIPT, 'terminal'], [TRANSCRIPT, 'terminal'], [TRANSCRIPT, 'desktop'], [TRANSCRIPT, 'desktop'],
+  ])
+  expect(w.toasts.map(t => t.split(' (')[0])).toEqual(['copied', 'not copied', 'copied', 'not copied'])
+})
+
+test('a finished run with a session ends its log with how to resume it, and a running one does not', async ($, on) => {
+  const w = await withLog($, on, jsonl({ type: 'result', subtype: 'success', is_error: false, duration_ms: 4000 }))
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  let shown = await logLines($)
+  expect(shown.filter((t: string) => t.startsWith('to resume') || t.startsWith('no session'))).toEqual([])
+
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  shown = await logLines($)
+  expect(shown.slice(-3, -1)).toEqual(['done in 4s', RESUME])
+  expect(shown[shown.length - 1]).toMatch(/sandbox wrote.*forged turns.*session\.jsonl first$/)
+})
+
+test('a finished run with no session.jsonl says it cannot be resumed', async ($, on) => {
+  const w = await withLog($, on, '')
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 1, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  const shown = await logLines($)
+  expect(shown[shown.length - 1]).toBe('no session came back: this run cannot be resumed')
+  expect(shown.filter((t: string) => t.startsWith('to resume'))).toEqual([])
+})
+
+test('a worktree path with spaces is quoted in the resume command', async ($, on) => {
+  const w = await withLog($, on, '')
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 1, ended: NOW / 1000 + 2, worktree: '/My Repo' })))
+  await w.clock.advance(1500)
+  expect(await logLines($)).toContain("to resume: remote-agent resume agent-1 '/My Repo'")
+})
+
+test('a copy that throws toasts not copied, and the path stays drawn', async ($, on) => {
+  const w = await withLog($, on, '')
+  w.copy = new Error('refused')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  await ui.press({ key: 'copy' })
+  expect((await ui.findAll({ type: 'Text' })).map((el: any) => el.text)).toContain(TRANSCRIPT)
+  await ui.unmount()
+  expect(w.toasts).toEqual(['not copied (refused): select the path shown instead'])
+})
+
+test('a stopped run shows how to resume it once its session.jsonl appears', async ($, on) => {
+  const w = await withLog($, on, '')
+  w.ps = psAlive([])
+  await w.clock.advance(1500)
+  expect((await logLines($)).slice(-1)).toEqual(['no session came back: this run cannot be resumed'])
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  await w.clock.advance(1500)
+  expect(await logLines($)).toContain(RESUME)
+})
+
+test('an open log whose run folder is removed shows the list again', async ($, on) => {
+  const w = await withLog($, on, jsonl({ type: 'system', subtype: 'init', model: 'claude-opus' }))
+  addRun(w, '/repo/.git', 'agent-2', runJson({ name: 'other', pid: 43 }))
+  w.ps = psAlive([42, 43])
+  await w.clock.advance(1500)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'run:agent-1' })
+  expect(await ui.find({ key: 'back' })).toBeTruthy()
+  await ui.unmount()
+  w.dirs['/repo/.git/remote-agent'] = ['agent-2']
+  await w.clock.advance(1500)
+  const shown = await words($)
+  expect(shown).not.toContain(TRANSCRIPT)
+  expect(shown.some((t: string) => t.startsWith('other '))).toBe(true)
+  expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(false)
+})
+
+test('a finished run draws fewer log lines, so its wrapped resume hint fits the body too', async ($, on) => {
+  const w = await withLog($, on, says(30))
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  await press($, 'run:agent-1')
+  // 20 rows at 60 columns: two header rows, the command on one, the 152-character warning wrapped to three.
+  const shown = await logView($)
+  expect(shown.hint[0]).toBe(RESUME)
+  expect(shown.lines).toEqual(names(14, 16))
+  await $.ui.scroll(scroll(-1))
+  expect((await logView($)).lines).toEqual(names(14, 15))
+})
+
+test('a result read on a later tick names the tool called before it, and a transcript written anew starts the log again', async ($, on) => {
+  const call = jsonl({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } })
+  const result = (text: string) => jsonl({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] } })
+  const w = await withLog($, on, call)
+  await press($, 'run:agent-1')
+  expect((await logView($)).lines).toEqual(['-> Bash ls'])
+  append(w, result('a.txt'))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(['-> Bash ls', '<- Bash: a.txt'])
+  // Shorter than what was read: a new file, whose result has no call before it.
+  write(w, TRANSCRIPT, result('b.txt'))
+  expect(result('b.txt').length).toBeLessThan((call + result('a.txt')).length)
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(['<- b.txt'])
+})
+
+test('a transcript between 1 and 3 MiB is read whole and opens at its last MiB under the earlier-events note', async ($, on) => {
+  const MiB = 1 << 20
+  const w = await withLog($, on, say('x'.repeat(2 * MiB)) + says(30))
+  await press($, 'run:agent-1')
+  const shown = await logView($)
+  // 17 rows: the note takes one.
+  expect(shown.lines).toEqual(names(ROWS - 1, 13))
+  expect(shown.texts).toContain('(earlier events not shown: open the file)')
+  expect(w.tails).toEqual([])
+  // Read on from where it stopped: a window scrolled up stays put.
+  await $.ui.scroll(scroll(-5))
+  append(w, says(1, 30))
+  await w.clock.advance(1500)
+  expect((await logView($)).lines).toEqual(names(ROWS - 1, 8))
+  await press($, 'end')
+  expect((await logView($)).lines).toEqual(names(ROWS - 1, 14))
+})
+
+test('a tail read that fails leaves the log waiting, and the next tick reads it', async ($, on) => {
+  const w = await withLog($, on, null)
+  const events = says(3)
+  const head = 5 * (1 << 20)
+  let isUp = false
+  w.big[TRANSCRIPT] = {
+    size: head + events.length,
+    tail: n => (isUp ? `${'x'.repeat(head - n)}\n${events}` : null),
+  }
+  await press($, 'run:agent-1')
+  let shown = await logView($)
+  expect(shown.lines).toEqual([])
+  expect(shown.texts).toContain('waiting for the first event')
+  expect(shown.texts).not.toContain('(earlier events not shown: open the file)')
+  isUp = true
+  await w.clock.advance(1500)
+  shown = await logView($)
+  expect(shown.lines).toEqual(names(3))
+  expect(shown.texts).toContain('(earlier events not shown: open the file)')
+})
+
+const DONE = jsonl({ type: 'result', subtype: 'success', is_error: false, duration_ms: 4000 })
+const GAPS = {
+  'events over a chunk': says(1300, 2).replace(/line /g, `${'y'.repeat(900)} `),
+  'one line over a chunk': say('x'.repeat((1 << 20) + 1000)),
+}
+for (const [gap, text] of Object.entries(GAPS)) {
+  test(`a finished run that wrote ${gap} between two ticks shows its log to the end`, async ($, on) => {
+    const w = await withLog($, on, says(2))
+    await press($, 'run:agent-1')
+    expect((await logView($)).lines).toEqual(names(2))
+    append(w, text + DONE)
+    write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+    for (let i = 0; i < 4; i++) await w.clock.advance(1500)
+    expect((await logView($)).lines.slice(-1)).toEqual(['done in 4s'])
+  })
+}
+
+for (const [session, isResumable] of [['', false], ['{}\n', true]] as const) {
+  test(`a finished run with ${isResumable ? 'a non-empty' : 'an empty'} session.jsonl ${isResumable ? 'shows the' : 'shows no'} resume command`, async ($, on) => {
+    const w = await withLog($, on, '')
+    w.files[SESSION] = { text: session, mtimeMs: NOW }
+    write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+    await w.clock.advance(1500)
+    const shown = await logLines($)
+    expect(shown.includes(RESUME)).toBe(isResumable)
+    if (!isResumable) expect(shown[shown.length - 1]).toBe('no session came back: this run cannot be resumed')
+  })
+}
+
+test('scrolling a finished run before its log is drawn moves by the rows the draw shows', async ($, on) => {
+  // Once `opened` is set, the view the mod reads says that run is open with no press, so nothing drew its log.
+  let opened: string | null = null
+  on('state.get', (_: unknown, e: any, next: any) =>
+    e.key === 'view' && opened !== null ? { value: { value: { shape: 'view-1', value: { runId: opened } }, version: 1 } } : next(e))
+  const w = await withLog($, on, '')
+  // A run no other test draws, opened with no draw, as a reload finds it.
+  addRun(w, '/repo/.git', 'undrawn', runJson({ name: 'undrawn', state: 'done', exit_code: 0, ended: NOW / 1000 + 2 }))
+  w.files['/repo/.git/remote-agent/undrawn/transcript.jsonl'] = { text: says(30), mtimeMs: NOW }
+  w.files['/repo/.git/remote-agent/undrawn/session.jsonl'] = { text: '{}\n', mtimeMs: NOW }
+  await w.clock.advance(1500)
+  await words($)
+  opened = 'undrawn'
+  await w.clock.advance(1500)
+  await $.ui.scroll(scroll(-1))
+  // 20 rows at 60 columns: two header rows and the hint's four leave 14, one up from the end.
+  expect((await logView($)).lines).toEqual(names(14, 15))
+  await $.ui.scroll(scroll(-1))
+  expect((await logView($)).lines).toEqual(names(14, 14))
 })
