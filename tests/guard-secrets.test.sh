@@ -21,7 +21,7 @@ judge() {
 }
 # judge, with stderr in $err. Between `background` and `settle` cases run at once instead (each
 # hook call is mostly process start-up), so only cases that share no state go there.
-err="$SANDBOX/err" bg="" jobs=0
+err="$SANDBOX/err" bg="" jobs=0 pids=""
 run() { spawn judge "$@"; }
 # spawn FUNC ARGS...: runs FUNC now, or as one background case between `background` and `settle`,
 # where it runs its own cases one at a time with stderr in its own $err.
@@ -29,7 +29,16 @@ spawn() {
   if [ -z "$bg" ]; then "$@"; return; fi
   jobs=$((jobs + 1))
   in_job "$bg/$jobs.err" "$@" >"$bg/$jobs.out" &
-  if [ $((jobs % 16)) -eq 0 ]; then wait; fi
+  pids="$pids $jobs:$!"
+  if [ $((jobs % 16)) -eq 0 ]; then reap; fi
+}
+# Waits for each background case started since the last reap, keeping a nonzero exit in $bg/<n>.rc.
+reap() {
+  local job
+  for job in $pids; do
+    if wait "${job#*:}"; then :; else echo "$?" >"$bg/${job%%:*}.rc"; fi
+  done
+  pids=""
 }
 # in_job ERR FUNC ARGS...: FUNC with its stderr in ERR, running its own cases one at a time.
 in_job() {
@@ -38,14 +47,20 @@ in_job() {
   "$@"
 }
 background() { bg="$(mktemp -d "$SANDBOX/bg.XXXXXX")"; }
-# Waits for the background cases and counts their failures, then runs cases one at a time again.
+# Waits for the background cases and counts their failures (a case that exits nonzero counts as one), then runs cases one at a time again.
 settle() {
-  local i
-  wait
+  local i found
+  reap
   for ((i = 1; i <= jobs; i++)); do
+    found=0
     if [ -s "$bg/$i.out" ]; then
       cat "$bg/$i.out"
-      fails=$((fails + $(grep -c '^FAIL: ' "$bg/$i.out")))
+      found="$(grep -c '^FAIL: ' "$bg/$i.out" || true)"
+      fails=$((fails + found))
+    fi
+    # A case that died before reporting anything still counts.
+    if [ -f "$bg/$i.rc" ] && [ "$found" -eq 0 ]; then
+      fail "background case $i exited $(cat "$bg/$i.rc")"
     fi
   done
   bg="" jobs=0
@@ -257,6 +272,8 @@ HOOK="$REPO/scripts/hooks/guard-secrets.sh"
 
 # The command as an argument works too.
 "$HOOK" 'cat .env' 2>/dev/null && fail "argument form did not block"
+# No input at all (no JSON on stdin) has nothing to judge, so it runs.
+printf '' | "$HOOK" 2>/dev/null || fail "empty stdin did not allow (exit $?)"
 
 [ "$fails" -eq 0 ] || { echo "guard-secrets.test.sh: $fails failure(s)"; exit 1; }
 echo "guard-secrets.test.sh: ok"

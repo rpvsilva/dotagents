@@ -34,6 +34,7 @@ else
     @sh "cmd=\((.tool_input.command // .command // "") | str)",
     @sh "path=\((.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // .file_path // "") | str)",
     @sh "cwd=\((.cwd // "") | str)"')"
+  cmd="" path="" cwd=""
   eval "$fields"
   cwd="${cwd:-$PWD}"
 fi
