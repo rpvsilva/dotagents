@@ -184,8 +184,9 @@ def results(logs):
     return found
 
 
-def steps(entries, done, rules, subagent=None):
-    """One step per tool call in these entries, timed by its result in done; no span set yet."""
+def steps(entries, done, rules, subagent=None, subagent_id=None):
+    """One step per tool call in these entries, timed by its result in done; no span set yet.
+    subagent is the subagent's type, shown in reports; subagent_id tells two of one type apart."""
     found = {}
     for entry in entries:
         if entry.get("type") != "assistant" or not entry.get("timestamp"):
@@ -204,6 +205,7 @@ def steps(entries, done, rules, subagent=None):
                 "seconds": round((end - start).total_seconds(), 3) if end else None,
                 "failed": failed,
                 "subagent": subagent,
+                "subagentId": subagent_id,
             }
             if tool == "Bash" and given.get("run_in_background") is True:
                 step["background"] = True
@@ -212,31 +214,32 @@ def steps(entries, done, rules, subagent=None):
 
 
 def load_subagents(session):
-    """(meta, log) for every subagent the session started; one whose meta is unreadable is left out."""
+    """(meta, log, id) for every subagent the session started, id its log's stem (agent-f);
+    one whose meta is unreadable is left out."""
     folder = Path(session).with_suffix("") / "subagents"
     found = []
     for m in sorted(folder.glob("*.meta.json")) if folder.is_dir() else []:
         meta = load_meta(m)
         log = m.with_name(m.name.replace(".meta.json", ".jsonl"))
         if meta is not None:
-            found.append((meta, load(log) if log.is_file() else []))
+            found.append((meta, load(log) if log.is_file() else [], log.stem))
     return found
 
 
 def linked_subagents(pool, tool_ids):
-    """Subagents started by these tool calls, and by their own tool calls in turn, as (meta, numbers, log)."""
+    """Subagents started by these tool calls, and by their own tool calls in turn, as (meta, numbers, log, id)."""
     known = set(tool_ids)
     found = []
     pending = list(pool)
     linked = True
     while linked:
         linked = False
-        for meta, log in list(pending):
+        for meta, log, agent_id in list(pending):
             if meta.get("toolUseId") in known:
-                pending.remove((meta, log))
+                pending.remove((meta, log, agent_id))
                 numbers, own_ids = measure(log)
                 known |= own_ids
-                found.append((meta, numbers, log))
+                found.append((meta, numbers, log, agent_id))
                 linked = True
     return found
 
@@ -280,9 +283,10 @@ def span(entries, skill, pool, done, rules):
     agents = linked_subagents(pool, tool_ids)
     if totals["turns"] == 0 and not agents:
         return None
-    own = steps(entries, done, rules) + [s for meta, _, log in agents for s in steps(log, done, rules, meta.get("agentType"))]
-    timed = [e for e in entries if e.get("timestamp")] + [e for *_, log in agents for e in log if e.get("timestamp")]
-    for _, numbers, _ in agents:
+    own = steps(entries, done, rules) + [s for meta, _, log, agent_id in agents
+                                         for s in steps(log, done, rules, meta.get("agentType"), agent_id)]
+    timed = [e for e in entries if e.get("timestamp")] + [e for _, _, log, _ in agents for e in log if e.get("timestamp")]
+    for _, numbers, _, _ in agents:
         add(totals, {k: numbers[k] for k in ("turns", "toolCalls", "tools", "tokensByModel")})
     start = parse_time(next(e["timestamp"] for e in entries if e.get("timestamp")))
     end = max(parse_time(e["timestamp"]) for e in timed)
@@ -293,7 +297,7 @@ def span(entries, skill, pool, done, rules):
         "wallClockSeconds": round((end - start).total_seconds()),
         **totals,
         "subagents": [{"type": meta.get("agentType"), "description": meta.get("description"), **numbers}
-                      for meta, numbers, _ in agents],
+                      for meta, numbers, _, _ in agents],
         "steps": own,
     }
 
@@ -343,7 +347,7 @@ def main():
     entries = load(args.session)
     pool = load_subagents(args.session)
     # Results are looked up across the whole session: one can land in the next span.
-    done = results([entries] + [log for _, log in pool])
+    done = results([entries] + [log for _, log, _ in pool])
     rules = secret_rules()
     skills = {loaded_skill(e) for e in entries} - {None}
     stretches = segment(entries, skills)
@@ -384,7 +388,7 @@ def main():
         all_steps += [{**step, "span": name, "skill": s["skill"]} for step in s.pop("steps")]
         spans[i] = {"name": name, **s}
     all_steps.sort(key=lambda step: step["start"])
-    keys = ("tool", "label", "start", "seconds", "failed", "span", "skill", "subagent", "background")
+    keys = ("tool", "label", "start", "seconds", "failed", "span", "skill", "subagent", "subagentId", "background")
     all_steps = [{k: stamp(step[k]) if k == "start" else step[k] for k in keys if k in step} for step in all_steps]
 
     window = entries[chosen[0][1]:chosen[-1][2]]

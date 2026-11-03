@@ -261,12 +261,16 @@ class Steps(unittest.TestCase):
         tagged = [(s["tool"], s["label"], s["span"]) for s in self.steps if s["subagent"] == "general-purpose"]
         self.assertEqual(tagged, [("Read", "/repo/x.py", "renovate-prs"), ("Bash", "pytest -q", "renovate-prs")])
 
+    def test_subagent_steps_name_the_subagent_instance_and_others_null(self):
+        self.assertEqual({s["subagentId"] for s in self.steps if s["subagent"]}, {"agent-f"})
+        self.assertEqual({s["subagentId"] for s in self.steps if not s["subagent"]}, {None})
+
     def test_only_a_background_bash_is_flagged_background(self):
         self.assertEqual([s["label"] for s in self.steps if "background" in s], ["npm test"])
         self.assertIs(self.by_label[("Bash", "npm test")]["background"], True)
 
     def test_each_step_holds_only_the_known_fields(self):
-        keys = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent"}
+        keys = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent", "subagentId"}
         for step in self.steps:
             self.assertEqual(set(step) - {"background"}, keys)
 
