@@ -275,6 +275,47 @@ class DamagedLog(unittest.TestCase):
                          ["no skill", "grill-with-docs", "renovate-prs", "renovate-prs-2", "telemetry"])
         self.assertEqual(run_["spans"][-1]["end"], "2026-10-23T09:05:35.000Z")
 
+    def damaged(self, tail):
+        """extract.py --whole on a copy of the spans fixture, its subagents beside it, with tail (bytes) appended."""
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_bytes((FIXTURES / "spans.jsonl").read_bytes() + tail)
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            return extract("--whole", "--session", str(session))
+
+    def assertSameRun(self, proc):
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["spans"], run("--whole", "--session", str(FIXTURES / "spans.jsonl"))["spans"])
+
+    def test_a_last_line_cut_inside_a_utf8_character_is_skipped(self):
+        self.assertSameRun(self.damaged(b'{"type":"user","message":{"content":"caf\xc3'))
+
+    def test_a_line_that_is_json_but_not_an_object_is_skipped(self):
+        for line in (b"123", b'"x"', b"[]", b"null"):
+            with self.subTest(line=line):
+                self.assertSameRun(self.damaged(line + b"\n"))
+
+    def test_a_bad_line_anywhere_in_the_log_is_skipped(self):
+        lines = (FIXTURES / "spans.jsonl").read_bytes().splitlines(keepends=True)
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_bytes(b"".join(lines[:3]) + b'{"half\n' + b"\xff\xfe\n" + b"[1]\n" + b"".join(lines[3:]))
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            self.assertSameRun(extract("--whole", "--session", str(session)))
+
+    def test_a_half_written_subagent_meta_drops_only_that_subagent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            shutil.copy(FIXTURES / "spans.jsonl", session)
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            subagents = Path(folder) / "s" / "subagents"
+            (subagents / "agent-x.meta.json").write_text('{"type":')
+            (subagents / "agent-x.jsonl").write_text("")
+            (subagents / "agent-y.meta.json").write_text("[]")
+            proc = extract("--whole", "--session", str(session))
+        self.assertSameRun(proc)
+        self.assertTrue(any(s["subagents"] for s in json.loads(proc.stdout)["spans"]))
+
 
 if __name__ == "__main__":
     unittest.main()
