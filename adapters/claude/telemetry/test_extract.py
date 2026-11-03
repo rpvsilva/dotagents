@@ -181,5 +181,70 @@ class DefaultSession(unittest.TestCase):
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session")
 
 
+class Whole(unittest.TestCase):
+    """--whole measures the whole session, as the session-end save does; earlier reports are ordinary spans."""
+
+    def test_keeps_earlier_telemetry_reports_and_everything_after_them(self):
+        # run-twice.jsonl: /clear and chat, /renovate-prs, /telemetry, /renovate-prs, /telemetry.
+        run_ = run("--whole", "--session", str(FIXTURES / "run-twice.jsonl"))
+        self.assertEqual([s["name"] for s in run_["spans"]],
+                         ["no skill", "renovate-prs", "telemetry", "renovate-prs-2", "telemetry-2"])
+        self.assertEqual(run_["start"], "2026-10-23T09:59:00.000Z")
+        # The final /telemetry's own reply (r8) is measured too.
+        self.assertEqual(by_name(run_)["telemetry-2"]["turns"], 1)
+        self.assertEqual(run_["end"], "2026-10-23T10:06:30.000Z")
+
+    def test_marks_the_run_as_whole(self):
+        self.assertIs(run("--whole", "--session", str(FIXTURES / "run-twice.jsonl"))["whole"], True)
+        self.assertIs(run("--session", str(FIXTURES / "run-twice.jsonl"))["whole"], False)
+
+    def test_works_from_any_folder_with_a_transcript_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = subprocess.run([sys.executable, str((HERE / "extract.py").resolve()), "--whole",
+                                   "--session", str((FIXTURES / "spans.jsonl").resolve())],
+                                  capture_output=True, encoding="utf-8", cwd=folder)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["sessionId"], "spans")
+
+
+class RepoAndDate(unittest.TestCase):
+    def test_repo_is_the_git_top_level_of_cwd(self):
+        with tempfile.TemporaryDirectory() as folder:
+            top = Path(folder).resolve()
+            subprocess.run(["git", "init", "-q", str(top)], check=True)
+            (top / "sub").mkdir()
+            run_ = run("--session", str(FIXTURES / "spans.jsonl"), "--cwd", str(top / "sub"))
+        self.assertEqual(run_["repo"], str(top))
+
+    def test_repo_is_null_outside_a_repo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(folder).resolve().parent)}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", folder],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(json.loads(proc.stdout)["repo"])
+
+    def test_date_is_the_day_the_run_started(self):
+        for args in ([], ["--whole"]):
+            run_ = run(*args, "--session", str(FIXTURES / "spans.jsonl"))
+            self.assertEqual(run_["date"], run_["start"][:10])
+            self.assertEqual(run_["date"], "2026-10-23")
+
+
+class DamagedLog(unittest.TestCase):
+    def test_a_half_written_last_line_is_skipped(self):
+        text = (FIXTURES / "spans.jsonl").read_text()
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_text(text + '{"type": "assistant", "timestamp": "2026-10-23T09:07:00.000Z", "mess')
+            proc = extract("--whole", "--session", str(session))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        run_ = json.loads(proc.stdout)
+        self.assertEqual([s["name"] for s in run_["spans"]],
+                         ["no skill", "grill-with-docs", "renovate-prs", "renovate-prs-2", "telemetry"])
+        self.assertEqual(run_["spans"][-1]["end"], "2026-10-23T09:05:35.000Z")
+
+
 if __name__ == "__main__":
     unittest.main()
