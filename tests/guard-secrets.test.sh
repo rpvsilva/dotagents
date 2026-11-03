@@ -11,13 +11,35 @@ fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-# Runs the hook on JSON $2; $1 is "block" or "allow"; $3 names the case. stderr lands in $SANDBOX/err.
-run() {
-  local want="$1" json="$2" name="$3" got
-  if "$HOOK" <<<"$json" 2>"$SANDBOX/err"; then got=allow; else
+# Runs the hook on JSON $2; $1 is "block" or "allow"; $3 names the case; stderr lands in $4.
+judge() {
+  local want="$1" json="$2" name="$3" err="$4" got
+  if "$HOOK" <<<"$json" 2>"$err"; then got=allow; else
     [ $? -eq 2 ] && got=block || got=error
   fi
-  [ "$got" = "$want" ] || fail "$name: wanted $want, got $got $(cat "$SANDBOX/err")"
+  [ "$got" = "$want" ] || fail "$name: wanted $want, got $got $(cat "$err")"
+}
+# judge, with stderr in $SANDBOX/err. Between `background` and `settle` the cases run at once
+# instead (each hook call is mostly process start-up), so only cases that change no state go there.
+bg="" jobs=0
+run() {
+  if [ -z "$bg" ]; then judge "$@" "$SANDBOX/err"; return; fi
+  jobs=$((jobs + 1))
+  judge "$@" "$bg/$jobs.err" >"$bg/$jobs.out" &
+  if [ $((jobs % 16)) -eq 0 ]; then wait; fi
+}
+background() { bg="$(mktemp -d "$SANDBOX/bg.XXXXXX")"; }
+# Waits for the background cases and counts their failures, then runs cases one at a time again.
+settle() {
+  local i
+  wait
+  for ((i = 1; i <= jobs; i++)); do
+    if [ -s "$bg/$i.out" ]; then
+      cat "$bg/$i.out"
+      fails=$((fails + $(grep -c '^FAIL: ' "$bg/$i.out")))
+    fi
+  done
+  bg="" jobs=0
 }
 # $1 as a JSON string, built in bash: a jq process per case would cost more than the hook itself.
 # Escapes backslash, quote, newline, tab and CR, the only control characters the cases hold.
@@ -60,6 +82,7 @@ path_cases() {
   run block '{"command": "cat .env", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command"
   run allow '{"command": "cat .env.example", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command, an example"
 }
+background
 path_cases
 
 cmd block 'cat .env'
@@ -112,6 +135,7 @@ cmd block 'ls(){ cat $1;}; ls .env'
 cmd block 'function test { cat "$@"; }; test .env'
 cmd block 'alias ls=cat; ls .env'
 cmd block 'stat () { cat "$1"; }; stat .env'
+settle
 
 # Commits: a staged secret file or token line blocks; the reason never echoes the token.
 git init -q "$SANDBOX/r"
@@ -198,8 +222,10 @@ cp -R "$REPO/scripts/hooks" "$SANDBOX/crlf"
 sed 's/$/\r/' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/crlf/secret-patterns.txt"
 grep -q $'\r$' "$SANDBOX/crlf/secret-patterns.txt" || fail "crlf: the copy has no CR endings"
 HOOK="$SANDBOX/crlf/guard-secrets.sh"
+background
 path_cases
 cmd allow 'cat .env.example'
+settle
 echo "token = $token" >>"$SANDBOX/r/app.txt"
 git -C "$SANDBOX/r" add app.txt
 cmd block 'git commit -m x' r
