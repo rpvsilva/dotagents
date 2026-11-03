@@ -54,6 +54,7 @@ left_behind() {
   local run="$1"
   # shellcheck disable=SC2016 # expanded by the inner shell
   with_settings bash -c '
+    . "$2/scripts/remote-backends/lib.sh"
     run="$1"; label="sandbox.users.io/remote-agent-run=$run"
     case "$REMOTE_BACKEND" in
       docker) docker ps -aq --filter "label=$label" ;;
@@ -63,11 +64,11 @@ left_behind() {
       ssh)
         if [ "${REMOTE_SSH_MODE:-container}" = bare ]; then
           dir="${REMOTE_SSH_DIR:-.remote-agent/runs}"; dir="${dir#\~/}"
-          ssh -T -o BatchMode=yes "$REMOTE_SSH_HOST" "test ! -e \"$dir/$run\" || echo \"$dir/$run\"" </dev/null
+          ssh_client; "${ssh_cmd[@]}" "$REMOTE_SSH_HOST" "test ! -e \"$dir/$run\" || echo \"$dir/$run\"" </dev/null
         else
-          ssh -T -o BatchMode=yes "$REMOTE_SSH_HOST" "docker ps -aq --filter label=$label" </dev/null
+          ssh_client; "${ssh_cmd[@]}" "$REMOTE_SSH_HOST" "docker ps -aq --filter label=$label" </dev/null
         fi ;;
-    esac' smoke "$run" 2>&1 || true
+    esac' smoke "$run" "$REPO" 2>&1 || true
 }
 
 ran=0

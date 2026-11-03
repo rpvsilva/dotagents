@@ -2,7 +2,9 @@
 # Checks the remote-agent setup, run as `remote-agent check`: remote.env exists and holds a Claude token (never
 # printed) and no Settings left from before settings.json, a remote.backend is set, the backend's own requirements
 # (`<backend> check`: one line per missing thing), then a dry run: acquire a sandbox, put a one-file snapshot in
-# ~/work, run a trivial command that copies it to ~/out and finds claude, get ~/out back, compare, release. No Claude call, so no tokens spent. The sandbox is released even when a step fails.
+# ~/work, run a trivial command that copies it to ~/out, finds claude and runs `node --version` and `claude --version`
+# (a binary present but broken, e.g. a missing shared library, fails here with its own error), get ~/out back,
+# compare, release. No Claude API call, so no tokens spent. The sandbox is released even when a step fails.
 # The dry run is skipped when a requirement is missing. Exit 0 only when everything passes; prints ok at the end.
 set -euo pipefail
 
@@ -72,14 +74,25 @@ acquired=1
 handle="$("$backend" acquire "$run" </dev/null)" || step_failed "acquire"
 [ -n "$handle" ] || step_failed "acquire"
 export COPYFILE_DISABLE=1
-tar -C "$tmp" -cf - ping | "$backend" put "$run" "$handle" work || step_failed "put"
+# shellcheck disable=SC2154 # remote_tar: set by remote-settings.sh
+"${remote_tar[@]}" -C "$tmp" -cf - ping | "$backend" put "$run" "$handle" work || step_failed "put"
 code=0
 # shellcheck disable=SC2016 # expanded in the sandbox
-claude_path="$("$backend" run "$run" "$handle" sh -c 'mkdir -p "$HOME/out" && cat "$HOME/work/ping" >"$HOME/out/ping" &&
-  { command -v claude || exit 3; }' </dev/null)" || code=$?
-[ "$code" -ne 3 ] || step_failed "run: claude not found in the sandbox"
-[ "$code" -eq 0 ] || step_failed "run (exit $code)"
-say "claude in the sandbox: $claude_path"
+found="$("$backend" run "$run" "$handle" sh -c 'mkdir -p "$HOME/out" && cat "$HOME/work/ping" >"$HOME/out/ping" &&
+  { command -v claude || exit 3; } &&
+  { v=$(node --version 2>&1) || { printf "%s\n" "$v"; exit 4; }; echo "node $v"; } &&
+  { v=$(claude --version 2>&1) || { printf "%s\n" "$v"; exit 5; }; echo "claude $v"; }' </dev/null)" || code=$?
+# The last line of a failed tool's output: its error.
+why="$(printf '%s\n' "$found" | grep . | tail -1 || true)"
+case "$code" in
+  0) ;;
+  3) step_failed "run: claude not found in the sandbox" ;;
+  4) step_failed "run: node does not run in the sandbox: ${why:-no output}" ;;
+  5) step_failed "run: claude does not run in the sandbox: ${why:-no output}" ;;
+  *) step_failed "run (exit $code)" ;;
+esac
+say "claude in the sandbox: $(printf '%s\n' "$found" | sed -n 1p) ($(printf '%s\n' "$found" | sed -n 's/^claude //p'))"
+say "node in the sandbox: $(printf '%s\n' "$found" | sed -n 's/^node //p')"
 # Drained after extracting: bsdtar stops at the end-of-archive marker, and the sender's trailing padding would then
 # hit a closed pipe and fail the get (SIGPIPE) though the file came back whole.
 "$backend" get "$run" "$handle" out </dev/null | { tar -xf - -C "$tmp/back" && cat >/dev/null; } || step_failed "get"

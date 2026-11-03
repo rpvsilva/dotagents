@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SSH backend for scripts/remote-agent.sh: a VM or PC reached with `ssh`.
 # Usage: ssh.sh acquire <run> | put <run> <handle> <dir> | run <run> <handle> <argv>... | get <run> <handle> <dir> | release <run> | check
-# Every command runs on the host through `ssh -T -o BatchMode=yes <host> '<quoted words>'`, its words single-quoted
-# for any POSIX login shell. Files travel as tar streams over the connection: no scp, no temp files.
+# Every command runs on the host through `ssh -T <options> <host> '<quoted words>'` (options: lib.sh's ssh_client, a
+# key or a password login), its words single-quoted for any POSIX login shell. Files travel as tar streams over the connection: no scp, no temp files.
 # Container mode (the default) needs only SSH access and Docker on the host: the docker backend (docker.sh) with each
 # docker command sent over ssh. Each run's container is named after it, so runs share the host; `--rm` and its
 # `sleep` remove it after REMOTE_HOURS if release never comes.
@@ -20,10 +20,10 @@
 # removes the folder, or keeps it under REMOTE_KEEP. A pid counts as the run's, for the heartbeat and for any signal,
 # only while its working folder is inside the run folder (read from /proc, else lsof): a pid reused by another
 # process is never signalled.
-# check names what is missing: the host with key-based ssh, then docker.sh's check on the host (container mode) or
+# check names what is missing: a login to the host, then docker.sh's check on the host (container mode) or
 # the tools acquire checks (bare mode).
-# Settings: REMOTE_SSH_HOST (ssh destination: user@host or a ~/.ssh/config alias), REMOTE_SSH_MODE (container or
-# bare), REMOTE_HOURS (2), REMOTE_KEEP; container mode: docker.sh's REMOTE_IMAGE and REMOTE_PLATFORM; bare mode:
+# Settings: REMOTE_SSH_HOST (ssh destination: user@host or a ~/.ssh/config alias), REMOTE_SSH_KEY (a key file to log in
+# with), REMOTE_SSH_MODE (container or bare), REMOTE_HOURS (2), REMOTE_KEEP; container mode: docker.sh's REMOTE_IMAGE and REMOTE_PLATFORM; bare mode:
 # REMOTE_SSH_DIR (run folders' root on the host: absolute, or relative to the SSH user's home; .remote-agent/runs).
 set -euo pipefail
 
@@ -45,8 +45,14 @@ if [ -n "$problem" ]; then
   if [ "$op" = check ]; then echo "$problem"; else say "$problem"; fi
   exit 1
 fi
-if [ "$op" = check ] && ! ssh -T -o BatchMode=yes "$REMOTE_SSH_HOST" true </dev/null >/dev/null 2>&1; then
-  echo "cannot reach $REMOTE_SSH_HOST with key-based ssh (ssh -o BatchMode=yes $REMOTE_SSH_HOST true fails)"
+ssh_client
+# shellcheck disable=SC2154 # set by ssh_client
+if [ "$op" = check ] && ! err="$("${ssh_cmd[@]}" "$REMOTE_SSH_HOST" true </dev/null 2>&1 >/dev/null)"; then
+  how="keys from the ssh agent or ~/.ssh/config"
+  [ -z "${REMOTE_SSH_KEY:-}" ] || how="the key file $REMOTE_SSH_KEY"
+  [ "${ssh_cmd[0]}" != env ] || how="$how, then the password or passphrase in remote.env"
+  echo "cannot reach $REMOTE_SSH_HOST with $how: $(printf '%s' "$err" | tail -1)"
+  echo "  fix: \`remote-agent setup\` (key file or password), or load the key with ssh-add"
   exit 1
 fi
 
@@ -107,7 +113,7 @@ stop() {
 '
 
 # Runs one POSIX shell command line on the host, its streams through the connection.
-on_host() { ssh -T -o BatchMode=yes "$host" "$1"; }
+on_host() { "${ssh_cmd[@]}" "$host" "$1"; }
 
 case "$op" in
   acquire)
@@ -164,7 +170,7 @@ if [ -n \"\$e\" ]; then rm -f $x && echo \"\$e\" >$x; fi"
     # shellcheck disable=SC2016 # expanded on the host
     beat="$ours_fn"'(r=$(pwd -P); while ours $$ "$r"; do touch .heartbeat; sleep 60; done) </dev/null >/dev/null 2>&1 &'
     # shellcheck disable=SC2016 # expanded by the sh setsid starts
-    exec ssh -T -o BatchMode=yes "$host" "cd $(sq "$home") || exit 1
+    exec "${ssh_cmd[@]}" "$host" "cd $(sq "$home") || exit 1
 if command -v setsid >/dev/null 2>&1; then
   setsid sh -c $(sq 'echo "$$ group" >>.pid || exit 1; '"$beat"' exec "$@"') sh $argv
   exit \$?
