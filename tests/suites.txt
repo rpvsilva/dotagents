@@ -24,3 +24,4 @@ remote-agent-check.test.sh scripts/remote-* scripts/settings.sh remote/settings.
 parallel.test.sh tests/parallel.sh
 run.test.sh tests/run.sh scripts/shellcheck-version scripts/shellcheck-image
 settings.test.sh scripts/settings.sh *settings.json
+telemetry-save.test.sh scripts/hooks/telemetry-save.sh adapters/claude/hooks/telemetry-save.json adapters/claude/telemetry/* skills/telemetry/settings.json scripts/settings.sh
