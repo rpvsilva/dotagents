@@ -214,13 +214,26 @@ grep -v '^token ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/sec
 check_closed "no token rule"
 grep -v '^example ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
 check_closed "no example rule"
-grep -v '^path ' "$REPO/scripts/hooks/secret-patterns.txt" | sed 's/$/\r/' >"$SANDBOX/hooks/secret-patterns.txt"
+# crlf FILE: FILE's lines with CR LF endings on stdout, whatever FILE ends with. awk, not
+# sed 's/$/\r/', which not every sed supports.
+crlf() { awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' "$1"; }
+# has_crlf FILE: every line of FILE ends in CR LF. Counts CR bytes with tr, since grep on
+# Git for Windows ignores a CR before LF and would never see one.
+has_crlf() {
+  local lines crs
+  lines=$(($(wc -l <"$1")))
+  crs=$(($(tr -dc '\r' <"$1" | wc -c)))
+  [ "$lines" -gt 0 ] && [ "$crs" -eq "$lines" ]
+}
+grep -v '^path ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/lf.txt"
+crlf "$SANDBOX/lf.txt" >"$SANDBOX/hooks/secret-patterns.txt"
+has_crlf "$SANDBOX/hooks/secret-patterns.txt" || fail "no path rule, CRLF endings: the copy has no CR endings"
 check_closed "no path rule, CRLF endings"
 
 # A patterns file with CRLF endings (a Windows checkout, a copied install) gives the same rules.
 cp -R "$REPO/scripts/hooks" "$SANDBOX/crlf"
-sed 's/$/\r/' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/crlf/secret-patterns.txt"
-grep -q $'\r$' "$SANDBOX/crlf/secret-patterns.txt" || fail "crlf: the copy has no CR endings"
+crlf "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/crlf/secret-patterns.txt"
+has_crlf "$SANDBOX/crlf/secret-patterns.txt" || fail "crlf: the copy has no CR endings"
 HOOK="$SANDBOX/crlf/guard-secrets.sh"
 background
 path_cases
