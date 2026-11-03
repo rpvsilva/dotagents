@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -26,10 +27,16 @@ def extract(*args):
     )
 
 
+_RUNS = {}
+
+
 def run(*args):
-    proc = extract(*args)
-    assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout)
+    """extract.py's report for these args; the fixtures never change, so each args list runs once."""
+    if args not in _RUNS:
+        proc = extract(*args)
+        assert proc.returncode == 0, proc.stderr
+        _RUNS[args] = json.loads(proc.stdout)
+    return copy.deepcopy(_RUNS[args])
 
 
 def by_name(run_):
