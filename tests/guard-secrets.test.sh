@@ -11,22 +11,31 @@ fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-# Runs the hook on JSON $2; $1 is "block" or "allow"; $3 names the case; stderr lands in $4.
+# Runs the hook on JSON $2; $1 is "block" or "allow"; $3 names the case; stderr lands in $err.
 judge() {
-  local want="$1" json="$2" name="$3" err="$4" got
+  local want="$1" json="$2" name="$3" got
   if "$HOOK" <<<"$json" 2>"$err"; then got=allow; else
     [ $? -eq 2 ] && got=block || got=error
   fi
   [ "$got" = "$want" ] || fail "$name: wanted $want, got $got $(cat "$err")"
 }
-# judge, with stderr in $SANDBOX/err. Between `background` and `settle` the cases run at once
-# instead (each hook call is mostly process start-up), so only cases that change no state go there.
-bg="" jobs=0
-run() {
-  if [ -z "$bg" ]; then judge "$@" "$SANDBOX/err"; return; fi
+# judge, with stderr in $err. Between `background` and `settle` cases run at once instead (each
+# hook call is mostly process start-up), so only cases that share no state go there.
+err="$SANDBOX/err" bg="" jobs=0
+run() { spawn judge "$@"; }
+# spawn FUNC ARGS...: runs FUNC now, or as one background case between `background` and `settle`,
+# where it runs its own cases one at a time with stderr in its own $err.
+spawn() {
+  if [ -z "$bg" ]; then "$@"; return; fi
   jobs=$((jobs + 1))
-  judge "$@" "$bg/$jobs.err" >"$bg/$jobs.out" &
+  in_job "$bg/$jobs.err" "$@" >"$bg/$jobs.out" &
   if [ $((jobs % 16)) -eq 0 ]; then wait; fi
+}
+# in_job ERR FUNC ARGS...: FUNC with its stderr in ERR, running its own cases one at a time.
+in_job() {
+  local err="$1" bg=""
+  shift
+  "$@"
 }
 background() { bg="$(mktemp -d "$SANDBOX/bg.XXXXXX")"; }
 # Waits for the background cases and counts their failures, then runs cases one at a time again.
@@ -135,57 +144,53 @@ cmd block 'ls(){ cat $1;}; ls .env'
 cmd block 'function test { cat "$@"; }; test .env'
 cmd block 'alias ls=cat; ls .env'
 cmd block 'stat () { cat "$1"; }; stat .env'
-settle
 
 # Commits: a staged secret file or token line blocks; the reason never echoes the token.
-git init -q "$SANDBOX/r"
-git -C "$SANDBOX/r" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+# Each case gets its own copy of one base repo (app.txt committed), so they run at once with the
+# cases above.
+git init -q "$SANDBOX/base"
+echo "base" >"$SANDBOX/base/app.txt"
+git -C "$SANDBOX/base" add app.txt
+git -C "$SANDBOX/base" -c user.name=t -c user.email=t@t commit -q -m base
 token="ghp_$(printf 'a%.0s' {1..36})"
-echo "base" >"$SANDBOX/r/app.txt"
-git -C "$SANDBOX/r" add app.txt
-cmd allow 'git commit -m "clean change"' r
-git -C "$SANDBOX/r" -c user.name=t -c user.email=t@t commit -q -m base
-
-echo "token = $token" >>"$SANDBOX/r/app.txt"
-cmd allow 'git commit -m "unstaged token is not committed"' r
-cmd block 'git commit -am "commits the token"' r
-cmd block "cd $SANDBOX/r && git commit -a -m x" ''
-grep -q "app.txt" "$SANDBOX/err" || fail "token: reason does not name the file"
-if grep -qF "$token" "$SANDBOX/err"; then fail "token: reason echoes the token"; fi
-git -C "$SANDBOX/r" add app.txt
-cmd block 'git commit -m x' r
-git -C "$SANDBOX/r" reset -q --hard
-
-printf -- '-----BEGIN OPENSSH %s KEY-----\n' PRIVATE >"$SANDBOX/r/deploy.txt"
-git -C "$SANDBOX/r" add deploy.txt
-cmd block 'git commit -m key' r
-git -C "$SANDBOX/r" rm -q --cached deploy.txt
+# stage NAME FILE TEXT: a copy of the base repo at $SANDBOX/NAME, with TEXT in FILE, staged.
+stage() {
+  cp -R "$SANDBOX/base" "$SANDBOX/$1"
+  printf '%s\n' "$3" >"$SANDBOX/$1/$2"
+  git -C "$SANDBOX/$1" add -f "$2"
+}
+# commit_case WANT NAME FILE TEXT: `git commit` with TEXT staged in FILE; a blocked token is never echoed.
+commit_case() {
+  stage "$2" "$3" "$4"
+  cmd "$1" "git commit -m $2" "$2"
+  if [ "$1" = block ] && [ -n "$4" ] && grep -qF -e "$4" "$err"; then fail "$2: reason echoes the secret"; fi
+}
+# A token in app.txt, changed in the worktree but not staged.
+unstaged() {
+  cp -R "$SANDBOX/base" "$SANDBOX/unstaged"
+  echo "token = $token" >>"$SANDBOX/unstaged/app.txt"
+  cmd allow 'git commit -m "unstaged token is not committed"' unstaged
+  cmd block 'git commit -am "commits the token"' unstaged
+  cmd block "cd $SANDBOX/unstaged && git commit -a -m x" ''
+  grep -q "app.txt" "$err" || fail "token: reason does not name the file"
+  if grep -qF "$token" "$err"; then fail "token: reason echoes the token"; fi
+}
+spawn commit_case allow clean new.txt "base"
+spawn unstaged
+spawn commit_case block staged app.txt "token = $token"
+spawn commit_case block deploy deploy.txt "$(printf -- '-----BEGIN OPENSSH %s KEY-----' PRIVATE)"
 
 # Every token kind blocks a commit. Each token is built here, so this file never holds one.
 rep() { printf "%${2}s" '' | tr ' ' "$1"; }
 for kind in "github_pat_ $(rep a 22)" "AKIA $(rep A 16)" "xoxb- $(rep 1 10)" "xoxp- $(rep a 12)" \
   "sk-ant- $(rep a 20)" "AIza $(rep a 35)" "gho_ $(rep a 36)"; do
-  tok="${kind/ /}"
-  echo "key: $tok" >"$SANDBOX/r/conf.txt"
-  git -C "$SANDBOX/r" add conf.txt
-  cmd block "git commit -m ${kind%% *}" r
-  if grep -qF "$tok" "$SANDBOX/err"; then fail "token ${kind%% *}: reason echoes the token"; fi
-  git -C "$SANDBOX/r" rm -q --cached conf.txt
+  spawn commit_case block "${kind%% *}" conf.txt "key: ${kind/ /}"
 done
-printf -- '-----BEGIN %s KEY-----\n' PRIVATE >"$SANDBOX/r/conf.txt"
-git -C "$SANDBOX/r" add conf.txt
-cmd block 'git commit -m bare-pem' r
-git -C "$SANDBOX/r" rm -q --cached conf.txt
+spawn commit_case block bare-pem conf.txt "$(printf -- '-----BEGIN %s KEY-----' PRIVATE)"
 # Near misses stay allowed.
-echo "AKIA$(rep A 15) xox-$(rep a 10) sk-ant-short" >"$SANDBOX/r/conf.txt"
-git -C "$SANDBOX/r" add conf.txt
-cmd allow 'git commit -m near-miss' r
-git -C "$SANDBOX/r" rm -q --cached conf.txt
-
-touch "$SANDBOX/r/prod.env"
-git -C "$SANDBOX/r" add -f prod.env
-cmd block 'git commit -m x' r
-git -C "$SANDBOX/r" rm -q --cached prod.env
+spawn commit_case allow near-miss conf.txt "AKIA$(rep A 15) xox-$(rep a 10) sk-ant-short"
+spawn commit_case block prod-env prod.env ""
+settle
 
 # The rules live only in secret-patterns.txt, beside lib.sh.
 for f in lib.sh guard-secrets.sh; do
@@ -238,11 +243,8 @@ HOOK="$SANDBOX/crlf/guard-secrets.sh"
 background
 path_cases
 cmd allow 'cat .env.example'
+spawn commit_case block crlf-staged app.txt "token = $token"
 settle
-echo "token = $token" >>"$SANDBOX/r/app.txt"
-git -C "$SANDBOX/r" add app.txt
-cmd block 'git commit -m x' r
-git -C "$SANDBOX/r" reset -q --hard
 HOOK="$REPO/scripts/hooks/guard-secrets.sh"
 
 # The command as an argument works too.
