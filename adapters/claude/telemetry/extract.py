@@ -97,6 +97,90 @@ def measure(entries):
     }, set(tool_ids)
 
 
+# The repo's secret rules (see its header); label lines apply only here, case-insensitive.
+PATTERNS = Path(__file__).resolve().parents[3] / "scripts" / "hooks" / "secret-patterns.txt"
+LABEL_LENGTH = 80
+
+
+def secret_rules(path=PATTERNS):
+    """Compiled token and label rules from the patterns file; None when it cannot be read."""
+    flags = {"token": 0, "label": re.I}
+    try:
+        lines = [line.partition(" ") for line in path.read_text(encoding="utf-8").splitlines()]
+        rules = [re.compile(rule, flags[name]) for name, _, rule in lines if name in flags]
+    except (OSError, UnicodeDecodeError, re.error):
+        return None
+    return rules or None
+
+
+def label(tool, given, rules):
+    """A step's short label: the first line of the tool's label input, masked, then cut. Only these keys are read."""
+    if tool == "Bash":
+        text = given.get("command")
+    elif tool in ("Read", "Write", "Edit", "NotebookEdit"):
+        text = given.get("file_path")
+    elif tool in ("Grep", "Glob"):
+        text = given.get("pattern")
+        if text is not None and given.get("path"):
+            text = f"{text} in {given['path']}"
+    elif tool == "WebFetch":
+        text = given.get("url")
+    elif tool == "WebSearch":
+        text = given.get("query")
+    elif tool == "Skill":
+        text = given.get("skill")
+    elif tool == "Agent":
+        text = ": ".join(str(v) for v in (given.get("subagent_type"), given.get("description")) if v)
+    else:
+        text = None
+    if not isinstance(text, str) or not text or rules is None:
+        return ""
+    text = text.splitlines()[0] if text.strip() else ""
+    for rule in rules:
+        text = rule.sub("***", text)
+    return text if len(text) <= LABEL_LENGTH else text[:LABEL_LENGTH - 1] + "…"
+
+
+def results(logs):
+    """{tool_use_id: (time, is_error)} for every tool result in these logs."""
+    found = {}
+    for log in logs:
+        for entry in log:
+            if entry.get("type") != "user" or not entry.get("timestamp"):
+                continue
+            for block in blocks(entry):
+                if block.get("type") == "tool_result" and block.get("tool_use_id"):
+                    found.setdefault(block["tool_use_id"], (parse_time(entry["timestamp"]), block.get("is_error") is True))
+    return found
+
+
+def steps(entries, done, rules, subagent=None):
+    """One step per tool call in these entries, timed by its result in done; no span set yet."""
+    found = {}
+    for entry in entries:
+        if entry.get("type") != "assistant" or not entry.get("timestamp"):
+            continue
+        start = parse_time(entry["timestamp"])
+        for block in blocks(entry):
+            if block.get("type") != "tool_use" or block.get("id") in found:
+                continue
+            tool = block.get("name", "")
+            given = block.get("input") if isinstance(block.get("input"), dict) else {}
+            end, failed = done.get(block.get("id"), (None, False))
+            step = {
+                "tool": tool,
+                "label": label(tool, given, rules),
+                "start": start,
+                "seconds": round((end - start).total_seconds(), 3) if end else None,
+                "failed": failed,
+                "subagent": subagent,
+            }
+            if tool == "Bash" and given.get("run_in_background") is True:
+                step["background"] = True
+            found[block.get("id")] = step
+    return list(found.values())
+
+
 def load_subagents(session):
     """(meta, log) for every subagent the session started."""
     folder = Path(session).with_suffix("") / "subagents"
@@ -155,12 +239,13 @@ def segment(entries, skills):
     return [[skill, start, end] for (skill, start), end in zip(spans, ends)]
 
 
-def span(entries, skill, pool):
-    """Numbers for one span, its subagents included; None when nothing happened in it."""
+def span(entries, skill, pool, done, rules):
+    """Numbers for one span, its subagents included, with its steps; None when nothing happened in it."""
     totals, tool_ids = measure(entries)
     agents = linked_subagents(pool, tool_ids)
     if totals["turns"] == 0 and not agents:
         return None
+    own = steps(entries, done, rules) + [s for meta, _, log in agents for s in steps(log, done, rules, meta.get("agentType"))]
     timed = [e for e in entries if e.get("timestamp")] + [e for *_, log in agents for e in log if e.get("timestamp")]
     for _, numbers, _ in agents:
         add(totals, {k: numbers[k] for k in ("turns", "toolCalls", "tools", "tokensByModel")})
@@ -174,6 +259,7 @@ def span(entries, skill, pool):
         **totals,
         "subagents": [{"type": meta.get("agentType"), "description": meta.get("description"), **numbers}
                       for meta, numbers, _ in agents],
+        "steps": own,
     }
 
 
@@ -203,6 +289,10 @@ def main():
     args.session = find_session(args.session, Path(args.cwd).resolve())
 
     entries = load(args.session)
+    pool = load_subagents(args.session)
+    # Results are looked up across the whole session: one can land in the next span.
+    done = results([entries] + [log for _, log in pool])
+    rules = secret_rules()
     skills = {loaded_skill(e) for e in entries} - {None}
     stretches = segment(entries, skills)
     # The last telemetry stretch is this request; everything before it is measurable.
@@ -223,10 +313,9 @@ def main():
     else:
         chosen = stretches[reports[-1] + 1:] if reports else stretches
 
-    pool = load_subagents(args.session)
     spans = []
     for skill, first, last in chosen:
-        numbers = span(entries[first:last], skill, pool)
+        numbers = span(entries[first:last], skill, pool, done, rules)
         if numbers:
             spans.append(numbers)
     if not spans:
@@ -235,16 +324,22 @@ def main():
 
     # Name spans by skill without its plugin prefix; repeats become renovate-prs-2, -3, ...
     seen = {}
+    all_steps = []
     for i, s in enumerate(spans):
         short = s["skill"].split(":")[-1] if s["skill"] else "no skill"
         seen[short] = seen.get(short, 0) + 1
-        spans[i] = {"name": short if seen[short] == 1 else f"{short}-{seen[short]}", **s}
+        name = short if seen[short] == 1 else f"{short}-{seen[short]}"
+        all_steps += [{**step, "span": name, "skill": s["skill"]} for step in s.pop("steps")]
+        spans[i] = {"name": name, **s}
+    all_steps.sort(key=lambda step: step["start"])
+    keys = ("tool", "label", "start", "seconds", "failed", "span", "skill", "subagent", "background")
+    all_steps = [{k: stamp(step[k]) if k == "start" else step[k] for k in keys if k in step} for step in all_steps]
 
     window = entries[chosen[0][1]:chosen[-1][2]]
     start = parse_time(spans[0]["start"] if args.skill else next(e["timestamp"] for e in window if e.get("timestamp")))
     end = max(parse_time(s["end"]) for s in spans)
     json.dump({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "tool": "claude-code",
         "sessionId": Path(args.session).stem,
         "skill": args.skill,
@@ -252,6 +347,7 @@ def main():
         "end": stamp(end),
         "wallClockSeconds": round((end - start).total_seconds()),
         "spans": spans,
+        "steps": all_steps,
     }, sys.stdout, indent=2)
 
 
