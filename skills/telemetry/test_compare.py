@@ -1,9 +1,14 @@
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
+
+import compare
 
 HERE = Path(__file__).parent
 PRICING = str(HERE / "fixtures" / "pricing.json")
@@ -36,12 +41,20 @@ class Compare(unittest.TestCase):
         for r in runs:
             (self.dir / f"{r['sessionId']}.json").write_text(json.dumps(r), encoding="utf-8")
 
-    def compare(self, *args):
-        return subprocess.run(
-            [sys.executable, str(HERE / "compare.py"), "--dir", str(self.dir),
-             "--pricing", PRICING, *args],
-            capture_output=True, encoding="utf-8",
-        )
+    def compare(self, *args, dirs=None):
+        """Run compare.py's main in this process (a fresh interpreter per case costs ~60 ms)."""
+        argv = ["compare.py", *(a for d in (dirs or [self.dir]) for a in ("--dir", str(d))),
+                "--pricing", PRICING, *args]
+        out = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")  # main reconfigures stdout
+        err = io.StringIO()
+        code = 0
+        with mock.patch.object(sys, "argv", argv), redirect_stdout(out), redirect_stderr(err):
+            try:
+                compare.main()
+            except SystemExit as e:
+                code = e.code
+            out.flush()
+        return subprocess.CompletedProcess(argv, code, out.buffer.getvalue().decode("utf-8"), err.getvalue())
 
     def ok(self, *args):
         proc = self.compare(*args)
@@ -122,6 +135,15 @@ class Compare(unittest.TestCase):
         self.save(run("a", "2026-10-01", span("deploy")))
         (self.dir / "bad.json").write_text("{", encoding="utf-8")
         self.assertIn("Skipped 1 saved file", self.ok())
+
+    def test_the_script_runs_as_a_command(self):
+        self.save(run("a", "2026-10-01", span("deploy")))
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "compare.py"), "--dir", str(self.dir), "--pricing", PRICING],
+            capture_output=True, encoding="utf-8",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.rows(proc.stdout, "deploy")[0][0], "2026-10-01")
 
 
 if __name__ == "__main__":
