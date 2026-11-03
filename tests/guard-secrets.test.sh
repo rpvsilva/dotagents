@@ -117,10 +117,57 @@ git -C "$SANDBOX/r" add deploy.txt
 cmd block 'git commit -m key' r
 git -C "$SANDBOX/r" rm -q --cached deploy.txt
 
+# Every token kind blocks a commit. Each token is built here, so this file never holds one.
+rep() { printf "%${2}s" '' | tr ' ' "$1"; }
+for kind in "github_pat_ $(rep a 22)" "AKIA $(rep A 16)" "xoxb- $(rep 1 10)" "xoxp- $(rep a 12)" \
+  "sk-ant- $(rep a 20)" "AIza $(rep a 35)" "gho_ $(rep a 36)"; do
+  tok="${kind/ /}"
+  echo "key: $tok" >"$SANDBOX/r/conf.txt"
+  git -C "$SANDBOX/r" add conf.txt
+  cmd block "git commit -m ${kind%% *}" r
+  if grep -qF "$tok" "$SANDBOX/err"; then fail "token ${kind%% *}: reason echoes the token"; fi
+  git -C "$SANDBOX/r" rm -q --cached conf.txt
+done
+printf -- '-----BEGIN %s KEY-----\n' PRIVATE >"$SANDBOX/r/conf.txt"
+git -C "$SANDBOX/r" add conf.txt
+cmd block 'git commit -m bare-pem' r
+git -C "$SANDBOX/r" rm -q --cached conf.txt
+# Near misses stay allowed.
+echo "AKIA$(rep A 15) xox-$(rep a 10) sk-ant-short" >"$SANDBOX/r/conf.txt"
+git -C "$SANDBOX/r" add conf.txt
+cmd allow 'git commit -m near-miss' r
+git -C "$SANDBOX/r" rm -q --cached conf.txt
+
 touch "$SANDBOX/r/prod.env"
 git -C "$SANDBOX/r" add -f prod.env
 cmd block 'git commit -m x' r
 git -C "$SANDBOX/r" rm -q --cached prod.env
+
+# The rules live only in secret-patterns.txt, beside lib.sh.
+for f in lib.sh guard-secrets.sh; do
+  if grep -qF -e '\.netrc' -e 'KEY-----' -e 'AKIA[' -e '(example|sample' "$REPO/scripts/hooks/$f"; then
+    fail "$f holds a secret rule"
+  fi
+done
+
+# Without the patterns file (or with a rule missing), the hooks stop loudly, never match every path.
+cp -R "$REPO/scripts/hooks" "$SANDBOX/hooks"
+rm "$SANDBOX/hooks/secret-patterns.txt"
+code=0
+"$SANDBOX/hooks/guard-secrets.sh" 'cat src/app.ts' 2>"$SANDBOX/err" || code=$?
+[ "$code" -eq 2 ] || fail "no patterns file: wanted exit 2, got $code"
+grep -q 'secret-patterns.txt' "$SANDBOX/err" || fail "no patterns file: message does not name it"
+check_closed() {
+  local out code=0
+  out="$(bash -c '. "$1"; is_secret src/app.ts && echo matches' _ "$SANDBOX/hooks/lib.sh" 2>/dev/null)" || code=$?
+  [ "$code" -eq 2 ] || fail "$1: sourcing lib.sh wanted exit 2, got $code"
+  [ -z "$out" ] || fail "$1: is_secret matched every path"
+}
+check_closed "no patterns file"
+grep -v '^path ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
+check_closed "no path rule"
+grep -v '^token ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
+check_closed "no token rule"
 
 # The command as an argument works too.
 "$HOOK" 'cat .env' 2>/dev/null && fail "argument form did not block"
