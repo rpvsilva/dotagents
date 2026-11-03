@@ -5,11 +5,13 @@
 # secret_re (secret file paths), example_re (examples of them, which pass) and token_re (tokens and
 # private keys in text). Without them it stops (exit 2): an empty regex would match every path.
 # Read in plain bash: every hook call sources this file, and each extra process costs it time.
+# A trailing CR is dropped (a CRLF checkout on Windows), else every rule would end in it.
 case "${BASH_SOURCE[0]}" in */*) secret_patterns="${BASH_SOURCE[0]%/*}" ;; *) secret_patterns=. ;; esac
 secret_patterns="$secret_patterns/secret-patterns.txt"
 secret_re="" example_re="" token_re=""
 if [ -f "$secret_patterns" ] && [ -r "$secret_patterns" ]; then
   while IFS= read -r _secret_line || [ -n "$_secret_line" ]; do
+    _secret_line="${_secret_line%$'\r'}"
     case "$_secret_line" in
       'path '*) secret_re="${secret_re:+$secret_re|}${_secret_line#path }" ;;
       'example '*) example_re="${example_re:+$example_re|}${_secret_line#example }" ;;
