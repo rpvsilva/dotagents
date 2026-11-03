@@ -34,8 +34,9 @@ def unpriced(run_text):
 class Table(unittest.TestCase):
     """run.json: grill-with-docs then renovate-prs, priced at model-a's $1 / $10 / $0.1 / $2 (1h write)."""
 
-    def setUp(self):
-        self.out = report(RUN)
+    @classmethod
+    def setUpClass(cls):
+        cls.out = report(RUN)
 
     def test_one_row_per_span_and_a_total_row(self):
         # grill-with-docs: 0.10 input + 0.50 output + 0.12 cache read + 0.20 cache write = $0.92
@@ -65,8 +66,9 @@ class Table(unittest.TestCase):
 
 
 class Breakdowns(unittest.TestCase):
-    def setUp(self):
-        self.out = report(RUN)
+    @classmethod
+    def setUpClass(cls):
+        cls.out = report(RUN)
 
     def test_lists_each_spans_tool_calls_with_mcp_tools_grouped_by_server(self):
         self.assertIn("grill-with-docs\n"
