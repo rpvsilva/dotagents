@@ -366,3 +366,31 @@ test('wrappedRows counts the rows a line wraps to at spaces, a word longer than 
   assert.equal(wrappedRows('a'.repeat(25), 10), 3)
   assert.equal(wrappedRows(`ab ${'c'.repeat(12)} d`, 10), 3)
 })
+
+test('a crafted 1 MiB line of secret-like repeats is masked and cut in well under a second', () => {
+  const MiB = 1 << 20
+  for (const unit of ['KEY', 'eyJ-', 'TOKEN_']) {
+    const crafted = `GH_TOKEN=${ENV_VALUE} ${unit.repeat(Math.ceil(MiB / unit.length))}`
+    const started = performance.now()
+    const line = oneLine(crafted)
+    const took = performance.now() - started
+    assert.ok(took < 500, `${unit}: ${Math.round(took)} ms`)
+    assert.ok(line.startsWith('GH_TOKEN=[masked] '), line)
+    assert.ok(!line.includes(ENV_VALUE), line)
+    assert.equal(line.length, 160)
+  }
+  // Masking shortens a long secret: the line still says it was cut.
+  assert.equal(oneLine(`a sk-ant-${'x'.repeat(1000)} more`), 'a [masked]…')
+})
+
+test('a tail read starting inside a multi-byte character keeps the offset at the true line start', () => {
+  const enc = new TextEncoder()
+  const file = enc.encode(`${event('before €uro')}${event('kept')}${event('half').slice(0, 12)}`)
+  // One byte into the 3-byte €: the read starts on its two continuation bytes, which decode as two U+FFFD.
+  const from = enc.encode(event('before €uro').split('€')[0]).length + 1
+  const chunk = new TextDecoder().decode(file.slice(from))
+  assert.ok(chunk.startsWith('��'))
+  const got = readChunk(log(), chunk, { from, length: file.length - from, isTail: true, isFull: true }, new Map())
+  assert.deepEqual(got.lines, ['kept'])
+  assert.equal(got.offset, enc.encode(`${event('before €uro')}${event('kept')}`).length)
+})

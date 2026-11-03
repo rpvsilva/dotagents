@@ -78,12 +78,14 @@ const ANSI = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]|(?:\u001b\]|\u009d)[^\u0007\u
 
 /**
  * `line` as one row of at most `max` characters: newlines and tabs to spaces, ANSI escapes and control characters
- * dropped (`printable`), secrets masked, then cut, so a cut never leaves part of a secret unmasked.
+ * dropped (`printable`), secrets masked, then cut, so a cut never leaves part of a secret unmasked. Masking runs on
+ * the first `4 * max` characters only: some patterns backtrack, and the sandbox writes the line.
  */
 export function oneLine(line: string, max = LINE_MAX): string {
   const flat = printable(line.replace(ANSI, '').replace(/[\r\n\t]+/g, ' ')).replace(/ {2,}/g, ' ').trim()
-  const masked = mask(flat)
-  return masked.length > max ? `${masked.slice(0, max - 1)}…` : masked
+  const masked = mask(flat.slice(0, 4 * max))
+  if (masked.length > max) return `${masked.slice(0, max - 1)}…`
+  return flat.length > 4 * max ? `${masked}…` : masked
 }
 
 /** The sandbox's one-word summary of a tool call's input, as its progress line prints it. */
@@ -245,8 +247,10 @@ export function readChunk(
   if (at.isTail) {
     const cut = text.indexOf('\n')
     if (cut < 0) return at.isFull ? { ...log, offset: from + at.length, truncated: true } : log
-    from += encoder.encode(text.slice(0, cut + 1)).length
     text = text.slice(cut + 1)
+    // Counted from the end the file had whole: the dropped part may start inside a character, whose stray bytes
+    // read as U+FFFD and re-encode longer than they were.
+    from = at.isFull ? at.from + at.length - encoder.encode(text).length : from + encoder.encode(chunk.slice(0, cut + 1)).length
     truncated = true
   }
   const offset = nextOffset(text, from)

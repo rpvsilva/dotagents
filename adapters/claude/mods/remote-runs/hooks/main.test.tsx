@@ -850,3 +850,53 @@ test('a tail read that fails leaves the log waiting, and the next tick reads it'
   expect(shown.lines).toEqual(names(3))
   expect(shown.texts).toContain('(earlier events not shown: open the file)')
 })
+
+const DONE = jsonl({ type: 'result', subtype: 'success', is_error: false, duration_ms: 4000 })
+const GAPS = {
+  'events over a chunk': says(1300, 2).replace(/line /g, `${'y'.repeat(900)} `),
+  'one line over a chunk': say('x'.repeat((1 << 20) + 1000)),
+}
+for (const [gap, text] of Object.entries(GAPS)) {
+  test(`a finished run that wrote ${gap} between two ticks shows its log to the end`, async ($, on) => {
+    const w = await withLog($, on, says(2))
+    await press($, 'run:agent-1')
+    expect((await logView($)).lines).toEqual(names(2))
+    append(w, text + DONE)
+    write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+    for (let i = 0; i < 4; i++) await w.clock.advance(1500)
+    expect((await logView($)).lines.slice(-1)).toEqual(['done in 4s'])
+  })
+}
+
+for (const [session, isResumable] of [['', false], ['{}\n', true]] as const) {
+  test(`a finished run with ${isResumable ? 'a non-empty' : 'an empty'} session.jsonl ${isResumable ? 'shows the' : 'shows no'} resume command`, async ($, on) => {
+    const w = await withLog($, on, '')
+    w.files[SESSION] = { text: session, mtimeMs: NOW }
+    write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+    await w.clock.advance(1500)
+    const shown = await logLines($)
+    expect(shown.includes(RESUME)).toBe(isResumable)
+    if (!isResumable) expect(shown[shown.length - 1]).toBe('no session came back: this run cannot be resumed')
+  })
+}
+
+test('scrolling a finished run before its log is drawn moves by the rows the draw shows', async ($, on) => {
+  // Once `opened` is set, the view the mod reads says that run is open with no press, so nothing drew its log.
+  let opened: string | null = null
+  on('state.get', (_: unknown, e: any, next: any) =>
+    e.key === 'view' && opened !== null ? { value: { value: { shape: 'view-1', value: { runId: opened } }, version: 1 } } : next(e))
+  const w = await withLog($, on, '')
+  // A run no other test draws, opened with no draw, as a reload finds it.
+  addRun(w, '/repo/.git', 'undrawn', runJson({ name: 'undrawn', state: 'done', exit_code: 0, ended: NOW / 1000 + 2 }))
+  w.files['/repo/.git/remote-agent/undrawn/transcript.jsonl'] = { text: says(30), mtimeMs: NOW }
+  w.files['/repo/.git/remote-agent/undrawn/session.jsonl'] = { text: '{}\n', mtimeMs: NOW }
+  await w.clock.advance(1500)
+  await words($)
+  opened = 'undrawn'
+  await w.clock.advance(1500)
+  await $.ui.scroll(scroll(-1))
+  // 20 rows at 60 columns: two header rows and the hint's four leave 14, one up from the end.
+  expect((await logView($)).lines).toEqual(names(14, 15))
+  await $.ui.scroll(scroll(-1))
+  expect((await logView($)).lines).toEqual(names(14, 14))
+})
