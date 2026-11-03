@@ -308,6 +308,14 @@ class Analyse(unittest.TestCase):
         self.save(bad)
         self.assertEqual([r[2] for r in self.section(self.ok("deploy"), "Slowest")], ["ls"])
 
+    def test_steps_missing_seconds_or_with_a_non_string_subagent_id_are_skipped(self):
+        bad = run("a", step("Bash", "ls"), step("Bash", "id", subagent="reviewer", subagentId=5))
+        no_seconds = step("Bash", "untimed")
+        del no_seconds["seconds"]
+        bad["steps"].append(no_seconds)
+        self.save(bad)
+        self.assertEqual([r[2] for r in self.section(self.ok("deploy"), "Slowest")], ["ls"])
+
     def test_steps_with_non_finite_seconds_are_skipped(self):
         for value in ("Infinity", "-Infinity", "NaN"):
             with self.subTest(value):
