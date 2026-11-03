@@ -11,6 +11,8 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 SANDBOX="$(cd "$SANDBOX" && pwd -P)"
 unset XDG_CONFIG_HOME TELEMETRY_EXTRACT
+# Git Bash on Windows copies on `ln -s` unless told otherwise, as install.sh says.
+export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict"
 fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
@@ -69,7 +71,8 @@ quiet "$h" "$(payload "$t")" "real save"
 saved="$h/.agents/telemetry/sess-real.json"
 if wait_for '[ -s "$saved" ]'; then
   jq -e '.whole == true' "$saved" >/dev/null || fail "real save: whole is not true"
-  jq -e --arg r "$SANDBOX/proj" '.repo == $r' "$saved" >/dev/null || fail "real save: repo is not $SANDBOX/proj"
+  # Only the tail: on Windows, repo and the paths Python sees are native (C:\...).
+  jq -e '.repo | test("[/\\\\]proj$")' "$saved" >/dev/null || fail "real save: repo is not $SANDBOX/proj: $(jq -c .repo "$saved")"
   jq -e '.sessionId == "sess-real"' "$saved" >/dev/null || fail "real save: wrong sessionId"
 else
   fail "real save: $saved never appeared"
@@ -84,7 +87,8 @@ quiet "$h" "$(payload "$t")" "slow extractor" TELEMETRY_EXTRACT="$x"
 [ ! -e "$x.done" ] || fail "slow extractor: the hook waited for the extractor to finish"
 saved="$h/.agents/telemetry/sess-slow.json"
 if wait_for '[ -s "$saved" ]'; then
-  jq -e --arg t "$t" --arg c "$SANDBOX/proj" '.argv == ["--whole", "--session", $t, "--cwd", $c]' "$saved" >/dev/null \
+  jq -e '.argv | length == 5 and .[0] == "--whole" and .[1] == "--session" and (.[2] | endswith("sess-slow.jsonl"))
+    and .[3] == "--cwd" and (.[4] | endswith("proj"))' "$saved" >/dev/null \
     || fail "slow extractor: wrong arguments: $(cat "$saved")"
 else
   fail "slow extractor: $saved never appeared"
