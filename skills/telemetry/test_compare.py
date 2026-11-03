@@ -91,8 +91,35 @@ class Compare(unittest.TestCase):
     def test_skill_limits_output_and_the_short_name_works(self):
         self.save(run("a", "2026-10-01", span("plug:deploy"), span("review")))
         out = self.ok("deploy")
-        self.assertIn("plug:deploy", out.splitlines())
+        self.assertIn("deploy", out.splitlines())
         self.assertNotIn("review", out)
+
+    def test_a_plugin_skill_and_its_short_name_share_one_table(self):
+        self.save(run("a", "2026-10-01", span("plug:deploy", wall=60)),
+                  run("b", "2026-10-02", span("deploy", wall=90)))
+        out = self.ok()
+        self.assertNotIn("plug:deploy", out)
+        self.assertEqual([(r[0], r[2]) for r in self.rows(out, "deploy")],
+                         [("2026-10-01", "60 s"), ("2026-10-02", "90 s"), ("change", "+30 s (+50%)")])
+
+    def test_every_manual_save_of_a_session_shows(self):
+        a = {**run("S", "2026-10-01", span("deploy")), "start": "2026-10-01T10:00:00.000Z", "whole": False}
+        b = {**run("S", "2026-10-01", span("review")), "start": "2026-10-01T11:00:00.000Z", "whole": False}
+        (self.dir / "a.json").write_text(json.dumps(a), encoding="utf-8")
+        (self.dir / "b.json").write_text(json.dumps(b), encoding="utf-8")
+        self.assertEqual(self.rows(self.ok("review"), "review")[0][0], "2026-10-01")
+        out = self.ok()
+        self.assertIn("deploy", out.splitlines())
+        self.assertIn("review", out.splitlines())
+
+    def test_a_malformed_saved_run_is_skipped_not_a_crash(self):
+        self.save(run("a", "2026-10-01", span("deploy")))
+        (self.dir / "bad.json").write_text(
+            '{"sessionId":"x","start":"2026-11-01T10:00:00Z","spans":"oops"}', encoding="utf-8")
+        (self.dir / "num.json").write_text(json.dumps(run("y", "2026-10-02", {**span("deploy"), "skill": 3})), encoding="utf-8")
+        out = self.ok()
+        self.assertIn("Skipped 2 saved files", out)
+        self.assertEqual([r[0] for r in self.rows(out, "deploy")], ["2026-10-01"])
 
     def test_since_and_until_are_inclusive_on_the_run_date(self):
         self.save(*(run(d, d, span("deploy")) for d in
