@@ -258,12 +258,13 @@ code=0; CHECK_PATH="$SANDBOX/downbin:$CLIENT_PATH" check || code=$?
 grep -q "cannot reach me@build-box" "$SANDBOX/out" || fail "ssh unreachable: host not named as unreachable: $(out)"
 grep -q "Docker daemon" "$SANDBOX/out" && fail "ssh unreachable: went on to check Docker: $(out)"
 grep -q "keys from the ssh agent" "$SANDBOX/out" || fail "ssh unreachable: key login not named: $(out)"
-# With a password in remote.env and a key file, the message names both.
-config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_KEY=/k/box
+# With a password in remote.env and a key file, the message names both. A relative key file: Git Bash would turn
+# /k/box into K:/box on its way through jq.exe.
+config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_KEY=keys/box
 echo "SSH_PASSWORD=pw-check" >>"$SANDBOX/config/dotagents/remote.env"
 code=0; CHECK_PATH="$SANDBOX/downbin:$CLIENT_PATH" check || code=$?
 [ "$code" != 0 ] || fail "ssh password unreachable: exited 0"
-grep -q "cannot reach me@build-box with the key file /k/box, then the password" "$SANDBOX/out" \
+grep -q "cannot reach me@build-box with the key file keys/box, then the password" "$SANDBOX/out" \
   || fail "ssh password unreachable: login not named: $(out)"
 grep -q "pw-check" "$SANDBOX/out" && fail "ssh password unreachable: the password showed"
 config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
