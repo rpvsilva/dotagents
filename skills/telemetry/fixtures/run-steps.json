@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 3,
+  "tool": "claude-code",
+  "sessionId": "5678efgh-0000-0000-0000-000000000000",
+  "skill": null,
+  "start": "2026-10-24T09:00:00.000Z",
+  "end": "2026-10-24T09:03:00.000Z",
+  "wallClockSeconds": 180,
+  "repo": "/home/dev/projects/shop",
+  "date": "2026-10-24",
+  "whole": true,
+  "spans": [
+    {
+      "name": "grill-with-docs",
+      "skill": "mattpocock-skills:grill-with-docs",
+      "start": "2026-10-24T09:00:00.000Z",
+      "end": "2026-10-24T09:01:30.000Z",
+      "wallClockSeconds": 90,
+      "turns": 6,
+      "toolCalls": 4,
+      "tools": {
+        "Bash": 2,
+        "Read": 1,
+        "AskUserQuestion": 1
+      },
+      "tokensByModel": {
+        "model-a": {
+          "input": 50000,
+          "output": 20000,
+          "cacheRead": 600000,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 50000
+        }
+      },
+      "subagents": []
+    },
+    {
+      "name": "renovate-prs",
+      "skill": "renovate-prs",
+      "start": "2026-10-24T09:01:30.000Z",
+      "end": "2026-10-24T09:03:00.000Z",
+      "wallClockSeconds": 90,
+      "turns": 5,
+      "toolCalls": 4,
+      "tools": {
+        "Bash": 3,
+        "Agent": 1
+      },
+      "tokensByModel": {
+        "model-a": {
+          "input": 60000,
+          "output": 30000,
+          "cacheRead": 800000,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 100000
+        }
+      },
+      "subagents": [
+        {
+          "type": "Explore",
+          "description": "Find lock files",
+          "turns": 2,
+          "toolCalls": 2,
+          "tools": {
+            "Glob": 1,
+            "Read": 1
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 0,
+              "output": 10000,
+              "cacheRead": 0,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "tool": "Bash",
+      "label": "git status",
+      "start": "2026-10-24T09:00:05.000Z",
+      "seconds": 0.412,
+      "failed": false,
+      "span": "grill-with-docs",
+      "skill": "mattpocock-skills:grill-with-docs",
+      "subagent": null
+    },
+    {
+      "tool": "Read",
+      "label": "/home/dev/projects/shop/README.md",
+      "start": "2026-10-24T09:00:10.000Z",
+      "seconds": 0.05,
+      "failed": false,
+      "span": "grill-with-docs",
+      "skill": "mattpocock-skills:grill-with-docs",
+      "subagent": null
+    },
+    {
+      "tool": "Bash",
+      "label": "npm test",
+      "start": "2026-10-24T09:00:20.000Z",
+      "seconds": 12.3,
+      "failed": true,
+      "span": "grill-with-docs",
+      "skill": "mattpocock-skills:grill-with-docs",
+      "subagent": null
+    },
+    {
+      "tool": "AskUserQuestion",
+      "label": "",
+      "start": "2026-10-24T09:00:40.000Z",
+      "seconds": 35.0,
+      "failed": false,
+      "span": "grill-with-docs",
+      "skill": "mattpocock-skills:grill-with-docs",
+      "subagent": null
+    },
+    {
+      "tool": "Bash",
+      "label": "gh pr list --author app/renovate",
+      "start": "2026-10-24T09:01:35.000Z",
+      "seconds": 1.8,
+      "failed": false,
+      "span": "renovate-prs",
+      "skill": "renovate-prs",
+      "subagent": null
+    },
+    {
+      "tool": "Agent",
+      "label": "Explore: Find lock files",
+      "start": "2026-10-24T09:01:40.000Z",
+      "seconds": 20.5,
+      "failed": false,
+      "span": "renovate-prs",
+      "skill": "renovate-prs",
+      "subagent": null
+    },
+    {
+      "tool": "Glob",
+      "label": "**/package-lock.json",
+      "start": "2026-10-24T09:01:45.000Z",
+      "seconds": 0.2,
+      "failed": false,
+      "span": "renovate-prs",
+      "skill": "renovate-prs",
+      "subagent": "Explore"
+    },
+    {
+      "tool": "Read",
+      "label": "/home/dev/projects/shop/package-lock.json",
+      "start": "2026-10-24T09:01:50.000Z",
+      "seconds": 0.1,
+      "failed": false,
+      "span": "renovate-prs",
+      "skill": "renovate-prs",
+      "subagent": "Explore"
+    },
+    {
+      "tool": "Bash",
+      "label": "npm run build -- --watch",
+      "start": "2026-10-24T09:02:10.000Z",
+      "seconds": 0.03,
+      "failed": false,
+      "span": "renovate-prs",
+      "skill": "renovate-prs",
+      "subagent": null,
+      "background": true
+    },
+    {
+      "tool": "Bash",
+      "label": "gh pr merge 731",
+      "start": "2026-10-24T09:02:50.000Z",
+      "seconds": null,
+      "failed": false,
+      "span": "renovate-prs",
+      "skill": "renovate-prs",
+      "subagent": null
+    }
+  ]
+}

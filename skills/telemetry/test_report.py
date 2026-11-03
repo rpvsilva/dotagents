@@ -36,8 +36,9 @@ def unpriced(run_text):
 class Table(unittest.TestCase):
     """run.json: grill-with-docs then renovate-prs, priced at model-a's $1 / $10 / $0.1 / $2 (1h write)."""
 
-    def setUp(self):
-        self.out = report(RUN)
+    @classmethod
+    def setUpClass(cls):
+        cls.out = report(RUN)
 
     def test_one_row_per_span_and_a_total_row(self):
         # grill-with-docs: 0.10 input + 0.50 output + 0.12 cache read + 0.20 cache write = $0.92
@@ -67,8 +68,9 @@ class Table(unittest.TestCase):
 
 
 class Breakdowns(unittest.TestCase):
-    def setUp(self):
-        self.out = report(RUN)
+    @classmethod
+    def setUpClass(cls):
+        cls.out = report(RUN)
 
     def test_lists_each_spans_tool_calls_with_mcp_tools_grouped_by_server(self):
         self.assertIn("grill-with-docs\n"
@@ -103,6 +105,71 @@ class Save(unittest.TestCase):
             (Path(repo) / "src").mkdir()
             report(RUN, "--save", "base", cwd=Path(repo) / "src")
             self.assertTrue((Path(repo) / ".agents" / "telemetry" / "base.json").is_file())
+
+    def test_saved_runs_stay_out_of_git(self):
+        with tempfile.TemporaryDirectory() as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            report(RUN, "--save", "base", cwd=repo)
+            status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo,
+                                    capture_output=True, encoding="utf-8", check=True).stdout
+            self.assertTrue((Path(repo) / ".agents" / "telemetry" / "base.json").is_file())
+            self.assertEqual(status, "")
+
+    def test_an_existing_gitignore_in_the_folder_is_kept(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / ".gitignore").write_text("mine\n")
+            report(RUN, "--save", "base", "--dir", folder)
+            self.assertEqual((Path(folder) / ".gitignore").read_text(), "mine\n")
+
+
+RUN_STEPS = str(FIXTURES / "run-steps.json")
+EXTRACTOR = HERE.parents[1] / "adapters" / "claude" / "telemetry"
+
+
+def extracted_run():
+    """The run the Claude Code extractor writes for its steps fixture."""
+    proc = subprocess.run([sys.executable, str(EXTRACTOR / "extract.py"), "--session", str(EXTRACTOR / "fixtures" / "steps.jsonl")],
+                          capture_output=True, encoding="utf-8")
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+class RunWithSteps(unittest.TestCase):
+    """run-steps.json: a version 3 run with steps, shaped like the extractor's output, plus repo, date and
+    whole, which ticket 01's extractor adds (the extractor on this branch may not write them yet)."""
+
+    def test_fixture_has_steps_in_the_extractor_shape(self):
+        # Tied to the extractor's real output, so a field it adds, drops or renames fails here.
+        run, real = json.loads(Path(RUN_STEPS).read_text()), extracted_run()
+        self.assertEqual(run["schemaVersion"], real["schemaVersion"])
+        self.assertLessEqual(set(real), set(run))
+        span_keys = {k for s in real["spans"] for k in s}
+        for span in run["spans"]:
+            self.assertEqual(set(span), span_keys, span["name"])
+        step_keys = {k for s in real["steps"] for k in s} - {"background"}
+        span_names = {s["name"] for s in run["spans"]}
+        self.assertGreaterEqual(len(span_names), 2)
+        for step in run["steps"]:
+            self.assertEqual(set(step) - {"background"}, step_keys, step)
+            self.assertIn(step["span"], span_names)
+        self.assertEqual(run["steps"], sorted(run["steps"], key=lambda s: s["start"]))
+        self.assertTrue(any(s["subagent"] for s in run["steps"]))
+        self.assertTrue(any(s["failed"] for s in run["steps"]))
+
+    def test_renders_the_span_table(self):
+        # grill-with-docs: 0.05 + 0.20 + 0.06 + 0.10 = $0.41; renovate-prs: 0.06 + 0.30 + 0.08 + 0.20 = $0.64
+        out = report(RUN_STEPS)
+        self.assertIn("│ grill-with-docs │ 90 s   │ 6     │ 4     │ 50k  │ 20k │ 600k    │ 50k     │ 0      │ $0.41 │", out)
+        self.assertIn("│ renovate-prs    │ 90 s   │ 5     │ 4     │ 60k  │ 30k │ 800k    │ 100k    │ 1      │ $0.64 │", out)
+        self.assertIn("│ Total           │ 3m 00s │ 11    │ 8     │ 110k │ 50k │ 1.4M    │ 150k    │ 1      │ $1.05 │", out)
+
+    def test_save_keeps_steps_repo_date_and_whole(self):
+        source = json.loads(Path(RUN_STEPS).read_text())
+        with tempfile.TemporaryDirectory() as folder:
+            report(RUN_STEPS, "--save", "x", "--dir", folder)
+            run = json.loads((Path(folder) / "x.json").read_text())
+        for key in ("steps", "repo", "date", "whole", "schemaVersion"):
+            self.assertEqual(run[key], source[key], key)
 
 
 class PriceCheckHint(unittest.TestCase):

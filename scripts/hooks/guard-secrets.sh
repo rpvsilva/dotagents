@@ -15,6 +15,8 @@
 # - commands in backticks: `cat \`echo .env\``. The hook never parsed backticks;
 # - names built at run time: globs (`cat .en?`), variables set earlier (`cat "$F"`), `eval`;
 # - a quoted path with a space in it, which reads as prose.
+# The rules (secret paths, examples, tokens) live in secret-patterns.txt, read through lib.sh;
+# without that file this hook blocks everything with exit 2.
 # A guardrail against mistakes, not a security boundary: the human can still run anything themselves.
 # Input: the command as $1, or a hook's JSON on stdin with .tool_input.command or a path
 # (.tool_input.file_path / .path / .notebook_path, or Cursor's top-level .file_path), and optional .cwd.
@@ -26,10 +28,14 @@ if [ $# -gt 0 ]; then
   path=""
   cwd="$PWD"
 else
-  input="$(cat)"
-  cmd="$(jq -r '.tool_input.command // .command // empty' <<<"$input")"
-  path="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // .file_path // empty' <<<"$input")"
-  cwd="$(jq -r '.cwd // empty' <<<"$input")"
+  # One jq call for all three fields (this runs on every tool call): it prints shell assignments,
+  # each value a single @sh-quoted word; a value that is not a string is quoted as its JSON text.
+  fields="$(jq -r 'def str: if type == "string" then . else tojson end;
+    @sh "cmd=\((.tool_input.command // .command // "") | str)",
+    @sh "path=\((.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // .file_path // "") | str)",
+    @sh "cwd=\((.cwd // "") | str)"')"
+  cmd="" path="" cwd=""
+  eval "$fields"
   cwd="${cwd:-$PWD}"
 fi
 
@@ -104,7 +110,6 @@ if [[ "$cmd" =~ ${start}git$s+([^;&|]*$s)?commit($s|$) ]]; then
   while read -r f; do
     if is_secret "$f"; then block "the commit adds $f, which looks like a secret file."; fi
   done < <(git -C "$dir" diff "${base[@]}" --name-only --diff-filter=AR 2>/dev/null)
-  token_re='-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}'
   hit="$(git -C "$dir" diff "${base[@]}" -U0 --no-color 2>/dev/null |
     awk '/^\+\+\+ / {f = substr($0, 7); next} /^\+/ {print f "\t" $0}' | grep -E -m1 -e "$token_re" | cut -f1 || true)"
   if [ -n "$hit" ]; then block "the commit adds a line in $hit that looks like a token or private key."; fi

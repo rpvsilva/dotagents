@@ -1,0 +1,3 @@
+# The secret rules are read by bash and Python on every platform: keep them byte-identical (LF)
+# in every checkout. lib.sh and extract.py also accept CRLF, for copies made some other way.
+scripts/hooks/secret-patterns.txt text eol=lf

@@ -10,7 +10,7 @@ _Avoid_: Execution, trace
 
 **Span**:
 One typed skill's stretch within a run, from its invocation to the next typed skill or the telemetry request; skills it loads count toward it. Activity before any skill forms a span called "no skill".
-_Avoid_: Segment, step, column
+_Avoid_: Segment, column
 
 **Turn**:
 One model API call within a run; a reply split across several log lines is still one turn.
@@ -19,6 +19,10 @@ _Avoid_: Message, step
 **Tool call**:
 One tool invocation requested by the model, MCP tools included.
 _Avoid_: Action, function call
+
+**Step**:
+One tool call in a saved run, with its label, timing, outcome, and the span or subagent that made it. A span holds many steps; a step belongs to exactly one span.
+_Avoid_: Action, event
 
 ## Configuration
 
