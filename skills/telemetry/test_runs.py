@@ -76,6 +76,13 @@ class SavedRuns(unittest.TestCase):
         runs, _ = saved_runs([folder])
         self.assertEqual(self.ids(runs), [("s", "early")])
 
+    def test_runs_without_a_session_id_are_each_kept(self):
+        folder = self.tmp / "d"
+        write(folder, "a.json", {"start": "2026-10-01T10:00:00.000Z", "spans": [], "label": "a"})
+        write(folder, "b.json", {"start": "2026-10-02T10:00:00.000Z", "spans": [], "label": "b"})
+        runs, _ = saved_runs([folder, folder])
+        self.assertEqual([r["label"] for r in runs], ["a", "b"])
+
     def test_runs_are_sorted_by_start(self):
         folder = self.tmp / "d"
         write(folder, "a.json", run("a", "2026-10-03T10:00:00.000Z"))
