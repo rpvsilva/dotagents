@@ -79,12 +79,18 @@ else
 fi
 
 # The hook returns while a slow extractor still runs, and its output appears afterwards. The extractor gets the
-# transcript, the session's folder and --whole.
+# transcript, the session's folder and --whole. It blocks until the test writes its .go file (up to 10 s), which the
+# test does only once the hook has returned: a hook that waited for it would return late, with .done already there.
 h="$(home slow)"
 t="$(transcript sess-slow)"
-x="$(stub slow 'time.sleep(3); open(sys.argv[0] + ".done", "w").close(); print(json.dumps({"argv": sys.argv[1:]}))')"
+x="$(stub slow 'import os
+for _ in range(200):
+    if os.path.exists(sys.argv[0] + ".go"): break
+    time.sleep(0.05)
+open(sys.argv[0] + ".done", "w").close(); print(json.dumps({"argv": sys.argv[1:]}))')"
 quiet "$h" "$(payload "$t")" "slow extractor" TELEMETRY_EXTRACT="$x"
 [ ! -e "$x.done" ] || fail "slow extractor: the hook waited for the extractor to finish"
+touch "$x.go"
 saved="$h/.agents/telemetry/sess-slow.json"
 if wait_for '[ -s "$saved" ]'; then
   jq -e '.argv | length == 5 and .[0] == "--whole" and .[1] == "--session" and (.[2] | endswith("sess-slow.jsonl"))
@@ -130,6 +136,14 @@ t="$(transcript sess-off)"
 env HOME="$h" "$h/.agents/bin/settings" set telemetry auto_save false --machine >/dev/null
 quiet "$h" "$(payload "$t")" "Setting off" TELEMETRY_EXTRACT="$(stub off 'print("{}")')"
 
+# The Setting off in the repo the session ran in (the payload's cwd, not the hook's working directory).
+h="$(home repooff)"
+t="$(transcript sess-repooff)"
+mkdir -p "$SANDBOX/offrepo/sub"
+git -C "$SANDBOX/offrepo" init -q
+env HOME="$h" "$h/.agents/bin/settings" --dir "$SANDBOX/offrepo" set telemetry auto_save false --repo >/dev/null
+quiet "$h" "$(payload "$t" "$SANDBOX/offrepo/sub")" "repo Setting off" TELEMETRY_EXTRACT="$(stub repooff 'print("{}")')"
+
 h="$(home malformed)"
 quiet "$h" 'not json {' "malformed payload" TELEMETRY_EXTRACT="$(stub malformed 'print("{}")')"
 quiet "$h" '' "empty payload" TELEMETRY_EXTRACT="$(stub malformed 'print("{}")')"
@@ -172,8 +186,8 @@ h="$(home last)"
 t="$(transcript sess-last)"
 quiet "$h" "$(payload "$t")" "last save" TELEMETRY_EXTRACT="$(stub last 'print("{}")')"
 wait_for '[ -s "$h/.agents/telemetry/sess-last.json" ]' || fail "last save: never appeared"
-for m in off malformed missing unwritable; do [ ! -e "$SANDBOX/marks/$m" ] || fail "$m: the extractor ran"; done
-for d in off malformed missing nopython nojq copied; do
+for m in off repooff malformed missing unwritable; do [ ! -e "$SANDBOX/marks/$m" ] || fail "$m: the extractor ran"; done
+for d in off repooff malformed missing nopython nojq copied; do
   [ ! -e "$SANDBOX/$d/.agents/telemetry" ] || fail "$d: started a save"
 done
 [ "$(cat "$SANDBOX/unwritable/.agents/telemetry")" = keep ] || fail "unwritable folder: the file in its place changed"
