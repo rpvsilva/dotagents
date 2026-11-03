@@ -4,14 +4,34 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 
 def load(path):
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+    """The log's entries. A line anywhere in the log that is not a JSON object (half-written at session end, cut
+    inside a UTF-8 character, a bare number or list) is skipped, so a damaged log never stops a save."""
+    entries = []
+    with open(path, "rb") as f:
+        for line in f:
+            try:
+                entry = json.loads(line.decode("utf-8"))
+            except ValueError:  # UnicodeDecodeError is a ValueError too
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+    return entries
+
+
+def load_meta(path):
+    """A subagent's meta, or None when it is not a JSON object (half-written at session end)."""
+    try:
+        meta = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None
 
 
 def blocks(entry):
@@ -98,10 +118,15 @@ def measure(entries):
 
 
 def load_subagents(session):
-    """(meta, log) for every subagent the session started."""
+    """(meta, log) for every subagent the session started; one whose meta is unreadable is left out."""
     folder = Path(session).with_suffix("") / "subagents"
-    metas = sorted(folder.glob("*.meta.json")) if folder.is_dir() else []
-    return [(json.loads(m.read_text(encoding="utf-8")), load(m.with_name(m.name.replace(".meta.json", ".jsonl")))) for m in metas]
+    found = []
+    for m in sorted(folder.glob("*.meta.json")) if folder.is_dir() else []:
+        meta = load_meta(m)
+        log = m.with_name(m.name.replace(".meta.json", ".jsonl"))
+        if meta is not None:
+            found.append((meta, load(log) if log.is_file() else []))
+    return found
 
 
 def linked_subagents(pool, tool_ids):
@@ -194,11 +219,28 @@ def find_session(ref, cwd):
     return sessions[-1]
 
 
+def repo_of(cwd):
+    """The git top-level folder holding cwd, in the OS's native form; None outside a repo or without git.
+
+    Git for Windows prints C:/Users/...; Path turns that into C:\\Users\\..., the form every other
+    path takes, so runs from one repo always carry the same repo string.
+    """
+    try:
+        proc = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+                              capture_output=True, encoding="utf-8")
+    except OSError:
+        return None
+    top = proc.stdout.strip()
+    return str(Path(top)) if top else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", help="session .jsonl path or ID (default: current session)")
     parser.add_argument("--skill", help="report only this skill's last span")
     parser.add_argument("--cwd", default=Path.cwd(), help="project directory (default: here)")
+    parser.add_argument("--whole", action="store_true",
+                        help="measure the whole session; earlier telemetry reports become ordinary spans")
     args = parser.parse_args()
     args.session = find_session(args.session, Path(args.cwd).resolve())
 
@@ -207,7 +249,7 @@ def main():
     stretches = segment(entries, skills)
     # The last telemetry stretch is this request; everything before it is measurable.
     reports = [i for i, (skill, _, _) in enumerate(stretches) if skill == "telemetry"]
-    if reports:
+    if reports and not args.whole:
         entries = entries[:stretches[reports[-1]][1]]
         stretches = stretches[:reports[-1]]
         reports = reports[:-1]
@@ -221,7 +263,7 @@ def main():
             sys.exit(2)
         chosen = matching[-1:]
     else:
-        chosen = stretches[reports[-1] + 1:] if reports else stretches
+        chosen = stretches[reports[-1] + 1:] if reports and not args.whole else stretches
 
     pool = load_subagents(args.session)
     spans = []
@@ -248,6 +290,9 @@ def main():
         "tool": "claude-code",
         "sessionId": Path(args.session).stem,
         "skill": args.skill,
+        "repo": repo_of(Path(args.cwd).resolve()),
+        "date": stamp(start)[:10],
+        "whole": args.whole,
         "start": stamp(start),
         "end": stamp(end),
         "wallClockSeconds": round((end - start).total_seconds()),

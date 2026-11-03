@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -26,10 +27,16 @@ def extract(*args):
     )
 
 
+_RUNS = {}
+
+
 def run(*args):
-    proc = extract(*args)
-    assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout)
+    """extract.py's report for these args; the fixtures never change, so each args list runs once."""
+    if args not in _RUNS:
+        proc = extract(*args)
+        assert proc.returncode == 0, proc.stderr
+        _RUNS[args] = json.loads(proc.stdout)
+    return copy.deepcopy(_RUNS[args])
 
 
 def by_name(run_):
@@ -179,6 +186,144 @@ class DefaultSession(unittest.TestCase):
                                   capture_output=True, encoding="utf-8", env=env)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session")
+
+
+class Whole(unittest.TestCase):
+    """--whole measures the whole session, as the session-end save does; earlier reports are ordinary spans."""
+
+    def test_keeps_earlier_telemetry_reports_and_everything_after_them(self):
+        # run-twice.jsonl: /clear and chat, /renovate-prs, /telemetry, /renovate-prs, /telemetry.
+        run_ = run("--whole", "--session", str(FIXTURES / "run-twice.jsonl"))
+        self.assertEqual([s["name"] for s in run_["spans"]],
+                         ["no skill", "renovate-prs", "telemetry", "renovate-prs-2", "telemetry-2"])
+        self.assertEqual(run_["start"], "2026-10-23T09:59:00.000Z")
+        # The final /telemetry's own reply (r8) is measured too.
+        self.assertEqual(by_name(run_)["telemetry-2"]["turns"], 1)
+        self.assertEqual(run_["end"], "2026-10-23T10:06:30.000Z")
+
+    def test_marks_the_run_as_whole(self):
+        self.assertIs(run("--whole", "--session", str(FIXTURES / "run-twice.jsonl"))["whole"], True)
+        self.assertIs(run("--session", str(FIXTURES / "run-twice.jsonl"))["whole"], False)
+
+    def test_works_from_any_folder_with_a_transcript_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = subprocess.run([sys.executable, str((HERE / "extract.py").resolve()), "--whole",
+                                   "--session", str((FIXTURES / "spans.jsonl").resolve())],
+                                  capture_output=True, encoding="utf-8", cwd=folder)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["sessionId"], "spans")
+
+
+class RepoAndDate(unittest.TestCase):
+    def test_repo_is_the_git_top_level_of_cwd(self):
+        with tempfile.TemporaryDirectory() as folder:
+            top = Path(folder).resolve()
+            subprocess.run(["git", "init", "-q", str(top)], check=True)
+            (top / "sub").mkdir()
+            run_ = run("--session", str(FIXTURES / "spans.jsonl"), "--cwd", str(top / "sub"))
+        self.assertEqual(run_["repo"], str(top))
+
+    @unittest.skipIf(os.name == "nt", "a shell-script git stub cannot run on Windows; the test above covers it there")
+    def test_repo_is_in_the_os_native_form_whatever_git_prints(self):
+        # Git for Windows prints C:/Users/...; a run's repo must be the same string the OS's own paths give.
+        with tempfile.TemporaryDirectory() as folder:
+            stub = Path(folder) / "git"
+            stub.write_text('#!/bin/sh\necho "//work//dotagents/"\n')
+            stub.chmod(0o755)
+            env = {**os.environ, "PATH": folder + os.pathsep + os.environ.get("PATH", "")}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["repo"], str(Path("//work/dotagents")))
+
+    def test_repo_is_null_outside_a_repo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(folder).resolve().parent)}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", folder],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(json.loads(proc.stdout)["repo"])
+
+    def test_repo_is_null_without_git(self):
+        with tempfile.TemporaryDirectory() as empty:
+            env = {**os.environ, "PATH": empty}
+            proc = subprocess.run([sys.executable, str(HERE / "extract.py"), "--session",
+                                   str(FIXTURES / "spans.jsonl"), "--cwd", str(HERE)],
+                                  capture_output=True, encoding="utf-8", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(json.loads(proc.stdout)["repo"])
+
+    def test_date_is_the_day_the_run_started(self):
+        for args in ([], ["--whole"]):
+            run_ = run(*args, "--session", str(FIXTURES / "spans.jsonl"))
+            self.assertEqual(run_["date"], run_["start"][:10])
+            self.assertEqual(run_["date"], "2026-10-23")
+
+
+class DamagedLog(unittest.TestCase):
+    def test_a_half_written_last_line_is_skipped(self):
+        text = (FIXTURES / "spans.jsonl").read_text()
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_text(text + '{"type": "assistant", "timestamp": "2026-10-23T09:07:00.000Z", "mess')
+            proc = extract("--whole", "--session", str(session))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        run_ = json.loads(proc.stdout)
+        self.assertEqual([s["name"] for s in run_["spans"]],
+                         ["no skill", "grill-with-docs", "renovate-prs", "renovate-prs-2", "telemetry"])
+        self.assertEqual(run_["spans"][-1]["end"], "2026-10-23T09:05:35.000Z")
+
+    def damaged(self, tail):
+        """extract.py --whole on a copy of the spans fixture, its subagents beside it, with tail (bytes) appended."""
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_bytes((FIXTURES / "spans.jsonl").read_bytes() + tail)
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            return extract("--whole", "--session", str(session))
+
+    def assertSameRun(self, proc):
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["spans"], run("--whole", "--session", str(FIXTURES / "spans.jsonl"))["spans"])
+
+    def test_a_last_line_cut_inside_a_utf8_character_is_skipped(self):
+        self.assertSameRun(self.damaged(b'{"type":"user","message":{"content":"caf\xc3'))
+
+    def test_a_line_that_is_json_but_not_an_object_is_skipped(self):
+        for line in (b"123", b'"x"', b"[]", b"null"):
+            with self.subTest(line=line):
+                self.assertSameRun(self.damaged(line + b"\n"))
+
+    def test_a_bad_line_anywhere_in_the_log_is_skipped(self):
+        lines = (FIXTURES / "spans.jsonl").read_bytes().splitlines(keepends=True)
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            session.write_bytes(b"".join(lines[:3]) + b'{"half\n' + b"\xff\xfe\n" + b"[1]\n" + b"".join(lines[3:]))
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            self.assertSameRun(extract("--whole", "--session", str(session)))
+
+    def test_a_half_written_subagent_meta_drops_only_that_subagent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            shutil.copy(FIXTURES / "spans.jsonl", session)
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            subagents = Path(folder) / "s" / "subagents"
+            (subagents / "agent-x.meta.json").write_text('{"type":')
+            (subagents / "agent-x.jsonl").write_text("")
+            (subagents / "agent-y.meta.json").write_text("[]")
+            proc = extract("--whole", "--session", str(session))
+        self.assertSameRun(proc)
+        self.assertTrue(any(s["subagents"] for s in json.loads(proc.stdout)["spans"]))
+
+    def test_a_subagent_meta_without_its_log_does_not_stop_the_save(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "s.jsonl"
+            shutil.copy(FIXTURES / "spans.jsonl", session)
+            shutil.copytree(FIXTURES / "spans", Path(folder) / "s")
+            (Path(folder) / "s" / "subagents" / "agent-z.meta.json").write_text('{"agentType": "Explore", "toolUseId": "zz"}')
+            proc = extract("--whole", "--session", str(session))
+        self.assertSameRun(proc)
 
 
 if __name__ == "__main__":
