@@ -68,13 +68,42 @@ class SavedRuns(unittest.TestCase):
         runs, _ = saved_runs([self.tmp / "repo", self.tmp / "home"])
         self.assertEqual(self.ids(runs), [("s", "auto")])
 
-    def test_of_two_manual_saves_of_a_session_the_earliest_wins(self):
+    def test_every_manual_save_of_a_session_is_kept_as_its_own_run(self):
         folder = self.tmp / "d"
         write(folder, "late.json", run("s", "2026-10-01T11:00:00.000Z", label="late"))
         write(folder, "early.json", run("s", "2026-10-01T10:00:00.000Z", label="early"))
         write(folder, "zlate.json", run("s", "2026-10-01T12:00:00.000Z", label="later"))
         runs, _ = saved_runs([folder])
-        self.assertEqual(self.ids(runs), [("s", "early")])
+        self.assertEqual(self.ids(runs), [("s", "early"), ("s", "late"), ("s", "later")])
+
+    def test_the_same_manual_save_found_twice_counts_once(self):
+        folder = self.tmp / "d"
+        write(folder, "a.json", run("s", "2026-10-01T10:00:00.000Z", end="2026-10-01T10:30:00.000Z", label="a"))
+        write(self.tmp / "copy", "b.json", run("s", "2026-10-01T10:00:00.000Z", end="2026-10-01T10:30:00.000Z", label="a"))
+        write(folder, "c.json", run("s", "2026-10-01T10:00:00.000Z", end="2026-10-01T11:00:00.000Z", label="c"))
+        runs, _ = saved_runs([folder, folder, self.tmp / "copy"])
+        self.assertEqual(self.ids(runs), [("s", "a"), ("s", "c")])
+
+    def test_skips_and_counts_runs_compare_cannot_read(self):
+        folder = self.tmp / "d"
+        good = {"wallClockSeconds": 1, "turns": 1, "toolCalls": 1, "skill": None,
+                "tokensByModel": {"m": {"input": 1, "output": 0, "cacheRead": 0,
+                                        "cacheWrite5m": 0, "cacheWrite1h": 0}}}
+        write(folder, "good.json", run("a", "2026-10-01T10:00:00.000Z", spans=[good]))
+        bad = {
+            "spans_not_list": {"sessionId": "x", "start": "2026-11-01T10:00:00Z", "spans": "oops"},
+            "start_not_str": run("b", 5),
+            "span_not_object": run("c", "2026-10-01T10:00:00.000Z", spans=[1]),
+            "no_wall": run("d", "2026-10-01T10:00:00.000Z", spans=[{k: v for k, v in good.items() if k != "wallClockSeconds"}]),
+            "no_tokens": run("e", "2026-10-01T10:00:00.000Z", spans=[{k: v for k, v in good.items() if k != "tokensByModel"}]),
+            "tokens_not_object": run("f", "2026-10-01T10:00:00.000Z", spans=[{**good, "tokensByModel": {"m": 3}}]),
+            "skill_not_str": run("g", "2026-10-01T10:00:00.000Z", spans=[{**good, "skill": 7}]),
+        }
+        for name, content in bad.items():
+            write(folder, name + ".json", content)
+        runs, skipped = saved_runs([folder])
+        self.assertEqual(self.ids(runs), [("a", None)])
+        self.assertEqual(skipped, len(bad))
 
     def test_runs_without_a_session_id_are_each_kept(self):
         folder = self.tmp / "d"

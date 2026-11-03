@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from report import HERE, cost, merged_tokens, money, seconds, table, token_total, tokens
-from runs import NO_SKILL, run_date, saved_runs, skill_matches
+from runs import NO_SKILL, run_date, saved_runs, short_name, skill_matches
 
 HEADERS = ["Date", "Cost", "Time", "Turns", "Tools", "In", "Out", "Cache R", "Cache W"]
 KEY = "Tools = tool calls · In/Out = input/output tokens · Cache R/W = cache read/write"
@@ -51,7 +51,8 @@ def change(first, last):
 
 
 def by_skill(runs, name, since, until):
-    """{span skill: [(date, spans of that skill in the run)]}, runs in the order given."""
+    """{skill's short name: [(date, spans of that skill in the run)]}, runs in the order given.
+    "plug:deploy" and "deploy" are one skill, as skill_matches says."""
     grouped = {}
     for run in runs:
         day = run_date(run)
@@ -60,7 +61,7 @@ def by_skill(runs, name, since, until):
         spans = {}
         for span in run["spans"]:
             if name is None or skill_matches(span.get("skill"), name):
-                spans.setdefault(span.get("skill") or NO_SKILL, []).append(span)
+                spans.setdefault(short_name(span.get("skill")), []).append(span)
         for skill, picked in spans.items():
             grouped.setdefault(skill, []).append((day, picked))
     return grouped
@@ -82,7 +83,7 @@ def main():
     since = args.since.isoformat() if args.since else None
     until = args.until.isoformat() if args.until else None
     grouped = by_skill(runs, args.skill, since, until)
-    note = f"Skipped {skipped} saved file{'s' if skipped != 1 else ''} that are not valid JSON or hold no spans."
+    note = f"Skipped {skipped} saved file{'s' if skipped != 1 else ''} that are not valid JSON or not readable runs."
 
     if not grouped:
         what = f"of {args.skill} " if args.skill else ""
