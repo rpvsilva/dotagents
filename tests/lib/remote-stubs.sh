@@ -14,6 +14,8 @@
 # changes out/ping before a command that writes a tar, so what comes back differs from what went in. With
 # <state>/padding present, such a command's tar is followed, a moment later, by 200 KB of zeros: the remote tar's
 # trailing padding arriving after the reading tar (GNU or bsdtar) stopped at the end-of-archive marker.
+# With <state>/root-only present, every call fails as for a user outside the docker group, unless made through the
+# stub sudo (see stub_ssh).
 stub_docker() {
   local bin="$1" state="$2"
   mkdir -p "$bin" "$state/containers"
@@ -28,6 +30,8 @@ case "$args" in
   *$'\n'*) { printf '%s' "$args" | tr '\n' ' '; echo; } >>"$state/calls" ;;
   *) printf '%s\n' "$args" >>"$state/calls" ;;
 esac
+[ ! -e "$state/root-only" ] || [ -n "${STUB_DOCKER_ROOT:-}" ] \
+  || { echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1; }
 op="$1"
 shift
 case "$op" in
@@ -104,9 +108,23 @@ EOF
 # any call in <state>/scp and fails. With STUB_SSH_HOME set, it plays a bare host: the command starts there with it as
 # HOME, PATH is STUB_SSH_PATH when set (sh itself is found on the caller's PATH), and the host's main-process stdout
 # (/proc/1/fd/1) is the writable file <state>/host-main-stdout, as for root or on a host that is itself a container.
+# Also a stub `sudo` for the host: it logs `sudo <args>` to <state>/calls, wants -n, refuses with <state>/sudo-password
+# (sudo would ask for one), else runs the rest as root (STUB_DOCKER_ROOT=1, see stub_docker).
 stub_ssh() {
   local bin="$1" state="$2"
   mkdir -p "$bin" "$state"
+  cat >"$bin/sudo" <<EOF
+#!/bin/sh
+state="$state"
+EOF
+  cat >>"$bin/sudo" <<'EOF'
+echo "sudo $*" >>"$state/calls"
+[ "$1" = -n ] || { echo "stub sudo: wanted -n" >&2; exit 1; }
+shift
+[ ! -e "$state/sudo-password" ] || { echo "sudo: a password is required" >&2; exit 1; }
+STUB_DOCKER_ROOT=1 exec "$@"
+EOF
+  chmod +x "$bin/sudo"
   cat >"$bin/ssh" <<EOF
 #!/usr/bin/env bash
 state="$state"
@@ -118,6 +136,12 @@ case "$args" in
   *$'\n'*) { printf '%s' "$args" | tr '\n' ' '; echo; } >>"$state/calls" ;;
   *) printf '%s\n' "$args" >>"$state/calls" ;;
 esac
+# A password login, as real ssh does it with SSH_ASKPASS_REQUIRE=force: the prompt (STUB_SSH_PROMPT, else a password
+# prompt) to $SSH_ASKPASS, its answer appended to askpass; no answer is a refused login.
+if [ "${SSH_ASKPASS_REQUIRE:-}" = force ] && [ -n "${SSH_ASKPASS:-}" ]; then
+  answer="$("$SSH_ASKPASS" "${STUB_SSH_PROMPT:-me@host password: }")" || { echo "Permission denied (password)." >&2; exit 255; }
+  printf '%s\n' "$answer" >>"$state/askpass"
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     -o|-p|-i|-l|-F) shift 2 ;;

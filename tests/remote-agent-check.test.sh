@@ -47,8 +47,19 @@ for d in "${dirs[@]}"; do
 done
 # One chmod for all: such a folder can hold hundreds of commands (Homebrew's bin), and a chmod each takes seconds.
 [ -z "$(ls -A "$SHIM")" ] || chmod +x "$SHIM"/*
-printf '#!/bin/sh\necho "claude called" >>"%s/claude-called"\n' "$S" >"$CB/claude"
-printf '#!/bin/sh\nexit 0\n' >"$CB/node"
+# Fake claude and node: they log how they were called and print a version, or fail as a binary missing a shared
+# library would with $S/claude-broken or $S/node-broken.
+cat >"$CB/claude" <<EOF
+#!/bin/sh
+echo "claude \$*" >>"$S/claude-called"
+[ ! -e "$S/claude-broken" ] || { echo "claude: error while loading shared libraries: libfoo.so.1" >&2; exit 127; }
+echo "9.9.9 (Claude Code)"
+EOF
+cat >"$CB/node" <<EOF
+#!/bin/sh
+[ ! -e "$S/node-broken" ] || { echo "node: error while loading shared libraries: libatomic.so.1" >&2; exit 127; }
+echo v99.0.0
+EOF
 chmod +x "$CB/claude" "$CB/node"
 CLIENT_PATH="$SANDBOX/bin:$CB$base_path"
 
@@ -81,7 +92,20 @@ fi
 [ ! -e "$S/containers/$c" ] || fail "docker: dry run container not removed"
 grep -q "^ok" "$SANDBOX/out" || fail "docker: does not end with ok: $(out)"
 grep -q "^pull" "$S/calls" && fail "docker: pulled an image already present"
-[ ! -e "$S/claude-called" ] || fail "docker: the dry run called claude"
+[ "$(sort -u "$S/claude-called" 2>/dev/null)" = "claude --version" ] \
+  || fail "docker: the dry run called claude other than for its version: $(cat "$S/claude-called" 2>/dev/null)"
+grep -q "claude in the sandbox: .*claude (9.9.9 (Claude Code))" "$SANDBOX/out" || fail "docker: claude version not shown: $(out)"
+grep -q "node in the sandbox: v99.0.0" "$SANDBOX/out" || fail "docker: node version not shown: $(out)"
+# claude or node present but broken: the run step fails with the tool's own error, and the sandbox is still released.
+for t in node claude; do
+  : >"$S/$t-broken"
+  code=0; check || code=$?
+  rm -f "$S/$t-broken"
+  [ "$code" != 0 ] || fail "broken $t: exited 0"
+  grep -q "dry run failed at run: $t does not run in the sandbox: .*error while loading shared libraries" "$SANDBOX/out" \
+    || fail "broken $t: not named with its error: $(out)"
+  grep -q "^rm -f agent-check-" "$S/calls" || fail "broken $t: sandbox not released: $(cat "$S/calls")"
+done
 grep -qi "note" "$SANDBOX/out" && fail "docker: an architecture note though the image matches: $(out)"
 no_token docker
 
@@ -202,6 +226,29 @@ no_token ssh
 code=0; check || code=$?
 grep -q "Docker daemon.*me@build-box" "$SANDBOX/out" || fail "ssh daemon down: not named with the host: $(out)"
 rm -f "$S/daemon-down"
+# An SSH user outside the docker group, with passwordless sudo: check names both fixes; with ssh_sudo it passes.
+: >"$S/root-only"
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "ssh docker group: exited 0"
+grep -q "works only through sudo" "$SANDBOX/out" || fail "ssh docker group: sudo case not named: $(out)"
+grep -q "settings set remote ssh_sudo true --machine" "$SANDBOX/out" || fail "ssh docker group: ssh_sudo fix not given: $(out)"
+grep -q "usermod -aG docker" "$SANDBOX/out" || fail "ssh docker group: docker group fix not given: $(out)"
+config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_SUDO=true
+check || fail "ssh sudo: exited non-zero: $(out)"
+grep -q "^ssh -T -o BatchMode=yes me@build-box 'sudo' '-n' 'docker' 'info'" "$S/calls" \
+  || fail "ssh sudo: docker info not run through sudo -n: $(grep '^ssh' "$S/calls" | head -2)"
+grep -q "^ok" "$SANDBOX/out" || fail "ssh sudo: does not end with ok: $(out)"
+: >"$S/image-missing"; : >"$S/no-pull"
+code=0; check || code=$?
+grep -q "sudo docker login" "$SANDBOX/out" || fail "ssh sudo no image: root's login not named: $(out)"
+rm -f "$S/image-missing" "$S/no-pull"
+# sudo wants a password: said so, not taken for a down daemon.
+: >"$S/sudo-password"
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "ssh sudo password: exited 0"
+grep -q "sudo without a password" "$SANDBOX/out" || fail "ssh sudo password: not named: $(out)"
+rm -f "$S/root-only" "$S/sudo-password"
+config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
 # The host does not answer.
 mkdir -p "$SANDBOX/downbin"
 printf '#!/bin/sh\necho "ssh: connect to host build-box: Connection refused" >&2\nexit 255\n' >"$SANDBOX/downbin/ssh"
@@ -210,6 +257,16 @@ code=0; CHECK_PATH="$SANDBOX/downbin:$CLIENT_PATH" check || code=$?
 [ "$code" != 0 ] || fail "ssh unreachable: exited 0"
 grep -q "cannot reach me@build-box" "$SANDBOX/out" || fail "ssh unreachable: host not named as unreachable: $(out)"
 grep -q "Docker daemon" "$SANDBOX/out" && fail "ssh unreachable: went on to check Docker: $(out)"
+grep -q "keys from the ssh agent" "$SANDBOX/out" || fail "ssh unreachable: key login not named: $(out)"
+# With a password in remote.env and a key file, the message names both.
+config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_KEY=/k/box
+echo "SSH_PASSWORD=pw-check" >>"$SANDBOX/config/dotagents/remote.env"
+code=0; CHECK_PATH="$SANDBOX/downbin:$CLIENT_PATH" check || code=$?
+[ "$code" != 0 ] || fail "ssh password unreachable: exited 0"
+grep -q "cannot reach me@build-box with the key file /k/box, then the password" "$SANDBOX/out" \
+  || fail "ssh password unreachable: login not named: $(out)"
+grep -q "pw-check" "$SANDBOX/out" && fail "ssh password unreachable: the password showed"
+config REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
 
 # --- ssh, bare mode: the host's tools, then a dry run in a run folder.
 HH="$SANDBOX/host home"

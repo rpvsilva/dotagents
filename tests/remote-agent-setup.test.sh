@@ -45,6 +45,12 @@ value() {
     "$(printf '%s' "${1#REMOTE_}" | tr '[:upper:]' '[:lower:]')" --machine)"
   printf '%s' "${v:-unset}"
 }
+# Prints Secret $1 from remote.env, or unset.
+secret() {
+  [ -f "$FILE" ] || { printf unset; return; }
+  # shellcheck disable=SC1090
+  (unset "$1"; set +u; . "$FILE"; printf '%s' "${!1-unset}")
+}
 # Starts a case with neither file.
 fresh() { rm -f "$FILE" "$SETTINGS"; }
 
@@ -78,7 +84,7 @@ grep -q "claude setup-token" "$SANDBOX/out" || fail "docker: does not say to run
 fresh
 printf 'CLAUDE_CODE_OAUTH_TOKEN=old-token\nREMOTE_HOURS=5\nREMOTE_SSH_HOST=old@box\nexport REMOTE_KEEP=1\nOTHER=kept\n' >"$SANDBOX/seed"
 mkdir -p "$CFG" && cp "$SANDBOX/seed" "$FILE"
-setup $'ssh\n\nbare\n\n' || fail "ssh bare: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\n\n\nbare\n\n' || fail "ssh bare: exited non-zero: $(cat "$SANDBOX/out")"
 check_written "ssh bare" old-token
 [ "$(value REMOTE_BACKEND)" = ssh ] || fail "ssh bare: REMOTE_BACKEND is $(value REMOTE_BACKEND)"
 [ "$(value REMOTE_SSH_HOST)" = old@box ] || fail "ssh bare: REMOTE_SSH_HOST is $(value REMOTE_SSH_HOST), not the old one"
@@ -96,11 +102,36 @@ setup $'docker\n\n\n' || fail "switch: exited non-zero: $(cat "$SANDBOX/out")"
 
 # SSH, container mode: an empty host and an unknown mode are asked again; the image is asked.
 fresh
-setup $'ssh\n\nme@box\nweird\ncontainer\nmy/image:1\n'"$TOKEN"$'\n' || fail "ssh container: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\nme@box\n\n\nweird\ncontainer\nmy/image:1\n'"$TOKEN"$'\n' || fail "ssh container: exited non-zero: $(cat "$SANDBOX/out")"
 check_written "ssh container" "$TOKEN"
 [ "$(value REMOTE_SSH_HOST)" = me@box ] || fail "ssh container: REMOTE_SSH_HOST is $(value REMOTE_SSH_HOST)"
 [ "$(value REMOTE_SSH_MODE)" = container ] || fail "ssh container: REMOTE_SSH_MODE is $(value REMOTE_SSH_MODE)"
 [ "$(value REMOTE_IMAGE)" = my/image:1 ] || fail "ssh container: REMOTE_IMAGE is $(value REMOTE_IMAGE)"
+[ "$(value REMOTE_SSH_KEY)" = unset ] || fail "ssh container: agent answered, yet a key file was written"
+
+# SSH logins. A password: an empty one asked again, read like the token, kept in remote.env only.
+fresh
+setup $'ssh\nme@box\npassword\n\npw-1\nbare\n'"$TOKEN"$'\n' || fail "ssh password: exited non-zero: $(cat "$SANDBOX/out")"
+check_written "ssh password" "$TOKEN"
+[ "$(secret SSH_PASSWORD)" = pw-1 ] || fail "ssh password: not stored: $(secret SSH_PASSWORD)"
+grep -q "pw-1" "$SANDBOX/out" && fail "ssh password: the password showed in the output"
+grep -q "pw-1" "$SETTINGS" && fail "ssh password: the password reached settings.json"
+[ "$(value REMOTE_SSH_KEY)" = unset ] || fail "ssh password: a key file was written"
+# Enter on every question keeps it all, password login included.
+setup $'ssh\n\n\n\n\n\n' || fail "ssh password again: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(secret SSH_PASSWORD)" = pw-1 ] || fail "ssh password again: not kept: $(secret SSH_PASSWORD)"
+# A key file with a passphrase: the password goes.
+setup $'ssh\n\nkey\n~/.ssh/box\nphrase-1\n\n\n' || fail "ssh key: exited non-zero: $(cat "$SANDBOX/out")"
+# shellcheck disable=SC2088 # stored as typed
+[ "$(value REMOTE_SSH_KEY)" = "~/.ssh/box" ] || fail "ssh key: key file is $(value REMOTE_SSH_KEY)"
+[ "$(secret SSH_KEY_PASSPHRASE)" = phrase-1 ] || fail "ssh key: passphrase not stored"
+grep -q "phrase-1" "$SANDBOX/out" && fail "ssh key: the passphrase showed in the output"
+[ "$(secret SSH_PASSWORD)" = unset ] || fail "ssh key: the password was kept"
+# The ssh agent: no key file, no passphrase.
+setup $'ssh\n\n\nagent\n\n\n' || fail "ssh agent: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_SSH_KEY)" = unset ] || fail "ssh agent: key file kept: $(value REMOTE_SSH_KEY)"
+[ "$(secret SSH_KEY_PASSPHRASE)" = unset ] || fail "ssh agent: passphrase kept"
+check_written "ssh agent" "$TOKEN"
 
 # Cluster: the current kube context by default, then namespace and pool; a token with quotes survives.
 fresh
