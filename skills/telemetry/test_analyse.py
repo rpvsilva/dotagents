@@ -175,6 +175,53 @@ class Analyse(unittest.TestCase):
         self.save(run("a", step("Bash", "a.py", failed=True), step("Read", "a.py")))
         self.assertIsNone(self.section(self.ok("deploy"), "Retries"))
 
+    # Instances: a subagent's own steps, else its span's
+
+    def parallel_reviewers(self):
+        brief = "~/.agents/skills/review-pr/reviewer-brief.md"
+        return run("a", step("Read", brief, subagent="reviewer", subagentId="agent-a"),
+                   step("Read", brief, subagent="reviewer", subagentId="agent-b"),
+                   step("Bash", "gh pr diff 1", failed=True, subagent="reviewer", subagentId="agent-a"),
+                   step("Bash", "gh pr diff 1", subagent="reviewer", subagentId="agent-b"))
+
+    def test_two_parallel_subagents_of_one_type_are_not_repeats(self):
+        self.save(self.parallel_reviewers())
+        self.assertIsNone(self.section(self.ok("deploy"), "Repeated"))
+
+    def test_two_parallel_subagents_of_one_type_are_not_retries(self):
+        self.save(self.parallel_reviewers())
+        self.assertIsNone(self.section(self.ok("deploy"), "Retries"))
+
+    def test_one_subagent_repeating_a_step_is_still_repeated_and_named_by_type(self):
+        self.save(run("a", step("Read", "x", subagent="reviewer", subagentId="agent-a"),
+                      step("Read", "x", subagent="reviewer", subagentId="agent-a"),
+                      step("Bash", "gh pr diff 1", failed=True, subagent="reviewer", subagentId="agent-a"),
+                      step("Bash", "gh pr diff 1", subagent="reviewer", subagentId="agent-a")))
+        out = self.ok("deploy")
+        self.assertEqual(self.section(out, "Repeated"), [["reviewer", "Bash", "gh pr diff 1", "2", "1"],
+                                                         ["reviewer", "Read", "x", "2", "1"]])
+        self.assertEqual(self.section(out, "Retries"), [["reviewer", "Bash", "gh pr diff 1", "1", "1"]])
+
+    def test_two_spans_of_one_skill_are_not_merged_for_repeats_or_retries(self):
+        self.save(run("a", step("Read", "x", subagentId=None, span="deploy"),
+                      step("Bash", "npm test", failed=True, subagentId=None, span="deploy"),
+                      step("Read", "x", subagentId=None, span="deploy-2"),
+                      step("Bash", "npm test", subagentId=None, span="deploy-2")))
+        out = self.ok("deploy")
+        self.assertIsNone(self.section(out, "Repeated"))
+        self.assertIsNone(self.section(out, "Retries"))
+
+    def test_slowest_and_failing_still_group_parallel_subagents_by_type(self):
+        self.save(self.parallel_reviewers())
+        out = self.ok("deploy")
+        self.assertEqual(self.section(out, "Failing"), [["reviewer", "Bash", "gh pr diff 1", "1/2", "1"]])
+        self.assertIn(["reviewer", "Read", "~/.agents/skills/review-pr/reviewer-brief.md", "1.0 s", "1.0 s", "2", "1"],
+                      self.section(out, "Slowest"))
+
+    def test_runs_saved_without_subagent_ids_group_by_type_as_before(self):
+        self.save(run("a", step("Read", "x", subagent="reviewer"), step("Read", "x", subagent="reviewer")))
+        self.assertEqual(self.section(self.ok("deploy"), "Repeated"), [["reviewer", "Read", "x", "2", "1"]])
+
     # Where
 
     def test_steps_without_a_label_are_not_retries(self):
@@ -253,6 +300,35 @@ class Analyse(unittest.TestCase):
         self.save(bad)
         rows = self.section(self.ok("deploy"), "Slowest")
         self.assertEqual([r[2] for r in rows], ["ls"])
+
+    def test_steps_missing_skill_or_subagent_are_skipped_not_a_crash(self):
+        bad = run("a", step("Bash", "ls"))
+        bad["steps"] += [{"tool": "Bash", "label": "x", "seconds": 1},
+                         {"tool": "Bash", "label": "y", "seconds": 1, "skill": "deploy", "span": "deploy"}]
+        self.save(bad)
+        self.assertEqual([r[2] for r in self.section(self.ok("deploy"), "Slowest")], ["ls"])
+
+    def test_steps_with_non_finite_seconds_are_skipped(self):
+        for value in ("Infinity", "-Infinity", "NaN"):
+            with self.subTest(value):
+                text = json.dumps(run("a", step("Bash", "ls"), step("Bash", "inf", seconds=7.0)))
+                (self.dir / "a.json").write_text(text.replace("7.0", value), encoding="utf-8")
+                rows = self.section(self.ok("deploy"), "Slowest")
+                self.assertEqual([r[2] for r in rows], ["ls"])
+
+    def test_top_below_one_is_rejected(self):
+        self.save(run("a", step("Bash", "ls")))
+        for value in ("0", "-1"):
+            with self.subTest(value):
+                proc = self.analyse("--top", value, "deploy")
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn("--top", proc.stderr)
+
+    def test_control_characters_in_a_label_are_escaped(self):
+        self.save(run("a", step("Bash", "echo \x1b[2Jhi\x9b\x07")))
+        out = self.ok("deploy")
+        self.assertIn("echo \\x1b[2Jhi\\x9b\\x07", out)
+        self.assertFalse(any(c in out for c in "\x1b\x9b\x07"))
 
     def test_the_script_runs_as_a_command(self):
         self.save(run("a", step("Bash", "ls")))

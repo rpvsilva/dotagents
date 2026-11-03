@@ -1,5 +1,6 @@
 """Saved telemetry runs: load them from their folders, oldest first."""
 import json
+import math
 from pathlib import Path
 
 from report import TOKEN_KINDS, saved_runs_dir
@@ -13,7 +14,8 @@ def default_dirs():
 
 
 def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """A finite int or float; json.loads reads Infinity and NaN as floats."""
+    return isinstance(value, int) and not isinstance(value, bool) or isinstance(value, float) and math.isfinite(value)
 
 
 def readable_span(span):

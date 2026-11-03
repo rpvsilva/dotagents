@@ -51,6 +51,15 @@ class SavedRuns(unittest.TestCase):
             runs, _ = saved_runs([self.tmp / "d1", self.tmp / "d2", self.tmp / "missing"])
         self.assertEqual(self.ids(runs), [("b", None), ("c", None)])
 
+    def test_skips_and_counts_a_run_with_a_non_finite_number(self):
+        folder = self.tmp / "d"
+        span = {"skill": None, "wallClockSeconds": 1, "turns": 1, "toolCalls": 1, "tokensByModel": {}}
+        write(folder, "good.json", run("a", "2026-10-01T10:00:00.000Z", spans=[span]))
+        write(folder, "inf.json", json.dumps(run("b", "2026-10-01T10:00:00.000Z", spans=[span])).replace(
+            '"wallClockSeconds": 1', '"wallClockSeconds": Infinity'))
+        runs, skipped = saved_runs([folder])
+        self.assertEqual((self.ids(runs), skipped), ([("a", None)], 1))
+
     def test_skips_and_counts_bad_json_and_runs_without_spans(self):
         folder = self.tmp / "d"
         write(folder, "good.json", run("a", "2026-10-01T10:00:00.000Z"))
