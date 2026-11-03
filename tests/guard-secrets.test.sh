@@ -19,10 +19,23 @@ run() {
   fi
   [ "$got" = "$want" ] || fail "$name: wanted $want, got $got $(cat "$SANDBOX/err")"
 }
+# $1 as a JSON string, built in bash: a jq process per case would cost more than the hook itself.
+# Escapes backslash, quote, newline, tab and CR, the only control characters the cases hold.
+str() {
+  local s="${1//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '"%s"' "$s"
+}
 # A file tool on path $2, the way Claude Code calls it.
-file() { run "$1" "$(jq -n --arg p "$2" '{tool_name: "Read", tool_input: {file_path: $p}}')" "path $2"; }
+file() { run "$1" "{\"tool_name\": \"Read\", \"tool_input\": {\"file_path\": $(str "$2")}}" "path $2"; }
 # A shell command $2, run in $SANDBOX/$3 (default: the sandbox).
-cmd() { run "$1" "$(jq -n --arg c "$2" --arg d "$SANDBOX/${3:-}" '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d}')" "command $2"; }
+cmd() { run "$1" "{\"tool_name\": \"Bash\", \"tool_input\": {\"command\": $(str "$2")}, \"cwd\": $(str "$SANDBOX/${3:-}")}" "command $2"; }
+# The builder agrees with jq on every kind of character it escapes.
+want="$(jq -n --arg c $'a\\b "q" \t\r\nz' '$c')"
+[ "$(jq -c . <<<"$(str $'a\\b "q" \t\r\nz')")" = "$want" ] || fail "str: JSON escaping differs from jq"
 
 file block .env
 file block /repo/.env.local
