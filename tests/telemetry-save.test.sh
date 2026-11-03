@@ -48,9 +48,12 @@ quiet() {
 }
 
 # A stub extractor: writes $SANDBOX/marks/$1 when it starts, then runs the Python in $2.
+# It finds marks/ from its own path (argv[0]), never from $SANDBOX written into its source: on Windows, Git Bash turns
+# a /c/... argument into C:/... for a native python3, but a path inside the source stays /c/..., which Python cannot open.
 stub() {
   mkdir -p "$SANDBOX/marks"
-  printf 'import json, sys, time\nopen("%s/marks/%s", "w").close()\n%s\n' "$SANDBOX" "$1" "$2" >"$SANDBOX/$1.py"
+  printf 'import json, os, sys, time\nopen(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "marks", "%s"), "w").close()\n%s\n' \
+    "$1" "$2" >"$SANDBOX/$1.py"
   echo "$SANDBOX/$1.py"
 }
 
@@ -153,12 +156,15 @@ h="$(home missing)"
 quiet "$h" "$(payload "$SANDBOX/sessions/nowhere.jsonl")" "missing transcript" TELEMETRY_EXTRACT="$(stub missing 'print("{}")')"
 
 # No python3 (or no jq) on PATH: a PATH holding only the other commands the hook and settings use.
+# Each is a /bin/sh script running the real one, not a link: on Windows a link to /usr/bin/bash points at a file
+# without its .exe, so env fails to run the hook's `#!/usr/bin/env bash` through it (exit 127).
 mkdir -p "$SANDBOX/nopy" "$SANDBOX/nojq"
 for c in bash env jq git cat dirname basename readlink mkdir mv rm nohup sed paste tr head grep sleep ls; do
   p="$(command -v "$c")" || continue
-  ln -s "$p" "$SANDBOX/nopy/$c"
-  [ "$c" = jq ] || ln -s "$p" "$SANDBOX/nojq/$c"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" >"$SANDBOX/nopy/$c"
+  [ "$c" = jq ] || cp "$SANDBOX/nopy/$c" "$SANDBOX/nojq/$c"
 done
+chmod +x "$SANDBOX/nopy"/* "$SANDBOX/nojq"/*
 h="$(home nopython)"
 t="$(transcript sess-nopython)"
 quiet "$h" "$(payload "$t")" "no python3" PATH="$SANDBOX/nopy"
