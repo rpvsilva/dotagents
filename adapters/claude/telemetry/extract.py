@@ -103,18 +103,28 @@ LABEL_LENGTH = 80
 
 
 def secret_rules(path=PATTERNS):
-    """Compiled token and label rules from the patterns file; None when it cannot be read."""
+    """(compiled rule, is a label rule) for each token and label line of the patterns file; None when it cannot be read."""
     flags = {"token": 0, "label": re.I}
     try:
         lines = [line.partition(" ") for line in path.read_text(encoding="utf-8").splitlines()]
-        rules = [re.compile(rule, flags[name]) for name, _, rule in lines if name in flags]
+        rules = [(re.compile(rule, flags[name]), name == "label") for name, _, rule in lines if name in flags]
     except (OSError, UnicodeDecodeError, re.error):
         return None
     return rules or None
 
 
+def mask(rule, is_label, text):
+    """Text with each match of rule as ***; a label rule with groups masks only its last group (the value)."""
+    def stars(m):
+        if not is_label or m.lastindex is None:
+            return "***"
+        whole, (start, end) = m.group(0), m.span(m.lastindex)
+        return whole[:start - m.start()] + "***" + whole[end - m.start():]
+    return rule.sub(stars, text)
+
+
 def label(tool, given, rules):
-    """A step's short label: the first line of the tool's label input, masked, then cut. Only these keys are read."""
+    """A step's short label: the first non-blank line of the tool's label input, masked, then cut. Only these keys are read."""
     if tool == "Bash":
         text = given.get("command")
     elif tool in ("Read", "Write", "Edit", "NotebookEdit"):
@@ -135,9 +145,9 @@ def label(tool, given, rules):
         text = None
     if not isinstance(text, str) or not text or rules is None:
         return ""
-    text = text.splitlines()[0] if text.strip() else ""
-    for rule in rules:
-        text = rule.sub("***", text)
+    text = next((line for line in text.splitlines() if line.strip()), "")
+    for rule, is_label in rules:
+        text = mask(rule, is_label, text)
     return text if len(text) <= LABEL_LENGTH else text[:LABEL_LENGTH - 1] + "…"
 
 

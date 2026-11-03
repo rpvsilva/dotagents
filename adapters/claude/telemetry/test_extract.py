@@ -327,7 +327,7 @@ class CrlfPatterns(unittest.TestCase):
             lf = (HERE.parents[2] / "scripts" / "hooks" / "secret-patterns.txt").read_bytes().replace(b"\r\n", b"\n")
             rules.write_bytes(lf.replace(b"\n", b"\r\n"))
             labels = step_labels(calls, folder, script)
-        self.assertEqual(labels, ["curl -d *** x", "mysql --***", "echo hello"])
+        self.assertEqual(labels, ["curl -d *** x", "mysql --password=***", "echo hello"])
 
 
 class StepMasking(unittest.TestCase):
@@ -345,12 +345,38 @@ class StepMasking(unittest.TestCase):
     }
 
     PASSWORDS = {
-        "mysql --password=hunter2 db": "mysql --*** db",
-        "export API_KEY=abc123": "export ***",
-        "DB_PASSWORD: s3cret make": "*** make",
-        "GITHUB_TOKEN=abc123 gh pr list": "*** gh pr list",
+        "mysql --password=hunter2 db": "mysql --password=*** db",
+        "export API_KEY=abc123": "export API_KEY=***",
+        "DB_PASSWORD: s3cret make": "DB_PASSWORD: *** make",
+        "GITHUB_TOKEN=abc123 gh pr list": "GITHUB_TOKEN=*** gh pr list",
         'curl -H "Authorization: Bearer abc.def" x': 'curl -H "Authorization: ***" x',
+        "echo bearer abc.def": "echo ***",
     }
+    # Each credential form a label rule masks; the label keeps the program, flags, host and path.
+    # Built at runtime where token-shaped, so no token-like text is committed.
+    FORMS = {
+        "curl user:password": ("curl -u admin:hunter2 https://x", "curl -u *** https://x"),
+        "curl --user": ("curl --user admin:hunter2 https://x", "curl --user *** https://x"),
+        "mysql -p": ("mysql -u root -ps3cr3t db", "mysql -u root -p*** db"),
+        "--password=": ("mysql --password=s3cr3t db", "mysql --password=*** db"),
+        "--password value": ("mysql --password s3cr3t db", "mysql --password *** db"),
+        "NAME=value with PASS": ("DB_PASS=hunter2 ./run", "DB_PASS=*** ./run"),
+        "NAME=value with KEY": ("export STRIPE_KEY=sk_live_x", "export STRIPE_KEY=***"),
+        "NAME=value with SECRET": ("API_SECRET=x make", "API_SECRET=*** make"),
+        "NAME=value with PWD": ("db_pwd=x make", "db_pwd=*** make"),
+        "NAME=value with AUTH": ("MY_AUTH=x make", "MY_AUTH=*** make"),
+        "NAME=value with TOKEN": ("npm_token=x make", "npm_token=*** make"),
+        "URL userinfo": ("git clone https://rui:pw123@github.com/a/b", "git clone https://***@github.com/a/b"),
+        "URL query": ("curl https://x/api?key=abc&b=1", "curl https://x/api?***"),
+        "Authorization Basic": ('curl -H "Authorization: Basic YWRtaW46cGFzcw==" x', 'curl -H "Authorization: ***" x'),
+        "Authorization other scheme": ("curl -H 'Authorization: token abc' x", "curl -H 'Authorization: ***' x"),
+        "Authorization no scheme": ('curl -H "Authorization:abc" x', 'curl -H "Authorization:***" x'),
+        "OpenAI key": ("echo " + "sk-" + "proj-" + "a1" * 12, "echo ***"),
+        "Stripe key": ("echo " + "sk_" + "live_" + "b2" * 12, "echo ***"),
+    }
+    # Look like the forms above but hold no secret, so they are kept as they are.
+    KEPT = ["git push -u origin main", "mkdir -p src/a", "cp -pr a b", "ssh -p22 host",
+            "curl https://example.com/docs", "git log --format=%H", "echo desk-top"]
     NEAR_CUT = "echo " + "x" * 65 + " " + TOKENS["github"] + " done"
 
     @classmethod
@@ -359,6 +385,9 @@ class StepMasking(unittest.TestCase):
         calls = [("Bash", f"curl -d {token} x") for token in cls.TOKENS.values()]
         calls += [("Read", "/tmp/" + cls.TOKENS["github"] + ".txt"), ("Bash", "echo " + "x" * 200), ("Bash", cls.NEAR_CUT)]
         calls += [("Bash", command) for command in cls.PASSWORDS]
+        calls += [("Bash", command) for command, _ in cls.FORMS.values()]
+        calls += [("Bash", command) for command in cls.KEPT]
+        calls += [("Bash", "\n\n  \ngit push\nmore")]
         with tempfile.TemporaryDirectory() as folder:
             cls.labels = dict(zip(calls, step_labels(calls, folder)))
 
@@ -377,6 +406,19 @@ class StepMasking(unittest.TestCase):
         for command, label in self.PASSWORDS.items():
             with self.subTest(command):
                 self.assertEqual(self.label("Bash", command), label)
+
+    def test_each_credential_form_is_masked_keeping_the_rest(self):
+        for form, (command, label) in self.FORMS.items():
+            with self.subTest(form):
+                self.assertEqual(self.label("Bash", command), label)
+
+    def test_commands_with_no_secret_are_kept_whole(self):
+        for command in self.KEPT:
+            with self.subTest(command):
+                self.assertEqual(self.label("Bash", command), command)
+
+    def test_a_label_starts_at_the_first_non_blank_line(self):
+        self.assertEqual(self.label("Bash", "\n\n  \ngit push\nmore"), "git push")
 
     def test_a_long_label_is_cut_to_80_characters(self):
         label = self.label("Bash", "echo " + "x" * 200)
