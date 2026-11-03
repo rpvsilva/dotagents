@@ -350,3 +350,20 @@ export function wrappedRows(line: string, columns: number): number {
   }
   return rows
 }
+
+/** How the pane draws a log line: a theme color, or dim; `{}` for the agent's own text. */
+export type LineStyle = { color?: 'suggestion' | 'success' | 'error'; dimColor?: true }
+
+/**
+ * A log line's style from what renderEvent made of it: a tool call (`->`) in the suggestion color, a tool result
+ * (`<-`) dim and an errored one red, the session line dim, the end line green (`done`) or red (`FAILED`).
+ */
+export function lineStyle(line: string): LineStyle {
+  if (line.startsWith('-> ')) return { color: 'suggestion' }
+  if (line.startsWith('<- ERROR')) return { color: 'error' }
+  if (line.startsWith('<- ')) return { dimColor: true }
+  if (line.startsWith('session started')) return { dimColor: true }
+  if (/^done( in \d+s)?(,? ?\$\d+\.\d{2})?$/.test(line)) return { color: 'success' }
+  if (/^FAILED( \S+)?$/.test(line)) return { color: 'error' }
+  return {}
+}
