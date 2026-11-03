@@ -312,8 +312,9 @@ run_json '.claim_s = $s' --argjson s "$took"
 # macOS tar would add AppleDouble files and xattr headers.
 export COPYFILE_DISABLE=1
 t0=$SECONDS
-tar -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
-(cd "$root" && tar -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
+# shellcheck disable=SC2154 # remote_tar: set by remote-settings.sh
+"${remote_tar[@]}" -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
+(cd "$root" && "${remote_tar[@]}" -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
 took=$((SECONDS - t0))
 say "sent setup and snapshot in ${took}s"
 # shellcheck disable=SC2016 # jq's variables

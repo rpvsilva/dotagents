@@ -178,6 +178,56 @@ code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh || code=$?
 grep -q "set REMOTE_SSH_HOST" "$SANDBOX/out" || fail "ssh no host: message: $(cat "$SANDBOX/out")"
 [ ! -e "$S/calls" ] || fail "ssh no host: something reached the host: $(cat "$S/calls")"
 
+# --- ssh login. A key file: every call uses it alone, still without a prompt.
+rm -f "$W/hello.txt" "$S/askpass"
+run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box "REMOTE_SSH_KEY='~/keys/box key'" \
+  || fail "ssh key: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = hello ] || fail "ssh key: patch not applied: $(cat "$SANDBOX/out")"
+if ! grep -q "^ssh " "$S/calls" \
+  || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes -i $H/keys/box key -o IdentitiesOnly=yes me@build-box "; then
+  fail "ssh key: a call without BatchMode or the key file alone (~ as this machine's home): $(grep '^ssh' "$S/calls" | head -2)"
+fi
+[ ! -e "$S/askpass" ] || fail "ssh key: askpass used with no password set"
+# A password in remote.env: keys first, then the password, answered by askpass and never in ssh's arguments.
+rm -f "$W/hello.txt"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
+echo "SSH_PASSWORD='pw-s3cret \$x'" >>"$SANDBOX/config/dotagents/remote.env"
+run 0 "$HELLO_PATCH" || fail "ssh password: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = hello ] || fail "ssh password: patch not applied: $(cat "$SANDBOX/out")"
+if ! grep -q "^ssh " "$S/calls" \
+  || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=no -o NumberOfPasswordPrompts=1 me@build-box "; then
+  fail "ssh password: a call not allowing one password try: $(grep '^ssh' "$S/calls" | head -2)"
+fi
+# shellcheck disable=SC2016 # a literal $ in the password
+[ "$(sort -u "$S/askpass" 2>/dev/null)" = 'pw-s3cret $x' ] || fail "ssh password: askpass answers: $(cat "$S/askpass" 2>/dev/null)"
+grep -q "pw-s3cret" "$S/calls" "$SANDBOX/out" && fail "ssh password: the password leaked into ssh arguments or the output"
+# An unknown host key's question gets no answer: the login fails, as with BatchMode.
+rm -f "$W/hello.txt" "$S/askpass"
+code=0; STUB_SSH_PROMPT="Are you sure you want to continue connecting (yes/no/[fingerprint])? " run 0 "$HELLO_PATCH" || code=$?
+[ "$code" != 0 ] || fail "ssh host key: exited 0"
+[ ! -s "$S/askpass" ] || fail "ssh host key: askpass answered: $(cat "$S/askpass")"
+# askpass itself: a passphrase prompt takes SSH_KEY_PASSPHRASE only; --any says whether either Secret is set.
+askpass() { XDG_CONFIG_HOME="$SANDBOX/config" env -u SSH_PASSWORD -u SSH_KEY_PASSPHRASE "$REPO/scripts/remote-ssh-askpass.sh" "$@"; }
+askpass "Enter passphrase for key '/k': " >/dev/null && fail "askpass: answered a passphrase prompt with the password"
+echo "SSH_KEY_PASSPHRASE=phrase" >>"$SANDBOX/config/dotagents/remote.env"
+[ "$(askpass "Enter passphrase for key '/k': ")" = phrase ] || fail "askpass: passphrase not answered"
+# shellcheck disable=SC2016 # a literal $ in the password
+[ "$(askpass "(me@box) Password: ")" = 'pw-s3cret $x' ] || fail "askpass: keyboard-interactive password not answered"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
+askpass --any && fail "askpass --any: true with neither Secret set"
+rm -f "$W/hello.txt" "$S/askpass"
+
+# ssh_sudo: a host whose docker only root may use; every docker command goes through sudo -n.
+: >"$S/root-only"
+run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box REMOTE_SSH_SUDO=true \
+  || fail "ssh sudo: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = hello ] || fail "ssh sudo: patch not applied: $(cat "$SANDBOX/out")"
+if grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@build-box 'sudo' '-n' 'docker' "; then
+  fail "ssh sudo: a docker call not through sudo -n: $(grep '^ssh' "$S/calls" | grep -v "'sudo'" | head -2)"
+fi
+gone "$(container)" || fail "ssh sudo: container not removed"
+rm -f "$S/root-only" "$W/hello.txt"
+
 # Two runs at once on one host: each gets its own container, both finish, both containers go.
 W2="$SANDBOX/work2"
 make_worktree "$W2"

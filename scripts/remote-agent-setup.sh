@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Guided setup for scripts/remote-agent.sh, run as `remote-agent setup`: asks for the backend and its details, then
-# for a Claude token (from `claude setup-token`, read without echo). The answers are remote Settings, written to the
-# machine Level through scripts/settings.sh; the token is a Secret, written to ~/.config/dotagents/remote.env readable
-# only by the user (mode 600), through a temp file in the same folder moved into place.
+# Guided setup for scripts/remote-agent.sh, run as `remote-agent setup`: asks for the backend and its details (for SSH,
+# how to log in: a key, from the agent, ~/.ssh/config or a key file with an optional passphrase, or a password), then
+# for a Claude token (from `claude setup-token`). Secrets are read without echo. The answers are remote Settings,
+# written to the machine Level through scripts/settings.sh; the token, the SSH password and the key passphrase are
+# Secrets, written to ~/.config/dotagents/remote.env readable only by the user (mode 600), through a temp file in the
+# same folder moved into place. A login method not chosen drops the other's Secret.
 # Enter takes the default shown: the machine Level's value, else one left in remote.env from before settings.json,
-# else the Declaration's default (for the kube context, the current one first); for the token, it keeps the one
-# already in remote.env. Of the Settings it asks about, those the chosen backend does not use are unset; the others
+# else the Declaration's default (for the kube context, the current one first); for a Secret, it keeps the one
+# already in remote.env (for the key passphrase, none when there is none; `none` drops one). Of the Settings it asks about, those the chosen backend does not use are unset; the others
 # (hours, keep, ...) stay. REMOTE_* lines left in remote.env move to settings.json, unless the machine Level already
 # holds that Setting; remote.env keeps the token and its lines that are not Settings. Reads answers from stdin when
 # it is not a terminal (for tests). EOF or Ctrl-C before the end writes nothing: existing files stay as they were.
@@ -15,7 +17,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 FILE="$CONFIG/remote.env"
 # The Settings this script asks about; the ones the chosen backend does not use are unset.
-ASKED="backend context namespace pool ssh_host ssh_mode image"
+ASKED="backend context namespace pool ssh_host ssh_key ssh_mode image"
+# The Secrets it writes to remote.env; the lines it keeps there are the others.
+SECRETS="CLAUDE_CODE_OAUTH_TOKEN SSH_PASSWORD SSH_KEY_PASSPHRASE"
 
 tmp=""
 trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
@@ -39,6 +43,27 @@ ask() {
   printf '%s' "$answer"
 }
 
+# ask_secret <prompt> <current> [optional]: prints a Secret read without echo (plain lines when stdin is not a
+# terminal). Enter keeps <current>; with none, it asks again, unless optional, where enter (or `none`) means none.
+ask_secret() {
+  local prompt="$1" current="$2" optional="${3:-}" answer=""
+  while :; do
+    if [ -n "$current" ]; then prompt="$1 (enter keeps the current one${optional:+, none drops it})"
+    elif [ -n "$optional" ]; then prompt="$1 (enter: none)"; fi
+    printf '%s: ' "$prompt" >&2
+    if [ -t 0 ]; then
+      IFS= read -rs answer || abort
+      echo >&2
+    else
+      IFS= read -r answer || abort
+    fi
+    if [ -n "$optional" ] && [ "$answer" = none ]; then answer=""; break; fi
+    answer="${answer:-$current}"
+    [ -z "$answer" ] && [ -z "$optional" ] || break
+  done
+  printf '%s' "$answer"
+}
+
 # sq quotes a value for the sourced file.
 # shellcheck source=remote-backends/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/remote-backends/lib.sh"
@@ -51,7 +76,8 @@ settings() { "$REPO/scripts/settings.sh" --dir / "$@"; }
 legacy() {
   [ -f "$FILE" ] || return 0
   # shellcheck disable=SC1090
-  (unset "$1" CLAUDE_CODE_OAUTH_TOKEN; set +u; . "$FILE" >/dev/null 2>&1; printf '%s' "${!1-}")
+  # shellcheck disable=SC2086 # the names, split
+  (unset "$1" $SECRETS; set +u; . "$FILE" >/dev/null 2>&1; printf '%s' "${!1-}")
 }
 # Prints the default for Setting $1: the machine Level's value, else remote.env's, else fallback $2, else the
 # Declaration's.
@@ -73,6 +99,8 @@ old_backend="$(old backend)"
 backend="$(ask "Backend (cluster, docker, ssh)" "${old_backend:-cluster}" cluster docker ssh)"
 answers+=("backend $backend")
 mode=""
+password=""
+passphrase=""
 case "$backend" in
   cluster)
     context="$(ask "Kube context" "$(old context "$(kubectl config current-context 2>/dev/null || true)")")"
@@ -82,6 +110,19 @@ case "$backend" in
     ;;
   ssh)
     host="$(ask "SSH host (user@host or a ~/.ssh/config alias)" "$(old ssh_host)")"
+    old_login=key
+    [ -z "$(legacy SSH_PASSWORD)" ] || old_login=password
+    login="$(ask "Log in with (key, password)" "$old_login" key password)"
+    if [ "$login" = key ]; then
+      echo "A key file, or agent: the ssh agent's keys or ~/.ssh/config's for the host." >&2
+      key="$(ask "Key file" "$(old ssh_key agent)")"
+      if [ "$key" != agent ]; then
+        answers+=("ssh_key $key")
+        passphrase="$(ask_secret "Key passphrase" "$(legacy SSH_KEY_PASSPHRASE)" optional)"
+      fi
+    else
+      password="$(ask_secret "SSH password for $host" "$(legacy SSH_PASSWORD)")"
+    fi
     mode="$(ask "Mode (container, or bare: weaker isolation)" "$(old ssh_mode)" container bare)"
     answers+=("ssh_host $host" "ssh_mode $mode")
     ;;
@@ -92,18 +133,7 @@ if [ "$backend" = docker ] || [ "$mode" = container ]; then
 fi
 
 echo "Get a Claude token: run \`claude setup-token\` in another terminal, then paste it here (it does not show)." >&2
-old_token="$(legacy CLAUDE_CODE_OAUTH_TOKEN)"
-token=""
-while [ -z "$token" ]; do
-  printf 'Claude token%s: ' "${old_token:+ (enter keeps the current one)}" >&2
-  if [ -t 0 ]; then
-    IFS= read -rs token || abort
-    echo >&2
-  else
-    IFS= read -r token || abort
-  fi
-  token="${token:-$old_token}"
-done
+token="$(ask_secret "Claude token" "$(legacy CLAUDE_CODE_OAUTH_TOKEN)")"
 
 # Every answer is in: from here on, write. First the Settings left in remote.env that it does not ask about.
 for name in $(remote_leftovers); do
@@ -127,11 +157,13 @@ mkdir -p "$CONFIG"
 umask 077
 tmp="$(mktemp "$CONFIG/.remote.env.XXXXXX")"
 {
-  printf '# Written by remote-agent setup: the Claude token only; the remote Settings are in settings.json.\n'
+  printf '# Written by remote-agent setup: the Secrets only; the remote Settings are in settings.json.\n'
   printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(sq "$token")"
+  [ -z "$password" ] || printf 'SSH_PASSWORD=%s\n' "$(sq "$password")"
+  [ -z "$passphrase" ] || printf 'SSH_KEY_PASSPHRASE=%s\n' "$(sq "$passphrase")"
   if [ -f "$FILE" ]; then
-    # Keep the lines that are neither the token nor a Setting.
-    grep -Ev "^[[:space:]]*(export[[:space:]]+)?(REMOTE_[A-Za-z0-9_]+|CLAUDE_CODE_OAUTH_TOKEN)=|^# Written by remote-agent setup" "$FILE" || true
+    # Keep the lines that are neither a Secret it writes nor a Setting.
+    grep -Ev "^[[:space:]]*(export[[:space:]]+)?(REMOTE_[A-Za-z0-9_]+|${SECRETS// /|})=|^# Written by remote-agent setup" "$FILE" || true
   fi
 } >"$tmp"
 chmod 600 "$tmp"
