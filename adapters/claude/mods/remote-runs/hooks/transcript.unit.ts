@@ -8,6 +8,7 @@ import {
   CHUNK,
   copiedText,
   type Log,
+  lineStyle,
   mask,
   nextOffset,
   NO_LOG,
@@ -393,4 +394,29 @@ test('a tail read starting inside a multi-byte character keeps the offset at the
   const got = readChunk(log(), chunk, { from, length: file.length - from, isTail: true, isFull: true }, new Map())
   assert.deepEqual(got.lines, ['kept'])
   assert.equal(got.offset, enc.encode(`${event('before €uro')}${event('kept')}`).length)
+})
+
+test('lineStyle colors a log line by its kind: tool call, result, error, session, end', () => {
+  const got = [
+    '-> Bash ls -1A',
+    '<- Bash: total 3',
+    '<- ERROR Bash: no such file',
+    'session started (claude-opus-5-5)',
+    'done in 21s, $0.04',
+    'done',
+    'FAILED error_max_turns',
+    'I created the file.',
+    'done with the refactor, moving on',
+  ].map(lineStyle)
+  assert.deepEqual(got, [
+    { color: 'suggestion' },
+    { dimColor: true },
+    { color: 'error' },
+    { dimColor: true },
+    { color: 'success' },
+    { color: 'success' },
+    { color: 'error' },
+    {},
+    {},
+  ])
 })

@@ -49,6 +49,10 @@ type World = {
   copies: { text: string; surface: string }[]
   toasts: string[]
   clock: ReturnType<typeof mock.clock>
+  /** What `settings get remote open_pane` answers, the cwd of each such call, and every `ui.open`'s input. */
+  setting: unknown
+  settingDirs: string[]
+  opens: any[]
 }
 
 function engine(on: any, over: Partial<World> = {}): World {
@@ -56,16 +60,22 @@ function engine(on: any, over: Partial<World> = {}): World {
   const w: World = {
     dirs: {}, files: {}, git: GIT_OK, ps: psAlive([]), placed: true, readFails: false, reads: [], opened: [], sets: 0, logSets: 0, psCalls: [], clock,
     big: {}, tails: [],
-    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], copy: { isCopied: true }, copies: [], toasts: [], ...over,
+    sent: { isSent: true, channel: 'kitty' }, status: [], notified: [], copy: { isCopied: true }, copies: [], toasts: [],
+    setting: { value: { exitCode: 0, stdout: 'true\n', stderr: '' } }, settingDirs: [], opens: [], ...over,
   }
   on('command.register', () => ({ value: { command: 'remote-runs' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('ui.open', (_: unknown, e: any) => {
     w.opened.push(e.id)
+    w.opens.push(e)
     return { value: { isPlaced: w.placed } }
   })
   on('process.run', (_: unknown, e: any) => {
+    if (e.argv[0] === 'sh' && e.argv[2].includes('/.agents/bin/settings')) {
+      w.settingDirs.push(e.argv[4])
+      return w.setting
+    }
     if (e.argv[0] === 'sh') {
       // sh -c 'tail -c "+$1" "$2" | head -c "$3"' sh <+n> <path> <max bytes>
       w.tails.push(e.argv)
@@ -157,6 +167,9 @@ async function start($: any) {
 }
 
 // Runs /remote-runs and checks its answer: a hook that threw would be skipped, with a failed-hook line.
+// Every Text the pane draws, but the follow bar's line of keys, which ends every log view.
+const logTexts = (texts: any[]): string[] => texts.map((el: any) => el.text).filter((t: string) => !t.startsWith('b back · '))
+
 async function open($: any) {
   const { text } = await $.command.run({ command: 'remote-runs' })
   expect(text).toBe('Remote runs pane opened.')
@@ -197,8 +210,9 @@ test('the pane lists runs of the main git dir and of each linked worktree, with 
   await start($)
   await open($)
   expect(await words($)).toEqual([
-    'TT-01-list running <1m', 'running <1m', '   claim 3s · send 5s · first 12s · first agent event after 12s',
-    'main-run done 1m23s', 'done 1m23s', '   claim 3s · send 5s · first 12s · done',
+    '● TT-01-list  running <1m', '●', 'running <1m', '     claim 3s · send 5s · first 12s · first agent event after 12s',
+    '✓ main-run  done 1m23s · <1m ago', '✓', 'done 1m23s · <1m ago', '     claim 3s · send 5s · first 12s · done',
+    '1-9 open a run · esc close',
   ])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ key: 'run:agent-wt' }))?.props.hotkey).toBe('1')
@@ -212,7 +226,7 @@ test('a folder with no run.json, or an empty transcript, shows a row and nothing
   for (const surface of SURFACES) {
     await start($)
     await open($)
-    expect(await words($, surface)).toEqual(['agent-20261102-100000-1 unknown', 'unknown'])
+    expect(await words($, surface)).toEqual(['? agent-20261102-100000-1  unknown', '?', 'unknown', '1-9 open a run · esc close'])
   }
   expect(w.psCalls).toEqual([])
 })
@@ -225,7 +239,7 @@ test('a running run whose pid is dead or started at another time shows stopped',
   await start($)
   await open($)
   const shown = await words($)
-  expect(shown.filter(t => / stopped/.test(t) && !t.startsWith(' '))).toEqual(['dead stopped 0s', 'reused stopped 0s'])
+  expect(shown.filter(t => t.startsWith('■ '))).toEqual(['■ dead  stopped 0s · <1m ago', '■ reused  stopped 0s · <1m ago'])
   // In the C locale, as remote-agent writes pid_start: lstart follows the locale on macOS.
   expect(w.psCalls).toEqual([['env', 'LC_ALL=C', 'ps', '-o', 'pid=,lstart=', '-p', '7,8']])
 })
@@ -235,7 +249,7 @@ test('a run left running after its remote-agent is gone stays stopped when ps ca
   addRun(w, '/repo/.git', 'agent-1', runJson())
   await start($)
   await open($)
-  expect((await words($))[0]).toBe('TT-01-list running <1m')
+  expect((await words($))[0]).toBe('● TT-01-list  running <1m')
 })
 
 test('more than 20 runs keep every unfinished one and drop the oldest finished', async ($, on) => {
@@ -267,15 +281,15 @@ test('a changed run.json or a new progress line shows after one tick, with no co
 
   addRun(w, '/repo/.git', 'agent-1', runJson({ state: 'starting' }))
   await clock.advance(1500)
-  expect((await words($))[0]).toBe('TT-01-list starting <1m')
+  expect((await words($))[0]).toBe('○ TT-01-list  starting <1m')
 
   write(w, '/repo/.git/remote-agent/agent-1/progress.log', 'claimed in 3s\n')
   await clock.advance(1500)
-  expect((await words($))[2]).toBe('   claim 3s · send 5s · first 12s · claimed in 3s')
+  expect((await words($))[3]).toBe('     claim 3s · send 5s · first 12s · claimed in 3s')
 
   write(w, '/repo/.git/remote-agent/agent-1/run.json', JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 5 })))
   await clock.advance(1500)
-  expect((await words($))[0]).toBe('TT-01-list done 35s')
+  expect((await words($))[0]).toBe('✓ TT-01-list  done 35s · <1m ago')
 })
 
 test('a removed run folder leaves the pane, and a finished run is read once', async ($, on) => {
@@ -285,13 +299,13 @@ test('a removed run folder leaves the pane, and a finished run is read once', as
   addRun(w, '/repo/.git', 'agent-2', runJson({ name: 'finished', state: 'done', exit_code: 0, ended: NOW / 1000 }), 'done\n')
   await start($)
   await clock.advance(1500)
-  expect((await words($)).filter(t => /^(TT-01-list|finished) /.test(t))).toEqual(['TT-01-list running <1m', 'finished done 30s'])
+  expect((await words($)).filter(t => /^. (TT-01-list|finished) /.test(t))).toEqual(['● TT-01-list  running <1m', '✓ finished  done 30s · <1m ago'])
   write(w, '/repo/.git/remote-agent/agent-2/progress.log', 'done\nlater line\n')
   w.dirs['/repo/.git/remote-agent'] = ['agent-2']
   const reads = w.reads.length
   await clock.advance(1500)
   expect(w.reads.length).toBe(reads)
-  expect(await words($)).toEqual(['finished done 30s', 'done 30s', '   claim 3s · send 5s · first 12s · done'])
+  expect(await words($)).toEqual(['✓ finished  done 30s · <1m ago', '✓', 'done 30s · <1m ago', '     claim 3s · send 5s · first 12s · done', '1-9 open a run · esc close'])
 })
 
 test('an unchanged tick does not set state', async ($, on) => {
@@ -313,7 +327,7 @@ test('failing file reads and processes on every tick leave no failed hook', asyn
   await start($)
   await w.clock.advance(1500)
   await open($)
-  expect((await words($))[0]).toBe('agent-1 unknown')
+  expect((await words($))[0]).toBe('? agent-1  unknown · 1m ago')
 })
 
 test('/remote-runs says the pane waits for a wider terminal when it is not placed', async ($, on) => {
@@ -331,13 +345,13 @@ test('a run that ends notifies once and clears the status line, with the pane cl
   addRun(w, '/repo/.git', 'agent-1', runJson())
   await start($)
   await w.clock.advance(1500)
-  expect(w.status).toEqual(['remote: 1 running'])
+  expect(w.status).toEqual(['● TT-01-list running'])
   expect(w.notified).toEqual([])
 
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
   await w.clock.advance(1500)
   expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
-  expect(w.status).toEqual(['remote: 1 running', undefined])
+  expect(w.status).toEqual(['● TT-01-list running', undefined])
 
   await w.clock.advance(1500)
   await start($)
@@ -357,12 +371,12 @@ test('a run that fails notifies with its exit code and counts as failed in the s
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 2, ended: NOW / 1000 + 3 - 3590 })))
   await w.clock.advance(1500)
   expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list failed (exit 2)' }])
-  expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed'])
+  expect(w.status).toEqual(['● TT-01-list running', '✗ TT-01-list failed'])
 
   await w.clock.advance(4500)
   expect(w.status.length).toBe(2)
   await w.clock.advance(7500)
-  expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed', undefined])
+  expect(w.status).toEqual(['● TT-01-list running', '✗ TT-01-list failed', undefined])
   expect(w.notified.length).toBe(1)
 })
 
@@ -375,7 +389,7 @@ test('a run whose remote-agent died notifies stopped', async ($, on) => {
   w.ps = psAlive([])
   await w.clock.advance(1500)
   expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list stopped' }])
-  expect(w.status).toEqual(['remote: 1 running', 'remote: 1 failed'])
+  expect(w.status).toEqual(['● TT-01-list running', '✗ TT-01-list failed'])
 })
 
 test('a run that ends between reading run.json and ps notifies how it ended, not stopped', async ($, on) => {
@@ -393,7 +407,7 @@ test('a run that ends between reading run.json and ps notifies how it ended, not
   expect(w.notified).toEqual([{ title: 'remote run', text: 'TT-01-list done' }])
   await w.clock.advance(3000)
   expect(w.notified.length).toBe(1)
-  expect((await words($))[0]).toBe('TT-01-list done 32s')
+  expect((await words($))[0]).toBe('✓ TT-01-list  done 32s · <1m ago')
 })
 
 test('more finished runs on disk than the store keeps are never notified again', async ($, on) => {
@@ -453,7 +467,7 @@ test('without a store a run that ends is not notified, and the status line still
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
   await w.clock.advance(4500)
   expect(w.notified).toEqual([])
-  expect(w.status).toEqual(['remote: 1 running', undefined])
+  expect(w.status).toEqual(['● TT-01-list running', undefined])
 })
 
 test('a notification that throws is marked all the same, and the store drops the oldest folders gone from disk past 1000', async ($, on) => {
@@ -514,7 +528,7 @@ test('pressing a run shows its log in order, and Back returns to the list with i
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'run:agent-1' })
     expect((await ui.find({ key: 'back' }))?.props.hotkey).toBe('b')
-    const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+    const shown = logTexts(await ui.findAll({ type: 'Text' }))
     expect(shown.slice(-5)).toEqual(['session started (claude-opus)', 'Reading the code.', '-> Bash ls', '<- Bash: a.txt', 'done in 4s, $0.12'])
     expect(shown).toContain(TRANSCRIPT)
     expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(true)
@@ -532,7 +546,7 @@ test('a run with an empty, missing or unreadable transcript says it waits for th
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       await ui.press({ key: 'run:agent-1' })
-      const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+      const shown = logTexts(await ui.findAll({ type: 'Text' }))
       expect(shown[shown.length - 1]).toBe('waiting for the first event')
       await ui.press({ key: 'back' })
       await ui.unmount()
@@ -556,8 +570,8 @@ test('a token-shaped string in the transcript is masked in every line drawn', as
 const say = (text: string) => jsonl({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 const says = (count: number, from = 0) => Array.from({ length: count }, (_, i) => say(`line ${from + i}`)).join('')
 const names = (count: number, from = 0) => Array.from({ length: count }, (_, i) => `line ${from + i}`)
-// The pane is 20 rows: two header rows, 18 rows of log.
-const ROWS = 18
+// bodyRows 20, less the two header rows and a blank row, a blank row and the follow bar.
+const ROWS = 15
 const scroll = (by: number) => ({ component: 'Pane', requestId: 'remote-runs', offset: 0, by, bodyRows: 20, contentRows: 20, origin: { kind: 'person' } })
 
 // The log lines the pane draws (each Text after the path, but the notes and the resume hint), the hint, and all its
@@ -568,7 +582,9 @@ async function logView($: any, surface: (typeof SURFACES)[number] = 'terminal') 
   await ui.unmount()
   const notes = ['(earlier events not shown: open the file)', 'waiting for the first event']
   const isHint = (t: any) => /^(to resume: |warning: |no session came back)/.test(t.text)
-  const after = texts.slice(texts.findIndex((t: any) => t.text.endsWith('/transcript.jsonl')) + 1)
+  // The log is what lies between the transcript path and the follow bar's key line.
+  const keys = texts.findIndex((t: any) => t.text.startsWith('b back · '))
+  const after = texts.slice(texts.findIndex((t: any) => t.text.endsWith('/transcript.jsonl')) + 1, keys < 0 ? undefined : keys)
   const lines = after.filter((t: any) => !notes.includes(t.text) && !isHint(t))
   for (const t of lines) expect(t.props.wrap).toBe('truncate-end')
   return { lines: lines.map((t: any) => t.text), hint: after.filter(isHint).map((t: any) => t.text), texts: texts.map((t: any) => t.text) }
@@ -587,38 +603,38 @@ function append(w: World, text: string) {
 test('an open log draws exactly its rows and shows new events within one tick', async ($, on) => {
   const w = await withLog($, on, says(30))
   await press($, 'run:agent-1')
-  expect((await logView($)).lines).toEqual(names(ROWS, 12))
+  expect((await logView($)).lines).toEqual(names(ROWS, 15))
   append(w, says(2, 30))
   await w.clock.advance(1500)
-  for (const surface of SURFACES) expect((await logView($, surface)).lines).toEqual(names(ROWS, 14))
+  for (const surface of SURFACES) expect((await logView($, surface)).lines).toEqual(names(ROWS, 17))
 })
 
 test('scrolled up, new events leave the window; End, or scrolling back to the end, follows again', async ($, on) => {
   const w = await withLog($, on, says(30))
   await press($, 'run:agent-1')
   await $.ui.scroll(scroll(-5))
-  expect((await logView($)).lines).toEqual(names(ROWS, 7))
+  expect((await logView($)).lines).toEqual(names(ROWS, 10))
   append(w, says(3, 30))
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(names(ROWS, 7))
+  expect((await logView($)).lines).toEqual(names(ROWS, 10))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ key: 'end' }))?.props.hotkey).toBe('e')
   await ui.press({ key: 'end' })
   await ui.unmount()
-  expect((await logView($)).lines).toEqual(names(ROWS, 15))
+  expect((await logView($)).lines).toEqual(names(ROWS, 18))
   append(w, says(1, 33))
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(names(ROWS, 16))
+  expect((await logView($)).lines).toEqual(names(ROWS, 19))
 
   await $.ui.scroll(scroll(-1))
   append(w, says(1, 34))
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(names(ROWS, 15))
+  expect((await logView($)).lines).toEqual(names(ROWS, 18))
   await $.ui.scroll(scroll(20))
   append(w, says(1, 35))
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(names(ROWS, 18))
+  expect((await logView($)).lines).toEqual(names(ROWS, 21))
 })
 
 test('a half-written last line is not drawn until whole, then drawn once', async ($, on) => {
@@ -672,7 +688,7 @@ test('switching runs or going Back starts the log again', async ($, on) => {
   await press($, 'back')
   append(w, says(1, 30))
   await press($, 'run:agent-1')
-  expect((await logView($)).lines).toEqual(names(ROWS, 13))
+  expect((await logView($)).lines).toEqual(names(ROWS, 16))
 
   await $.ui.scroll(scroll(-5))
   await press($, 'back')
@@ -687,7 +703,7 @@ const RESUME = 'to resume: remote-agent resume agent-1 /repo'
 async function logLines($: any): Promise<string[]> {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'run:agent-1' })
-  const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+  const shown = logTexts(await ui.findAll({ type: 'Text' }))
   await ui.press({ key: 'back' })
   await ui.unmount()
   return shown
@@ -702,7 +718,7 @@ test('Copy path copies the exact transcript path on the pressing surface, and to
     await ui.press({ key: 'copy' })
     w.copy = { isCopied: false, reason: 'no-clipboard' }
     await ui.press({ key: 'copy' })
-    const shown = (await ui.findAll({ type: 'Text' })).map((el: any) => el.text)
+    const shown = logTexts(await ui.findAll({ type: 'Text' }))
     expect(shown).toContain(TRANSCRIPT)
     await ui.press({ key: 'back' })
     await ui.unmount()
@@ -750,7 +766,7 @@ test('a copy that throws toasts not copied, and the path stays drawn', async ($,
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'run:agent-1' })
   await ui.press({ key: 'copy' })
-  expect((await ui.findAll({ type: 'Text' })).map((el: any) => el.text)).toContain(TRANSCRIPT)
+  expect(logTexts(await ui.findAll({ type: 'Text' }))).toContain(TRANSCRIPT)
   await ui.unmount()
   expect(w.toasts).toEqual(['not copied (refused): select the path shown instead'])
 })
@@ -778,7 +794,7 @@ test('an open log whose run folder is removed shows the list again', async ($, o
   await w.clock.advance(1500)
   const shown = await words($)
   expect(shown).not.toContain(TRANSCRIPT)
-  expect(shown.some((t: string) => t.startsWith('other '))).toBe(true)
+  expect(shown.some((t: string) => t.startsWith('● other '))).toBe(true)
   expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(false)
 })
 
@@ -788,12 +804,12 @@ test('a finished run draws fewer log lines, so its wrapped resume hint fits the 
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
   await w.clock.advance(1500)
   await press($, 'run:agent-1')
-  // 20 rows at 60 columns: two header rows, the command on one, the 152-character warning wrapped to three.
+  // 20 rows at 60 columns: two header rows and the follow bar with a blank row each, the command on one, the 152-character warning on three.
   const shown = await logView($)
   expect(shown.hint[0]).toBe(RESUME)
-  expect(shown.lines).toEqual(names(14, 16))
+  expect(shown.lines).toEqual(names(11, 19))
   await $.ui.scroll(scroll(-1))
-  expect((await logView($)).lines).toEqual(names(14, 15))
+  expect((await logView($)).lines).toEqual(names(11, 18))
 })
 
 test('a result read on a later tick names the tool called before it, and a transcript written anew starts the log again', async ($, on) => {
@@ -818,16 +834,16 @@ test('a transcript between 1 and 3 MiB is read whole and opens at its last MiB u
   await press($, 'run:agent-1')
   const shown = await logView($)
   // 17 rows: the note takes one.
-  expect(shown.lines).toEqual(names(ROWS - 1, 13))
+  expect(shown.lines).toEqual(names(ROWS - 1, 16))
   expect(shown.texts).toContain('(earlier events not shown: open the file)')
   expect(w.tails).toEqual([])
   // Read on from where it stopped: a window scrolled up stays put.
   await $.ui.scroll(scroll(-5))
   append(w, says(1, 30))
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(names(ROWS - 1, 8))
+  expect((await logView($)).lines).toEqual(names(ROWS - 1, 11))
   await press($, 'end')
-  expect((await logView($)).lines).toEqual(names(ROWS - 1, 14))
+  expect((await logView($)).lines).toEqual(names(ROWS - 1, 17))
 })
 
 test('a tail read that fails leaves the log waiting, and the next tick reads it', async ($, on) => {
@@ -895,8 +911,104 @@ test('scrolling a finished run before its log is drawn moves by the rows the dra
   opened = 'undrawn'
   await w.clock.advance(1500)
   await $.ui.scroll(scroll(-1))
-  // 20 rows at 60 columns: two header rows and the hint's four leave 14, one up from the end.
-  expect((await logView($)).lines).toEqual(names(14, 15))
+  // 20 rows at 60 columns: the header, the follow bar, their blank rows and the hint's four leave 11, one up from the end.
+  expect((await logView($)).lines).toEqual(names(11, 18))
   await $.ui.scroll(scroll(-1))
-  expect((await logView($)).lines).toEqual(names(14, 14))
+  expect((await logView($)).lines).toEqual(names(11, 17))
+})
+
+test('runs that ended over 30 minutes ago are drawn dim, on one line, under an older rule', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const now = NOW / 1000
+  addRun(w, '/repo/.git', 'agent-live', runJson({ name: 'live', started: now - 5 }), 'claimed in 3s\n')
+  addRun(w, '/repo/.git', 'agent-fresh', runJson({ name: 'fresh', state: 'done', exit_code: 0, started: now - 600, ended: now - 300 }), 'done\n')
+  addRun(w, '/repo/.git', 'agent-old', runJson({ name: 'old', state: 'failed', exit_code: 1, started: now - 7300, ended: now - 7200 }), 'failed\n')
+  await start($)
+  await open($)
+  expect(await words($)).toEqual([
+    '● live  running <1m', '●', 'running <1m', '     claim 3s · send 5s · first 12s · claimed in 3s',
+    '✓ fresh  done 5m00s · 5m ago', '✓', 'done 5m00s · 5m ago', '     claim 3s · send 5s · first 12s · done',
+    '── older ──', '✗ old  failed 1m40s · 2h ago', '✗', 'failed 1m40s · 2h ago',
+    '1-9 open a run · esc close',
+  ])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const dim = async (key: string) => (await ui.find({ key }))?.props.dimColor ?? false
+  expect([await dim('run:agent-live'), await dim('run:agent-fresh'), await dim('run:agent-old')]).toEqual([false, false, true])
+  const glyphs = (await ui.findAll({ type: 'Text' })).filter((t: any) => ['●', '✓', '✗'].includes(t.text))
+  expect(glyphs.map((t: any) => [t.text, t.props.color ?? null, t.props.dimColor ?? false])).toEqual([
+    ['●', 'warning', false], ['✓', 'success', false], ['✗', null, true],
+  ])
+  await ui.unmount()
+})
+
+test('the follow bar says it follows, offers Jump to end as the main action once scrolled up, and colors lines', async ($, on) => {
+  await withLog($, on, jsonl(
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom' }] } },
+  ) + says(30))
+  await press($, 'run:agent-1')
+  const bar = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const end = await ui.find({ key: 'end' })
+    const texts = await ui.findAll({ type: 'Text' })
+    await ui.unmount()
+    return { label: end?.text, variant: end?.props.variant ?? null, hotkey: end?.props.hotkey, texts }
+  }
+  expect(await bar()).toMatchObject({ label: '● Following live', variant: null, hotkey: 'e' })
+  await $.ui.scroll(scroll(-40))
+  const up = await bar()
+  expect(up).toMatchObject({ label: '↓ Jump to end', variant: 'primary', hotkey: 'e' })
+  const style = (text: string) => up.texts.find((t: any) => t.text === text)?.props.color ?? null
+  expect([style('-> Bash ls'), style('<- ERROR Bash: boom'), style('line 0')]).toEqual(['suggestion', 'error', null])
+  await press($, 'end')
+  expect((await bar()).label).toBe('● Following live')
+})
+
+test('a run that starts while the session is open opens the pane, without the keyboard, once', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42, 43]) })
+  addRun(w, '/repo/.git', 'agent-before', runJson({ name: 'before', pid: 43 }))
+  await start($)
+  await w.clock.advance(1500)
+  // Already going at the first tick: no open.
+  expect(w.opened).toEqual([])
+  addRun(w, '/repo/.git', 'agent-new', runJson({ state: 'starting' }))
+  await w.clock.advance(1500)
+  expect(w.opens.map(o => [o.id, o.focus ?? null, o.closeOnEscape ?? null])).toEqual([['remote-runs', null, true]])
+  expect(w.settingDirs).toEqual(['/repo'])
+  write(w, '/repo/.git/remote-agent/agent-new/run.json', JSON.stringify(runJson({ state: 'running' })))
+  await w.clock.advance(1500)
+  await w.clock.advance(1500)
+  expect(w.opened).toEqual(['remote-runs'])
+})
+
+test('remote.open_pane false keeps the pane closed when a run starts; a failing settings opens it', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]), setting: { value: { exitCode: 0, stdout: 'false\n', stderr: '' } } })
+  await start($)
+  await w.clock.advance(1500)
+  addRun(w, '/repo/.git', 'agent-1', runJson())
+  await w.clock.advance(1500)
+  expect(w.settingDirs).toEqual(['/repo'])
+  expect(w.opened).toEqual([])
+  w.setting = { value: { exitCode: 127, stdout: '', stderr: 'not found' } }
+  addRun(w, '/repo/.git', 'agent-2', runJson({ pid: 42, name: 'second' }))
+  await w.clock.advance(1500)
+  expect(w.opened).toEqual(['remote-runs'])
+})
+
+test('opening a failed run\'s log drops it from the status line; a done run\'s changes nothing', async ($, on) => {
+  const w = engine(on, { ps: psAlive([42]) })
+  const now = NOW / 1000
+  addRun(w, '/repo/.git', 'agent-live', runJson({ name: 'live' }))
+  addRun(w, '/repo/.git', 'agent-bad', runJson({ name: 'bad', state: 'failed', exit_code: 1, ended: now - 60, pid: 7 }))
+  addRun(w, '/repo/.git', 'agent-ok', runJson({ name: 'ok', state: 'done', exit_code: 0, ended: now - 60, pid: 8 }))
+  await start($)
+  await w.clock.advance(1500)
+  expect(w.status.at(-1)).toBe('● live running · ✗ bad failed')
+  await press($, 'run:agent-ok')
+  await press($, 'back')
+  await w.clock.advance(1500)
+  expect(w.status.at(-1)).toBe('● live running · ✗ bad failed')
+  await press($, 'run:agent-bad')
+  await w.clock.advance(1500)
+  expect(w.status.at(-1)).toBe('● live running')
 })

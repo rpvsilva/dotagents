@@ -20,6 +20,10 @@ export type Run = {
   changed: number
   /** The elapsed time as the row shows it: to the minute while the run goes on, so a tick does not redraw it. */
   elapsed: string
+  /** How long ago a finished run ended, coarsely (`3m ago`); '' for one going on. Set with `elapsed`. */
+  ago: string
+  /** A finished run that ended more than OLD_S ago: the pane greys it out. Set with `elapsed`. */
+  isOld: boolean
   /** The last line of progress.log. */
   step: string | null
   claim_s: number | null
@@ -36,9 +40,10 @@ export type Run = {
 
 /**
  * What the timer keeps for the session (survives a hot reload, not a new process): the common git dirs whose
- * finished runs it has marked notified without notifying, and the status line it last set (null: none).
+ * finished runs it has marked notified without notifying, the status line it last set (null: none), and the folders
+ * of the failed or stopped runs whose log the person opened, which the status line no longer counts.
  */
-export type Ticker = { seeded: string[]; status: string | null }
+export type Ticker = { seeded: string[]; status: string | null; opened: string[] }
 
 /** What the pane shows: the list (`runId` null), or the log of the run with that id. */
 export type View = { runId: string | null }
