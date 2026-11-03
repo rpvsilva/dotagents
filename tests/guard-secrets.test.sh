@@ -19,10 +19,23 @@ run() {
   fi
   [ "$got" = "$want" ] || fail "$name: wanted $want, got $got $(cat "$SANDBOX/err")"
 }
+# $1 as a JSON string, built in bash: a jq process per case would cost more than the hook itself.
+# Escapes backslash, quote, newline, tab and CR, the only control characters the cases hold.
+str() {
+  local s="${1//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '"%s"' "$s"
+}
 # A file tool on path $2, the way Claude Code calls it.
-file() { run "$1" "$(jq -n --arg p "$2" '{tool_name: "Read", tool_input: {file_path: $p}}')" "path $2"; }
+file() { run "$1" "{\"tool_name\": \"Read\", \"tool_input\": {\"file_path\": $(str "$2")}}" "path $2"; }
 # A shell command $2, run in $SANDBOX/$3 (default: the sandbox).
-cmd() { run "$1" "$(jq -n --arg c "$2" --arg d "$SANDBOX/${3:-}" '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d}')" "command $2"; }
+cmd() { run "$1" "{\"tool_name\": \"Bash\", \"tool_input\": {\"command\": $(str "$2")}, \"cwd\": $(str "$SANDBOX/${3:-}")}" "command $2"; }
+# The builder agrees with jq on every kind of character it escapes.
+want="$(jq -n --arg c $'a\\b "q" \t\r\nz' '$c')"
+[ "$(jq -c . <<<"$(str $'a\\b "q" \t\r\nz')")" = "$want" ] || fail "str: JSON escaping differs from jq"
 
 file block .env
 file block /repo/.env.local
@@ -41,6 +54,9 @@ file allow keys.ts
 file allow docs/environment.md
 run block '{"file_path": "/repo/.env", "hook_event_name": "beforeReadFile"}' "Cursor's top-level file_path"
 run block '{"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "secrets/"}}' "Grep on secrets/"
+run block '{"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "secrets/a.ipynb"}}' "NotebookEdit on secrets/"
+run block '{"command": "cat .env", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command"
+run allow '{"command": "cat .env.example", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command, an example"
 
 cmd block 'cat .env'
 cmd block 'head -5 ~/.config/dotagents/github-app.pem'
@@ -168,6 +184,8 @@ grep -v '^path ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secr
 check_closed "no path rule"
 grep -v '^token ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
 check_closed "no token rule"
+grep -v '^example ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
+check_closed "no example rule"
 
 # The command as an argument works too.
 "$HOOK" 'cat .env' 2>/dev/null && fail "argument form did not block"

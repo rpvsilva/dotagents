@@ -4,11 +4,20 @@
 # The secret rules come from secret-patterns.txt beside this file (see its header):
 # secret_re (secret file paths), example_re (examples of them, which pass) and token_re (tokens and
 # private keys in text). Without them it stops (exit 2): an empty regex would match every path.
-secret_patterns="$(dirname "${BASH_SOURCE[0]}")/secret-patterns.txt"
-secret_rule() { sed -n "s/^$1 //p" "$secret_patterns" 2>/dev/null | paste -sd'|' - || true; }
-secret_re="$(secret_rule path)"
-example_re="$(secret_rule example)"
-token_re="$(secret_rule token)"
+# Read in plain bash: every hook call sources this file, and each extra process costs it time.
+case "${BASH_SOURCE[0]}" in */*) secret_patterns="${BASH_SOURCE[0]%/*}" ;; *) secret_patterns=. ;; esac
+secret_patterns="$secret_patterns/secret-patterns.txt"
+secret_re="" example_re="" token_re=""
+if [ -f "$secret_patterns" ] && [ -r "$secret_patterns" ]; then
+  while IFS= read -r _secret_line || [ -n "$_secret_line" ]; do
+    case "$_secret_line" in
+      'path '*) secret_re="${secret_re:+$secret_re|}${_secret_line#path }" ;;
+      'example '*) example_re="${example_re:+$example_re|}${_secret_line#example }" ;;
+      'token '*) token_re="${token_re:+$token_re|}${_secret_line#token }" ;;
+    esac
+  done <"$secret_patterns"
+  unset _secret_line
+fi
 if [ -z "$secret_re" ] || [ -z "$example_re" ] || [ -z "$token_re" ]; then
   echo "lib.sh: cannot read secret-patterns.txt ($secret_patterns)" >&2
   exit 2
