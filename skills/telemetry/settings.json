@@ -1,0 +1,3 @@
+{
+  "auto_save": { "kind": "bool", "default": true, "meaning": "Save each Claude Code session's run as JSON in ~/.agents/telemetry/ when the session ends." }
+}

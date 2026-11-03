@@ -5,7 +5,7 @@ Rui's portable AI setup: skills, instructions, MCP servers and hooks shared acro
 ## Telemetry
 
 **Run**:
-The stretch of a session being measured: from the session's start, or from a skill's invocation, until telemetry is requested; includes the subagents started in that stretch.
+The stretch of a session being measured: from the session's start, or from a skill's invocation, until telemetry is requested; includes the subagents started in that stretch. An automatic save at session end measures the whole session, earlier telemetry requests included.
 _Avoid_: Execution, trace
 
 **Span**:
