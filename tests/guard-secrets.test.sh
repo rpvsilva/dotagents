@@ -37,26 +37,30 @@ cmd() { run "$1" "{\"tool_name\": \"Bash\", \"tool_input\": {\"command\": $(str 
 want="$(jq -n --arg c $'a\\b "q" \t\r\nz' '$c')"
 [ "$(jq -c . <<<"$(str $'a\\b "q" \t\r\nz')")" = "$want" ] || fail "str: JSON escaping differs from jq"
 
-file block .env
-file block /repo/.env.local
-file block config/prod.env
-file block "$HOME/.config/dotagents/github-app.pem"
-file block certs/server.key
-file block "$HOME/.ssh/id_ed25519"
-file block secrets/db.txt
-file block "$HOME/.netrc"
-file block "$HOME/.aws/credentials"
-file allow .env.example
-file allow config/.env.template
-file allow "$HOME/.ssh/id_ed25519.pub"
-file allow src/env.ts
-file allow keys.ts
-file allow docs/environment.md
-run block '{"file_path": "/repo/.env", "hook_event_name": "beforeReadFile"}' "Cursor's top-level file_path"
-run block '{"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "secrets/"}}' "Grep on secrets/"
-run block '{"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "secrets/a.ipynb"}}' "NotebookEdit on secrets/"
-run block '{"command": "cat .env", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command"
-run allow '{"command": "cat .env.example", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command, an example"
+# The path rules on file tools; run again below with a CRLF patterns file.
+path_cases() {
+  file block .env
+  file block /repo/.env.local
+  file block config/prod.env
+  file block "$HOME/.config/dotagents/github-app.pem"
+  file block certs/server.key
+  file block "$HOME/.ssh/id_ed25519"
+  file block secrets/db.txt
+  file block "$HOME/.netrc"
+  file block "$HOME/.aws/credentials"
+  file allow .env.example
+  file allow config/.env.template
+  file allow "$HOME/.ssh/id_ed25519.pub"
+  file allow src/env.ts
+  file allow keys.ts
+  file allow docs/environment.md
+  run block '{"file_path": "/repo/.env", "hook_event_name": "beforeReadFile"}' "Cursor's top-level file_path"
+  run block '{"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "secrets/"}}' "Grep on secrets/"
+  run block '{"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "secrets/a.ipynb"}}' "NotebookEdit on secrets/"
+  run block '{"command": "cat .env", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command"
+  run allow '{"command": "cat .env.example", "hook_event_name": "beforeShellExecution"}' "Cursor's top-level command, an example"
+}
+path_cases
 
 cmd block 'cat .env'
 cmd block 'head -5 ~/.config/dotagents/github-app.pem'
@@ -186,6 +190,21 @@ grep -v '^token ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/sec
 check_closed "no token rule"
 grep -v '^example ' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/hooks/secret-patterns.txt"
 check_closed "no example rule"
+grep -v '^path ' "$REPO/scripts/hooks/secret-patterns.txt" | sed 's/$/\r/' >"$SANDBOX/hooks/secret-patterns.txt"
+check_closed "no path rule, CRLF endings"
+
+# A patterns file with CRLF endings (a Windows checkout, a copied install) gives the same rules.
+cp -R "$REPO/scripts/hooks" "$SANDBOX/crlf"
+sed 's/$/\r/' "$REPO/scripts/hooks/secret-patterns.txt" >"$SANDBOX/crlf/secret-patterns.txt"
+grep -q $'\r$' "$SANDBOX/crlf/secret-patterns.txt" || fail "crlf: the copy has no CR endings"
+HOOK="$SANDBOX/crlf/guard-secrets.sh"
+path_cases
+cmd allow 'cat .env.example'
+echo "token = $token" >>"$SANDBOX/r/app.txt"
+git -C "$SANDBOX/r" add app.txt
+cmd block 'git commit -m x' r
+git -C "$SANDBOX/r" reset -q --hard
+HOOK="$REPO/scripts/hooks/guard-secrets.sh"
 
 # The command as an argument works too.
 "$HOOK" 'cat .env' 2>/dev/null && fail "argument form did not block"

@@ -19,15 +19,15 @@ def times(turn, n):
     return {kind: value * n for kind, value in turn.items()}
 
 
-def extract(*args):
+def extract(*args, script=HERE / "extract.py"):
     return subprocess.run(
-        [sys.executable, str(HERE / "extract.py"), *args],
+        [sys.executable, str(script), *args],
         capture_output=True, encoding="utf-8",
     )
 
 
-def run(*args):
-    proc = extract(*args)
+def run(*args, script=HERE / "extract.py"):
+    proc = extract(*args, script=script)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 
@@ -185,8 +185,8 @@ class DefaultSession(unittest.TestCase):
 SENTINEL = "SENTINEL-NEVER-STORED"
 
 
-def step_labels(calls, folder):
-    """The labels extract.py gives each (tool, value) call, whose input is {key: value}, in one session written to folder."""
+def step_labels(calls, folder, script=HERE / "extract.py"):
+    """The labels extract.py (or script) gives each (tool, value) call, whose input is {key: value}, in one session written to folder."""
     keys = {"Bash": "command", "Read": "file_path"}
     lines = [{"type": "user", "timestamp": "2026-10-24T09:00:00.000Z", "message": {"role": "user", "content": "go"}}]
     for i, (tool, value) in enumerate(calls):
@@ -197,7 +197,7 @@ def step_labels(calls, folder):
                           "content": [{"type": "tool_use", "id": f"t{i}", "name": tool, "input": {keys[tool]: value}}]}})
     session = Path(folder) / "masked.jsonl"
     session.write_text("".join(json.dumps(line) + "\n" for line in lines))
-    steps = run("--session", str(session))["steps"]
+    steps = run("--session", str(session), script=script)["steps"]
     assert len(steps) == len(calls), steps
     return [step["label"] for step in steps]
 
@@ -310,6 +310,24 @@ class Steps(unittest.TestCase):
     def test_a_patterns_file_with_rules_gives_labels(self):
         # Guards the two tests above: the copied tree itself is not what empties the labels.
         self.assertIn("git status", self.labels_from_a_copy("token ghp_[A-Za-z0-9]{36}\n"))
+
+
+class CrlfPatterns(unittest.TestCase):
+    """A patterns file with CRLF endings (a Windows checkout) masks labels the same as with LF."""
+
+    def test_token_and_label_rules_still_mask(self):
+        calls = [("Bash", "curl -d " + "ghp_" + "a" * 36 + " x"), ("Bash", "mysql --password=hunter2"),
+                 ("Bash", "echo hello")]
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "a" / "b" / "c" / "extract.py"
+            script.parent.mkdir(parents=True)
+            shutil.copy(HERE / "extract.py", script)
+            rules = Path(folder) / "scripts" / "hooks" / "secret-patterns.txt"
+            rules.parent.mkdir(parents=True)
+            lf = (HERE.parents[2] / "scripts" / "hooks" / "secret-patterns.txt").read_bytes().replace(b"\r\n", b"\n")
+            rules.write_bytes(lf.replace(b"\n", b"\r\n"))
+            labels = step_labels(calls, folder, script)
+        self.assertEqual(labels, ["curl -d *** x", "mysql --***", "echo hello"])
 
 
 class StepMasking(unittest.TestCase):
