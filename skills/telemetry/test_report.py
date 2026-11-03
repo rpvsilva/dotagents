@@ -194,6 +194,12 @@ class TableHeaders(unittest.TestCase):
         self.assertEqual(out[3], "│ renovate-prs │ 3    │")
         self.assertNotIn("Span", out[1])
 
+    def test_control_characters_in_any_cell_are_shown_escaped(self):
+        out = table([["a\x1b[2J", "\x9b1"]], total=["\x07", "\x7f"], headers=["S\x00", "R"])
+        self.assertFalse(any(c in out for c in "\x1b\x9b\x07\x7f\x00"))
+        for shown in ("a\\x1b[2J", "\\x9b1", "\\x07", "\\x7f", "S\\x00"):
+            self.assertIn(shown, out)
+
 
 if __name__ == "__main__":
     unittest.main()
