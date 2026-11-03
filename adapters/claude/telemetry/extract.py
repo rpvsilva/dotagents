@@ -11,15 +11,27 @@ from pathlib import Path
 
 
 def load(path):
-    """The log's entries; a line that is not JSON (half-written at session end) is skipped."""
+    """The log's entries. A line anywhere in the log that is not a JSON object (half-written at session end, cut
+    inside a UTF-8 character, a bare number or list) is skipped, so a damaged log never stops a save."""
     entries = []
-    with open(path, encoding="utf-8") as f:
+    with open(path, "rb") as f:
         for line in f:
             try:
-                entries.append(json.loads(line))
-            except ValueError:
+                entry = json.loads(line.decode("utf-8"))
+            except ValueError:  # UnicodeDecodeError is a ValueError too
                 continue
+            if isinstance(entry, dict):
+                entries.append(entry)
     return entries
+
+
+def load_meta(path):
+    """A subagent's meta, or None when it is not a JSON object (half-written at session end)."""
+    try:
+        meta = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None
 
 
 def blocks(entry):
@@ -106,10 +118,15 @@ def measure(entries):
 
 
 def load_subagents(session):
-    """(meta, log) for every subagent the session started."""
+    """(meta, log) for every subagent the session started; one whose meta is unreadable is left out."""
     folder = Path(session).with_suffix("") / "subagents"
-    metas = sorted(folder.glob("*.meta.json")) if folder.is_dir() else []
-    return [(json.loads(m.read_text(encoding="utf-8")), load(m.with_name(m.name.replace(".meta.json", ".jsonl")))) for m in metas]
+    found = []
+    for m in sorted(folder.glob("*.meta.json")) if folder.is_dir() else []:
+        meta = load_meta(m)
+        log = m.with_name(m.name.replace(".meta.json", ".jsonl"))
+        if meta is not None:
+            found.append((meta, load(log) if log.is_file() else []))
+    return found
 
 
 def linked_subagents(pool, tool_ids):

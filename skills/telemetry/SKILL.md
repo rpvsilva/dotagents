@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Report what the **run** cost: this session from its start (or from the previous telemetry report) up to this request, subagents included. The report splits the run into **spans**, one per skill the user typed; skills those load count toward them, and activity before any skill is the `no skill` span. Scripts compute every number; you relay them and read them.
 
-Claude Code also saves every session's whole run on its own when the session ends, as `~/.agents/telemetry/<session id>.json` (a session that ends again overwrites its file), through the session-end hook `scripts/hooks/telemetry-save.sh`. The Setting `auto_save` turns that off: `~/.agents/bin/settings set telemetry auto_save false --machine` (or `--repo`), or the `configure` skill. The `--save` below is separate and unchanged.
+Claude Code also saves every session's whole run on its own when the session ends, as `~/.agents/telemetry/<session id>.json` (a session that ends again overwrites its file; its `date` is the UTC date of its start), through the session-end hook `scripts/hooks/telemetry-save.sh`. The Setting `auto_save` turns that off: `~/.agents/bin/settings set telemetry auto_save false --machine` (or `--repo`), or the `configure` skill. The `--save` below is separate and unchanged.
 
 Arguments, all optional: a **skill** name to report only that skill's last span; `--save <label>`; `--session <id>` to report on an older session instead of this one.
 

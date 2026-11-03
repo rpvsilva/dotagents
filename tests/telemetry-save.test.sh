@@ -34,7 +34,11 @@ transcript() {
   cp -R "$FIXTURES/spans" "$SANDBOX/sessions/$1"
   echo "$SANDBOX/sessions/$1.jsonl"
 }
-payload() { jq -n --arg t "$1" --arg c "${2:-$SANDBOX/proj}" '{session_id: "x", transcript_path: $t, cwd: $c, hook_event_name: "SessionEnd", reason: "other"}'; }
+# A SessionEnd payload for transcript $1 (its session_id the transcript's name), cwd $2.
+payload() {
+  jq -n --arg t "$1" --arg s "$(basename "$1" .jsonl)" --arg c "${2:-$SANDBOX/proj}" \
+    '{session_id: $s, transcript_path: $t, cwd: $c, hook_event_name: "SessionEnd", reason: "other"}'
+}
 
 # Runs the hook through the home's ~/.agents/hooks link as $HOME=$1 on payload $2, $3 naming the case (extra env as
 # KEY=value in $4...); checks it exits 0 and prints nothing.
@@ -113,6 +117,59 @@ for n in 1 2; do
 done
 wait_for '[ -z "$(ls -A "$h/.agents/telemetry" | grep -v "^sess-again.json$")" ]' || fail "second end left: $(ls -A "$h/.agents/telemetry")"
 
+# Two ends of one session at once each write their own temp file, so neither's output mixes into the other's.
+# Both stubs block until the test writes $SANDBOX/both.go; while they wait, each must hold its own temp file.
+h="$(home concurrent)"
+t="$(transcript sess-concurrent)"
+for n in 1 2; do
+  x="$(stub "concurrent$n" "for _ in range(200):
+    if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'both.go')): break
+    time.sleep(0.05)
+print(json.dumps({'n': $n}))")"
+  quiet "$h" "$(payload "$t")" "concurrent end $n" TELEMETRY_EXTRACT="$x"
+done
+wait_for '[ -e "$SANDBOX/marks/concurrent1" ] && [ -e "$SANDBOX/marks/concurrent2" ]' || fail "concurrent ends: an extractor never started"
+wait_for '[ "$(ls -A "$h/.agents/telemetry" | wc -l)" -eq 2 ]' \
+  || fail "concurrent ends: the two ends share a temp file: $(ls -A "$h/.agents/telemetry")"
+touch "$SANDBOX/both.go"
+wait_for '[ "$(ls -A "$h/.agents/telemetry")" = sess-concurrent.json ]' \
+  || fail "concurrent ends: left $(ls -A "$h/.agents/telemetry")"
+jq -e '.n == 1 or .n == 2' "$h/.agents/telemetry/sess-concurrent.json" >/dev/null 2>&1 \
+  || fail "concurrent ends: the file holds no single run: $(cat "$h/.agents/telemetry/sess-concurrent.json" 2>/dev/null)"
+
+# The file is named after the payload's session_id, not the transcript's name: a native Windows transcript_path
+# (C:\...\<id>.jsonl) does not split on / . On Windows that is the transcript's own native path; elsewhere a file
+# whose name holds the backslashes.
+h="$(home winpath)"
+t="$(transcript sess-winpath)"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) w="$(cygpath -w "$t")" ;;
+  *) w="$SANDBOX/sessions/C:\\Users\\me\\sess-winpath.jsonl"; cp "$t" "$w" ;;
+esac
+json="$(jq -n --arg t "$w" --arg c "$SANDBOX/proj" '{session_id: "sess-win.id_1", transcript_path: $t, cwd: $c}')"
+quiet "$h" "$json" "Windows transcript path" TELEMETRY_EXTRACT="$(stub winpath 'print("{}")')"
+wait_for '[ "$(ls -A "$h/.agents/telemetry" 2>/dev/null)" = sess-win.id_1.json ]' \
+  || fail "Windows transcript path: saved $(ls -A "$h/.agents/telemetry" 2>/dev/null)"
+
+# An unsafe session_id (a path, a dot-dot, a character outside [A-Za-z0-9._-]) is ignored: the transcript's name is
+# used, and nothing is written outside ~/.agents/telemetry.
+for c in 'up:../../escaped' 'slash:a/b' 'back:a\b' 'dots:..' 'dotdot:a..b' 'space:a b' 'empty:' 'number:7'; do
+  name="${c%%:*}"
+  h="$(home "unsafe-$name")"
+  t="$(transcript "sess-unsafe-$name")"
+  if [ "$name" = number ]; then
+    json="$(jq -n --arg t "$t" --arg c "$SANDBOX/proj" '{session_id: 7, transcript_path: $t, cwd: $c}')"
+  else
+    json="$(jq -n --arg s "${c#*:}" --arg t "$t" --arg c "$SANDBOX/proj" '{session_id: $s, transcript_path: $t, cwd: $c}')"
+  fi
+  quiet "$h" "$json" "unsafe session_id $name" TELEMETRY_EXTRACT="$(stub "unsafe-$name" 'print("{}")')"
+  wait_for '[ "$(ls -A "$h/.agents/telemetry" 2>/dev/null)" = "sess-unsafe-$name.json" ]' \
+    || fail "unsafe session_id $name: saved $(ls -A "$h/.agents/telemetry" 2>/dev/null)"
+  [ "$(ls -A "$h/.agents")" = "$(printf 'bin\nhooks\ntelemetry')" ] || fail "unsafe session_id $name: wrote $(ls -A "$h/.agents")"
+  [ "$(ls -A "$h")" = .agents ] || fail "unsafe session_id $name: wrote $(ls -A "$h")"
+done
+[ ! -e "$SANDBOX/escaped.json" ] || fail "unsafe session_id: wrote $SANDBOX/escaped.json"
+
 # An extractor failing (exit 1 or 2) or printing nothing saves nothing and leaves no temp file.
 for c in 'exit1:print("partial"); sys.exit(1)' 'exit2:print("partial"); sys.exit(2)' 'empty:pass'; do
   name="${c%%:*}"
@@ -177,7 +234,7 @@ quiet "$h" "$(payload "$SANDBOX/sessions/nowhere.jsonl")" "missing transcript" T
 # Each is a /bin/sh script running the real one, not a link: on Windows a link to /usr/bin/bash points at a file
 # without its .exe, so env fails to run the hook's `#!/usr/bin/env bash` through it (exit 127).
 mkdir -p "$SANDBOX/nopy" "$SANDBOX/nojq"
-for c in bash env jq git cat dirname basename readlink mkdir mv rm nohup sed paste tr head grep sleep ls; do
+for c in bash env jq git cat dirname basename readlink mkdir mktemp mv rm nohup sed paste tr head grep sleep ls; do
   p="$(command -v "$c")" || continue
   printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" >"$SANDBOX/nopy/$c"
   [ "$c" = jq ] || cp "$SANDBOX/nopy/$c" "$SANDBOX/nojq/$c"
