@@ -191,6 +191,10 @@ def main():
                "pricingAsOf": pricing.get("asOf")}
         folder = args.dir or saved_runs_dir()
         folder.mkdir(parents=True, exist_ok=True)
+        # Saved runs hold step labels: keep them out of git without touching the repo's own files.
+        ignore = folder / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n", encoding="utf-8")
         path = folder / f"{slug(args.save)}.json"
         path.write_text(json.dumps(run, indent=2) + "\n", encoding="utf-8")
         print(f"\nSaved {path}")

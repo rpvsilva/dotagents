@@ -104,6 +104,21 @@ class Save(unittest.TestCase):
             report(RUN, "--save", "base", cwd=Path(repo) / "src")
             self.assertTrue((Path(repo) / ".agents" / "telemetry" / "base.json").is_file())
 
+    def test_saved_runs_stay_out_of_git(self):
+        with tempfile.TemporaryDirectory() as repo:
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            report(RUN, "--save", "base", cwd=repo)
+            status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo,
+                                    capture_output=True, encoding="utf-8", check=True).stdout
+            self.assertTrue((Path(repo) / ".agents" / "telemetry" / "base.json").is_file())
+            self.assertEqual(status, "")
+
+    def test_an_existing_gitignore_in_the_folder_is_kept(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / ".gitignore").write_text("mine\n")
+            report(RUN, "--save", "base", "--dir", folder)
+            self.assertEqual((Path(folder) / ".gitignore").read_text(), "mine\n")
+
 
 RUN_STEPS = str(FIXTURES / "run-steps.json")
 STEP_KEYS = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent"}
