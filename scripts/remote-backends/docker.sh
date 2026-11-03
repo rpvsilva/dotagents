@@ -14,7 +14,9 @@
 # Settings: REMOTE_IMAGE (ghcr.io/rpvsilva/agent-runner:main), REMOTE_PLATFORM (passed as --platform when set;
 # otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
 # ssh.sh runs this script with DOCKER_SSH_HOST set: every docker command then runs on that host, one ssh call each,
-# its words quoted for the remote shell and its streams through the connection.
+# its words quoted for the remote shell and its streams through the connection; as `sudo -n docker` under
+# REMOTE_SSH_SUDO (an SSH user outside the docker group, with passwordless sudo). check names that fix when plain
+# docker is refused there but sudo's works.
 set -euo pipefail
 
 # shellcheck source=lib.sh disable=SC1091
@@ -26,7 +28,11 @@ hours="${REMOTE_HOURS:-2}"
 # Sets cmd to the command line for `docker <args>`: here, or on DOCKER_SSH_HOST.
 docker_cmd() {
   if [ -n "${DOCKER_SSH_HOST:-}" ]; then
-    cmd=(ssh -T -o BatchMode=yes "$DOCKER_SSH_HOST" "$(sq_argv docker "$@")")
+    ssh_client
+    local docker=(docker)
+    [ -z "${REMOTE_SSH_SUDO:-}" ] || docker=(sudo -n docker)
+    # shellcheck disable=SC2154 # set by ssh_client
+    cmd=("${ssh_cmd[@]}" "$DOCKER_SSH_HOST" "$(sq_argv "${docker[@]}" "$@")")
   else
     cmd=(docker "$@")
   fi
@@ -82,7 +88,15 @@ case "$op" in
     if [ -z "${DOCKER_SSH_HOST:-}" ] && ! command -v docker >/dev/null 2>&1; then echo "docker not found on PATH"; exit 1; fi
     # shellcheck disable=SC2016 # a Go template for docker
     if ! machine="$(dk info --format '{{.Architecture}}' </dev/null 2>/dev/null)"; then
-      echo "Docker daemon not reachable$where (docker info failed: is it running, and may this user use it?)"
+      if [ -n "${DOCKER_SSH_HOST:-}" ] && [ -n "${REMOTE_SSH_SUDO:-}" ]; then
+        echo "Docker daemon not reachable$where (sudo -n docker info failed: is it running, and may this user sudo without a password?)"
+      elif [ -n "${DOCKER_SSH_HOST:-}" ] && REMOTE_SSH_SUDO=1 dk info </dev/null >/dev/null 2>&1; then
+        echo "Docker$where works only through sudo (this user is not in the docker group). Either:"
+        echo "  run docker with sudo: ~/.agents/bin/settings set remote ssh_sudo true --machine"
+        echo "  or add the user to the group, once: ssh $DOCKER_SSH_HOST 'sudo usermod -aG docker \$USER' (takes effect on the next login)"
+      else
+        echo "Docker daemon not reachable$where (docker info failed: is it running, and may this user use it?)"
+      fi
       exit 1
     fi
     # shellcheck disable=SC2016
@@ -90,7 +104,9 @@ case "$op" in
     if ! arch="$(inspect)"; then
       say "pulling $image$where"
       if ! dk pull "$image" </dev/null >/dev/null 2>&1 || ! arch="$(inspect)"; then
-        echo "image $image$where: not present and not pullable (docker login to its registry, or build it and set REMOTE_IMAGE)"
+        login="docker login"
+        [ -z "${DOCKER_SSH_HOST:-}" ] || [ -z "${REMOTE_SSH_SUDO:-}" ] || login="sudo docker login, as root pulls under ssh_sudo,"
+        echo "image $image$where: not present and not pullable ($login to its registry, or build it and set REMOTE_IMAGE)"
         exit 1
       fi
     fi
