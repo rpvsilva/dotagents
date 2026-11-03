@@ -13,6 +13,7 @@ mod.test.sh adapters/claude/mods/*
 gh-app-token.test.sh scripts/gh-app-token.sh
 guard-merge.test.sh scripts/hooks/* scripts/merge-pr.sh scripts/gh-app-token.sh
 guard-secrets.test.sh scripts/hooks/* scripts/gh-app-token.sh
+allow-task-cleanup.test.sh scripts/hooks/* adapters/claude/hooks/allow-task-cleanup.json
 merge-json.test.sh scripts/merge-json.sh
 merge-pr.test.sh scripts/merge-pr.sh scripts/gh-app-token.sh
 mcp-servers.test.sh scripts/mcp-servers.sh scripts/merge-json.sh mcp/*
