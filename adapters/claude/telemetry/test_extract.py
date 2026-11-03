@@ -181,5 +181,170 @@ class DefaultSession(unittest.TestCase):
             self.assertEqual(json.loads(proc.stdout)["sessionId"], "this-session")
 
 
+SENTINEL = "SENTINEL-NEVER-STORED"
+
+
+def step_label(tool, value, folder):
+    """The label extract.py gives a lone `tool` call whose input is {key: value}, in a session written to folder."""
+    key = {"Bash": "command", "Read": "file_path"}[tool]
+    lines = [
+        {"type": "user", "timestamp": "2026-10-24T09:00:00.000Z", "message": {"role": "user", "content": "go"}},
+        {"type": "assistant", "timestamp": "2026-10-24T09:00:01.000Z", "requestId": "q", "message": {
+            "model": "claude-opus-5-5", "role": "assistant", "usage": {},
+            "content": [{"type": "tool_use", "id": "t", "name": tool, "input": {key: value}}]}},
+    ]
+    session = Path(folder) / "masked.jsonl"
+    session.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    return run("--session", str(session))["steps"][0]["label"]
+
+
+class Steps(unittest.TestCase):
+    """steps.jsonl: tool calls before any skill, /renovate-prs, and an Agent call whose subagent log has its own."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out = run("--session", str(FIXTURES / "steps.jsonl"))
+        cls.steps = cls.out["steps"]
+        cls.by_label = {(s["tool"], s["label"]): s for s in cls.steps}
+
+    def test_the_run_is_schema_version_3(self):
+        self.assertEqual(self.out["schemaVersion"], 3)
+
+    def test_one_step_per_tool_call_in_start_order_subagents_included(self):
+        self.assertEqual([(s["tool"], s["start"]) for s in self.steps], [
+            ("Bash", "2026-10-24T10:00:01.000Z"), ("Bash", "2026-10-24T10:00:02.000Z"),
+            ("Read", "2026-10-24T10:00:02.500Z"), ("Write", "2026-10-24T10:00:04.000Z"),
+            ("Edit", "2026-10-24T10:00:04.000Z"), ("NotebookEdit", "2026-10-24T10:00:04.000Z"),
+            ("Grep", "2026-10-24T10:00:05.000Z"), ("Glob", "2026-10-24T10:00:05.000Z"),
+            ("WebFetch", "2026-10-24T10:00:05.000Z"), ("WebSearch", "2026-10-24T10:00:05.000Z"),
+            ("AskUserQuestion", "2026-10-24T10:00:07.000Z"), ("mcp__srv__search", "2026-10-24T10:00:07.000Z"),
+            ("TodoWrite", "2026-10-24T10:00:07.000Z"), ("Bash", "2026-10-24T10:00:30.000Z"),
+            ("Skill", "2026-10-24T10:01:01.000Z"), ("Bash", "2026-10-24T10:01:02.000Z"),
+            ("Agent", "2026-10-24T10:01:03.000Z"), ("Read", "2026-10-24T10:01:04.000Z"),
+            ("Bash", "2026-10-24T10:01:05.000Z"), ("Bash", "2026-10-24T10:01:11.000Z"),
+        ])
+
+    def test_a_step_lasts_from_its_call_to_its_result_in_milliseconds(self):
+        self.assertEqual(self.by_label[("Bash", "git status")]["seconds"], 0.412)
+        self.assertEqual(self.by_label[("Read", "/repo/README.md")]["seconds"], 0.75)
+        self.assertEqual(self.by_label[("Agent", "general-purpose: Fix PR")]["seconds"], 7.0)
+
+    def test_a_call_with_no_result_has_null_seconds(self):
+        self.assertIsNone(self.by_label[("Bash", "make deploy")]["seconds"])
+        self.assertFalse(self.by_label[("Bash", "make deploy")]["failed"])
+
+    def test_a_result_flagged_as_an_error_marks_the_step_failed(self):
+        self.assertEqual([s["label"] for s in self.steps if s["failed"]], ["false", "pytest -q"])
+
+    def test_a_result_landing_in_the_next_span_is_timed_and_kept_in_the_span_of_its_call(self):
+        step = self.by_label[("Bash", "sleep 30")]
+        self.assertEqual((step["seconds"], step["span"], step["skill"]), (30.0, "no skill", None))
+
+    def test_each_step_names_its_span_and_skill(self):
+        step = self.by_label[("Skill", "grilling")]
+        self.assertEqual((step["span"], step["skill"], step["subagent"]), ("renovate-prs", "renovate-prs", None))
+        self.assertEqual([s["name"] for s in self.out["spans"]], ["no skill", "renovate-prs"])
+
+    def test_subagent_steps_are_tagged_with_its_agent_type(self):
+        tagged = [(s["tool"], s["label"], s["span"]) for s in self.steps if s["subagent"] == "general-purpose"]
+        self.assertEqual(tagged, [("Read", "/repo/x.py", "renovate-prs"), ("Bash", "pytest -q", "renovate-prs")])
+
+    def test_only_a_background_bash_is_flagged_background(self):
+        self.assertEqual([s["label"] for s in self.steps if "background" in s], ["npm test"])
+        self.assertIs(self.by_label[("Bash", "npm test")]["background"], True)
+
+    def test_each_step_holds_only_the_known_fields(self):
+        keys = {"tool", "label", "start", "seconds", "failed", "span", "skill", "subagent"}
+        for step in self.steps:
+            self.assertEqual(set(step) - {"background"}, keys)
+
+    def test_labels_come_from_the_input_key_of_each_tool(self):
+        self.assertEqual([(s["tool"], s["label"]) for s in self.steps if s["subagent"] is None and s["tool"] != "Bash"], [
+            ("Read", "/repo/README.md"), ("Write", "/repo/new.txt"), ("Edit", "/repo/old.txt"),
+            ("NotebookEdit", "/repo/nb.ipynb"), ("Grep", "TODO in src"), ("Glob", "**/*.py"),
+            ("WebFetch", "https://example.com/docs"), ("WebSearch", "python re"),
+            ("AskUserQuestion", ""), ("mcp__srv__search", ""), ("TodoWrite", ""),
+            ("Skill", "grilling"), ("Agent", "general-purpose: Fix PR"),
+        ])
+
+    def test_a_label_keeps_only_the_first_line(self):
+        self.assertIn(("Bash", "git status"), self.by_label)
+
+    def test_no_prompt_reply_output_or_other_input_is_stored(self):
+        # The fixture puts the sentinel in content, old_string, new_string, prompt, questions,
+        # tool results, typed prompts and subagent messages.
+        fixture = (FIXTURES / "steps.jsonl").read_text()
+        for key in ("content", "old_string", "new_string", "prompt", "questions"):
+            self.assertIn(f'"{key}": ', fixture)
+        self.assertIn(SENTINEL, fixture)
+        self.assertNotIn(SENTINEL, json.dumps(self.out))
+
+    def test_with_no_patterns_file_every_label_is_empty(self):
+        # A copy of the extractor in a folder tree without scripts/hooks/secret-patterns.txt.
+        with tempfile.TemporaryDirectory() as folder:
+            copy = Path(folder) / "a" / "b" / "c" / "extract.py"
+            copy.parent.mkdir(parents=True)
+            shutil.copy(HERE / "extract.py", copy)
+            proc = subprocess.run([sys.executable, str(copy), "--session", str(FIXTURES / "steps.jsonl")],
+                                  capture_output=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        steps = json.loads(proc.stdout)["steps"]
+        self.assertEqual(len(steps), len(self.steps))
+        self.assertEqual({s["label"] for s in steps}, {""})
+
+
+class StepMasking(unittest.TestCase):
+    """Labels are masked with the token and label rules of scripts/hooks/secret-patterns.txt, then cut."""
+
+    # Built at runtime so no token-like text is committed.
+    TOKENS = {
+        "github": "ghp_" + "a" * 36,
+        "github fine-grained": "github_pat_" + "B" * 22,
+        "aws": "AKIA" + "C" * 16,
+        "slack": "xoxb-" + "1" * 10,
+        "anthropic": "sk-ant-" + "d" * 20,
+        "google": "AIza" + "e" * 35,
+        "private key": "-----BEGIN RSA " + "PRIVATE KEY-----",
+    }
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+
+    def label(self, tool, value):
+        return step_label(tool, value, self.folder.name)
+
+    def test_every_token_kind_becomes_stars(self):
+        for kind, token in self.TOKENS.items():
+            with self.subTest(kind):
+                self.assertEqual(self.label("Bash", f"curl -d {token} x"), "curl -d *** x")
+
+    def test_a_token_in_a_file_path_is_masked(self):
+        self.assertEqual(self.label("Read", "/tmp/" + self.TOKENS["github"] + ".txt"), "/tmp/***.txt")
+
+    def test_passwords_keys_and_bearer_tokens_become_stars(self):
+        cases = {
+            "mysql --password=hunter2 db": "mysql --*** db",
+            "export API_KEY=abc123": "export ***",
+            "DB_PASSWORD: s3cret make": "*** make",
+            "GITHUB_TOKEN=abc123 gh pr list": "*** gh pr list",
+            'curl -H "Authorization: Bearer abc.def" x': 'curl -H "Authorization: ***" x',
+        }
+        for command, label in cases.items():
+            with self.subTest(command):
+                self.assertEqual(self.label("Bash", command), label)
+
+    def test_a_long_label_is_cut_to_80_characters(self):
+        label = self.label("Bash", "echo " + "x" * 200)
+        self.assertEqual(len(label), 80)
+        self.assertEqual(label, "echo " + "x" * 74 + "…")
+
+    def test_a_token_near_the_cut_is_masked_whole_before_cutting(self):
+        token = self.TOKENS["github"]
+        label = self.label("Bash", "echo " + "x" * 65 + " " + token + " done")
+        self.assertEqual(label, "echo " + "x" * 65 + " *** done")
+        self.assertNotIn(token[:8], label)
+
+
 if __name__ == "__main__":
     unittest.main()
