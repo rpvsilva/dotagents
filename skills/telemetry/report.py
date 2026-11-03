@@ -95,9 +95,9 @@ def total_row(run, pricing):
                merged_tokens(spans), pricing)
 
 
-def table(body, total=None):
-    rows = [HEADERS, *body, *([total] if total else [])]
-    widths = [max(len(r[i]) for r in rows) + 2 for i in range(len(HEADERS))]
+def table(body, total=None, headers=HEADERS, key=KEY):
+    rows = [headers, *body, *([total] if total else [])]
+    widths = [max(len(r[i]) for r in rows) + 2 for i in range(len(headers))]
 
     def line(left, mid, right):
         return left + mid.join("─" * w for w in widths) + right
@@ -105,10 +105,10 @@ def table(body, total=None):
     def cells(r):
         return "│" + "│".join(" " + c.ljust(w - 1) for c, w in zip(r, widths)) + "│"
 
-    out = [line("┌", "┬", "┐"), cells(HEADERS), line("├", "┼", "┤"), *(cells(r) for r in body)]
+    out = [line("┌", "┬", "┐"), cells(headers), line("├", "┼", "┤"), *(cells(r) for r in body)]
     if total:
         out += [line("├", "┼", "┤"), cells(total)]
-    out += [line("└", "┴", "┘"), KEY]
+    out += [line("└", "┴", "┘"), key]
     return "\n".join(out)
 
 

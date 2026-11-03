@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from report import table
+
 HERE = Path(__file__).parent
 FIXTURES = HERE / "fixtures"
 PRICING = str(FIXTURES / "pricing.json")
@@ -183,6 +185,14 @@ class PriceCheckHint(unittest.TestCase):
     def test_offers_a_check_for_a_model_with_no_price(self):
         out = report("-", "--today", "2026-01-15", stdin=unpriced(Path(RUN).read_text()))
         self.assertIn("No price for model-z; check with: update_pricing.py model-z", out)
+
+
+class TableHeaders(unittest.TestCase):
+    def test_given_headers_replace_the_default_ones(self):
+        out = table([["renovate-prs", "3"]], headers=["Skill", "Runs"]).splitlines()
+        self.assertEqual(out[1], "│ Skill        │ Runs │")
+        self.assertEqual(out[3], "│ renovate-prs │ 3    │")
+        self.assertNotIn("Span", out[1])
 
 
 if __name__ == "__main__":
