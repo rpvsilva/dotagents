@@ -18,6 +18,33 @@ git -C "$R" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 git -C "$R" worktree add -q -b task/gh-1-x/01 "$SANDBOX/wt-task"
 git -C "$R" worktree add -q -b feat/gh-1-x "$SANDBOX/wt-ticket"
 git -C "$R" worktree add -q --detach "$SANDBOX/wt-detached"
+git -C "$R" branch feat/gh-2-merged
+git -C "$R" branch feat/gh-4-open
+git -C "$R" worktree add -q -b feat/gh-5-wt "$SANDBOX/wt-merged"
+tip="$(git -C "$R" rev-parse HEAD)"
+git -C "$SANDBOX/wt-ticket" -c user.name=t -c user.email=t@t commit -q --allow-empty -m later
+
+# Stub gh: `pr list --head <b> --state merged` prints the heads listed for <b> in $SANDBOX/merged
+# ("<branch> <sha>" lines). It fails outside a repo, and when $SANDBOX/offline exists.
+mkdir "$SANDBOX/bin"
+cat >"$SANDBOX/bin/gh" <<EOF
+#!/usr/bin/env bash
+[ ! -e "$SANDBOX/offline" ] || exit 1
+git rev-parse --show-toplevel >/dev/null 2>&1 || exit 1
+[ "\$1 \$2" = "pr list" ] || exit 1
+head=""; state=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in --head) head="\$2"; shift ;; --state) state="\$2"; shift ;; esac
+  shift
+done
+[ "\$state" = merged ] || exit 1
+awk -v b="\$head" '\$1 == b { print \$2 }' "$SANDBOX/merged"
+EOF
+chmod +x "$SANDBOX/bin/gh"
+# feat/gh-2-merged and feat/gh-5-wt: merged at their tip. feat/gh-1-x: merged, then a commit was added.
+# main: a PR from a fork's main, never a reason to delete main. Others: no merged PR.
+printf '%s\n' "feat/gh-2-merged $tip" "feat/gh-5-wt $tip" "feat/gh-1-x $tip" "main $tip" >"$SANDBOX/merged"
+export PATH="$SANDBOX/bin:$PATH"
 
 # Runs the hook in the repo on command $2, the way Claude Code calls it; $1 is "allow" or "ask".
 expect() {
@@ -38,7 +65,22 @@ expect allow "git worktree remove $SANDBOX/wt-task && git branch -D task/gh-1-x/
 expect allow "git worktree remove --force $SANDBOX/wt-task; git branch -D task/gh-1-x/01"
 expect allow "git worktree remove ../wt-task && git worktree prune && git branch -D task/gh-1-x/01"
 
-# Ticket and fix branches are PR branches: they ask.
+# A branch whose tip is the head of a merged PR is finished too, ticket branches included.
+expect allow 'git branch -D feat/gh-2-merged'
+expect allow 'git branch -d feat/gh-2-merged task/gh-1-x/01'
+expect allow "git -C $R branch -D feat/gh-2-merged"
+expect allow "git worktree remove $SANDBOX/wt-merged && git branch -D feat/gh-5-wt"
+expect ask 'git branch -D feat/gh-4-open'
+expect ask 'git branch -D feat/gh-2-merged feat/gh-4-open'
+expect ask 'git branch -D feat/nowhere'
+touch "$SANDBOX/offline"
+expect ask 'git branch -D feat/gh-2-merged'
+rm "$SANDBOX/offline"
+mv "$SANDBOX/bin/gh" "$SANDBOX/gh.off"
+expect ask 'git branch -D feat/gh-2-merged'
+mv "$SANDBOX/gh.off" "$SANDBOX/bin/gh"
+
+# Ticket and fix branches with no merged PR at their tip ask: feat/gh-1-x got a commit after its merge.
 expect ask 'git branch -D feat/gh-1-x'
 expect ask 'git branch -D fix/security-tokens'
 expect ask 'git branch -D task/gh-1-x/01 feat/gh-1-x'
