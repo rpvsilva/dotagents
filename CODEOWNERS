@@ -3,6 +3,7 @@
 /.review-gate.yml @rpvsilva
 /CODEOWNERS @rpvsilva
 /install.sh @rpvsilva
+/uninstall.sh @rpvsilva
 /tests/ @rpvsilva
 /scripts/ @rpvsilva
 /mcp/ @rpvsilva

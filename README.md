@@ -145,6 +145,7 @@ git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
 - Re-run `install.sh` after adding a skill or moving the repo. Running it twice is safe.
 - Anything it replaces is moved to `~/.dotagents-backup/` first.
 - Codex and Cursor are skipped when `~/.codex` or `~/.cursor` doesn't exist.
+- To remove it all, run `uninstall.sh` (`--dry-run` first to see the plan). See [Uninstall](docs/how-it-works.md#uninstall).
 
 What gets linked where: [docs/how-it-works.md](docs/how-it-works.md).
 
@@ -158,7 +159,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 
 | Page | Read it to learn |
 |---|---|
-| 🔧 [How it works](docs/how-it-works.md) | What `install.sh` links or merges where, for each tool |
+| 🔧 [How it works](docs/how-it-works.md) | What `install.sh` links or merges where, for each tool, and how `uninstall.sh` undoes it |
 | 🎛️ [Settings](docs/settings.md) | How to change a skill's behaviour, per machine or per repo |
 | 🪝 [Hooks](docs/hooks.md) | What each hook blocks or approves, and why |
 | ☁️ [Remote subagents](docs/remote.md) | Running subagents on a cluster, Docker or an SSH host, with diagrams |

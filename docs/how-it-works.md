@@ -48,6 +48,22 @@ Notes:
 - Claude plugins and MCP servers are skipped when `claude` isn't on `PATH`, or when `DOTAGENTS_SKIP_PLUGINS` is set.
 - MCP credentials come from `~/.config/dotagents/mcp.env` (`KEY=value` lines). A server whose variable is unset is skipped, and `install.sh` names it.
 
+## Uninstall
+
+```sh
+./uninstall.sh --dry-run   # print what would change, change nothing
+./uninstall.sh             # everything; or one tool: uninstall.sh claude|codex|cursor
+./uninstall.sh --purge     # also delete ~/.config/dotagents (secrets, Settings), ~/.agents/telemetry and ~/.agents/runs
+```
+
+It touches only what `install.sh` put there:
+- **Links**: removes every link pointing into this repo (or, for Claude skills, into `~/.agents/skills/`), stale ones included. Your own links and files stay. A file `install.sh` moved aside is copied back from `~/.dotagents-backup/`.
+- **Merged files**: removes the snippets' entries and any hook calling `~/.agents/hooks/`, and keeps the rest. Each file it edits is copied to `~/.dotagents-backup/<timestamp>-uninstall/` first.
+- **MCP servers and Claude plugins** listed in this repo are removed; their marketplaces stay.
+- A single tool keeps the shared `~/.agents/` links for the others. `~/.dotagents-backup/` is never deleted.
+
+Run it from the checkout the links point to: after moving the repo, links to the old path aren't recognised.
+
 ## Why skills and hooks are split this way
 
 - **A skill never names a tool.** It says "start one subagent per unit", not a specific tool call, and gives a fallback when a capability may be missing. That keeps one copy working everywhere.
