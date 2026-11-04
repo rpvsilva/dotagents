@@ -5,11 +5,12 @@
 #     branch: `task/<ticket-slug>/<NN...>` (build-epic) or `fix/security-<name>/<NN...>` (security-audit);
 #   - a merged branch (ticket branches included): a local branch, not main or master, whose tip is the head
 #     commit of a merged PR on GitHub (`gh pr list --head`). PRs are squash-merged, so git alone can't tell;
-#     the tip check means no commit made after the merge is lost. Without gh, or offline, it isn't merged.
+#     the tip check means no commit made after the merge is lost. Without gh, or offline, it isn't merged;
+#   - a branch that no longer exists (merge-pr.sh deletes the PR branch), since deleting it changes nothing.
 # Exit 0 when every part of the command (split on && and ;) is one of:
 #   cd <dir>
 #   git [-C <dir>] branch -D|-d|--delete [-f|--force|-q|--quiet] <finished branch>...
-#   git [-C <dir>] worktree remove [-f|--force] <path>   (the worktree at <path> is on a finished branch)
+#   git [-C <dir>] worktree remove [-f|--force] <path>   (<path> is gone, or on a finished branch)
 #   git [-C <dir>] worktree prune
 # Exit 1 otherwise: no opinion, the tool asks as usual. Anything with expansions, pipes, redirects or
 # globs gets no opinion. Each adapter turns exit 0 into its own "allow" answer.
@@ -45,8 +46,11 @@ is_merged() {
   grep -qx "$tip" <<<"$heads"
 }
 
-# Succeeds when branch $2 of the repo at $1 is finished: a task branch or a merged one.
-is_finished() { is_task "$2" || is_merged "$1" "$2"; }
+# Succeeds when local branch $2 of the repo at $1 does not exist: deleting it changes nothing.
+is_gone() { [ -n "$2" ] && ! git -C "$1" show-ref --verify -q "refs/heads/$2"; }
+
+# Succeeds when branch $2 of the repo at $1 is finished: a task branch, a merged one, or one already gone.
+is_finished() { is_task "$2" || is_gone "$1" "$2" || is_merged "$1" "$2"; }
 
 # Prints dir $2 resolved from dir $1, or fails when it does not exist.
 resolve() {
@@ -99,7 +103,8 @@ judge() {
         esac
       done
       [ -n "$path" ] || return 1
-      path="$(resolve "$here" "$path")" || return 1
+      # A path that no longer exists has nothing left to lose: git only drops its registration.
+      path="$(resolve "$here" "$path")" || return 0
       is_finished "$path" "$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null)"
       ;;
     *) return 1 ;;
