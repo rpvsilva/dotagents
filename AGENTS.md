@@ -16,13 +16,15 @@ Write every skill and instruction file following the `writing-for-agents` skill 
 
 ## Contributing
 
+`README.md` is the map for a newcomer: it names every skill (a row in its group, linking its `SKILL.md`), hook, subagent, MCP server, Claude plugin and mod, and links every `docs/` page. Add the entry in the same change as the thing; `tests/repo.test.sh` fails on a missing one.
+
 ### Add or change a skill
 
 1. Create `skills/<name>/SKILL.md` (frontmatter `name` matching the folder, plus `description`). Supporting files sit beside it and are reached by relative links. Steps several skills share (learning the repo's rules, starting subagents) live once in `skills/_shared/conventions.md`; link to its section instead of restating it. Folders starting with `_` hold shared files, not skills.
    Every value the skill acts on that has a default (how many at once, which tracker) is a **Setting** (`GLOSSARY.md`): declare it in `skills/<name>/settings.json` (`kind`, `default`, `meaning`; see `scripts/settings.sh`) and have the skill read it through `~/.agents/bin/settings`, never from a notes file. A key in `skills/_shared/settings.json` is shared: a skill that reads it opts in with `{"shared": true}`, never redeclares it. Notes files hold Lessons only.
 2. Re-read it against the **portable first** principle: every tool-specific word replaced or given a fallback.
 3. Run `./install.sh` and confirm `~/.agents/skills/<name>` and `~/.claude/skills/<name>` are links into this repo.
-4. Add a row to the Skills table in `README.md`.
+4. Add a row to the right group of the Skills table in `README.md`, linking its `SKILL.md`.
 
 Done when the skill loads in Claude Code by name and the README row exists.
 
