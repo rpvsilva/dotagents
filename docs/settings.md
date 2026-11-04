@@ -1,4 +1,6 @@
-# Settings
+# 🎛️ Settings
+
+[← Back to README](../README.md)
 
 A **Setting** is a named value with a default that a skill reads and acts on. Examples: how many subagents run at once, or which tracker holds tickets. It's the way to change a skill's behaviour without editing the skill.
 

@@ -50,6 +50,14 @@ for d in adapters/claude/mods/*/; do
   d="${d%/}"
   readme_names mod "${d##*/}"
 done
+# The README's at-a-glance counts ("13 skills · 9 subagents · 4 hooks · 2 MCP servers") match what exists.
+readme_count() { # $1: the label, $2: the real count
+  grep -qE "(^|[^0-9])$2 $1( |\$)" README.md || fail "README.md: the at-a-glance line does not say '$2 $1'"
+}
+readme_count skills "$(find skills -mindepth 1 -maxdepth 1 -type d ! -name '_*' | wc -l | tr -d ' ')"
+readme_count subagents "$(find adapters/claude/agents -name '*.md' | wc -l | tr -d ' ')"
+readme_count hooks "$(find scripts/hooks -name '*.sh' ! -name lib.sh | wc -l | tr -d ' ')"
+readme_count "MCP servers" "$(jq -r '.mcpServers // {} | length' mcp/servers.json)"
 for p in docs/*.md; do
   [ -f "$p" ] || continue
   grep -qF "]($p)" README.md || fail "README.md: does not link to $p"

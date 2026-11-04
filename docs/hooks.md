@@ -1,4 +1,6 @@
-# Hooks
+# 🪝 Hooks
+
+[← Back to README](../README.md)
 
 A **hook** is a script the tool runs around an agent's action, such as before a shell command or when a session ends. It can block the action, approve it without asking, or just do something on the side.
 

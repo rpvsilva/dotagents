@@ -1,4 +1,6 @@
-# How it works
+# 🔧 How it works
+
+[← Back to README](../README.md)
 
 `install.sh` puts this repo into each tool's config folders in one of two ways:
 

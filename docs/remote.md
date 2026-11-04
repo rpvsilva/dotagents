@@ -1,4 +1,6 @@
-# Remote subagents
+# ☁️ Remote subagents
+
+[← Back to README](../README.md)
 
 A skill can run some of its subagents on another machine instead of your laptop: a Kubernetes cluster, Docker on this machine, or a VM or PC over SSH. The remote machine is **compute only**. It gets your setup and a snapshot of one worktree, runs Claude headless on one task, and sends back a patch. Your laptop keeps the code, the git history, GitHub access and the orchestrating session.
 

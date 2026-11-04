@@ -1,4 +1,22 @@
-# dotagents
+<div align="center">
+
+# 🤖 dotagents
+
+**One AI setup, written once, shared by every coding tool.**
+
+[![CI](https://github.com/rpvsilva/dotagents/actions/workflows/ci.yml/badge.svg)](https://github.com/rpvsilva/dotagents/actions/workflows/ci.yml)
+![Claude Code](https://img.shields.io/badge/Claude_Code-supported-D97757?logo=anthropic&logoColor=white)
+![Codex](https://img.shields.io/badge/Codex-supported-412991?logo=openai&logoColor=white)
+![Cursor](https://img.shields.io/badge/Cursor-partial-000000?logo=cursor&logoColor=white)
+![Shell](https://img.shields.io/badge/shell-bash_3.2+-4EAA25?logo=gnubash&logoColor=white)
+
+🧩 13 skills · 🧑‍🤝‍🧑 9 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
+
+[What's included](#-whats-included) · [Install](#-install) · [Use](#-use) · [Docs](#-docs) · [Contributing](#-contributing)
+
+</div>
+
+---
 
 My personal AI setup, written once and shared by every AI coding tool I use: Claude Code, Codex and Cursor.
 
@@ -16,21 +34,28 @@ flowchart LR
   install --> claude
   install --> codex
   install --> cursor
+  classDef src fill:#D97757,stroke:#B4532F,color:#fff
+  classDef tool fill:#3B82F6,stroke:#1D4ED8,color:#fff
+  classDef hub fill:#10B981,stroke:#047857,color:#fff
+  class repo,install src
+  class shared hub
+  class claude,codex,cursor tool
 ```
 
-Terms like Setting, Lesson and Level have a precise meaning here: see [GLOSSARY.md](GLOSSARY.md).
+> [!TIP]
+> Terms like Setting, Lesson and Level have a precise meaning here: see [GLOSSARY.md](GLOSSARY.md).
 
-## What's included
+## 📦 What's included
 
-### Instructions
+### 📝 Instructions
 
 [`global/AGENTS.md`](global/AGENTS.md) holds my personal instructions for every project. It's linked as `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`.
 
-### Skills
+### 🧩 Skills
 
 A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are tool-neutral: each says *what* to do, never which tool does it. They live in [`skills/`](skills/). Steps several skills share are in [`skills/_shared/conventions.md`](skills/_shared/conventions.md).
 
-**Pull requests**
+#### 🔀 Pull requests
 
 | Skill | What it does |
 |---|---|
@@ -40,21 +65,21 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`review-pr`](skills/review-pr/SKILL.md) | First-pass PR review by fresh subagents, posted as a comment-only review |
 | [`ship-pr`](skills/ship-pr/SKILL.md) | Take the current changes to a merged PR, by the repo's own rules |
 
-**Epics**
+#### 🗺️ Epics
 
 | Skill | What it does |
 |---|---|
 | [`build-epic`](skills/build-epic/SKILL.md) | Build an epic from the tracker into one reviewed PR per ticket, using planner, explorer and implementer subagents |
 | [`to-epic`](skills/to-epic/SKILL.md) | Turn meeting notes, docs or any source into an epic and its issues on the tracker |
 
-**Code health**
+#### 🩺 Code health
 
 | Skill | What it does |
 |---|---|
 | [`security-audit`](skills/security-audit/SKILL.md) | Security-audit a repo of any size with subagents, then fix the findings you pick |
 | [`tune-tests`](skills/tune-tests/SKILL.md) | Make the tests faster and their coverage wider in one PR |
 
-**The setup itself**
+#### ⚙️ The setup itself
 
 | Skill | What it does |
 |---|---|
@@ -63,7 +88,7 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`remember`](skills/remember/SKILL.md) | After a skill run, save what it learned about the repo for next time |
 | [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill, compare runs over time, and find wasted steps |
 
-### Subagents
+### 🧑‍🤝‍🧑 Subagents
 
 Some skills start **subagents**: focused helpers, each with a fresh context. Each one's instructions are a portable brief beside its skill. `adapters/<tool>/agents/` holds thin wrappers for Claude Code, Codex and Cursor that point at that brief.
 
@@ -81,18 +106,18 @@ Some skills start **subagents**: focused helpers, each with a fresh context. Eac
 
 Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only: the sandbox gets a snapshot of one worktree and sends back a patch, and never touches GitHub. Overview with diagrams: [docs/remote.md](docs/remote.md). Full reference: [remote/README.md](remote/README.md).
 
-### Hooks
+### 🪝 Hooks
 
 **Hooks** are scripts the tool runs before or after an action. Their logic lives in [`scripts/hooks/`](scripts/hooks/), and each tool's adapter wires them up. Details: [docs/hooks.md](docs/hooks.md).
 
 | Hook | What it does | Tools |
 |---|---|---|
-| `guard-merge` | Blocks `gh pr merge`, PR approvals and pushes to main in repos with a merge gate | Claude, Codex, Cursor |
-| `guard-secrets` | Blocks reading secret files and committing secrets | Claude, Codex, Cursor |
-| `allow-task-cleanup` | Approves deleting finished branches and worktrees without asking | Claude |
-| `telemetry-save` | Saves each session's cost and steps when it ends | Claude |
+| `guard-merge` | 🛑 Blocks `gh pr merge`, PR approvals and pushes to main in repos with a merge gate | Claude, Codex, Cursor |
+| `guard-secrets` | 🔒 Blocks reading secret files and committing secrets | Claude, Codex, Cursor |
+| `allow-task-cleanup` | ✅ Approves deleting finished branches and worktrees without asking | Claude |
+| `telemetry-save` | 📊 Saves each session's cost and steps when it ends | Claude |
 
-### MCP servers
+### 🔌 MCP servers
 
 [`mcp/servers.json`](mcp/servers.json) is one list of MCP servers, installed into Claude Code, Codex and Cursor. Credentials are `${ENV_VAR}` references, with the values kept in `~/.config/dotagents/mcp.env`, which is never committed.
 
@@ -101,13 +126,13 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 | `context7` | Up-to-date library and framework docs |
 | `playwright` | A browser the agent can drive |
 
-### Claude Code extras
+### ✨ Claude Code extras
 
 - **Plugins** ([`adapters/claude/plugins.txt`](adapters/claude/plugins.txt)): `mattpocock-skills`, a set of engineering skills (grilling, TDD, code review, ...).
 - **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `remote-runs` adds a `/remote-runs` pane listing remote subagent runs and their live logs.
 - **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow my GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
 
-## Install
+## 🚀 Install
 
 Needs `bash`, `git` and `jq`. The `claude` CLI is needed for plugins and MCP servers. `python3` is needed for `telemetry`, and `gh` for the PR skills.
 
@@ -123,13 +148,23 @@ git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
 
 What gets linked where: [docs/how-it-works.md](docs/how-it-works.md).
 
-## Use
+## 🕹️ Use
 
 Start any supported tool and call a skill by name, e.g. `/ship-pr` in Claude Code, or ask for it in plain words. Hooks and MCP servers work without any action from you.
 
 To change how a skill behaves (how many subagents run at once, which tracker holds tickets), use the `configure` skill. See [docs/settings.md](docs/settings.md).
 
-## Layout
+## 📚 Docs
+
+| Page | Read it to learn |
+|---|---|
+| 🔧 [How it works](docs/how-it-works.md) | What `install.sh` links or merges where, for each tool |
+| 🎛️ [Settings](docs/settings.md) | How to change a skill's behaviour, per machine or per repo |
+| 🪝 [Hooks](docs/hooks.md) | What each hook blocks or approves, and why |
+| ☁️ [Remote subagents](docs/remote.md) | Running subagents on a cluster, Docker or an SSH host, with diagrams |
+| 📖 [Glossary](GLOSSARY.md) | The repo's terms |
+
+## 🗂️ Layout
 
 ```
 README.md           this file
@@ -146,7 +181,7 @@ docs/               how it works, settings, hooks, remote subagents
 tests/              the checks CI runs (tests/run.sh)
 ```
 
-## Contributing
+## 🤝 Contributing
 
 Read [AGENTS.md](AGENTS.md) first. It covers:
 - the principles
