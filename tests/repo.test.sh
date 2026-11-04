@@ -21,7 +21,38 @@ for d in skills/*/; do
   if [ ! -f "$f" ]; then fail "$f missing"; continue; fi
   [ "$(frontmatter "$f" name)" = "$s" ] || fail "$f: frontmatter name is not '$s'"
   [ -n "$(frontmatter "$f" description)" ] || fail "$f: frontmatter description missing"
-  grep -q "^| \`$s\` |" README.md || fail "README.md: no row for skill '$s'"
+  grep -qF "| [\`$s\`]($f) |" README.md || fail "README.md: no row for skill '$s' linking to $f"
+done
+
+# README inventory: every hook, subagent, MCP server, Claude plugin and mod is named in README.md as `name`,
+# and every docs/ page is linked from it, so the README never goes stale.
+readme_names() { # $1: what it is, then the names
+  local what="$1" n
+  shift
+  for n in "$@"; do grep -qF "\`$n\`" README.md || fail "README.md: $what '$n' is not listed"; done
+}
+for h in scripts/hooks/*.sh; do
+  h="${h##*/}"
+  [ "$h" = lib.sh ] || readme_names hook "${h%.sh}"
+done
+for a in adapters/*/agents/*; do
+  [ -f "$a" ] || continue
+  a="${a##*/}"
+  readme_names subagent "${a%.*}"
+done
+while read -r srv; do readme_names "MCP server" "$srv"; done < <(jq -r '.mcpServers // {} | keys[]' mcp/servers.json 2>/dev/null | tr -d '\r')
+while read -r p _; do
+  case "$p" in '#'* | '') continue ;; esac
+  readme_names "Claude plugin" "${p%%@*}"
+done < <(tr -d '\r' <adapters/claude/plugins.txt)
+for d in adapters/claude/mods/*/; do
+  [ -d "$d" ] || continue
+  d="${d%/}"
+  readme_names mod "${d##*/}"
+done
+for p in docs/*.md; do
+  [ -f "$p" ] || continue
+  grep -qF "]($p)" README.md || fail "README.md: does not link to $p"
 done
 
 # Settings Declarations: valid JSON, each key with a known kind, a meaning, a default of its kind (null for unset),
