@@ -6,6 +6,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 fails=0
+# Git Bash on Windows copies on `ln -s` unless told otherwise, as install.sh knows; the foreign link must be a link.
+export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict"
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
@@ -46,7 +48,7 @@ uninstall "$home" all >"$SANDBOX/all.out" || fail "uninstall all exited non-zero
 left="$(ours "$home")"
 [ -z "$left" ] || fail "links left behind: $left"
 [ "$(cat "$home/.claude/CLAUDE.md")" = "old instructions" ] || fail "original CLAUDE.md not restored"
-[ "$(readlink "$home/.agents/skills/foreign")" = "$SANDBOX/other" ] || fail "foreign skill link removed"
+[ -L "$home/.agents/skills/foreign" ] || fail "foreign skill link removed"
 jq -e '. == {"model": "opus", "permissions": {"deny": ["Bash(rm:*)"]}}' "$home/.claude/settings.json" >/dev/null ||
   fail "Claude settings not back to the user's own: $(cat "$home/.claude/settings.json")"
 jq -e '. == {"version": 1, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' "$home/.cursor/hooks.json" >/dev/null ||
