@@ -125,7 +125,8 @@ uninstall_claude_cli() {
   command -v claude >/dev/null || { echo "  plugins and mcp: claude not on PATH, skipped"; return; }
   while read -r id rest; do
     case "$id" in '' | '#'*) continue ;; esac
-    claude plugin list --json | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null || continue
+    # Only user scope: install.sh installs there, and a project's own copy is not ours to remove.
+    claude plugin list --json | jq -e --arg id "$id" 'any(.[]; .id == $id and (.scope // "user") == "user")' >/dev/null || continue
     would "uninstall plugin $id" && continue
     if claude plugin uninstall "$id" --scope user >/dev/null; then echo "  plugin $id: uninstalled"
     else echo "  plugin $id: uninstall failed"; failed=1; fi

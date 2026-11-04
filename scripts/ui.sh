@@ -117,6 +117,11 @@ line() {
       return
       ;;
     merge-json:* | *"not a JSON object"*) ;; # stderr from a helper: an indented failure, below
+    "✘"*)
+      # A CLI's own error (claude plugin ...): kept under the tool it belongs to.
+      if [ -n "$section" ]; then note "  ${RD}↳${R}" "${l#✘ }"; draw; else trailer+="$l"$'\n'; fi
+      return
+      ;;
     *)
       trailer+="$l"$'\n'
       return
