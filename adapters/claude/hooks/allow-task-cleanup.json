@@ -4,7 +4,7 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/hooks/allow-task-cleanup.sh\" && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"deletes only task branches\"}}' || true" }
+          { "type": "command", "command": "\"$HOME/.agents/hooks/allow-task-cleanup.sh\" && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"deletes only task or merged branches\"}}' || true" }
         ]
       }
     ]
