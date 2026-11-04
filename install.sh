@@ -7,6 +7,11 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# On a terminal, the plain output below is drawn as a live view (scripts/ui.sh); DOTAGENTS_PLAIN=1 keeps it plain.
+if [ -t 1 ] && [ -z "${DOTAGENTS_PLAIN:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  DOTAGENTS_PLAIN=1 "$BASH" "${BASH_SOURCE[0]}" "$@" 2>&1 | "$REPO/scripts/ui.sh" install "$@"
+  exit "${PIPESTATUS[0]}"
+fi
 BACKUP="$HOME/.dotagents-backup/$(date +%Y%m%d-%H%M%S)"
 SHARED_SKILLS="$HOME/.agents/skills"
 # Git Bash on Windows copies on `ln -s` unless told otherwise; real links need Developer Mode or admin.

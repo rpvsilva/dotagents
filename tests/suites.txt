@@ -6,8 +6,8 @@ shellcheck *.sh scripts/shellcheck-version scripts/shellcheck-image
 actionlint .github/workflows/*
 repo.test.sh *
 python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/* scripts/hooks/secret-patterns.txt
-install.test.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
-uninstall.test.sh uninstall.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
+install.test.sh install.sh scripts/ui.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
+uninstall.test.sh uninstall.sh scripts/ui.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
 affected.test.sh
 claude-plugins.test.sh scripts/claude-plugins.sh adapters/claude/plugins.txt
 mod.test.sh adapters/claude/mods/*
@@ -16,6 +16,7 @@ guard-merge.test.sh scripts/hooks/* scripts/merge-pr.sh scripts/gh-app-token.sh
 guard-secrets.test.sh scripts/hooks/* scripts/gh-app-token.sh
 allow-task-cleanup.test.sh scripts/hooks/* adapters/claude/hooks/allow-task-cleanup.json
 merge-json.test.sh scripts/merge-json.sh
+ui.test.sh scripts/ui.sh install.sh uninstall.sh
 merge-pr.test.sh scripts/merge-pr.sh scripts/gh-app-token.sh
 mcp-servers.test.sh scripts/mcp-servers.sh scripts/merge-json.sh mcp/*
 remote-agent.test.sh scripts/remote-* scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt tests/lib/*
