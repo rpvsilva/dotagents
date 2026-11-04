@@ -79,7 +79,7 @@ Some skills start **subagents**: focused helpers, each with a fresh context. Eac
 | `security-reviewer` | `security-audit`, `review-pr` | Hunts security issues in one PR, area or flow |
 | `test-tuner` | `tune-tests`, `build-epic` | Makes tests faster and widens coverage |
 
-Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only. See [remote/README.md](remote/README.md).
+Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only: the sandbox gets a snapshot of one worktree and sends back a patch, and never touches GitHub. Overview with diagrams: [docs/remote.md](docs/remote.md). Full reference: [remote/README.md](remote/README.md).
 
 ### Hooks
 
@@ -142,7 +142,7 @@ scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks
+docs/               how it works, settings, hooks, remote subagents
 tests/              the checks CI runs (tests/run.sh)
 ```
 
