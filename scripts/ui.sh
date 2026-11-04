@@ -25,11 +25,11 @@ esac
 
 e=$'\033'
 if [ -z "${NO_COLOR:-}" ]; then
-  B="$e[1m" D="$e[2m" R="$e[0m" GR="$e[32m" YE="$e[33m" RD="$e[31m" CY="$e[36m" MA="$e[35m"
+  B="${e}[1m" D="${e}[2m" R="${e}[0m" GR="${e}[32m" YE="${e}[33m" RD="${e}[31m" CY="${e}[36m" MA="${e}[35m"
 else
   B="" D="" R="" GR="" YE="" RD="" CY="" MA=""
 fi
-CL=$'\r'"$e[K"
+CL=$'\r'"${e}[K"
 cols="$(tput cols 2>/dev/null || echo 80)"
 case "$cols" in '' | *[!0-9]*) cols=80 ;; esac
 frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
@@ -44,7 +44,10 @@ short() { printf '%s' "${1//"$HOME"/$tilde}"; }
 section="" steps=0 notes=""
 # Each kind of line counted, with its label; s_<kind> per section, t_<kind> for the run.
 kinds="linked:linked changed:updated removed:removed backups:backed_up restored:restored same:unchanged planned:planned failed:failed"
-for k in $kinds; do eval "s_${k%%:*}=0 t_${k%%:*}=0"; done
+# shellcheck disable=SC2034 # read indirectly, through counts and eval
+s_linked=0 s_changed=0 s_removed=0 s_backups=0 s_restored=0 s_same=0 s_planned=0 s_failed=0
+# shellcheck disable=SC2034
+t_linked=0 t_changed=0 t_removed=0 t_backups=0 t_restored=0 t_same=0 t_planned=0 t_failed=0
 last=""
 trailer=""
 
