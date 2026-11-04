@@ -20,6 +20,8 @@ git -C "$R" worktree add -q -b feat/gh-1-x "$SANDBOX/wt-ticket"
 git -C "$R" worktree add -q --detach "$SANDBOX/wt-detached"
 git -C "$R" branch feat/gh-2-merged
 git -C "$R" branch feat/gh-4-open
+git -C "$R" branch fix/security-tokens
+git -C "$R" branch task/gh-1-x/-x
 git -C "$R" worktree add -q -b feat/gh-5-wt "$SANDBOX/wt-merged"
 tip="$(git -C "$R" rev-parse HEAD)"
 git -C "$SANDBOX/wt-ticket" -c user.name=t -c user.email=t@t commit -q --allow-empty -m later
@@ -72,7 +74,11 @@ expect allow "git -C $R branch -D feat/gh-2-merged"
 expect allow "git worktree remove $SANDBOX/wt-merged && git branch -D feat/gh-5-wt"
 expect ask 'git branch -D feat/gh-4-open'
 expect ask 'git branch -D feat/gh-2-merged feat/gh-4-open'
-expect ask 'git branch -D feat/nowhere'
+expect allow 'git branch -D feat/nowhere'
+expect allow 'git branch -D feat/nowhere feat/gh-2-merged'
+# These can't exist beside task/gh-1-x/01, so deleting them is a no-op.
+expect allow 'git branch -D task/gh-1-x'
+expect allow 'git branch -D task/gh-1-x/01/deeper'
 touch "$SANDBOX/offline"
 expect ask 'git branch -D feat/gh-2-merged'
 rm "$SANDBOX/offline"
@@ -85,12 +91,10 @@ expect ask 'git branch -D feat/gh-1-x'
 expect ask 'git branch -D fix/security-tokens'
 expect ask 'git branch -D task/gh-1-x/01 feat/gh-1-x'
 expect ask 'git branch -D main'
-expect ask 'git branch -D task/gh-1-x'
-expect ask 'git branch -D task/gh-1-x/01/deeper'
 expect ask 'git branch -D task/gh-1-x/-x'
 expect ask "git worktree remove --force $SANDBOX/wt-ticket"
 expect ask "git worktree remove $SANDBOX/wt-detached"
-expect ask "git worktree remove $SANDBOX/missing"
+expect allow "git worktree remove $SANDBOX/missing"
 expect ask "git worktree remove $SANDBOX/wt-task $SANDBOX/wt-ticket"
 
 # Anything else in the command, or anything the hook can't read plainly, asks.
