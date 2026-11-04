@@ -11,6 +11,7 @@ tiers:
     - /.review-gate.yml
     - /CODEOWNERS
     - /install.sh
+    - /uninstall.sh
     - /tests/
     - /scripts/
     - /mcp/
