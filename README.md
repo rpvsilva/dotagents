@@ -143,6 +143,7 @@ git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
 
 - Everything is symlinked, so editing the repo updates every tool at once.
 - Re-run `install.sh` after adding a skill or moving the repo. Running it twice is safe.
+- On a terminal, `install.sh` and `uninstall.sh` show a live view: a spinner and progress bar per tool, then a summary. `DOTAGENTS_PLAIN=1` prints every line instead.
 - Anything it replaces is moved to `~/.dotagents-backup/` first.
 - Codex and Cursor are skipped when `~/.codex` or `~/.cursor` doesn't exist.
 - To remove it all, run `uninstall.sh` (`--dry-run` first to see the plan). See [Uninstall](docs/how-it-works.md#uninstall).
