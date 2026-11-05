@@ -1,5 +1,6 @@
 {
   "max_parallel": { "shared": true },
   "tracker": { "shared": true },
-  "in_progress": { "kind": "string", "default": null, "meaning": "How to mark a started ticket when not the default (GitHub: an `in progress` label), e.g. a GitHub Projects status field and value." }
+  "in_progress": { "kind": "string", "default": null, "meaning": "How to mark a started ticket when not the default (GitHub: an `in progress` label), e.g. a GitHub Projects status field and value." },
+  "tune_min_seconds": { "kind": "int", "default": 30, "min": 0, "meaning": "A ticket gets a test-tuning task only when one of its suites ran at least this many seconds; 0 tunes every ticket." }
 }

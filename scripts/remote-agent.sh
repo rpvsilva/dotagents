@@ -2,13 +2,17 @@
 # Runs one subagent task on a remote sandbox for compute only, and applies its changes to a local worktree. The
 # sandbox comes from a backend (scripts/remote-backends/<name>.sh; the cluster by default) and never touches a
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
-# Usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]   (default worktree: the
-# current one)
+# Usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]   (default worktree:
+# the current one; - reads the brief from stdin; -h or --help prints this usage on stdout and exits 0; any other
+# argument starting with -- before the brief is refused with the usage, exit 1)
 #        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
 #        remote-agent ready [dir]   (whether skills may send the subagents of the repo at dir, default the current
-#                                    one, to the backend: prints the backend and exits 0, else prints why not)
+#                                    one, to the backend: checks the Settings and the token, then probes the backend
+#                                    (`<backend> ping`, at most a few seconds: kubectl version, docker info, an ssh
+#                                    login); prints the backend on stdout and exits 0, else one line on stdout saying
+#                                    why not, e.g. "cluster backend not reachable: <the connection error>", and exits 1)
 # install.sh links it as ~/.agents/bin/remote-agent. --attach copies a file or folder the brief needs from outside
 # the worktree (a ticket, a run folder) to ~/attached/<its name> in the sandbox, read-only: only the worktree's
 # changes come back. Secret-looking files inside it are left out. --name names the task (e.g. a ticket's NN-slug),
@@ -31,7 +35,11 @@
 # run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made.
-# Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look).
+# Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5 when
+# the run failed because the Claude account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
+# <time> (<time> as Claude gave it, e.g. 5:30pm (UTC), or unknown). Any other failed run exits with the sandbox's code,
+# 1 in place of 3, 4 or 5, so those three always mean the above. The summary (Claude's final report) is printed once,
+# on stdout only, and only on exit 0, 3 or 4; stderr carries the progress lines, never the report.
 # Settings: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
 # the remote Settings (remote/settings.json: backend, hours, max_mb, keep, and the backend's own) from
 # scripts/settings.sh, each exported as its REMOTE_* variable, which also overrides it for one run (REMOTE_KEEP=1).
@@ -94,6 +102,21 @@ esac
 # shellcheck source=remote-settings.sh disable=SC1091
 . "$REPO/scripts/remote-settings.sh"
 
+# Sets backend to the script of REMOTE_BACKEND and exports every REMOTE_* variable, which the backend reads its
+# Settings from; fails for an unknown backend, with why set to say so.
+backend_script() {
+  local f known=()
+  for f in "$REPO"/scripts/remote-backends/*.sh; do
+    [ "$(basename "$f")" = lib.sh ] || known+=("$(basename "$f" .sh)")
+  done
+  backend="$REPO/scripts/remote-backends/$REMOTE_BACKEND.sh"
+  if [ "$REMOTE_BACKEND" = lib ] || [[ "$REMOTE_BACKEND" == */* ]] || [ ! -f "$backend" ]; then
+    why="unknown REMOTE_BACKEND=$REMOTE_BACKEND (known: ${known[*]})"
+    return 1
+  fi
+  while IFS= read -r v; do export "${v?}"; done < <(compgen -v REMOTE_)
+}
+
 if [ "${1:-}" = ready ]; then
   [ $# -le 2 ] || { echo "usage: remote-agent ready [dir]" >&2; exit 1; }
   dir="${2:-$PWD}"
@@ -101,11 +124,26 @@ if [ "${1:-}" = ready ]; then
   why="$(remote_blocker "$dir")" || exit 1
   [ -z "$why" ] || { echo "$why"; exit 1; }
   [ -n "$(remote_token)" ] || { echo "no CLAUDE_CODE_OAUTH_TOKEN in $REMOTE_SECRET_FILE: run \`remote-agent setup\`"; exit 1; }
+  backend_script || { echo "$why"; exit 1; }
+  # The backend's cheap probe: its one line of error, e.g. the cluster's connection error.
+  if ! why="$("$backend" ping </dev/null 2>/dev/null)"; then
+    why="$(printf '%s\n' "$why" | grep . | tail -1 || true)"
+    echo "$REMOTE_BACKEND backend not reachable: ${why:-its probe failed}"
+    exit 1
+  fi
   echo "$REMOTE_BACKEND"
   exit 0
 fi
 
-usage() { echo "usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]" >&2; exit 1; }
+usage_text() {
+  cat <<'EOF'
+usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]
+       remote-agent setup | check | ready [dir] | resume <run> [worktree]
+Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
+from stdin. Exit 0 applied, 3 no changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
+EOF
+}
+usage() { usage_text >&2; exit 1; }
 attach=()
 name=""
 while [ $# -gt 0 ]; do
@@ -121,6 +159,10 @@ while [ $# -gt 0 ]; do
         | cut -c1-63 | sed 's/-$//')"
       [ -n "$name" ] || { echo "remote-agent: --name needs a letter or digit: $2" >&2; exit 1; }
       ;;
+    -h | --help) usage_text; exit 0 ;;
+    --) shift; break ;;
+    # An unknown option would otherwise become the brief and start a real run.
+    --*) echo "remote-agent: unknown option: $1" >&2; usage ;;
     *) break ;;
   esac
   shift 2
@@ -140,19 +182,9 @@ why="$(remote_blocker "$root")" || exit 1
 [ -z "$why" ] || { echo "remote-agent: $why" >&2; exit 1; }
 leftovers="$(remote_leftovers)"
 
-backend_name="$REMOTE_BACKEND"
-known=()
-for f in "$REPO"/scripts/remote-backends/*.sh; do
-  [ "$(basename "$f")" = lib.sh ] || known+=("$(basename "$f" .sh)")
-done
-backend="$REPO/scripts/remote-backends/$backend_name.sh"
-if [ "$backend_name" = lib ] || [[ "$backend_name" == */* ]] || [ ! -f "$backend" ]; then
-  echo "remote-agent: unknown REMOTE_BACKEND=$backend_name (known: ${known[*]})" >&2
-  exit 1
-fi
 # The backend reads its settings from REMOTE_* variables, sourced or not.
 export REMOTE_TASK="$name"
-while IFS= read -r v; do export "${v?}"; done < <(compgen -v REMOTE_)
+backend_script || { echo "remote-agent: $why" >&2; exit 1; }
 max_mb="${REMOTE_MAX_MB:-200}"
 
 stage="$(mktemp -d)"
@@ -251,6 +283,21 @@ transcript_to() {
       say "$line"
     fi
   done
+}
+
+# Prints when the account's usage limit resets (Claude's words after "resets", a "|<epoch>" as a UTC time, else
+# unknown) when transcript $1 shows the run stopped on it: an error result or an API-error assistant message whose
+# text says the limit was hit; prints nothing otherwise. Ordinary assistant text never counts.
+usage_limit() {
+  # shellcheck disable=SC2016 # a literal $ in jq's regex
+  jq -rRn '[inputs | fromjson? | objects
+      | select((.type == "result" and .is_error == true) or (.type == "assistant" and .error != null))
+      | (.result // ([.message.content[]? | select(.type == "text") | .text] | join(" "))) | strings
+      | select(test("hit your (usage )?limit|usage limit|limit reached"; "i"))] | last // empty
+    | if test("\\|[0-9]{9,}") then (capture("\\|(?<e>[0-9]{9,})").e | tonumber | strftime("%Y-%m-%d %H:%M UTC"))
+      elif test("resets"; "i") then (capture("(?i)resets (at )?(?<t>[^\\n]*)").t | sub("[\\s.]+$"; ""))
+      else "" end
+    | if . == "" then "unknown" else . end' "$1" 2>/dev/null | tr -d '\r' | head -1
 }
 
 acquired=""
@@ -355,7 +402,15 @@ if [ -s "$keep/session.jsonl" ]; then
 else
   say "no session came back: the run cannot be resumed"
 fi
-[ "$status" -eq 0 ] || { say "the sandbox run failed (exit $status); what it left is in $keep"; exit "$status"; }
+if [ "$status" -ne 0 ]; then
+  say "the sandbox run failed (exit $status); what it left is in $keep"
+  # The account's usage limit: Claude's error result (or the API error it shows as an assistant message) says so.
+  when="$(usage_limit "$keep/transcript.jsonl")" || true
+  if [ -n "$when" ]; then echo "usage limit: resets $when" | progress; exit 5; fi
+  # 3, 4 and 5 are this script's own answers (no changes, stale patch, usage limit).
+  case "$status" in 3 | 4 | 5) exit 1 ;; esac
+  exit "$status"
+fi
 
 [ -f "$keep/summary.md" ] && cat "$keep/summary.md"
 if [ ! -s "$keep/changes.patch" ]; then
