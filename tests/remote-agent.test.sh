@@ -660,8 +660,8 @@ grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "kill -9: the
 kill "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" 2>/dev/null || true
 mv "$SANDBOX/kubectl.real" "$SANDBOX/bin/kubectl"
 
-# Refused before anything reaches the cluster, each naming why: an empty brief, two attachments with one name, a
-# snapshot over REMOTE_MAX_MB.
+# Refused before anything reaches the cluster, each naming why: an empty brief, one starting with "-", two
+# attachments with one name, a snapshot over REMOTE_MAX_MB.
 refused() {
   local want="$1" code=0
   shift
@@ -673,6 +673,18 @@ refused() {
   [ ! -e "$SANDBOX/calls" ] || fail "refused ($want): kubectl was called: $(cat "$SANDBOX/calls")"
 }
 refused "empty brief" "$REPO/scripts/remote-agent.sh" ""
+refused "starts with" "$REPO/scripts/remote-agent.sh" "--verbose"
+printf -- '--help\n' >"$SANDBOX/dash-brief"
+refused "starts with" "$REPO/scripts/remote-agent.sh" "@$SANDBOX/dash-brief"
+# --help and -h print the usage and exit 0, starting no run.
+for flag in --help -h; do
+  rm -f "$SANDBOX/calls"
+  code=0; (cd "$W" && HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    "$REPO/scripts/remote-agent.sh" "$flag") >"$SANDBOX/out" 2>&1 || code=$?
+  [ "$code" = 0 ] || fail "$flag: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
+  grep -q "^usage: remote-agent" "$SANDBOX/out" || fail "$flag: no usage: $(cat "$SANDBOX/out")"
+  [ ! -e "$SANDBOX/calls" ] || fail "$flag: kubectl was called: $(cat "$SANDBOX/calls")"
+done
 mkdir -p "$SANDBOX/a/notes"
 refused "two attachments named notes" "$REPO/scripts/remote-agent.sh" --attach "$SANDBOX/run/notes" --attach "$SANDBOX/a/notes" "x"
 # 2 MB of random bytes against the smallest limit the Setting allows (1 MB; 0 is refused as a bad value).

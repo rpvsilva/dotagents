@@ -84,7 +84,10 @@ resume() {
   mv "$tmp" "$dest/$id.jsonl"
   echo "remote-agent: session: $dest/$id.jsonl (/resume in $real opens it, or claude --resume $id)" >&2
 }
+usage_line="usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]
+       remote-agent ready [dir] | setup | check | resume <run> [worktree]"
 case "${1:-}" in
+  -h|--help) echo "$usage_line"; exit 0 ;;
   setup) shift; exec "$REPO/scripts/remote-agent-setup.sh" "$@" ;;
   check) shift; exec "$REPO/scripts/remote-agent-check.sh" "$@" ;;
   resume) shift; resume "$@"; exit 0 ;;
@@ -105,7 +108,7 @@ if [ "${1:-}" = ready ]; then
   exit 0
 fi
 
-usage() { echo "usage: remote-agent [--attach PATH]... [--name NAME] <brief | @brief-file | -> [worktree]" >&2; exit 1; }
+usage() { echo "$usage_line" >&2; exit 1; }
 attach=()
 name=""
 while [ $# -gt 0 ]; do
@@ -132,6 +135,9 @@ case "$1" in
   *) brief="$1" ;;
 esac
 [ -n "$brief" ] || { echo "remote-agent: empty brief" >&2; exit 1; }
+# The sandbox runs `claude -p "$brief"`, which would read a leading "-" as its own option (`--help` prints Claude's
+# usage and the run fails): refuse it here, before anything reaches the sandbox.
+case "$brief" in -*) echo "remote-agent: the brief starts with \"-\", which claude would read as an option: ${brief%%$'\n'*}" >&2; exit 1 ;; esac
 root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
 claude_token="$(remote_token)"
 [ -n "$claude_token" ] || { echo "remote-agent: set CLAUDE_CODE_OAUTH_TOKEN (in $REMOTE_SECRET_FILE): run \`remote-agent setup\`" >&2; exit 1; }
