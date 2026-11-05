@@ -12,7 +12,7 @@ This page is the overview. Every flag, file and backend detail is in [remote/REA
 
 ## When a subagent runs remotely
 
-Only subagents a skill marks **remote-capable** can run remotely: ones that only change their own worktree. Today that's `build-epic`'s implementer. Before each one starts, the skill runs `remote-agent ready` in the repo:
+Only subagents a skill marks **remote-capable** can run remotely: ones that only change their own worktree. Today those are the implementer and test-tuner in `build-epic`, the test-tuner in `tune-tests` and the fix implementers in `security-audit`. Before each one starts, the skill runs `remote-agent ready` in the repo:
 
 ```mermaid
 flowchart TD
