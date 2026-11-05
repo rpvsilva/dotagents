@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Docker backend for scripts/remote-agent.sh: a fresh container of the runner image on this machine per run,
 # driven with `docker exec`. Only Docker and the image are needed.
-# Usage: docker.sh acquire <run> | put <run> <container> <dir> | run <run> <container> <argv>... | get <run> <container> <dir> | release <run> | check
+# Usage: docker.sh acquire <run> | put <run> <container> <dir> | run <run> <container> <argv>... | get <run> <container> <dir> | release <run> | check | ping
 # acquire starts container <run> and prints its name; its command is `sleep <REMOTE_HOURS*3600>` under --rm, so it
 # removes itself after REMOTE_HOURS if release never comes.
 # put extracts the tar on stdin under the container's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
@@ -11,6 +11,8 @@
 # `docker ps --filter label=sandbox.users.io/remote-agent-task` lists the named runs.
 # check names what is missing: docker, the Docker daemon, the image (pulled when absent); and notes on stderr when the
 # image's architecture differs from the machine's (it would run emulated).
+# ping runs `docker info` (`remote-agent ready`): exit 0 when the daemon answers, else one line on stdout with its error
+# and exit 1.
 # Settings: REMOTE_IMAGE (ghcr.io/rpvsilva/agent-runner:main), REMOTE_PLATFORM (passed as --platform when set;
 # otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
 # ssh.sh runs this script with DOCKER_SSH_HOST set: every docker command then runs on that host, one ssh call each,
@@ -114,8 +116,16 @@ case "$op" in
       say "note: image $image is $(arch_name "$arch"), the machine$where is $(arch_name "$machine"): it runs emulated, slowly"
     fi
     ;;
+  ping)
+    if [ -z "${DOCKER_SSH_HOST:-}" ] && ! command -v docker >/dev/null 2>&1; then echo "docker not found on PATH"; exit 1; fi
+    # shellcheck disable=SC2016 # a Go template for docker
+    if ! err="$(dk info --format '{{.ServerVersion}}' </dev/null 2>&1 >/dev/null)"; then
+      echo "Docker daemon not reachable$where: $(printf '%s\n' "$err" | grep . | tail -1 || true)"
+      exit 1
+    fi
+    ;;
   *)
-    echo "usage: docker.sh acquire|put|run|get|release|check <run> [<container> ...]" >&2
+    echo "usage: docker.sh acquire|put|run|get|release|check|ping <run> [<container> ...]" >&2
     exit 1
     ;;
 esac
