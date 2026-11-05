@@ -81,9 +81,9 @@ grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " 
   || fail "docker name: container not labelled with the task: $(grep '^run' "$S/calls")"
 
 # A failed run keeps its exit code, applies nothing, and removes the container. The brief comes from stdin (-).
-code=0; BRIEF=- run 5 "$HELLO_PATCH" REMOTE_BACKEND=docker <<<"brief from stdin" || code=$?
+code=0; BRIEF=- run 7 "$HELLO_PATCH" REMOTE_BACKEND=docker <<<"brief from stdin" || code=$?
 [ "$(sed -n '2,$p' "$S/stdin")" = "brief from stdin" ] || fail "docker -: the brief is not stdin: $(sed -n '2,$p' "$S/stdin")"
-[ "$code" = 5 ] || fail "docker failed run: wanted exit 5, got $code"
+[ "$code" = 7 ] || fail "docker failed run: wanted exit 7, got $code"
 [ ! -e "$W/hello.txt" ] || fail "docker failed run: patch applied anyway"
 gone "$(container)" || fail "docker failed run: container not removed"
 
@@ -116,6 +116,22 @@ code=0; wait "$pid" || code=$?
 [ $((SECONDS - start)) -lt 10 ] || fail "docker TERM: waited for the sandbox run to end"
 gone "$(container)" || fail "docker TERM: container not removed"
 rm -f "$S/hang"
+
+# `remote-agent ready` probes the backend: the backend's name when it answers, else one line naming it and the error.
+ready() {
+  rm -rf "$S/calls"
+  (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="${READY_PATH:-$SANDBOX/bin:$PATH}" \
+    XDG_CONFIG_HOME="$SANDBOX/config" "$REPO/scripts/remote-agent.sh" ready) >"$SANDBOX/out" 2>&1
+}
+remote_config "$SANDBOX/config" REMOTE_BACKEND=docker
+ready && [ "$(cat "$SANDBOX/out")" = docker ] || fail "docker ready: $(cat "$SANDBOX/out")"
+grep -q "^info " "$S/calls" || fail "docker ready: docker info not run: $(cat "$S/calls" 2>/dev/null)"
+: >"$S/daemon-down"
+code=0; ready || code=$?
+[ "$code" = 1 ] || fail "docker ready, daemon down: wanted exit 1, got $code"
+[ "$(cat "$SANDBOX/out")" = "docker backend not reachable: Docker daemon not reachable: Cannot connect to the Docker daemon. Is the docker daemon running?" ] \
+  || fail "docker ready, daemon down: not one line naming the backend and the error: $(cat "$SANDBOX/out")"
+rm -f "$S/daemon-down"
 
 # --- ssh, container mode: the docker backend's commands, each one an ssh call to the host.
 weird="it's a \$HOME file.txt"
@@ -160,8 +176,8 @@ grep -q "kept container $c" "$SANDBOX/out" || fail "ssh keep: not reported: $(ca
 rm -rf "${S:?}/containers/$c" "${W:?}/$weird"
 
 # A failed run keeps its exit code and removes the container.
-code=0; run 5 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box || code=$?
-[ "$code" = 5 ] || fail "ssh failed run: wanted exit 5, got $code"
+code=0; run 7 "$HELLO_PATCH" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box || code=$?
+[ "$code" = 7 ] || fail "ssh failed run: wanted exit 7, got $code"
 gone "$(container)" || fail "ssh failed run: container not removed"
 
 # An unknown mode (hand-edited into settings.json) or no host: the run stops naming what is wrong, and nothing
@@ -177,6 +193,28 @@ code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh || code=$?
 [ "$code" != 0 ] || fail "ssh no host: exited 0"
 grep -q "set REMOTE_SSH_HOST" "$SANDBOX/out" || fail "ssh no host: message: $(cat "$SANDBOX/out")"
 [ ! -e "$S/calls" ] || fail "ssh no host: something reached the host: $(cat "$S/calls")"
+
+# ready over ssh: a login with a 5-second connect timeout, then docker info on the host; the host's or the daemon's
+# error on one line when either fails.
+remote_config "$SANDBOX/config" REMOTE_BACKEND=ssh REMOTE_SSH_HOST=me@build-box
+ready && [ "$(cat "$SANDBOX/out")" = ssh ] || fail "ssh ready: $(cat "$SANDBOX/out")"
+grep -q "^ssh -T -o BatchMode=yes -o ConnectTimeout=5 me@build-box true$" "$S/calls" \
+  || fail "ssh ready: no login probe with a connect timeout: $(cat "$S/calls" 2>/dev/null)"
+grep -q "^ssh -T -o BatchMode=yes -o ConnectTimeout=5 me@build-box 'docker' 'info'" "$S/calls" \
+  || fail "ssh ready: docker info not run on the host: $(cat "$S/calls" 2>/dev/null)"
+: >"$S/daemon-down"
+code=0; ready || code=$?
+[ "$code" = 1 ] || fail "ssh ready, daemon down: wanted exit 1, got $code"
+grep -qx "ssh backend not reachable: Docker daemon not reachable on me@build-box: Cannot connect to the Docker daemon.*" "$SANDBOX/out" \
+  || fail "ssh ready, daemon down: not one line naming the backend, the host and the error: $(cat "$SANDBOX/out")"
+rm -f "$S/daemon-down"
+mkdir -p "$SANDBOX/downbin"
+printf '#!/bin/sh\necho "ssh: connect to host build-box port 22: No route to host" >&2\nexit 255\n' >"$SANDBOX/downbin/ssh"
+chmod +x "$SANDBOX/downbin/ssh"
+code=0; READY_PATH="$SANDBOX/downbin:$SANDBOX/bin:$PATH" ready || code=$?
+[ "$code" = 1 ] || fail "ssh ready, unreachable: wanted exit 1, got $code"
+[ "$(cat "$SANDBOX/out")" = "ssh backend not reachable: cannot reach me@build-box: ssh: connect to host build-box port 22: No route to host" ] \
+  || fail "ssh ready, unreachable: not one line naming the backend and the error: $(cat "$SANDBOX/out")"
 
 # --- ssh login. A key file: every call uses it alone, still without a prompt.
 rm -f "$W/hello.txt" "$S/askpass"
@@ -273,6 +311,7 @@ mkdir -p "\$d"
 printf '{"type":"user","cwd":"%s","sessionId":"%s","message":"%s"}\n' "\$PWD" "\$id" "\$CLAUDE_CODE_OAUTH_TOKEN" >"\$d/\$id.jsonl"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"}]}}'
 [ ! -s "$S/patch" ] || git apply "$S/patch"
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"did the thing"}]}}'
 echo '{"type":"result","result":"did the thing","is_error":false}'
 CLAUDE
 chmod +x "$HB/node" "$HB/claude"

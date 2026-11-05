@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Cluster backend for scripts/remote-agent.sh: a warm sandbox from agent-sandbox on Kubernetes, claimed with a
 # SandboxClaim and driven with `kubectl exec`.
-# Usage: cluster.sh acquire <run> | put <run> <pod> <dir> | run <run> <pod> <argv>... | get <run> <pod> <dir> | release <run> | check
+# Usage: cluster.sh acquire <run> | put <run> <pod> <dir> | run <run> <pod> <argv>... | get <run> <pod> <dir> | release <run> | check | ping
 # acquire claims a sandbox and prints its pod; its shutdownTime deletes it after REMOTE_HOURS if release never comes.
 # put extracts the tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release deletes the claim (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # check names, one line each, what is missing: kubectl, the context, permission to create sandboxclaims and pods/exec
 # in the namespace.
+# ping asks the cluster for its version, giving up after 5 seconds (`remote-agent ready`): exit 0 when it answers, else
+# one line on stdout with kubectl's error (e.g. Unable to connect to the server: ... no route to host) and exit 1.
 # Settings: REMOTE_CONTEXT (kube context, default my-cluster), REMOTE_NAMESPACE (agents), REMOTE_POOL (claude-runner),
 # REMOTE_HOURS (2), REMOTE_KEEP, REMOTE_CLAIM_TIMEOUT (seconds acquire waits for the claim to be Ready, 180);
 # REMOTE_TASK (set by remote-agent.sh from --name, a valid label value).
@@ -118,8 +120,15 @@ YAML
     done
     exit "$missing"
     ;;
+  ping)
+    command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found on PATH"; exit 1; }
+    if ! err="$(kubectl --context "$context" --request-timeout=5s version 2>&1 >/dev/null)"; then
+      echo "context $context: $(printf '%s\n' "$err" | grep . | tail -1 || true)"
+      exit 1
+    fi
+    ;;
   *)
-    echo "usage: cluster.sh acquire|put|run|get|release|check <run> [<pod> ...]" >&2
+    echo "usage: cluster.sh acquire|put|run|get|release|check|ping <run> [<pod> ...]" >&2
     exit 1
     ;;
 esac
