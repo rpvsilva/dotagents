@@ -16,26 +16,27 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
 
 1. **Read** `spec.md` and every note in `notes/`. Where notes conflict or leave a gap a task depends on, read that code yourself. Done when every behaviour has known files and tests.
 2. **Write `map.md`**: per area, the files to change and why, the tests that cover them, and the tests to add; every claim cites a path. Then a `Checks` section with the exact commands CI runs (from the CI workflow and the manifest's scripts) plus the one-time `Setup` a fresh git worktree needs before they run (e.g. creating a virtualenv, installing dependencies), or `Setup: none`; and a `Gaps` section: areas with no tests, open questions, risks. Give every open question in `spec.md` (the ones you find here too) an **assumed answer** in brackets, the way you would decide it: the human confirms or corrects them at the approval stop, so implementers build from decided answers. Done when every behaviour appears in the map and every open question has an assumed answer.
-3. **Write the tickets**, one file each as `tickets/TT-<slug>.md`, numbered blockers-first. A ticket is one tracker issue the epic delivers: one per child issue, or a single ticket for the epic itself when it has no children, for one issue, and for plain-text input. Each one becomes its own PR into the default branch, so a different developer may build it. Template:
+3. **Write the tickets**, one file each as `tickets/TT-<slug>.md`, numbered blockers-first. A ticket is one or more tracker issues the epic delivers as one PR into the default branch, so a different developer may build it: one per child issue by default, or a single ticket for the epic itself when it has no children, for one issue, and for plain-text input. Child issues whose code lands in mostly the same files (see the write sets in step 4) form **one** ticket: one branch and one PR in place of several that would conflict. Template:
 
    ```
    # TT: <title>
    Status: ready
-   Issue: <the tracker issue, e.g. #8; or none for plain-text input>
+   Issue: <the tracker issues, e.g. #8 or #8, #9; or none for plain-text input>
    Branch: feat/<ticket-slug>
    Blocked by: <ticket numbers, or none>
    ```
 
-   `<ticket-slug>` is the issue's tracker ID plus a few words (`gh-14-due-date-field`), or a few words alone for plain-text input. A ticket is `Blocked by` another when one of its tasks needs that ticket's code: it starts only once that ticket is merged into the default branch.
+   `<ticket-slug>` is the first issue's tracker ID plus a few words (`gh-14-due-date-field`), or a few words alone for plain-text input. A ticket is `Blocked by` another when one of its tasks needs that ticket's code, or when the two tickets' write sets overlap (the later one is cut after the earlier one merges): it starts only once that ticket is merged into the default branch.
 
-   Done when every tracker issue has its ticket and the ticket blocker graph has no cycle.
-4. **Write the tasks**, one file each as `tasks/TT-NN-<slug>.md`, `TT` its ticket, numbered blockers-first within it. Each task is a **tracer bullet**: a narrow slice through every layer it needs (schema, logic, interface, tests), verifiable on its own, small enough for one fresh context. Put any prefactoring in its own first task, in the first ticket that needs it. Template:
+   Done when every tracker issue belongs to exactly one ticket and the ticket blocker graph has no cycle.
+4. **Write the tasks**, one file each as `tasks/TT-NN-<slug>.md`, `TT` its ticket, numbered blockers-first within it. Each task is a **tracer bullet**: a narrow slice through every layer it needs (schema, logic, interface, tests), verifiable on its own, small enough for one fresh context. Put any prefactoring in its own first task, in the first ticket that needs it. Shared scaffolding (a helper, parser, store method or registry entry two tasks would each write) is prefactoring too: build it once, in one task the others are blocked by. Template:
 
    ```
    # TT-NN: <title>
    Status: ready
    Ticket: TT
    Blocked by: <task numbers of the same ticket, or none>
+   Writes: <every repo path this task creates or edits, comma-separated>
 
    ## What to build
    <the behaviour, from the user's side>
@@ -50,15 +51,16 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    <spec behaviours and map sections this task touches>
    ```
 
-   `Blocked by` names only a real dependency: the task needs the other one's behaviour or code to exist. Tasks that merely edit the same files stay parallel; the orchestrator's merge step handles the overlap.
+   The `Writes` line is the task's **write set**, taken from `map.md`'s files to change; the orchestrator runs two tasks at once only when their write sets are disjoint. `Blocked by` names a real dependency (the task needs the other one's behaviour or code) and every write-set overlap within the ticket: of two tasks sharing a file, the later one is blocked by the earlier, so it is cut from a branch that already holds the earlier one's change.
 
-   Done when every behaviour in `spec.md` belongs to a task of the ticket for the issue it came from, every ticket has a task, and the task blocker graph has no cycle.
+   Done when every behaviour in `spec.md` belongs to a task of the ticket for the issue it came from, every ticket has a task, every task has a `Writes` line, any two tasks sharing a path are ordered by `Blocked by` (across tickets, through their tickets), and neither blocker graph has a cycle.
+5. **Write the lanes**: a `Lanes` section at the end of `map.md`. A **lane** is a chain of tickets ordered by `Blocked by` whose write sets overlap; lanes with disjoint write sets run in parallel. List each lane as its tickets in order, with the hot paths they share. Done when every ticket sits in exactly one lane.
 
 ## Pass revise
 
 Input: the reason (the human's words, or a task path plus an implementer's `why`).
 
-Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`. Done when the plan answers the reason and neither blocker graph has a cycle.
+Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`, give each task you add a `Writes` line, and update `map.md`'s `Lanes`. Done when the plan answers the reason, any two tasks sharing a path are ordered as in pass B, and neither blocker graph has a cycle.
 
 ## Report
 

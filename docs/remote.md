@@ -24,7 +24,9 @@ flowchart TD
   token -- no --> here
   token -- yes --> allowed{"Repo sets<br/>remote.allowed = false?"}
   allowed -- yes --> here
-  allowed -- no --> slot["Wait for a free remote slot<br/>(remote.max_sandboxes)"]
+  allowed -- no --> ping{"Backend answers?"}
+  ping -- no --> here
+  ping -- yes --> slot["Wait for a free remote slot<br/>(remote.max_sandboxes)"]
   slot --> remote["Run with remote-agent"]
 ```
 
