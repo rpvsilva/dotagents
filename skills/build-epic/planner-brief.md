@@ -26,7 +26,7 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    Blocked by: <ticket numbers, or none>
    ```
 
-   `<ticket-slug>` is the first issue's tracker ID plus a few words (`gh-14-due-date-field`), or a few words alone for plain-text input. A ticket is `Blocked by` another when one of its tasks needs that ticket's code, or when the two tickets' write sets overlap (the later one is cut after the earlier one merges): it starts only once that ticket is merged into the default branch.
+   `<ticket-slug>` is the first issue's tracker ID plus a few words (`gh-14-due-date-field`), or a few words alone for plain-text input. A ticket is `Blocked by` another when one of its tasks needs that ticket's code, or when the two tickets' write sets overlap outside **hub files** (step 4): it starts only once that ticket is merged into the default branch.
 
    Done when every tracker issue belongs to exactly one ticket and the ticket blocker graph has no cycle.
 4. **Write the tasks**, one file each as `tasks/TT-NN-<slug>.md`, `TT` its ticket, numbered blockers-first within it. Each task is a **tracer bullet**: a narrow slice through every layer it needs (schema, logic, interface, tests), verifiable on its own, small enough for one fresh context. Put any prefactoring in its own first task, in the first ticket that needs it. Shared scaffolding (a helper, parser, store method or registry entry two tasks would each write) is prefactoring too: build it once, in one task the others are blocked by. Template:
@@ -35,7 +35,7 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    # TT-NN: <title>
    Status: ready
    Ticket: TT
-   Blocked by: <task numbers of the same ticket, or none>
+   Blocked by: <task numbers of the same ticket, and `ticket NN` for a ticket that must merge first; or none>
    Writes: <every repo path this task creates or edits, comma-separated>
 
    ## What to build
@@ -51,16 +51,18 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    <spec behaviours and map sections this task touches>
    ```
 
-   The `Writes` line is the task's **write set**, taken from `map.md`'s files to change; the orchestrator runs two tasks at once only when their write sets are disjoint. `Blocked by` names a real dependency (the task needs the other one's behaviour or code) and every write-set overlap within the ticket: of two tasks sharing a file, the later one is blocked by the earlier, so it is cut from a branch that already holds the earlier one's change.
+   The `Writes` line is the task's **write set**, taken from `map.md`'s files to change; the orchestrator runs two tasks at once only when their write sets are disjoint. `Blocked by` names a real dependency (the task needs the other one's behaviour or code) and every write-set overlap: of two tasks sharing a file, the later one is blocked by the earlier, so it is cut from a branch that already holds the earlier one's change.
 
-   Done when every behaviour in `spec.md` belongs to a task of the ticket for the issue it came from, every ticket has a task, every task has a `Writes` line, any two tasks sharing a path are ordered by `Blocked by` (across tickets, through their tickets), and neither blocker graph has a cycle.
-5. **Write the lanes**: a `Lanes` section at the end of `map.md`. A **lane** is a chain of tickets ordered by `Blocked by` whose write sets overlap; lanes with disjoint write sets run in parallel. List each lane as its tickets in order, with the hot paths they share. Done when every ticket sits in exactly one lane.
+   A **hub file** is one most tickets append to: a README table, a command registry, a changelog, an index of exports. Left in every feature task, it chains the whole epic into one lane. Shrink it first: when the repo's design allows, a prefactor task makes the hub load its entries (one file per command, a generated table), so each feature writes only its own file. What stays goes into each ticket's **hub task**: its last task, holding every hub edit of the ticket, blocked by the ticket's other tasks and by `ticket NN` for the ticket before it in the hub's order. Feature tasks keep hub files out of their write sets, so tickets build in parallel and only their hub tasks wait, each one for the merge before it.
+
+   Done when every behaviour in `spec.md` belongs to a task of the ticket for the issue it came from, every ticket has a task, every task has a `Writes` line, and neither blocker graph has a cycle.
+5. **Write the lanes**: a `Lanes` section at the end of `map.md`. A **lane** is a chain of tickets ordered by ticket `Blocked by`; lanes run in parallel, and hub tasks order tickets without joining their lanes. List each lane as its tickets in order with the paths they share, then the hub files with their tickets' order. Done when every ticket sits in exactly one lane and `python3 ~/.agents/skills/build-epic/plan_check.py <run folder>` prints `plan ok`; each line it prints otherwise is an unordered overlap, a missing `Writes` line or a cycle to fix.
 
 ## Pass revise
 
 Input: the reason (the human's words, or a task path plus an implementer's `why`).
 
-Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`, give each task you add a `Writes` line, and update `map.md`'s `Lanes`. Done when the plan answers the reason, any two tasks sharing a path are ordered as in pass B, and neither blocker graph has a cycle.
+Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`, give each task you add a `Writes` line, and update `map.md`'s `Lanes`. Done when the plan answers the reason and `plan_check.py` prints `plan ok` as in pass B.
 
 ## Report
 
