@@ -6,6 +6,8 @@ A skill can run some of its subagents on another machine instead of your laptop:
 
 Why use it: a skill like `build-epic` can run many implementers at once without overloading your laptop. Since the sandbox never touches GitHub, this works for any project, even ones the remote machine's owners can't access.
 
+Remote subagents never talk to each other ([agent-communication.md](agent-communication.md)). For how this differs from Claude Code's self-hosted environments, see [claude-features.md](claude-features.md).
+
 This page is the overview. Every flag, file and backend detail is in [remote/README.md](../remote/README.md).
 
 ## When a subagent runs remotely
