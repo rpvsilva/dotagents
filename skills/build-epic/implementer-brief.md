@@ -19,7 +19,7 @@ You build one task for `build-epic` (or `security-audit`, where the fix branch p
 
 ## When you run remotely
 
-Your worktree is `~/work`: a snapshot of the task worktree, already holding the ticket branch's tip, with one commit and no other branches. The task, `spec.md`, `map.md` and `notes/` are under `~/attached`. Skip the branch check in step 1 and all of step 5, and do not commit: leave your changes in the files. The orchestrator commits them on your task branch and catches up with the ticket. In the report, `changed:` lists the files.
+Your worktree is `~/work`: a snapshot of the task worktree, already holding the ticket branch's tip, with one commit and no other branches. The task, `map.md` and the files its `Pointers` name (`spec.md` and `notes/` for build-epic; `findings.md` and `reports/` for security-audit) are under `~/attached`. Skip the branch check in step 1 and all of step 5, and do not commit: leave your changes in the files. The orchestrator commits them on your task branch and catches up with the ticket. In the report, `changed:` lists the files.
 
 ## Report
 
