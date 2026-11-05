@@ -1,6 +1,7 @@
 ---
 name: pr-reviewer
 description: Read-only PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR and returns them as findings.
+model: opus
 disallowedTools: Agent, Edit, Write, NotebookEdit
 ---
 

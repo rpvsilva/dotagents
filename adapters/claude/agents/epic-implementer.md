@@ -1,6 +1,7 @@
 ---
 name: epic-implementer
 description: Builds one build-epic task test-first in its own worktree and commits on its task branch; never pushes or merges.
+model: sonnet
 disallowedTools: Agent
 ---
 
