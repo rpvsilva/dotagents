@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SSH backend for scripts/remote-agent.sh: a VM or PC reached with `ssh`.
-# Usage: ssh.sh acquire <run> | put <run> <handle> <dir> | run <run> <handle> <argv>... | get <run> <handle> <dir> | release <run> | check
+# Usage: ssh.sh acquire <run> | put <run> <handle> <dir> | run <run> <handle> <argv>... | get <run> <handle> <dir> | release <run> | check | ping
 # Every command runs on the host through `ssh -T <options> <host> '<quoted words>'` (options: lib.sh's ssh_client, a
 # key or a password login), its words single-quoted for any POSIX login shell. Files travel as tar streams over the connection: no scp, no temp files.
 # Container mode (the default) needs only SSH access and Docker on the host: the docker backend (docker.sh) with each
@@ -22,6 +22,9 @@
 # process is never signalled.
 # check names what is missing: a login to the host, then docker.sh's check on the host (container mode) or
 # the tools acquire checks (bare mode).
+# ping (`remote-agent ready`) logs in to the host, giving up after 5 seconds, then (container mode) runs docker.sh's
+# ping there: exit 0 when both answer, else one line on stdout with the error (ssh's own, e.g. Connection refused) and
+# exit 1.
 # Settings: REMOTE_SSH_HOST (ssh destination: user@host or a ~/.ssh/config alias), REMOTE_SSH_KEY (a key file to log in
 # with), REMOTE_SSH_MODE (container or bare), REMOTE_HOURS (2), REMOTE_KEEP; container mode: docker.sh's REMOTE_IMAGE and REMOTE_PLATFORM; bare mode:
 # REMOTE_SSH_DIR (run folders' root on the host: absolute, or relative to the SSH user's home; .remote-agent/runs).
@@ -42,16 +45,20 @@ esac
 if [ -n "$problem" ]; then
   # acquire already said it; release has nothing to remove.
   [ "$op" = release ] && exit 0
-  if [ "$op" = check ]; then echo "$problem"; else say "$problem"; fi
+  if [ "$op" = check ] || [ "$op" = ping ]; then echo "$problem"; else say "$problem"; fi
   exit 1
 fi
+# A probe gives up on a host that does not answer; exported, so docker.sh's ssh calls (container mode) do too.
+[ "$op" != ping ] || export SSH_CONNECT_TIMEOUT=5
 ssh_client
 # shellcheck disable=SC2154 # set by ssh_client
-if [ "$op" = check ] && ! err="$("${ssh_cmd[@]}" "$REMOTE_SSH_HOST" true </dev/null 2>&1 >/dev/null)"; then
+if [ "$op" = check ] || [ "$op" = ping ] && ! err="$("${ssh_cmd[@]}" "$REMOTE_SSH_HOST" true </dev/null 2>&1 >/dev/null)"; then
+  err="$(printf '%s\n' "$err" | grep . | tail -1 || true)"
+  [ "$op" = check ] || { echo "cannot reach $REMOTE_SSH_HOST: $err"; exit 1; }
   how="keys from the ssh agent or ~/.ssh/config"
   [ -z "${REMOTE_SSH_KEY:-}" ] || how="the key file $REMOTE_SSH_KEY"
   [ "${ssh_cmd[0]}" != env ] || how="$how, then the password or passphrase in remote.env"
-  echo "cannot reach $REMOTE_SSH_HOST with $how: $(printf '%s' "$err" | tail -1)"
+  echo "cannot reach $REMOTE_SSH_HOST with $how: $err"
   echo "  fix: \`remote-agent setup\` (key file or password), or load the key with ssh-add"
   exit 1
 fi
@@ -201,8 +208,9 @@ stop "$d"
   check)
     on_host "$tool_check" </dev/null 2>&1
     ;;
+  ping) ;; # logged in above: bare mode needs nothing more
   *)
-    echo "usage: ssh.sh acquire|put|run|get|release|check <run> [<handle> ...]" >&2
+    echo "usage: ssh.sh acquire|put|run|get|release|check|ping <run> [<handle> ...]" >&2
     exit 1
     ;;
 esac

@@ -21,7 +21,8 @@ sq_argv() {
 # machine's home). With no SSH_PASSWORD or SSH_KEY_PASSPHRASE Secret, `-o BatchMode=yes`: keys from the agent or
 # ~/.ssh/config only, never a prompt. With either, keys are still tried first, then one password try, every prompt
 # answered by scripts/remote-ssh-askpass.sh (SSH_ASKPASS_REQUIRE=force: never the terminal, needs OpenSSH 8.4+), which
-# answers nothing else, so an unknown host key still fails.
+# answers nothing else, so an unknown host key still fails. With SSH_CONNECT_TIMEOUT set (seconds), `-o ConnectTimeout`:
+# a probe (`ping`) gives up on a host that does not answer rather than hang.
 ssh_client() {
   local askpass key="${REMOTE_SSH_KEY:-}"
   askpass="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/remote-ssh-askpass.sh"
@@ -35,4 +36,5 @@ ssh_client() {
   # shellcheck disable=SC2088 # a literal ~/, expanded here
   case "$key" in "~/"*) key="$HOME/${key#\~/}" ;; esac
   [ -z "$key" ] || ssh_cmd+=(-i "$key" -o IdentitiesOnly=yes)
+  [ -z "${SSH_CONNECT_TIMEOUT:-}" ] || ssh_cmd+=(-o ConnectTimeout="$SSH_CONNECT_TIMEOUT")
 }

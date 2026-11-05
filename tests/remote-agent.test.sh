@@ -99,6 +99,9 @@ case " \$* " in
     else
       printf 'Ready\tTrue\tDependenciesReady\t\n'
     fi >"$SANDBOX/state" ;;
+  *" --request-timeout=5s version "*)
+    # The probe of \`remote-agent ready\`: with \$SANDBOX/unreachable, as kubectl when the cluster has no route.
+    [ ! -e "$SANDBOX/unreachable" ] || { echo "Client Version: v1.31.0"; echo "Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: no route to host" >&2; exit 1; } ;;
   *" get sandboxclaim "*conditions*) cat "$SANDBOX/conditions" 2>/dev/null || cat "$SANDBOX/state" ;;
   *" get sandboxclaim "*) printf 'claude-runner-abc' ;;
   *" get sandbox "*) printf '' ;;
@@ -133,6 +136,12 @@ mkdir -p "$SANDBOX/podbin"
 cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
+# With \$SANDBOX/limit, the account is over its usage limit: Claude says so, as an API error and an error result.
+if [ -e "$SANDBOX/limit" ]; then
+  echo '{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You have hit your limit - resets 5:30pm (UTC)"}]}}'
+  echo '{"type":"result","is_error":true,"result":"You have hit your limit - resets 5:30pm (UTC)"}'
+  exit 1
+fi
 if [ ! -e "$SANDBOX/nosession" ]; then
   id=0b1e5e55-1d00-4c1a-9a7e-5e551011d000
   echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"\$id\",\"cwd\":\"\$PWD\"}"
@@ -146,6 +155,8 @@ cat >>"$SANDBOX/podbin/claude" <<'EOF'
 echo "{\"type\":\"user\",\"text\":\"env: CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN\"}"
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"writing the hello file"},{"type":"tool_use","name":"Write","input":{"file_path":"hello.txt"}}]}}'
 printf 'hello\n' >hello.txt
+# The final report comes as an assistant message too, before the result, as Claude sends it.
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"did the thing"}]}}'
 echo '{"type":"result","result":"did the thing","is_error":false}'
 EOF
 chmod +x "$SANDBOX/podbin/claude"
@@ -262,6 +273,11 @@ code=0; run 1 "$patch" || code=$?
 [ ! -e "$W/hello.txt" ] || fail "failed run: patch applied anyway"
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
 run_data "failed run data" failed 1
+# A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
+for c in 3 4 5; do
+  code=0; run "$c" "$patch" || code=$?
+  [ "$code" = 1 ] || fail "failed run exiting $c: wanted exit 1, got $code"
+done
 
 # A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched.
 stale='diff --git a/tracked.txt b/tracked.txt
@@ -311,10 +327,13 @@ grep -q "→ Write hello.txt" "$POD/main-stdout" || fail "real sandbox: Claude's
 grep -q "sk-claude-secret" "$POD/main-stdout" "$SANDBOX/out" && fail "real sandbox: the token reached a log"
 # Its raw events come back on the run's stdout into the transcript, not onto stdout.
 t="$W/.git/remote-agent/$claim/transcript.jsonl"
-[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr -d '\r' | tr '\n' ' ')" = "system user assistant result " ] \
+[ "$(sed 's/\r$//' "$t" 2>/dev/null | jq -r .type 2>/dev/null | tr -d '\r' | tr '\n' ' ')" = "system user assistant assistant result " ] \
   || fail "real sandbox: transcript does not hold Claude's events: $(cat "$t" 2>/dev/null)"
 grep -q "first agent event after [0-9]*s" "$SANDBOX/err" || fail "real sandbox: no first-event time"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "real sandbox: stdout is not just the summary: $(cat "$SANDBOX/report")"
+# The report is printed once, on stdout: not also among the progress lines, which keep Claude's other text.
+grep -q "did the thing" "$SANDBOX/err" && fail "real sandbox: the report is also on stderr: $(cat "$SANDBOX/err")"
+grep -q "writing the hello file" "$SANDBOX/err" || fail "real sandbox: Claude's progress text not on stderr"
 # No file the run keeps holds the token: the stub's stream and session both echo it.
 k="$W/.git/remote-agent/$claim"
 grep -rl "sk-claude-secret" "$k" && fail "real sandbox: the token is in a kept file"
@@ -399,6 +418,19 @@ grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "real no ses
 grep -q "→ Write hello.txt" "$POD/progress.log" 2>/dev/null || fail "progress.log: Claude's progress missing"
 grep -q "snapshot: " "$POD/progress.log" 2>/dev/null || fail "progress.log: client progress missing"
 rm -f "$W/hello.txt" "$SANDBOX/nosession" "$SANDBOX/nomain" "$SANDBOX/real"
+
+# The account's usage limit: exit 5, one line saying when it resets, nothing on stdout, nothing applied.
+: >"$SANDBOX/real"
+: >"$SANDBOX/limit"
+code=0; run 0 "" || code=$?
+[ "$code" = 5 ] || fail "usage limit: wanted exit 5, got $code: $(cat "$SANDBOX/out")"
+if [ "$(grep -c "usage limit" "$SANDBOX/err")" != 1 ] || ! grep -q '^\[agent-[^]]*\] usage limit: resets 5:30pm (UTC)$' "$SANDBOX/err"; then
+  fail "usage limit: not one line [<task>] usage limit: resets 5:30pm (UTC): $(cat "$SANDBOX/err")"
+fi
+[ ! -s "$SANDBOX/report" ] || fail "usage limit: something on stdout: $(cat "$SANDBOX/report")"
+[ ! -e "$W/hello.txt" ] || fail "usage limit: patch applied"
+run_data "usage limit run data" failed 5
+rm -f "$SANDBOX/real" "$SANDBOX/limit"
 
 # --name labels the claim and its pod with the task and tags the progress; it is made a valid label value. run.json
 # keeps the name though --attach comes after it.
@@ -502,6 +534,33 @@ rm "$SANDBOX/config/dotagents/remote.env"
 ready && fail "ready: yes with no token"
 grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$SANDBOX/out" || fail "ready, no token: $(cat "$SANDBOX/out")"
 remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+# The backend is probed, briefly: an unreachable cluster is a no, with kubectl's own error on one line.
+rm -f "$SANDBOX/calls"
+ready || fail "ready: no though the cluster answers: $(cat "$SANDBOX/out")"
+grep -q -- "--context maxibombo --request-timeout=5s version" "$SANDBOX/calls" || fail "ready: the cluster not probed: $(cat "$SANDBOX/calls" 2>/dev/null)"
+: >"$SANDBOX/unreachable"
+code=0; ready || code=$?
+[ "$code" = 1 ] || fail "ready, unreachable: wanted exit 1, got $code"
+[ "$(cat "$SANDBOX/out")" = "cluster backend not reachable: context maxibombo: Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: no route to host" ] \
+  || fail "ready, unreachable: not one line naming the backend and the error: $(cat "$SANDBOX/out")"
+rm -f "$SANDBOX/unreachable" "$SANDBOX/calls"
+
+# --help prints the usage on stdout and exits 0; an unknown --option is refused; neither starts a run.
+code=0; (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" --help) >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?
+[ "$code" = 0 ] || fail "--help: wanted exit 0, got $code"
+grep -q "^usage: remote-agent" "$SANDBOX/report" || fail "--help: usage not on stdout: $(cat "$SANDBOX/report")"
+[ ! -e "$SANDBOX/calls" ] || fail "--help: kubectl was called: $(cat "$SANDBOX/calls")"
+code=0; (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" -h) >"$SANDBOX/report" 2>&1 || code=$?
+if [ "$code" != 0 ] || ! grep -q "^usage: remote-agent" "$SANDBOX/report"; then fail "-h: not the usage with exit 0: $code $(cat "$SANDBOX/report")"; fi
+code=0; (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" --bogus "a brief") >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?
+[ "$code" = 1 ] || fail "--bogus: wanted exit 1, got $code"
+if ! grep -q "unknown option: --bogus" "$SANDBOX/err" || ! grep -q "^usage: remote-agent" "$SANDBOX/err"; then
+  fail "--bogus: not refused with the usage on stderr: $(cat "$SANDBOX/err")"
+fi
+[ ! -e "$SANDBOX/calls" ] || fail "--bogus: kubectl was called: $(cat "$SANDBOX/calls")"
 
 # The transcript is written live: the stub's sandbox run prints a banner and two events (one echoing the token),
 # touches $SANDBOX/started and waits for $SANDBOX/go; the events are in transcript.jsonl while the run is alive,
@@ -673,18 +732,17 @@ refused() {
   [ ! -e "$SANDBOX/calls" ] || fail "refused ($want): kubectl was called: $(cat "$SANDBOX/calls")"
 }
 refused "empty brief" "$REPO/scripts/remote-agent.sh" ""
-refused "starts with" "$REPO/scripts/remote-agent.sh" "--verbose"
+refused "starts with" "$REPO/scripts/remote-agent.sh" -- "--help"
+refused "starts with" "$REPO/scripts/remote-agent.sh" "-p"
 printf -- '--help\n' >"$SANDBOX/dash-brief"
 refused "starts with" "$REPO/scripts/remote-agent.sh" "@$SANDBOX/dash-brief"
-# --help and -h print the usage and exit 0, starting no run.
-for flag in --help -h; do
-  rm -f "$SANDBOX/calls"
-  code=0; (cd "$W" && HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    "$REPO/scripts/remote-agent.sh" "$flag") >"$SANDBOX/out" 2>&1 || code=$?
-  [ "$code" = 0 ] || fail "$flag: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
-  grep -q "^usage: remote-agent" "$SANDBOX/out" || fail "$flag: no usage: $(cat "$SANDBOX/out")"
-  [ ! -e "$SANDBOX/calls" ] || fail "$flag: kubectl was called: $(cat "$SANDBOX/calls")"
-done
+# -h, like --help, prints the usage and exits 0, starting no run.
+rm -f "$SANDBOX/calls"
+code=0; (cd "$W" && HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  "$REPO/scripts/remote-agent.sh" -h) >"$SANDBOX/out" 2>&1 || code=$?
+[ "$code" = 0 ] || fail "-h: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
+grep -q "^usage: remote-agent" "$SANDBOX/out" || fail "-h: no usage: $(cat "$SANDBOX/out")"
+[ ! -e "$SANDBOX/calls" ] || fail "-h: kubectl was called: $(cat "$SANDBOX/calls")"
 mkdir -p "$SANDBOX/a/notes"
 refused "two attachments named notes" "$REPO/scripts/remote-agent.sh" --attach "$SANDBOX/run/notes" --attach "$SANDBOX/a/notes" "x"
 # 2 MB of random bytes against the smallest limit the Setting allows (1 MB; 0 is refused as a bad value).

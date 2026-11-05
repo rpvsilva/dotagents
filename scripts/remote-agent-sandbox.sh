@@ -57,12 +57,24 @@ you checked it."
 echo "== claude" >&2
 # Progress: Claude's text and each tool call, one line each; the full stream is kept for the summary, and goes out
 # raw, as it comes, on the run's stdout (fd 3: see the end), which remote-agent.sh keeps as the live transcript.
+# Each text is held until the next assistant or user event: the last one before a successful result is the final
+# report, which remote-agent.sh prints on stdout from summary.md, so it is dropped here rather than shown twice on its
+# stderr. Before an error result, or with no result at all, it is shown.
 claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules" --output-format stream-json --verbose \
   | tee "$HOME/out/stream.jsonl" /dev/fd/3 \
-  | jq -r --unbuffered 'select(.type == "assistant") | .message.content[]
-      | if .type == "text" then .text
-        elif .type == "tool_use" then "  → \(.name) \(.input.command // .input.file_path // .input.pattern // .input.description // "" | tostring | gsub("\n"; " ") | .[0:120])"
-        else empty end' >&2
+  | jq -rn --unbuffered 'foreach ((inputs | objects), {type: "end"}) as $e ({held: null, out: []};
+      if $e.type == "assistant" then
+        reduce ($e.message.content[]? | objects) as $c (.out = [];
+          if $c.type == "text" then .out += [.held | strings] | .held = $c.text
+          elif $c.type == "tool_use" then
+            .out += [.held | strings] | .held = null
+            | .out += ["  → \($c.name) \($c.input.command // $c.input.file_path // $c.input.pattern // $c.input.description // "" | tostring | gsub("\n"; " ") | .[0:120])"]
+          else . end)
+      elif $e.type == "user" then .out = [.held | strings] | .held = null
+      elif $e.type == "result" then .out = (if $e.is_error == true then [.held | strings] else [] end) | .held = null
+      elif $e.type == "end" then .out = [.held | strings] | .held = null
+      else .out = [] end;
+      .out[])' >&2
 jq -r 'select(.type == "result") | .result // ""' "$HOME/out/stream.jsonl" >"$HOME/out/summary.md"
 
 # The session Claude wrote, named by its init event, goes back as ~/out/session.jsonl with the token's value (through
