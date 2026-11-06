@@ -151,4 +151,6 @@ Each run keeps a folder at `<common git dir>/remote-agent/<run>/` (`git rev-pars
 | `changes.patch`, `summary.md` | What came back |
 | `session.jsonl` | Claude's session, for `remote-agent resume` |
 
+To read a run's outcome without its stdout or stderr, run `remote-agent result <name|run>` in the repo. It prints the `result.json` of that run id, or of the newest run started with `--name <name>` (a retry reuses the name; the latest start wins). Each run has its own folder and `progress.log`, so this holds for runs started together, in a loop, or with stderr redirected. It exits 1 with one line when no run matches or the newest has not ended yet.
+
 In Claude Code, the `remote-runs` mod (`/remote-runs`) lists every run of the repo with its state and timings, and opens a run's live log on a keypress.
