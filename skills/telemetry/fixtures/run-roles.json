@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 4,
+  "tool": "claude-code",
+  "sessionId": "5678abcd-0000-0000-0000-000000000000",
+  "skill": null,
+  "pricingAsOf": "2026-01-01",
+  "start": "2026-11-01T10:00:00.000Z",
+  "end": "2026-11-01T11:00:00.000Z",
+  "wallClockSeconds": 3600,
+  "spans": [
+    {
+      "name": "build-epic",
+      "skill": "build-epic",
+      "start": "2026-11-01T10:00:00.000Z",
+      "end": "2026-11-01T10:50:00.000Z",
+      "wallClockSeconds": 3000,
+      "turns": 100,
+      "toolCalls": 150,
+      "tools": {
+        "Bash": 145,
+        "Agent": 5
+      },
+      "tokensByModel": {
+        "model-a": {
+          "input": 95000,
+          "output": 50000,
+          "cacheRead": 6000000,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 300000
+        }
+      },
+      "subagents": [
+        {
+          "type": "epic-implementer",
+          "description": "implement: 01-01",
+          "role": "implement",
+          "turns": 30,
+          "toolCalls": 40,
+          "tools": {
+            "Bash": 40
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 30000,
+              "output": 20000,
+              "cacheRead": 1500000,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 100000
+            }
+          },
+          "cost": 0.58
+        },
+        {
+          "type": "epic-implementer",
+          "description": "implement: 01-02",
+          "role": "implement",
+          "turns": 20,
+          "toolCalls": 30,
+          "tools": {
+            "Bash": 30
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 20000,
+              "output": 10000,
+              "cacheRead": 1000000,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 50000
+            }
+          },
+          "cost": 0.32
+        },
+        {
+          "type": "pr-reviewer",
+          "description": "review: PR 12",
+          "role": "review",
+          "turns": 10,
+          "toolCalls": 10,
+          "tools": {
+            "Bash": 10
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 10000,
+              "output": 5000,
+              "cacheRead": 500000,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 50000
+            }
+          },
+          "cost": 0.21
+        },
+        {
+          "type": "Explore",
+          "description": "Look around",
+          "role": "other",
+          "turns": 5,
+          "toolCalls": 5,
+          "tools": {
+            "Bash": 5
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 10000,
+              "output": 5000,
+              "cacheRead": 200000,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 0
+            }
+          },
+          "cost": 0.08
+        }
+      ]
+    },
+    {
+      "name": "ship-pr",
+      "skill": "ship-pr",
+      "start": "2026-11-01T10:50:00.000Z",
+      "end": "2026-11-01T11:00:00.000Z",
+      "wallClockSeconds": 600,
+      "turns": 15,
+      "toolCalls": 20,
+      "tools": {
+        "Bash": 19,
+        "Agent": 1
+      },
+      "tokensByModel": {
+        "model-a": {
+          "input": 15000,
+          "output": 5000,
+          "cacheRead": 700000,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 0
+        }
+      },
+      "subagents": [
+        {
+          "type": "pr-fixer",
+          "description": "fix: PR 12",
+          "role": "fix",
+          "turns": 5,
+          "toolCalls": 4,
+          "tools": {
+            "Bash": 4
+          },
+          "tokensByModel": {
+            "model-a": {
+              "input": 10000,
+              "output": 2000,
+              "cacheRead": 200000,
+              "cacheWrite5m": 0,
+              "cacheWrite1h": 0
+            }
+          },
+          "cost": 0.05
+        }
+      ]
+    }
+  ]
+}
