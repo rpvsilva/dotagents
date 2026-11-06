@@ -4,7 +4,8 @@
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
 # Usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]   (default worktree:
 # the current one; - reads the brief from stdin; -h or --help prints this usage on stdout and exits 0; any other
-# argument starting with -- before the brief is refused with the usage, exit 1)
+# argument starting with -- before the brief is refused with the usage, exit 1, and so is a brief, however given,
+# whose text starts with -, which claude would read as an option)
 #        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
@@ -174,6 +175,9 @@ case "$1" in
   *) brief="$1" ;;
 esac
 [ -n "$brief" ] || { echo "remote-agent: empty brief" >&2; exit 1; }
+# The sandbox runs `claude -p "$brief"`, which would read a leading "-" as its own option (`--help` prints Claude's
+# usage and the run fails): refuse it here, before anything reaches the sandbox.
+case "$brief" in -*) echo "remote-agent: the brief starts with \"-\", which claude would read as an option: ${brief%%$'\n'*}" >&2; exit 1 ;; esac
 root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
 claude_token="$(remote_token)"
 [ -n "$claude_token" ] || { echo "remote-agent: set CLAUDE_CODE_OAUTH_TOKEN (in $REMOTE_SECRET_FILE): run \`remote-agent setup\`" >&2; exit 1; }
