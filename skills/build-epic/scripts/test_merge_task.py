@@ -12,17 +12,17 @@ from steplib import runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
 MERGE_TASK = SCRIPTS / "merge_task.py"
-INIT_RUN = SCRIPTS / "init_run.py"
 REPO = SCRIPTS.parents[2]
 
 # `gh pr view` answers like GitHub: the PR's head is the task branch's tip on origin (or `answers/pr-head`), its state
 # `answers/pr-state` (default MERGED). Every other call goes to the testkit stub.
-PR_VIEW = r'''#!{python}
-import json, os, subprocess, sys
+PR_VIEW = r'''#!{python} -IS
+import os, sys
 d = os.environ["GH_STUB_DIR"]
 args = sys.argv[1:]
 if args[:2] != ["pr", "view"]:
     os.execv({kit_gh!r}, [{kit_gh!r}, *args])
+import json, subprocess
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
 def read(name, default):
@@ -49,9 +49,8 @@ class MergeTaskTest(unittest.TestCase):
         (kit.bin / "gh").chmod(0o755)
         (kit.home / ".agents" / "bin").mkdir(parents=True)
         (kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
-        kit.git("push", "-q", "origin", "main:feat/t", cwd=clone)
-        p = kit.step(INIT_RUN, kit.run_dir, clone)
-        self.assertEqual(p.returncode, 0, p.stdout)
+        kit.branch_from_main("feat/t")
+        kit.init_run()
         for d in ("tickets", "tasks", "worktrees"):
             (kit.run_dir / d).mkdir()
         self.ticket = kit.run_dir / "tickets" / "01-t.md"
@@ -62,7 +61,6 @@ class MergeTaskTest(unittest.TestCase):
         kit.answer("pr-list", out="[]")
         kit.answer("pr-create", out="https://github.com/o/r/pull/9\n")
         self.wt = kit.run_dir / "worktrees" / "01-01"
-        kit.git("fetch", "-q", "origin", cwd=clone)
         kit.git("worktree", "add", "-q", "-b", "task/t/01", str(self.wt), "origin/feat/t", cwd=clone)
         self.commit(self.wt, "task.txt", "task\n", "feat: task one")
 
@@ -134,6 +132,48 @@ class MergeTaskTest(unittest.TestCase):
 
     def test_works_through_a_linked_run_path(self):
         self.assertRegex(self.merge(self.kit.link(self.kit.run_dir, "run-link")), r"^OK 01-01 done ")
+
+    # Refusals before any check, push or merge
+
+    def assert_refused(self, reason):
+        line = self.merge()
+        self.assertTrue(line.startswith(f"FAIL 01-01 {reason} (log: "), line)
+        self.assertEqual(self.kit.gh_calls(), [])
+        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "branch", "--list", "task/t/01"), "")
+        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+
+    def test_uncommitted_changes_are_refused_and_kept(self):
+        (self.wt / "task.txt").write_text("changed\n")
+        self.assert_refused("uncommitted-changes")
+        self.assertEqual((self.wt / "task.txt").read_text(), "changed\n")
+
+    def test_an_untracked_file_is_not_an_uncommitted_change(self):
+        (self.wt / "scratch.txt").write_text("x\n")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+
+    def test_a_detached_head_is_refused(self):
+        self.kit.git("checkout", "-q", "--detach", cwd=self.wt)
+        self.assert_refused("detached-head")
+
+    def test_a_missing_worktree_is_refused_naming_it(self):
+        self.kit.git("worktree", "remove", "--force", str(self.wt), cwd=self.kit.clone)
+        self.assert_refused(f"no-worktree: {self.wt}")
+
+    def test_a_ticket_without_a_branch_is_refused(self):
+        self.ticket.write_text(TICKET.replace("Branch: feat/t\n", ""))
+        self.assert_refused("ticket-no-branch")
+
+    def test_a_task_without_a_pr_is_refused(self):
+        self.task.write_text(TASK.format(nn="01", status="in-progress"))
+        self.assert_refused("no-pr")
+
+    def test_a_missing_or_failing_settings_tool_is_refused(self):
+        tool = self.kit.home / ".agents" / "bin" / "settings"
+        tool.unlink()
+        self.assert_refused(f"no-settings: {tool} is missing; run install.sh")
+        tool.write_text("#!/bin/sh\necho 'settings: bad value' >&2\nexit 1\n")
+        tool.chmod(0o755)
+        self.assert_refused("setting-merge_command")
 
     # Red checks
 

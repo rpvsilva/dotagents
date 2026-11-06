@@ -14,7 +14,6 @@ from testkit import SCRIPTS, Kit  # noqa: E402
 TRACKER = SCRIPTS / "tracker_cmd.py"
 CLEAN = SCRIPTS / "clean.py"
 PIN = SCRIPTS / "pin_dispatcher.py"
-INIT_RUN = SCRIPTS / "init_run.py"
 START_TASK = SCRIPTS / "start_task.py"
 MARKER = "<!-- build-epic-plan -->"
 
@@ -33,8 +32,7 @@ class RunCase(unittest.TestCase):
         self.kit = Kit()
         self.addCleanup(self.kit.close)
         self.kit.make_origin()
-        p = self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone)
-        self.assertEqual(p.returncode, 0, p.stdout)
+        self.kit.init_run()
         (self.kit.run_dir / "tickets").mkdir()
         (self.kit.run_dir / "tasks").mkdir()
         self.ticket("01", "json", "ready", "#5")
@@ -267,6 +265,24 @@ class PinDispatcherTest(RunCase):
         self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), f"OK dispatcher pinned {old[:7]}")
         self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), old)
         self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), f"OK dispatcher pinned {old[:7]}")
+
+    def test_a_dispatcher_worktree_moved_off_its_pin_or_a_bad_pin_is_refused(self):
+        self.link.symlink_to(self.kit.clone / "scripts" / "remote-agent.sh")
+        pin = self.main_tip()
+        self.ok(self.kit.step(PIN, self.kit.run_dir))
+        self.push_main("newer")
+        self.kit.git("fetch", "-q", "origin", cwd=self.wt)
+        self.kit.git("checkout", "-q", "--detach", "origin/main", cwd=self.wt)
+        p = self.kit.step(PIN, self.kit.run_dir)
+        self.assertEqual(p.returncode, 1)
+        line = self.one_line(p)
+        self.assertTrue(line.startswith(f"FAIL dispatcher dispatcher-moved: {self.wt} is not at {pin[:7]} (log: "),
+                        line)
+        self.assertNotEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), pin)  # reported, never moved back
+        sha_file = self.kit.run_dir / "dispatcher.sha"
+        sha_file.write_text("main\n")
+        line = self.one_line(self.kit.step(PIN, self.kit.run_dir))
+        self.assertTrue(line.startswith(f"FAIL dispatcher bad-dispatcher-sha: {sha_file} (log: "), line)
 
     def test_a_link_into_another_checkout_needs_no_pin(self):
         other = self.kit.tmp / "other" / "scripts" / "remote-agent.sh"

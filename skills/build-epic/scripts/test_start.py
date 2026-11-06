@@ -14,7 +14,6 @@ from testkit import SCRIPTS, Kit, skip_without_zsh, zsh  # noqa: E402
 
 START_TICKET = SCRIPTS / "start_ticket.py"
 START_TASK = SCRIPTS / "start_task.py"
-INIT_RUN = SCRIPTS / "init_run.py"
 BRANCH = "feat/gh-1-v1.2-json"
 
 
@@ -28,8 +27,7 @@ class StartCase(unittest.TestCase):
         self.kit = Kit()
         self.addCleanup(self.kit.close)
         self.kit.make_origin()
-        p = self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone)
-        self.assertEqual(p.returncode, 0, p.stdout)
+        self.kit.init_run()
         (self.kit.run_dir / "tickets").mkdir()
         (self.kit.run_dir / "tasks").mkdir()
         self.ticket = self.kit.run_dir / "tickets" / "01-json.md"
@@ -138,6 +136,19 @@ class StartTicketTest(StartCase):
         self.assertEqual(p.returncode, 1)
         self.assertTrue(self.one_line(p).startswith("FAIL 01 already-started status=building (log: "), p.stdout)
         self.assertEqual(len(self.kit.gh_calls()), calls)
+
+    def test_a_ticket_not_ready_or_without_a_branch_is_refused_and_pushes_nothing(self):
+        planned = f"# 01: JSON\nStatus: planned\nIssue: #5\nBranch: {BRANCH}\n"
+        no_branch = "# 01: JSON\nStatus: ready\nIssue: #5\n"
+        for text, reason in ((planned, "not-ready status=planned"), (no_branch, "no-branch")):
+            with self.subTest(reason):
+                self.ticket.write_text(text)
+                p = self.kit.step(START_TICKET, self.kit.run_dir, "01")
+                self.assertEqual(p.returncode, 1)
+                self.assertTrue(self.one_line(p).startswith(f"FAIL 01 {reason} (log: "), p.stdout)
+                self.assertEqual(self.ticket.read_text(), text)
+                self.assertIsNone(self.remote_tip(BRANCH))
+                self.assertEqual(self.kit.gh_calls(), [])
 
     def test_identity_changed_mid_start_holds_the_update(self):
         # The human's login, then the identity on the label update, then another login on the assign.
@@ -307,6 +318,23 @@ class StartTaskTest(StartCase):
         self.assertTrue(self.one_line(p).startswith("FAIL 01-01 ticket-not-building status=ready (log: "))
         self.assertFalse((self.kit.run_dir / "worktrees").exists())
 
+
+    def test_a_task_not_ready_a_ticket_without_a_branch_or_a_leftover_branch_is_refused(self):
+        lib = self.task("01-01-lib.md")
+        lib.write_text(lib.read_text().replace("Status: ready", "Status: planned"))
+        p = self.kit.step(START_TASK, self.kit.run_dir, "01-01")
+        self.assertTrue(self.one_line(p).startswith("FAIL 01-01 not-ready status=planned (log: "), p.stdout)
+        lib.write_text(lib.read_text().replace("Status: planned", "Status: ready"))
+        self.ticket.write_text("# 01: JSON\nStatus: building\nIssue: none\n")
+        p = self.kit.step(START_TASK, self.kit.run_dir, "01-01")
+        self.assertTrue(self.one_line(p).startswith("FAIL 01-01 no-branch (log: "), p.stdout)
+        self.write_ticket("building", "none")
+        self.kit.git("branch", "task/gh-1-v1.2-json/01", "main", cwd=self.kit.clone)
+        p = self.kit.step(START_TASK, self.kit.run_dir, "01-01")
+        self.assertTrue(self.one_line(p).startswith("FAIL 01-01 already-started branch=task/gh-1-v1.2-json/01 (log: "),
+                        p.stdout)
+        self.assertFalse((self.kit.run_dir / "worktrees").exists())
+        self.assertEqual(self.status(lib), "ready")
 
 class RefspecShellTest(StartCase):
     """Bug 6: a zsh `:r` modifier broke a refspec built from a branch name with `.` in it."""

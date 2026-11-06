@@ -10,16 +10,16 @@ from testkit import SCRIPTS, Kit, skip_without_zsh, zsh  # noqa: E402
 
 STATUS = SCRIPTS / "status.py"
 RESUME = SCRIPTS / "resume.py"
-INIT_RUN = SCRIPTS / "init_run.py"
 
 # `gh pr view <n>` answers `{"state": <answers/pr-<n>.state>, "headRefOid": ""}` (default OPEN). Every other call goes
 # to the testkit stub.
-PR_VIEW = r'''#!{python}
-import json, os, sys
+PR_VIEW = r'''#!{python} -IS
+import os, sys
 d = os.environ["GH_STUB_DIR"]
 args = sys.argv[1:]
 if args[:2] != ["pr", "view"]:
     os.execv({kit_gh!r}, [{kit_gh!r}, *args])
+import json
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
 p = os.path.join(d, "answers", "pr-" + args[2] + ".state")
@@ -102,10 +102,8 @@ class ResumeTest(unittest.TestCase):
         self.clone = clone = kit.make_origin()
         (kit.bin / "gh").rename(kit.bin / "gh-kit")
         write(kit.bin / "gh", PR_VIEW.format(python=sys.executable, kit_gh=str(kit.bin / "gh-kit"))).chmod(0o755)
-        kit.git("push", "-q", "origin", "main:refs/heads/feat/alpha", cwd=clone)
-        kit.git("fetch", "-q", "origin", cwd=clone)
-        p = kit.step(INIT_RUN, kit.run_dir, clone)
-        self.assertEqual(p.returncode, 0, p.stdout)
+        kit.branch_from_main("feat/alpha")
+        kit.init_run()
         self.run_dir = kit.run_dir
         self.t01 = write(self.run_dir / "tickets" / "01-alpha.md", ticket("01", "Alpha", "building", "feat/alpha"))
         self.t02 = write(self.run_dir / "tickets" / "02-beta.md",
