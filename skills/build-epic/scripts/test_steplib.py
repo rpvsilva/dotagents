@@ -1,8 +1,10 @@
 """Tests for the step-script core (`steplib`), `init_run.py` and `testkit.py`."""
 import io
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -10,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gh, gitops, runfolder  # noqa: E402
+from steplib import checks, ci, core, gh, gitops, runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit, git, skip_without_zsh, zsh  # noqa: E402
 
 INIT_RUN = SCRIPTS / "init_run.py"
@@ -146,6 +148,16 @@ class RunFolderPathTest(KitCase):
         self.kit.git("remote", "set-head", "origin", "-d", cwd=self.kit.clone)
         p = self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone)
         self.assertIn(" default=main ", self.one_line(p))
+
+    def test_a_repo_without_origin_or_any_default_branch_fails_writing_no_run_md(self):
+        self.kit.git("remote", "set-head", "origin", "-d", cwd=self.kit.clone)
+        self.kit.git("--git-dir", str(self.kit.origin), "symbolic-ref", "HEAD", "refs/heads/gone")
+        line = self.one_line(self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone))
+        self.assertTrue(line.startswith("FAIL run no-default-branch (log: "), line)
+        self.kit.git("remote", "remove", "origin", cwd=self.kit.clone)
+        line = self.one_line(self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone))
+        self.assertTrue(line.startswith("FAIL run no-origin (log: "), line)
+        self.assertFalse((self.kit.run_dir / "run.md").exists())
 
 
 class OneIdPerCallTest(KitCase):
@@ -310,6 +322,83 @@ class RunFolderFilesTest(KitCase):
         with self.assertRaises(ValueError):
             runfolder.set_header(runfolder.ticket_file(self.kit.run_dir, "01"), "Status", "a\nPR: 1")
 
+    def assert_fail(self, reason, fn, *args):
+        with self.assertRaises(core.Fail) as e:
+            fn(*args)
+        self.assertEqual(e.exception.reason, reason)
+
+    def test_a_file_not_found_names_why(self):
+        run = self.kit.run_dir
+        self.assert_fail("bad-task-id: x", runfolder.task_file, run, "x")
+        self.assert_fail("bad-task-id: 01", runfolder.task_file, run, "01")
+        self.assert_fail("no-task", runfolder.task_file, run, "01-02")
+        self.assert_fail("no-ticket", runfolder.ticket_file, run, "9")
+        (run / "tasks" / "01-1-dup.md").write_text("# 01-01\n")
+        (run / "tickets" / "2-dup.md").write_text("# 02\n")
+        self.assert_fail("ambiguous-task: 01-01-lib.md 01-1-dup.md", runfolder.task_file, run, "1-01")
+        self.assert_fail("ambiguous-ticket: 02-more.md 2-dup.md", runfolder.ticket_file, run, "2")
+
+    def test_run_info_names_a_missing_run_md_or_its_missing_lines(self):
+        run = self.kit.run_dir
+        self.assert_fail("no-run-md: run init_run.py first", runfolder.run_info, run)
+        (run / "run.md").write_text("Repo: /r\nDefault: main\n")
+        self.assert_fail("run-md-missing: Remote", runfolder.run_info, run)
+
+
+class ChecksCommandsTest(unittest.TestCase):
+    def setUp(self):
+        tmp = os.path.realpath(tempfile.mkdtemp(prefix="steplib-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.map = Path(tmp) / "map.md"
+
+    def commands(self, text):
+        self.map.write_text(text)
+        return checks.commands(self.map)
+
+    def test_every_command_in_the_checks_code_blocks_in_order(self):
+        text = ("# Map\n\n## Checks\n\nLocal:\n\n```sh\n# a comment\nmake lint\n\n  make test  \n```\n\n"
+                "CI only:\n\n```\nmake e2e\n```\n\n## Gaps\n\n```\nnot-a-check\n```\n")
+        self.assertEqual(self.commands(text), ["make lint", "make test", "make e2e"])
+
+    def test_a_missing_map_or_one_with_no_check_command_fails(self):
+        with self.assertRaises(core.Fail) as e:
+            checks.commands(self.map)
+        self.assertEqual(e.exception.reason, f"no-map: {self.map}")
+        for text in ("# Map\n\n## Gaps\n\n```\nmake test\n```\n", "## Checks\n\nmake test\n",
+                     "## Checks\n\n```\n# only a comment\n\n```\n"):
+            with self.subTest(text), self.assertRaises(core.Fail) as e:
+                self.commands(text)
+            self.assertTrue(e.exception.reason.startswith("no-checks: "), e.exception.reason)
+
+
+class TicketChecksTest(KitCase):
+    """`ci.checks`: the ticket PR's checks, read against the stub `gh` in this process."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, self.kit.env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.log = io.StringIO()
+
+    def checks(self):
+        return ci.checks("9", self.log, self.kit.tmp)
+
+    def test_checks_still_pending_after_the_last_poll_time_out(self):
+        self.kit.answer("pr-checks", out='[{"name": "ci", "bucket": "pending", "link": ""}]', rc=8)
+        with mock.patch.object(ci, "POLLS", 3), self.assertRaises(core.Fail) as e:
+            self.checks()
+        self.assertEqual(e.exception.reason, "ticket-ci-timeout")
+        self.assertEqual(self.kit.gh_calls(), [["pr", "checks", "9", "--json", "name,bucket,link"]] * 3)
+        self.assertIn("checks pending, poll 3/3", self.log.getvalue())
+
+    def test_no_checks_reported_is_no_checks_and_unreadable_output_fails(self):
+        self.kit.answer("pr-checks", err="no checks reported on the 'feat/t' branch\n", rc=1, n=1)
+        self.assertEqual(self.checks(), [])
+        self.kit.answer("pr-checks", out="<html>rate limited</html>", rc=1, n=2)
+        with self.assertRaises(core.Fail) as e:
+            self.checks()
+        self.assertEqual(e.exception.reason, "ticket-ci")
 
 class GitOpsTest(KitCase):
     def setUp(self):
@@ -346,18 +435,22 @@ class GitOpsTest(KitCase):
         self.assertIn("no-such-ref", self.log.getvalue())
 
     def test_git_waits_while_another_step_holds_the_repo_lock(self):
-        wt = self.kit.tmp / "wt"
+        wt, released = self.kit.tmp / "wt", self.kit.tmp / "released"
         self.g.worktree_add(wt, "HEAD", detach=True)
-        code = ("import io, sys; sys.path.insert(0, %r); from steplib import gitops\n"
-                "print(gitops.Git(%r, io.StringIO()).tip())" % (str(SCRIPTS), str(wt)))
+        code = ("import io, os, sys; sys.path.insert(0, %r); from steplib import gitops\n"
+                "print('ready', flush=True)\n"
+                "tip = gitops.Git(%r, io.StringIO()).tip()\n"
+                "print(tip, os.path.exists(%r))" % (str(SCRIPTS), str(wt), str(released)))
         with gitops.lock(self.kit.clone):  # the main checkout's lock also covers its worktrees
-            p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
-            time.sleep(0.5)
+            p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 text=True)
+            self.assertEqual(p.stdout.readline().strip(), "ready")
+            time.sleep(0.2)  # time for the child to reach the lock and wait on it
             self.assertIsNone(p.poll(), "git ran while the lock was held")
+            released.touch()
         out, _ = p.communicate(timeout=30)
         self.assertEqual(p.returncode, 0)
-        self.assertEqual(out.strip(), self.g.tip())
-
+        self.assertEqual(out.split(), [self.g.tip(), "True"], "git ran while the lock was held")
 
 if __name__ == "__main__":
     unittest.main()

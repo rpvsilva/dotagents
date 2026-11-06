@@ -12,17 +12,17 @@ from testkit import SCRIPTS, Kit  # noqa: E402
 
 POST_REVIEW = SCRIPTS / "post_review.py"
 SHIP = SCRIPTS / "ship_ticket.py"
-INIT_RUN = SCRIPTS / "init_run.py"
 REPO = SCRIPTS.parents[2]
 
 # `gh pr view` answers like GitHub: the PR's head is the ticket branch's tip on origin, its state `answers/pr-state`
 # (default MERGED). Every other call goes to the testkit stub.
-PR_VIEW = r'''#!{python}
-import json, os, subprocess, sys
+PR_VIEW = r'''#!{python} -IS
+import os, sys
 d = os.environ["GH_STUB_DIR"]
 args = sys.argv[1:]
 if args[:2] != ["pr", "view"]:
     os.execv({kit_gh!r}, [{kit_gh!r}, *args])
+import json, subprocess
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
 p = os.path.join(d, "answers", "pr-state")
@@ -48,9 +48,8 @@ class Base(unittest.TestCase):
         (kit.bin / "gh").chmod(0o755)
         (kit.home / ".agents" / "bin").mkdir(parents=True)
         (kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
-        kit.git("push", "-q", "origin", "main:feat/t", cwd=clone)
-        p = kit.step(INIT_RUN, kit.run_dir, clone)
-        self.assertEqual(p.returncode, 0, p.stdout)
+        kit.branch_from_main("feat/t")
+        kit.init_run()
         for d in ("tickets", "tasks", "worktrees"):
             (kit.run_dir / d).mkdir()
         self.ticket = kit.run_dir / "tickets" / "01-t.md"
@@ -117,6 +116,20 @@ class PostReviewTest(Base):
         self.assertRegex(line, r"^FAIL PR12 empty-review \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
+    def test_a_value_naming_no_pr_is_refused(self):
+        report = self.kit.tmp / "r.md"
+        report.write_text("ok\n")
+        self.assertRegex(self.post("latest", report), r"^FAIL latest bad-pr: latest \(log: ")
+        self.assertEqual(self.kit.gh_calls(), [])
+
+    def test_comments_that_are_not_a_json_array_of_objects_are_refused(self):
+        report = self.kit.tmp / "r.md"
+        report.write_text("ok\n")
+        for comments in ("not json", '{"path": "a.py"}', '["nit"]'):
+            with self.subTest(comments):
+                self.assertRegex(self.post("12", report, "--comments", comments), r"^FAIL PR12 bad-comments \(log: ")
+        self.assertEqual(self.kit.gh_calls(), [])
+
     def test_a_failed_post_fails(self):
         report = self.kit.tmp / "r.md"
         report.write_text("ok\n")
@@ -150,6 +163,13 @@ class ShipOpenTest(Base):
         self.assertEqual(self.calls("pr", "ready"), [["pr", "ready", "20"]])
         self.assertEqual(self.calls("pr", "create"), [])
         self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/20")
+
+    def test_a_pr_already_ready_is_fine_and_any_other_ready_failure_fails(self):
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
+        self.kit.answer("pr-ready", err="! Pull request o/r#20 is already \"ready for review\"\n", rc=1, n=1)
+        self.assertEqual(self.ship("open"), "OK 01 open pr=20")
+        self.kit.answer("pr-ready", err="GraphQL: Resource not accessible by integration\n", rc=1, n=2)
+        self.assertRegex(self.ship("open"), r"^FAIL 01 pr-ready \(log: ")
 
     def test_a_failed_create_fails(self):
         self.kit.answer("pr-list", out="[]")

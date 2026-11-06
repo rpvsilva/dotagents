@@ -9,7 +9,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from steplib import prbody, runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit, skip_without_zsh, zsh  # noqa: E402
 
-INIT_RUN = SCRIPTS / "init_run.py"
 FINISH = SCRIPTS / "finish_task.py"
 OPEN_PR = SCRIPTS / "open_pr.py"
 PUSH_FIX = SCRIPTS / "push_fix.py"
@@ -40,10 +39,8 @@ class StepCase(unittest.TestCase):
         self.kit = Kit()
         self.addCleanup(self.kit.close)
         self.clone = self.kit.make_origin()
-        self.kit.git("push", "-q", "origin", "main:refs/heads/feat/alpha", cwd=self.clone)
-        self.kit.git("fetch", "-q", "origin", cwd=self.clone)
-        p = self.kit.step(INIT_RUN, self.kit.run_dir, self.clone)
-        self.assertEqual(p.returncode, 0, p.stdout)
+        self.kit.branch_from_main("feat/alpha")
+        self.kit.init_run()
         run = self.kit.run_dir
         (run / "tickets").mkdir()
         (run / "tasks").mkdir()
@@ -219,6 +216,11 @@ class OpenPrTest(StepCase):
         self.write(self.wt, "b.txt", "b\n")
         self.assert_fail(self.kit.step(OPEN_PR, self.kit.run_dir, "01-02"), "FAIL 01-02 uncommitted")
         self.assertEqual(self.kit.gh_calls(), [])
+
+    def test_a_branch_with_no_commits_of_its_own_fails_before_pushing(self):
+        self.assert_fail(self.kit.step(OPEN_PR, self.kit.run_dir, "01-02"), "FAIL 01-02 no-commits: ")
+        self.assertEqual(self.kit.gh_calls(), [])
+        self.assertEqual(self.kit.git("ls-remote", str(self.kit.origin), "refs/heads/task/alpha/02"), "")
 
 
 class PushFixTest(StepCase):
