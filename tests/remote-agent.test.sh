@@ -750,6 +750,82 @@ head -c 2097152 /dev/urandom >"$W/big.bin"
 refused "over REMOTE_MAX_MB=1" env REMOTE_MAX_MB=1 "$REPO/scripts/remote-agent.sh" "x"
 rm -f "$W/big.bin"
 
+# Records live in the common git dir: a run in a linked worktree keeps its record there, so `git worktree remove`
+# leaves it, and `resume` places its session for any worktree of the repo afterwards.
+rm -f "$W/hello.txt"
+: >"$SANDBOX/real"
+LW="$SANDBOX/linked"
+git -C "$W" worktree add -q --detach "$LW"
+main_w="$W"
+W="$LW"
+run 0 "" || fail "linked worktree: exited non-zero: $(cat "$SANDBOX/out")"
+W="$main_w"
+rm -f "$SANDBOX/real"
+claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
+git -C "$W" worktree remove --force "$LW"
+k="$W/.git/remote-agent/$claim"
+for f in transcript.jsonl run.json progress.log changes.patch summary.md session.jsonl; do
+  [ -s "$k/$f" ] || fail "linked worktree: $f not kept in the common git dir after the worktree went: $(find "$W/.git" -path '*remote-agent*' 2>/dev/null)"
+done
+jq -e --arg run "$claim" '.run == $run and .state == "done"' "$k/run.json" >/dev/null 2>&1 \
+  || fail "linked worktree: run.json not whole: $(cat "$k/run.json" 2>/dev/null)"
+LW2="$SANDBOX/linked2"
+git -C "$W" worktree add -q --detach "$LW2"
+real_lw2="$(cd "$LW2" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then real_lw2="$(cygpath -w "$real_lw2")"; fi
+lw2_projects="$CC/projects/$(printf '%s' "$real_lw2" | sed 's/[^A-Za-z0-9]/-/g')"
+rm -rf "$CC"
+resume "$claim" "$LW2" || fail "resume after the worktree went: exited non-zero: $(cat "$SANDBOX/err")"
+[ -f "$lw2_projects/0b1e5e55-1d00-4c1a-9a7e-5e551011d000.jsonl" ] \
+  || fail "resume after the worktree went: session not placed for $LW2: $(find "$CC" -type f 2>/dev/null)"
+# A run kept before records moved, in the linked worktree's own git dir, still resumes.
+old="$(git -C "$LW2" rev-parse --absolute-git-dir)/remote-agent/agent-old"
+mkdir -p "$old"
+printf '%s\n' '{"sessionId":"01d5e55-0002","cwd":"/sandbox/work"}' >"$old/session.jsonl"
+rm -rf "$CC"
+resume agent-old "$LW2" || fail "resume from the old location: exited non-zero: $(cat "$SANDBOX/err")"
+[ -f "$lw2_projects/01d5e55-0002.jsonl" ] || fail "resume from the old location: session not placed: $(find "$CC" -type f 2>/dev/null) $(cat "$SANDBOX/err")"
+git -C "$W" worktree remove --force "$LW2"
+
+# Two runs whose first ids clash (a stub date and od give the same id twice): the second makes a new id, and both
+# records are whole.
+mkdir -p "$SANDBOX/idbin"
+real_date="$(command -v date)"
+real_od="$(command -v od)"
+cat >"$SANDBOX/idbin/date" <<STUB
+#!/usr/bin/env bash
+if [ "\$*" = "+%Y%m%d-%H%M%S" ]; then echo 20260101-000000; else exec "$real_date" "\$@"; fi
+STUB
+cat >"$SANDBOX/idbin/od" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+  *"/dev/urandom"*)
+    n=\$(( \$(cat "$SANDBOX/od-calls" 2>/dev/null || echo 0) + 1 ))
+    echo "\$n" >"$SANDBOX/od-calls"
+    if [ "\$n" -le 2 ]; then echo "    7"; else echo "    8"; fi ;;
+  *) exec "$real_od" "\$@" ;;
+esac
+STUB
+chmod +x "$SANDBOX/idbin/date" "$SANDBOX/idbin/od"
+clash_path="$PATH"
+PATH="$SANDBOX/idbin:$PATH"
+for i in 1 2; do
+  rm -f "$W/hello.txt"
+  run 0 "$patch" || fail "id clash: run $i exited non-zero: $(cat "$SANDBOX/out")"
+done
+PATH="$clash_path"
+rm -f "$W/hello.txt"
+for id in agent-20260101-000000-7 agent-20260101-000000-8; do
+  k="$W/.git/remote-agent/$id"
+  if [ ! -s "$k/changes.patch" ] || [ ! -f "$k/transcript.jsonl" ] || [ ! -s "$k/progress.log" ]; then
+    fail "id clash: record $id not whole: $(ls "$k" 2>/dev/null)"
+  fi
+  jq -e --arg run "$id" '.run == $run and .state == "done" and .exit_code == 0' "$k/run.json" >/dev/null 2>&1 \
+    || fail "id clash: run.json of $id not its own: $(cat "$k/run.json" 2>/dev/null)"
+done
+[ "$(grep -c "claimed agent-20260101-000000-7" "$W/.git/remote-agent/agent-20260101-000000-7/progress.log" 2>/dev/null)" = 1 ] \
+  || fail "id clash: the second run wrote into the first run's record: $(cat "$W/.git/remote-agent/agent-20260101-000000-7/progress.log" 2>/dev/null)"
+
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
 code=0; run 0 "$patch" || code=$?

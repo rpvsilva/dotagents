@@ -140,7 +140,7 @@ All of them, with each backend's own Settings, are in [remote/settings.json](../
 
 ## Watching a run
 
-Each run keeps a folder at `<git dir>/remote-agent/<run>/`, outside the worktree:
+Each run keeps a folder at `<common git dir>/remote-agent/<run>/` (`git rev-parse --path-format=absolute --git-common-dir`), outside the worktree. Every worktree of the repo shares it, so removing a linked worktree keeps its runs' records. Runs from before records moved there sit in `<common git dir>/worktrees/<name>/remote-agent/<run>/`: they are not moved and go with their worktree, though `remote-agent resume` still finds them while it is there.
 
 | File | Holds |
 |---|---|
