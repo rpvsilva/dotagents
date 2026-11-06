@@ -8,7 +8,14 @@ import {
   CHUNK,
   copiedText,
   type Log,
+  hintRows,
+  lineParts,
   lineStyle,
+  RESUME_WARNING,
+  sessionRule,
+  resumeCommand,
+  shortPath,
+  tidy,
   mask,
   nextOffset,
   NO_LOG,
@@ -59,30 +66,30 @@ test('a successful run renders its init, text, tool call, named result and done 
     success,
   )
   assert.deepEqual(renderTranscript(text), [
-    'session started (claude-opus)',
+    '── session · claude-opus ──',
     'Looking at the repo. Then the tests.',
-    '-> Bash ls -la',
-    '<- Bash: total 8',
-    'done in 12s, $0.03',
+    '▸ Bash ls -la',
+    '  ⎿ total 8',
+    '✓ done in 12s · $0.03',
   ])
 })
 
 test('a tool call is summarised by command, file_path, pattern, description, url or path, as the sandbox does', () => {
   const lines = (input: Record<string, unknown>) => renderEvent(call('x', 'Tool', input) as TranscriptEvent, new Map())
-  assert.deepEqual(lines({ file_path: '/a.ts', pattern: 'p' }), ['-> Tool /a.ts'])
-  assert.deepEqual(lines({ pattern: 'TODO', path: 'src' }), ['-> Tool TODO'])
-  assert.deepEqual(lines({ description: 'review', prompt: 'long' }), ['-> Tool review'])
-  assert.deepEqual(lines({ url: 'https://example.com' }), ['-> Tool https://example.com'])
-  assert.deepEqual(lines({ path: 'docs' }), ['-> Tool docs'])
-  assert.deepEqual(lines({ todos: [] }), ['-> Tool'])
+  assert.deepEqual(lines({ file_path: '/a.ts', pattern: 'p' }), ['▸ Tool /a.ts'])
+  assert.deepEqual(lines({ pattern: 'TODO', path: 'src' }), ['▸ Tool TODO'])
+  assert.deepEqual(lines({ description: 'review', prompt: 'long' }), ['▸ Tool review'])
+  assert.deepEqual(lines({ url: 'https://example.com' }), ['▸ Tool https://example.com'])
+  assert.deepEqual(lines({ path: 'docs' }), ['▸ Tool docs'])
+  assert.deepEqual(lines({ todos: [] }), ['▸ Tool'])
 })
 
 test('a result that ended in error says FAILED and its subtype', () => {
   const failed = { type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 1000 }
-  assert.deepEqual(renderTranscript(jsonl(failed)), ['FAILED error_during_execution'])
-  assert.deepEqual(renderTranscript(jsonl({ type: 'result', subtype: 'error_max_turns', is_error: false })), ['FAILED error_max_turns'])
-  assert.deepEqual(renderTranscript(jsonl({ type: 'result', is_error: true })), ['FAILED'])
-  assert.deepEqual(renderTranscript(jsonl({ type: 'result' })), ['done'])
+  assert.deepEqual(renderTranscript(jsonl(failed)), ['✗ failed (error_during_execution)'])
+  assert.deepEqual(renderTranscript(jsonl({ type: 'result', subtype: 'error_max_turns', is_error: false })), ['✗ failed (error_max_turns)'])
+  assert.deepEqual(renderTranscript(jsonl({ type: 'result', is_error: true })), ['✗ failed'])
+  assert.deepEqual(renderTranscript(jsonl({ type: 'result' })), ['✓ done'])
 })
 
 test('a tool result renders from a string, an array of blocks, and with is_error', () => {
@@ -96,13 +103,13 @@ test('a tool result renders from a string, an array of blocks, and with is_error
     answer('unknown', 'no call before it', true),
   )
   assert.deepEqual(renderTranscript(text), [
-    '-> Read /x',
-    '<- Read: first',
-    '-> ToolSearch',
-    '<- ToolSearch: WebFetch',
-    '-> Bash false',
-    '<- ERROR Bash: Exit code 1',
-    '<- ERROR no call before it',
+    '▸ Read /x',
+    '  ⎿ first',
+    '▸ ToolSearch',
+    '  ⎿ WebFetch',
+    '▸ Bash false',
+    '  ⎿ ✗ Exit code 1',
+    '  ⎿ ✗ no call before it',
   ])
 })
 
@@ -115,7 +122,7 @@ test('thinking, other system events and unknown types are skipped', () => {
     { type: 'assistant', message: { content: 'a string' } },
     { type: 'assistant', message: { content: [null, 3, { type: 'tool_use' }] } },
   )
-  assert.deepEqual(renderTranscript(text), ['hi', '-> tool'])
+  assert.deepEqual(renderTranscript(text), ['hi', '▸ tool'])
 })
 
 test('a partial last line is carried, not rendered, and completes on the next read', () => {
@@ -152,7 +159,7 @@ test('token-shaped strings never reach a rendered line', () => {
   const lines = renderTranscript(text)
   assert.equal(lines.length, 6)
   for (const line of lines) for (const s of SECRETS) assert.ok(!line.includes(s), `${line} shows ${s}`)
-  assert.equal(lines[2], '<- Bash: GH_TOKEN=[masked]')
+  assert.equal(lines[2], '  ⎿ GH_TOKEN=[masked]')
   assert.match(lines[4], /^\[masked private key\]$/)
 })
 
@@ -297,14 +304,14 @@ const row = (state: string, worktree: string | null = '/repo', id = 'agent-20261
 test('a finished run with a session says how to resume it, and warns the sandbox wrote the session', () => {
   for (const state of ['done', 'failed']) {
     const [command, warning, ...rest] = resumeHint(row(state), true)
-    assert.equal(command, 'to resume: remote-agent resume agent-20261102-100000-7 /repo')
+    assert.equal(command, 'resume: remote-agent resume agent-20261102-100000-7 /repo')
     assert.match(warning, /sandbox wrote/)
     assert.match(warning, /forged turns/)
-    assert.ok(warning.includes('/repo/.git/remote-agent/agent-20261102-100000-7/session.jsonl'), warning)
+    assert.match(warning, /read the run folder's session\.jsonl first/)
     assert.deepEqual(rest, [])
   }
   const stopped = { ...row('running'), state: 'stopped' as const }
-  assert.equal(resumeHint(stopped, true)[0], 'to resume: remote-agent resume agent-20261102-100000-7 /repo')
+  assert.equal(resumeHint(stopped, true)[0], 'resume: remote-agent resume agent-20261102-100000-7 /repo')
 })
 
 test('a run still going, or one with no run.json, shows no resume hint', () => {
@@ -320,10 +327,10 @@ test('a finished run with no session.jsonl says it cannot be resumed', () => {
 
 test('the worktree in the resume command is shell-quoted', () => {
   const command = (wt: string | null) => resumeHint(row('done', wt), true)[0]
-  assert.equal(command('/Users/me/My Projects/repo'), "to resume: remote-agent resume agent-20261102-100000-7 '/Users/me/My Projects/repo'")
-  assert.equal(command("/tmp/it's"), "to resume: remote-agent resume agent-20261102-100000-7 '/tmp/it'\\''s'")
-  assert.equal(command('/tmp/$(rm -rf ~)'), "to resume: remote-agent resume agent-20261102-100000-7 '/tmp/$(rm -rf ~)'")
-  assert.equal(command(null), 'to resume: remote-agent resume agent-20261102-100000-7')
+  assert.equal(command('/Users/me/My Projects/repo'), "resume: remote-agent resume agent-20261102-100000-7 '/Users/me/My Projects/repo'")
+  assert.equal(command("/tmp/it's"), "resume: remote-agent resume agent-20261102-100000-7 '/tmp/it'\\''s'")
+  assert.equal(command('/tmp/$(rm -rf ~)'), "resume: remote-agent resume agent-20261102-100000-7 '/tmp/$(rm -rf ~)'")
+  assert.equal(command(null), 'resume: remote-agent resume agent-20261102-100000-7')
 })
 
 test('copying the path toasts copied, or why not', () => {
@@ -347,10 +354,10 @@ test('mask covers every token shape the README lists', () => {
 
 test('a top-level tool_result, an init with no model and a non-string tool input render too', () => {
   const names = new Map([['t', 'Bash']])
-  assert.deepEqual(renderEvent({ type: 'tool_result', tool_use_id: 't', content: 'out\nmore', is_error: true }, names), ['<- ERROR Bash: out'])
-  assert.deepEqual(renderEvent({ type: 'system', subtype: 'init' }, new Map()), ['session started'])
-  assert.deepEqual(renderEvent(call('x', 'Glob', { path: ['a', 'b'] }) as TranscriptEvent, new Map()), ['-> Glob ["a","b"]'])
-  assert.deepEqual(renderTranscript(jsonl({ type: 'result', total_cost_usd: 1.5 })), ['done $1.50'])
+  assert.deepEqual(renderEvent({ type: 'tool_result', tool_use_id: 't', content: 'out\nmore', is_error: true }, names), ['  ⎿ ✗ out'])
+  assert.deepEqual(renderEvent({ type: 'system', subtype: 'init' }, new Map()), ['── session ──'])
+  assert.deepEqual(renderEvent(call('x', 'Glob', { path: ['a', 'b'] }) as TranscriptEvent, new Map()), ['▸ Glob ["a","b"]'])
+  assert.deepEqual(renderTranscript(jsonl({ type: 'result', total_cost_usd: 1.5 })), ['✓ done $1.50'])
 })
 
 test('oneLine keeps up to max characters when given a wider max', () => {
@@ -398,13 +405,13 @@ test('a tail read starting inside a multi-byte character keeps the offset at the
 
 test('lineStyle colors a log line by its kind: tool call, result, error, session, end', () => {
   const got = [
-    '-> Bash ls -1A',
-    '<- Bash: total 3',
-    '<- ERROR Bash: no such file',
-    'session started (claude-opus-5-5)',
-    'done in 21s, $0.04',
-    'done',
-    'FAILED error_max_turns',
+    '▸ Bash ls -1A',
+    '  ⎿ total 3',
+    '  ⎿ ✗ no such file',
+    '── session · claude-opus-5-5 ──',
+    '✓ done in 21s · $0.04',
+    '✓ done',
+    '✗ failed (error_max_turns)',
     'I created the file.',
     'done with the refactor, moving on',
   ].map(lineStyle)
@@ -419,4 +426,61 @@ test('lineStyle colors a log line by its kind: tool call, result, error, session
     {},
     {},
   ])
+})
+
+test('tidy drops <br> and <tool_use_error> markup and shows sandbox paths relative to its working copy', () => {
+  const work = '/home/azureadmin/.remote-agent/runs/agent-20261103-151221-20578/work'
+  assert.equal(tidy(`${work}/sleep-done.txt`), 'sleep-done.txt')
+  assert.equal(tidy(`cd ${work} && ls`), 'cd . && ls')
+  assert.equal(tidy(`File created successfully at: ${work}/a/b.ts`), 'File created successfully at: a/b.ts')
+  assert.equal(tidy(`${work}space/x`), `${work}space/x`)
+  assert.equal(tidy('<tool_use_error>Blocked: sleep 30</tool_use_error>'), 'Blocked: sleep 30')
+  assert.equal(tidy('I will wait. <br>'), 'I will wait.  ')
+})
+
+test('a tool call and its result render as a call row and an indented result row, without markup', () => {
+  const work = '/home/u/.remote-agent/runs/agent-1/work'
+  const text = jsonl(
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Write', input: { file_path: `${work}/x.txt` } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `File created successfully at: ${work}/x.txt` }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', is_error: true, content: '<tool_use_error>Blocked</tool_use_error>' }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't3', content: '' }] } },
+  )
+  assert.deepEqual(renderTranscript(text), ['▸ Write x.txt', '  ⎿ File created successfully at: x.txt', '  ⎿ ✗ Blocked', '  ⎿ (no output)'])
+})
+
+test('resumeCommand is the bare command, null without a session or for a live run', () => {
+  assert.equal(resumeCommand(row('done'), true), 'remote-agent resume agent-20261102-100000-7 /repo')
+  assert.equal(resumeCommand(row('done'), false), null)
+  assert.equal(resumeCommand(row('running'), true), null)
+})
+
+test('shortPath writes the home folder as ~', () => {
+  assert.equal(shortPath('/Users/me/repo/.git/x'), '~/repo/.git/x')
+  assert.equal(shortPath('/home/me/x'), '~/x')
+  assert.equal(shortPath('/tmp/Users/me'), '/tmp/Users/me')
+})
+
+test('lineParts splits a line by its kind for drawing', () => {
+  assert.deepEqual(lineParts('▸ Bash ls -la'), { kind: 'call', tool: 'Bash', rest: 'ls -la' })
+  assert.deepEqual(lineParts('▸ TodoWrite'), { kind: 'call', tool: 'TodoWrite', rest: '' })
+  assert.deepEqual(lineParts('  ⎿ ✗ boom'), { kind: 'error', rest: 'boom' })
+  assert.deepEqual(lineParts('  ⎿ ok'), { kind: 'result', rest: 'ok' })
+  assert.deepEqual(lineParts('── session · opus ──'), { kind: 'session', rest: '── session · opus' })
+  assert.deepEqual(lineParts('✓ done in 4s · $0.12'), { kind: 'done', rest: 'in 4s · $0.12' })
+  assert.deepEqual(lineParts('✗ failed (error_max_turns)'), { kind: 'failed', rest: '(error_max_turns)' })
+  assert.deepEqual(lineParts('✓ done with the refactor'), { kind: 'text', rest: '✓ done with the refactor' })
+})
+
+test('sessionRule fills the width with the rule', () => {
+  assert.equal(sessionRule('── session · opus ──', 24), '── session · opus ──────')
+  assert.equal(sessionRule('── session ──', 5), '── session ──')
+})
+
+test('hintRows counts the resume card, the no-session note, or nothing for a live run', () => {
+  const done = row('done')
+  // A blank row, the border's two, the command's one, the warning's at 54 columns.
+  assert.equal(hintRows(done, true, 58), 1 + 2 + 1 + wrappedRows(RESUME_WARNING, 54))
+  assert.equal(hintRows(done, false, 58), 1 + 1)
+  assert.equal(hintRows(row('running'), true, 58), 0)
 })

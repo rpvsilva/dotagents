@@ -9,7 +9,7 @@ const PANE = {
     isFocused: true,
     bodyColumns: 60,
     placement: 'dock',
-    scroll: { offset: 0, bodyRows: 20 },
+    scroll: { offset: 0, bodyRows: 23 },
     view: {},
   },
 } as const
@@ -168,7 +168,12 @@ async function start($: any) {
 
 // Runs /remote-runs and checks its answer: a hook that threw would be skipped, with a failed-hook line.
 // Every Text the pane draws, but the follow bar's line of keys, which ends every log view.
-const logTexts = (texts: any[]): string[] => texts.map((el: any) => el.text).filter((t: string) => !t.startsWith('b back · '))
+// The log view's rows, in order: each Text that sets `wrap` (a line's badge, label or rule is a Text inside it, which
+// sets none) and the resume card's Code, but the follow bar's key line. A badge or rule is read back as the text
+// renderEvent made, so a test names the line, not its drawing.
+const isRow = (el: any) => (el.type === 'Text' && 'wrap' in el.props && !el.text.startsWith('b back · ')) || el.type === 'Code'
+const unDraw = (t: string) => t.replace(/^ (✓ done|✗ failed) +/, '$1 ').replace(/ ─{2,}$/, ' ──').trimEnd()
+const logTexts = (found: any[]): string[] => found.filter(isRow).map((el: any) => (el.type === 'Code' ? `resume: ${el.text}` : unDraw(el.text)))
 
 async function open($: any) {
   const { text } = await $.command.run({ command: 'remote-runs' })
@@ -210,8 +215,8 @@ test('the pane lists runs of the main git dir and of each linked worktree, with 
   await start($)
   await open($)
   expect(await words($)).toEqual([
-    '● TT-01-list  running <1m', '●', 'running <1m', '     claim 3s · send 5s · first 12s · first agent event after 12s',
-    '✓ main-run  done 1m23s · <1m ago', '✓', 'done 1m23s · <1m ago', '     claim 3s · send 5s · first 12s · done',
+    '● TT-01-list  running <1m', '●', 'running <1m', '  first agent event after 12s · claim 3s · send 5s · first 12s',
+    '✓ main-run  done 1m23s · <1m ago', '✓', 'done 1m23s · <1m ago', '  done · claim 3s · send 5s · first 12s',
     '1-9 open a run · esc close',
   ])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -285,7 +290,7 @@ test('a changed run.json or a new progress line shows after one tick, with no co
 
   write(w, '/repo/.git/remote-agent/agent-1/progress.log', 'claimed in 3s\n')
   await clock.advance(1500)
-  expect((await words($))[3]).toBe('     claim 3s · send 5s · first 12s · claimed in 3s')
+  expect((await words($))[3]).toBe('  claimed in 3s · claim 3s · send 5s · first 12s')
 
   write(w, '/repo/.git/remote-agent/agent-1/run.json', JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 5 })))
   await clock.advance(1500)
@@ -305,7 +310,7 @@ test('a removed run folder leaves the pane, and a finished run is read once', as
   const reads = w.reads.length
   await clock.advance(1500)
   expect(w.reads.length).toBe(reads)
-  expect(await words($)).toEqual(['✓ finished  done 30s · <1m ago', '✓', 'done 30s · <1m ago', '     claim 3s · send 5s · first 12s · done', '1-9 open a run · esc close'])
+  expect(await words($)).toEqual(['✓ finished  done 30s · <1m ago', '✓', 'done 30s · <1m ago', '  done · claim 3s · send 5s · first 12s', '1-9 open a run · esc close'])
 })
 
 test('an unchanged tick does not set state', async ($, on) => {
@@ -528,8 +533,8 @@ test('pressing a run shows its log in order, and Back returns to the list with i
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'run:agent-1' })
     expect((await ui.find({ key: 'back' }))?.props.hotkey).toBe('b')
-    const shown = logTexts(await ui.findAll({ type: 'Text' }))
-    expect(shown.slice(-5)).toEqual(['session started (claude-opus)', 'Reading the code.', '-> Bash ls', '<- Bash: a.txt', 'done in 4s, $0.12'])
+    const shown = logTexts(await ui.findAll({}))
+    expect(shown.slice(-5)).toEqual(['── session · claude-opus ──', 'Reading the code.', '▸ Bash ls', '  ⎿ a.txt', '✓ done in 4s · $0.12'])
     expect(shown).toContain(TRANSCRIPT)
     expect(shown.some((t: string) => t.includes('TT-01-list'))).toBe(true)
     await ui.press({ key: 'back' })
@@ -546,7 +551,7 @@ test('a run with an empty, missing or unreadable transcript says it waits for th
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       await ui.press({ key: 'run:agent-1' })
-      const shown = logTexts(await ui.findAll({ type: 'Text' }))
+      const shown = logTexts(await ui.findAll({}))
       expect(shown[shown.length - 1]).toBe('waiting for the first event')
       await ui.press({ key: 'back' })
       await ui.unmount()
@@ -564,30 +569,30 @@ test('a token-shaped string in the transcript is masked in every line drawn', as
   const shown = (await ui.findAll({})).map((el: any) => el.text ?? '')
   await ui.unmount()
   expect(shown.filter((t: string) => t.includes(GHP) || t.includes('\u001b'))).toEqual([])
-  expect(shown).toContain('<- Bash: [masked]')
+  expect(shown).toContain('  ⎿ [masked]')
 })
 
 const say = (text: string) => jsonl({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 const says = (count: number, from = 0) => Array.from({ length: count }, (_, i) => say(`line ${from + i}`)).join('')
 const names = (count: number, from = 0) => Array.from({ length: count }, (_, i) => `line ${from + i}`)
-// bodyRows 20, less the two header rows and a blank row, a blank row and the follow bar.
+// bodyRows 23, less the header card (its border and three rows) and a blank row, a blank row and the follow bar.
 const ROWS = 15
-const scroll = (by: number) => ({ component: 'Pane', requestId: 'remote-runs', offset: 0, by, bodyRows: 20, contentRows: 20, origin: { kind: 'person' } })
+const scroll = (by: number) => ({ component: 'Pane', requestId: 'remote-runs', offset: 0, by, bodyRows: 23, contentRows: 23, origin: { kind: 'person' } })
 
 // The log lines the pane draws (each Text after the path, but the notes and the resume hint), the hint, and all its
 // Text, as `surface` shows them.
 async function logView($: any, surface: (typeof SURFACES)[number] = 'terminal') {
   const ui = await $.ui.mount({ ...PANE, surface })
-  const texts = await ui.findAll({ type: 'Text' })
+  const found = await ui.findAll({})
   await ui.unmount()
+  const rows = logTexts(found)
   const notes = ['(earlier events not shown: open the file)', 'waiting for the first event']
-  const isHint = (t: any) => /^(to resume: |warning: |no session came back)/.test(t.text)
-  // The log is what lies between the transcript path and the follow bar's key line.
-  const keys = texts.findIndex((t: any) => t.text.startsWith('b back · '))
-  const after = texts.slice(texts.findIndex((t: any) => t.text.endsWith('/transcript.jsonl')) + 1, keys < 0 ? undefined : keys)
-  const lines = after.filter((t: any) => !notes.includes(t.text) && !isHint(t))
+  const isHint = (t: string) => /^(resume: |⚠ |no session came back)/.test(t)
+  // The log is what lies between the transcript path and the hint, each line cut to one row.
+  const after = found.filter(isRow).slice(found.filter(isRow).findIndex((el: any) => el.text.endsWith('/transcript.jsonl')) + 1)
+  const lines = after.filter((el: any) => !notes.includes(el.text) && !isHint(logTexts([el])[0]))
   for (const t of lines) expect(t.props.wrap).toBe('truncate-end')
-  return { lines: lines.map((t: any) => t.text), hint: after.filter(isHint).map((t: any) => t.text), texts: texts.map((t: any) => t.text) }
+  return { lines: lines.map((t: any) => unDraw(t.text)), hint: rows.filter(isHint), texts: rows }
 }
 
 async function press($: any, key: string) {
@@ -697,13 +702,13 @@ test('switching runs or going Back starts the log again', async ($, on) => {
 })
 
 const SESSION = '/repo/.git/remote-agent/agent-1/session.jsonl'
-const RESUME = 'to resume: remote-agent resume agent-1 /repo'
+const RESUME = 'resume: remote-agent resume agent-1 /repo'
 
 // The Text lines the log of agent-1 shows on the terminal.
 async function logLines($: any): Promise<string[]> {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'run:agent-1' })
-  const shown = logTexts(await ui.findAll({ type: 'Text' }))
+  const shown = logTexts(await ui.findAll({}))
   await ui.press({ key: 'back' })
   await ui.unmount()
   return shown
@@ -718,7 +723,7 @@ test('Copy path copies the exact transcript path on the pressing surface, and to
     await ui.press({ key: 'copy' })
     w.copy = { isCopied: false, reason: 'no-clipboard' }
     await ui.press({ key: 'copy' })
-    const shown = logTexts(await ui.findAll({ type: 'Text' }))
+    const shown = logTexts(await ui.findAll({}))
     expect(shown).toContain(TRANSCRIPT)
     await ui.press({ key: 'back' })
     await ui.unmount()
@@ -730,16 +735,39 @@ test('Copy path copies the exact transcript path on the pressing surface, and to
   expect(w.toasts.map(t => t.split(' (')[0])).toEqual(['copied', 'not copied', 'copied', 'not copied'])
 })
 
+test('Copy resume shows only for a finished run with a session, and copies the bare resume command', async ($, on) => {
+  const w = await withLog($, on, '')
+  const resumeButton = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'run:agent-1' })
+    const button = await ui.find({ key: 'resume' })
+    if (button) await ui.press({ key: 'resume' })
+    await ui.press({ key: 'back' })
+    await ui.unmount()
+    return button?.props.hotkey ?? null
+  }
+  // Running, then running with a session: no button; done with it (remote-agent writes it before done): the button.
+  expect(await resumeButton()).toBe(null)
+  w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
+  await w.clock.advance(1500)
+  expect(await resumeButton()).toBe(null)
+  write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
+  await w.clock.advance(1500)
+  expect(await resumeButton()).toBe('r')
+  expect(w.copies).toEqual([{ text: 'remote-agent resume agent-1 /repo', surface: 'terminal' }])
+  expect(w.toasts).toEqual(['copied'])
+})
+
 test('a finished run with a session ends its log with how to resume it, and a running one does not', async ($, on) => {
   const w = await withLog($, on, jsonl({ type: 'result', subtype: 'success', is_error: false, duration_ms: 4000 }))
   w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
   let shown = await logLines($)
-  expect(shown.filter((t: string) => t.startsWith('to resume') || t.startsWith('no session'))).toEqual([])
+  expect(shown.filter((t: string) => t.startsWith('resume: ') || t.startsWith('no session'))).toEqual([])
 
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
   await w.clock.advance(1500)
   shown = await logLines($)
-  expect(shown.slice(-3, -1)).toEqual(['done in 4s', RESUME])
+  expect(shown.slice(-3, -1)).toEqual(['✓ done in 4s', RESUME])
   expect(shown[shown.length - 1]).toMatch(/sandbox wrote.*forged turns.*session\.jsonl first$/)
 })
 
@@ -749,7 +777,7 @@ test('a finished run with no session.jsonl says it cannot be resumed', async ($,
   await w.clock.advance(1500)
   const shown = await logLines($)
   expect(shown[shown.length - 1]).toBe('no session came back: this run cannot be resumed')
-  expect(shown.filter((t: string) => t.startsWith('to resume'))).toEqual([])
+  expect(shown.filter((t: string) => t.startsWith('resume: '))).toEqual([])
 })
 
 test('a worktree path with spaces is quoted in the resume command', async ($, on) => {
@@ -757,7 +785,7 @@ test('a worktree path with spaces is quoted in the resume command', async ($, on
   w.files[SESSION] = { text: '{}\n', mtimeMs: NOW }
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'failed', exit_code: 1, ended: NOW / 1000 + 2, worktree: '/My Repo' })))
   await w.clock.advance(1500)
-  expect(await logLines($)).toContain("to resume: remote-agent resume agent-1 '/My Repo'")
+  expect(await logLines($)).toContain("resume: remote-agent resume agent-1 '/My Repo'")
 })
 
 test('a copy that throws toasts not copied, and the path stays drawn', async ($, on) => {
@@ -766,7 +794,7 @@ test('a copy that throws toasts not copied, and the path stays drawn', async ($,
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'run:agent-1' })
   await ui.press({ key: 'copy' })
-  expect(logTexts(await ui.findAll({ type: 'Text' }))).toContain(TRANSCRIPT)
+  expect(logTexts(await ui.findAll({}))).toContain(TRANSCRIPT)
   await ui.unmount()
   expect(w.toasts).toEqual(['not copied (refused): select the path shown instead'])
 })
@@ -804,12 +832,12 @@ test('a finished run draws fewer log lines, so its wrapped resume hint fits the 
   write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
   await w.clock.advance(1500)
   await press($, 'run:agent-1')
-  // 20 rows at 60 columns: two header rows and the follow bar with a blank row each, the command on one, the 152-character warning on three.
+  // 23 rows at 60 columns: the header card and the follow bar with a blank row each leave 15; the resume card (a blank row, its border, the command on one, the 104-character warning on three at 54 columns) leaves 8.
   const shown = await logView($)
   expect(shown.hint[0]).toBe(RESUME)
-  expect(shown.lines).toEqual(names(11, 19))
+  expect(shown.lines).toEqual(names(8, 22))
   await $.ui.scroll(scroll(-1))
-  expect((await logView($)).lines).toEqual(names(11, 18))
+  expect((await logView($)).lines).toEqual(names(8, 21))
 })
 
 test('a result read on a later tick names the tool called before it, and a transcript written anew starts the log again', async ($, on) => {
@@ -817,15 +845,15 @@ test('a result read on a later tick names the tool called before it, and a trans
   const result = (text: string) => jsonl({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] } })
   const w = await withLog($, on, call)
   await press($, 'run:agent-1')
-  expect((await logView($)).lines).toEqual(['-> Bash ls'])
+  expect((await logView($)).lines).toEqual(['▸ Bash ls'])
   append(w, result('a.txt'))
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(['-> Bash ls', '<- Bash: a.txt'])
+  expect((await logView($)).lines).toEqual(['▸ Bash ls', '  ⎿ a.txt'])
   // Shorter than what was read: a new file, whose result has no call before it.
   write(w, TRANSCRIPT, result('b.txt'))
   expect(result('b.txt').length).toBeLessThan((call + result('a.txt')).length)
   await w.clock.advance(1500)
-  expect((await logView($)).lines).toEqual(['<- b.txt'])
+  expect((await logView($)).lines).toEqual(['  ⎿ b.txt'])
 })
 
 test('a transcript between 1 and 3 MiB is read whole and opens at its last MiB under the earlier-events note', async ($, on) => {
@@ -880,7 +908,7 @@ for (const [gap, text] of Object.entries(GAPS)) {
     append(w, text + DONE)
     write(w, RUN_JSON, JSON.stringify(runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 + 2 })))
     for (let i = 0; i < 4; i++) await w.clock.advance(1500)
-    expect((await logView($)).lines.slice(-1)).toEqual(['done in 4s'])
+    expect((await logView($)).lines.slice(-1)).toEqual(['✓ done in 4s'])
   })
 }
 
@@ -911,10 +939,10 @@ test('scrolling a finished run before its log is drawn moves by the rows the dra
   opened = 'undrawn'
   await w.clock.advance(1500)
   await $.ui.scroll(scroll(-1))
-  // 20 rows at 60 columns: the header, the follow bar, their blank rows and the hint's four leave 11, one up from the end.
-  expect((await logView($)).lines).toEqual(names(11, 18))
+  // 23 rows at 60 columns: the header card, the follow bar, their blank rows and the resume card leave 8, one up from the end.
+  expect((await logView($)).lines).toEqual(names(8, 21))
   await $.ui.scroll(scroll(-1))
-  expect((await logView($)).lines).toEqual(names(11, 17))
+  expect((await logView($)).lines).toEqual(names(8, 20))
 })
 
 test('runs that ended over 30 minutes ago are drawn dim, on one line, under an older rule', async ($, on) => {
@@ -926,8 +954,8 @@ test('runs that ended over 30 minutes ago are drawn dim, on one line, under an o
   await start($)
   await open($)
   expect(await words($)).toEqual([
-    '● live  running <1m', '●', 'running <1m', '     claim 3s · send 5s · first 12s · claimed in 3s',
-    '✓ fresh  done 5m00s · 5m ago', '✓', 'done 5m00s · 5m ago', '     claim 3s · send 5s · first 12s · done',
+    '● live  running <1m', '●', 'running <1m', '  claimed in 3s · claim 3s · send 5s · first 12s',
+    '✓ fresh  done 5m00s · 5m ago', '✓', 'done 5m00s · 5m ago', '  done · claim 3s · send 5s · first 12s',
     '── older ──', '✗ old  failed 1m40s · 2h ago', '✗', 'failed 1m40s · 2h ago',
     '1-9 open a run · esc close',
   ])
@@ -959,7 +987,7 @@ test('the follow bar says it follows, offers Jump to end as the main action once
   const up = await bar()
   expect(up).toMatchObject({ label: '↓ Jump to end', variant: 'primary', hotkey: 'e' })
   const style = (text: string) => up.texts.find((t: any) => t.text === text)?.props.color ?? null
-  expect([style('-> Bash ls'), style('<- ERROR Bash: boom'), style('line 0')]).toEqual(['suggestion', 'error', null])
+  expect([style('▸ Bash'), style('  ⎿ ✗ boom'), style('line 0')]).toEqual(['suggestion', 'error', null])
   await press($, 'end')
   expect((await bar()).label).toBe('● Following live')
 })

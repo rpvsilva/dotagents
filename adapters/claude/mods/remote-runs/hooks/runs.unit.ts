@@ -9,6 +9,7 @@ import {
   gitDirs,
   livePids,
   markNotified,
+  metaLine,
   newLiveRuns,
   openPaneSetting,
   notifyText,
@@ -20,6 +21,7 @@ import {
   type RunFiles,
   signature,
   statusText,
+  whenLine,
 } from './runs.ts'
 
 const LSTART = 'Mon Nov  2 10:00:00 2026'
@@ -194,7 +196,7 @@ test('formatRow names the run, else its id, with its state, elapsed time, timing
   assert.deepEqual(formatRow(r), {
     label: 'TT-01-list',
     status: 'running <1m',
-    detail: 'claim 3s · send 5s · first 12s · first agent event after 12s',
+    detail: 'first agent event after 12s · claim 3s · send 5s · first 12s',
     glyph: '●',
     tone: 'warning',
   })
@@ -334,4 +336,17 @@ test('openPaneSetting reads settings get output, true unless it says false', () 
   assert.equal(openPaneSetting(0, ''), true)
   assert.equal(openPaneSetting(1, 'false\n'), true)
   assert.equal(openPaneSetting(null, ''), true)
+})
+
+test('formatRow drops the remote-agent: prefix from the last step', () => {
+  const [r] = pickRows([run('agent-1', 'done', 990, { step: 'remote-agent: no changes', ended: 995 })], 1000)
+  assert.ok(formatRow(r).detail.startsWith('no changes · '), formatRow(r).detail)
+})
+
+test('metaLine shows the exit code once finished, the timings and the worktree folder', () => {
+  const [done] = pickRows([run('a', 'done', 990, { ended: 995, exit_code: 0, worktree: '/tmp/wt-x/' })], 1000)
+  assert.equal(metaLine(done), 'exit 0 · claim 3s · send 5s · first event 12s · wt-x')
+  const [live] = pickRows([run('b', 'running', 990, { claim_s: null, send_s: null, first_event_s: null, worktree: null })], 1000)
+  assert.equal(metaLine(live), 'no details yet')
+  assert.equal(whenLine(done), '5s · <1m ago')
 })
