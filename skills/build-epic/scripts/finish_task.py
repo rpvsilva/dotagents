@@ -10,8 +10,14 @@ implementer and prints `FAIL TT-NN conflict <files>`; a rerun after the markers 
 `--report` copies the implementer's report to `<run>/reports/<TT-NN>.md`; when its status is `blocked` or
 `plan-wrong`, the changes are committed and the step fails with that status and its `why`, touching nothing else.
 `--title` is the commit's subject (default: the task's title).
+
+For a remote task, first copies its run's `result.json` to `<run>/remote/<TT-NN>.json`: the newest run whose `run.json`
+`name` is the task's file name (or starts with `TT-NN-`), under the common git dir's `remote-agent/`, or under the
+worktree's own git dir for records made before they moved. With none, the log says so and the step goes on.
 """
 import fnmatch
+import json
+import os
 import re
 import shutil
 import sys
@@ -50,6 +56,48 @@ def read_report(ctx, given):
     return (status.group(1) if status else ""), (why.group(1).strip() if why else "")
 
 
+def remote_records(ctx, task):
+    """Every `remote-agent/<run>/` folder of the repo's common git dir and, while it exists, the worktree's git dir."""
+    dirs = [(task.repo, "--path-format=absolute", "--git-common-dir")]
+    if task.worktree.is_dir():
+        dirs.append((task.worktree, "--absolute-git-dir"))
+    folders = {}
+    for cwd, *flags in dirs:
+        res = ctx.run(["git", "-C", cwd, "rev-parse", *flags])
+        if res.rc == 0 and res.out.strip():
+            root = core.resolve(res.out.strip()) / "remote-agent"
+            for folder in sorted(root.glob("*/")) if root.is_dir() else []:
+                folders.setdefault(core.resolve(folder), None)
+    return list(folders)
+
+
+def copy_remote_result(ctx, task):
+    """Copies the newest matching run's `result.json` to `<run>/remote/<id>.json`; returns the run folder or None."""
+    found = []
+    for folder in remote_records(ctx, task):
+        try:
+            info = json.loads((folder / "run.json").read_text())
+        except (OSError, ValueError):
+            continue
+        name = info.get("name") if isinstance(info, dict) else None
+        if not isinstance(name, str) or not (name == task.path.stem or name == ctx.id or name.startswith(ctx.id + "-")):
+            continue
+        if (folder / "result.json").is_file():
+            started = info.get("started")
+            found.append((started if isinstance(started, (int, float)) else 0, folder.name, folder))
+    if not found:
+        ctx.note(f"no remote result found for {ctx.id}")
+        return None
+    folder = max(found)[2]
+    dest = ctx.run_dir / "remote" / f"{ctx.id}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.tmp")
+    shutil.copyfile(str(folder / "result.json"), str(tmp))
+    os.replace(str(tmp), str(dest))
+    ctx.note(f"remote result {folder / 'result.json'} copied to {dest}")
+    return folder
+
+
 def amend_writes(task, changed):
     """Appends each changed path outside the task's `Writes` line to it; returns those paths."""
     writes = runfolder.get(task.path, "Writes")
@@ -80,6 +128,7 @@ def step(ctx):
     opts = options(ctx.args)
     task = taskwt.Task(ctx)
     status, why = read_report(ctx, opts.get("report"))
+    copy_remote_result(ctx, task)  # before anything removes the worktree, and its git dir with older records
     if not task.worktree.is_dir():
         if (runfolder.get(task.path, "Status") or "").strip() == "done" and status not in ("blocked", "plan-wrong"):
             return "no-change"  # a rerun after the worktree was removed
