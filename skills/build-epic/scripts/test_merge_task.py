@@ -129,6 +129,8 @@ class MergeTaskTest(unittest.TestCase):
         log = (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text()
         self.assertIn("suite two", log)
         self.assertIn("suite 'true': rc 0", log)
+        saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text())
+        self.assertEqual([(s["command"], s["passed"]) for s in saved], [("true", True), ("echo suite two", True)])
 
     def test_works_through_a_linked_run_path(self):
         self.assertRegex(self.merge(self.kit.link(self.kit.run_dir, "run-link")), r"^OK 01-01 done ")
