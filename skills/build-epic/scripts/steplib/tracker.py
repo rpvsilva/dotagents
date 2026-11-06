@@ -134,6 +134,10 @@ class Tracker:
         """Puts `body` in the issue's one plan comment (starting with the marker): edits it when it exists."""
         self._update("upsert_plan", int(issue), body)
 
+    def comment(self, issue, body):
+        """Adds one comment, `body`, to the issue."""
+        self._update("comment", int(issue), body)
+
     def close(self, issue, comment):
         """Closes the issue as completed, with `comment`."""
         self._update("close", int(issue), comment)
@@ -164,6 +168,9 @@ class Tracker:
                       "-f", f"body={body}"], "comment")
         else:
             self._gh(["api", f"repos/{{owner}}/{{repo}}/issues/{issue}/comments", "-f", f"body={body}"], "comment")
+
+    def _do_comment(self, state, issue, body):
+        self._gh(["issue", "comment", str(issue), "--body", body], "comment")
 
     def _do_close(self, state, issue, comment):
         self._gh(["issue", "close", str(issue), "--reason", "completed", "--comment", comment], "close")
