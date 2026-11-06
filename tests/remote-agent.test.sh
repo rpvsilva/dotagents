@@ -85,8 +85,13 @@ case "\$args" in
   *\$'\\n'*) { printf '%s' "\$args" | tr '\\n' ' '; echo; } >>"$SANDBOX/calls" ;;
   *) printf '%s\n' "\$args" >>"$SANDBOX/calls" ;;
 esac
-mkdir -p "$POD"
-[ -e "$SANDBOX/nomain" ] || touch "$POD/main-stdout"
+# A task with its own \$SANDBOX/code.<task> (and patch.<task>) runs in its own pod, so two runs can go at once.
+pod="$POD" code="$SANDBOX/code" patch="$SANDBOX/patch"
+if [ -n "\${REMOTE_TASK:-}" ] && [ -e "$SANDBOX/code.\$REMOTE_TASK" ]; then
+  pod="$POD.\$REMOTE_TASK" code="$SANDBOX/code.\$REMOTE_TASK" patch="$SANDBOX/patch.\$REMOTE_TASK"
+fi
+mkdir -p "\$pod"
+[ -e "$SANDBOX/nomain" ] || touch "\$pod/main-stdout"
 case " \$* " in
   *" apply "*)
     cat >"$SANDBOX/claim.yaml"
@@ -109,27 +114,27 @@ case " \$* " in
     if [ -e "$SANDBOX/real" ]; then
       while [ "\$1" != "-c" ]; do shift; done
       # A pod does not get this machine's CLAUDE_CONFIG_DIR.
-      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="$POD" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/$POD/main-stdout}" "\$3"
+      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="\$pod" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/\$pod/main-stdout}" "\$3"
       exit
     fi
     cat >"$SANDBOX/stdin"
-    cp "$POD/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
+    cp "\$pod/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
     # With $SANDBOX/events, Claude's raw events on stdout (the transcript); with $SANDBOX/summary, the report.
     [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
-    mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"
-    if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "$POD/out/summary.md"; else echo "did the thing" >"$POD/out/summary.md"; fi
+    mkdir -p "\$pod/out"; cp "\$patch" "\$pod/out/changes.patch"
+    if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "\$pod/out/summary.md"; else echo "did the thing" >"\$pod/out/summary.md"; fi
     # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
     # it read the victim in as the session, and a forged run.json.
     if [ -e "$SANDBOX/evil" ]; then
-      for l in run.json.tmp run.json.first progress.log stream.jsonl.scrubbed summary.md.scrubbed session.jsonl; do ln -s "$SANDBOX/victim" "$POD/out/\$l"; done
-      echo '{"type":"result"}' >"$POD/out/stream.jsonl"
-      echo '{"run":"forged","name":"forged","state":"done","exit_code":0,"pid":1}' >"$POD/out/run.json"
+      for l in run.json.tmp run.json.first progress.log stream.jsonl.scrubbed summary.md.scrubbed session.jsonl; do ln -s "$SANDBOX/victim" "\$pod/out/\$l"; done
+      echo '{"type":"result"}' >"\$pod/out/stream.jsonl"
+      echo '{"run":"forged","name":"forged","state":"done","exit_code":0,"pid":1}' >"\$pod/out/run.json"
     fi
-    exit "\$(cat "$SANDBOX/code")" ;;
+    exit "\$(cat "\$code")" ;;
   *" exec "*)
     while [ "\$1" != "-c" ]; do shift; done
     c="\${2//--warning=no-unknown-keyword/}"
-    HOME="$POD" sh -c "\${c//\/proc\/1\/fd\/1/$POD/main-stdout}" ;;
+    HOME="\$pod" sh -c "\${c//\/proc\/1\/fd\/1/\$pod/main-stdout}" ;;
 esac
 EOF
 chmod +x "$SANDBOX/bin/kubectl"
@@ -880,6 +885,77 @@ for id in agent-20260101-000000-7 agent-20260101-000000-8; do
 done
 [ "$(grep -c "claimed agent-20260101-000000-7" "$W/.git/remote-agent/agent-20260101-000000-7/progress.log" 2>/dev/null)" = 1 ] \
   || fail "id clash: the second run wrote into the first run's record: $(cat "$W/.git/remote-agent/agent-20260101-000000-7/progress.log" 2>/dev/null)"
+
+# `remote-agent result <name|run>` prints a run's result.json, so a caller that redirected stderr, or started several
+# runs at once, still reads each run's result and exit code. Two runs at once, one with stderr in a file and one
+# through `2>&1 | cat`, each in its own stub pod: each keeps its own progress.log and result.
+# Runs `remote-agent result` in $W with the arguments given; stdout to $SANDBOX/result, stderr to $SANDBOX/err.
+result() {
+  (cd "$W" && env HOME="$H" "$REPO/scripts/remote-agent.sh" result "$@") >"$SANDBOX/result" 2>"$SANDBOX/err"
+}
+# Starts remote-agent.sh in $W as task $1 with the arguments after it; the caller redirects its output.
+start() {
+  local task="$1"
+  shift
+  (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" --name "$task" "$@" "add a hello file")
+}
+rm -f "$W/hello.txt"
+echo 0 >"$SANDBOX/code.08-alone"; : >"$SANDBOX/patch.08-alone"
+echo 1 >"$SANDBOX/code.08-piped"; : >"$SANDBOX/patch.08-piped"
+start 08-alone >/dev/null 2>"$SANDBOX/err-alone" &
+alone=$!
+start 08-piped 2>&1 | cat >"$SANDBOX/err-piped" &
+piped=$!
+wait "$alone" || true
+wait "$piped" || true
+for t in 08-alone:3 08-piped:1; do
+  task="${t%:*}" rc="${t#*:}"
+  result "$task" || fail "result $task: exited non-zero: $(cat "$SANDBOX/err")"
+  jq -e --arg n "$task" --argjson rc "$rc" '.name == $n and .exit_code == $rc' "$SANDBOX/result" >/dev/null 2>&1 \
+    || fail "result $task: not its result with exit $rc: $(cat "$SANDBOX/result")"
+  k="$W/.git/remote-agent/$(jq -r .run "$SANDBOX/result" 2>/dev/null | tr -d '\r')"
+  # Its progress.log is its own stderr's lines, untagged, however that stderr was sent.
+  [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null)" = "$(tr -d '\r' <"$SANDBOX/${task/08-/err-}" | sed -n "s/^\[$task\] //p")" ] \
+    || fail "result $task: progress.log is not its own stderr: $(cat "$k/progress.log" 2>/dev/null)"
+  # By its run id too.
+  run_id="$(jq -r .run "$SANDBOX/result" | tr -d '\r')"
+  result "$run_id" || fail "result $run_id: exited non-zero: $(cat "$SANDBOX/err")"
+  jq -e --arg n "$task" '.name == $n' "$SANDBOX/result" >/dev/null 2>&1 || fail "result $run_id: not $task's result: $(cat "$SANDBOX/result")"
+done
+rm -f "$SANDBOX"/code.08-* "$SANDBOX"/patch.08-*
+# A retry: the same name twice, the newest run's result printed, whatever order the folders sort in.
+run 1 "" --name 08-retry || true
+first="$(jq -r .run "$(kept)/run.json" | tr -d '\r')"
+run 0 "" --name 08-retry || true
+result 08-retry || fail "result of a retry: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.exit_code == 3' "$SANDBOX/result" >/dev/null 2>&1 || fail "result of a retry: not the newest run's: $(cat "$SANDBOX/result")"
+# The first run made newer: its result wins, so the newest by start is what counts, not the folder name.
+jq -c '.started += 3600' "$W/.git/remote-agent/$first/run.json" >"$SANDBOX/run.json" && mv "$SANDBOX/run.json" "$W/.git/remote-agent/$first/run.json"
+result 08-retry || fail "result of a retry, first newer: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e --arg r "$first" '.exit_code == 1 and .run == $r' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result of a retry, first newer: not the newest by start: $(cat "$SANDBOX/result")"
+# A name matches as --name writes it.
+result 08-Retry || fail "result 08-Retry: the name not matched as --name writes it: $(cat "$SANDBOX/err")"
+# Unknown names, and names that are no run name, exit non-zero with one line.
+for q in 08-nothing ../x ""; do
+  code=0; result "$q" || code=$?
+  [ "$code" != 0 ] || fail "result '$q': exited 0"
+  [ ! -s "$SANDBOX/result" ] || fail "result '$q': printed on stdout: $(cat "$SANDBOX/result")"
+  [ "$(grep -c . "$SANDBOX/err")" = 1 ] || fail "result '$q': not one line: $(cat "$SANDBOX/err")"
+done
+code=0; result || code=$?
+[ "$code" != 0 ] || fail "result with no argument: exited 0"
+# A run still going has no result.json yet: say so rather than print an older run's.
+mkdir -p "$W/.git/remote-agent/agent-going"
+printf '{"run":"agent-going","name":"08-retry","started":%s,"state":"running"}\n' "$(( $(date +%s) + 7200 ))" \
+  >"$W/.git/remote-agent/agent-going/run.json"
+code=0; result 08-retry || code=$?
+[ "$code" != 0 ] || fail "result of a run still going: exited 0 with $(cat "$SANDBOX/result")"
+grep -q "agent-going has no result yet" "$SANDBOX/err" || fail "result of a run still going: does not name it: $(cat "$SANDBOX/err")"
+rm -rf "$W/.git/remote-agent/agent-going"
+(cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "result <name|run>" || fail "--help does not list result"
+grep -q "remote-agent result <name|run>" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list result"
 
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"

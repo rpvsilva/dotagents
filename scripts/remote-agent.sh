@@ -9,6 +9,9 @@
 #        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
+#        remote-agent result <name|run> [dir]   (prints the result.json of run <run>, or of the newest run named
+#                                                <name> by --name, of the repo at dir, default the current one; one
+#                                                line on stderr and exit 1 when none matches or it has not ended)
 #        remote-agent ready [dir]   (whether skills may send the subagents of the repo at dir, default the current
 #                                    one, to the backend: checks the Settings and the token, then probes the backend
 #                                    (`<backend> ping`, at most a few seconds: kubectl version, docker info, an ssh
@@ -61,6 +64,41 @@ while [ -L "$src" ]; do
 done
 REPO="$(cd "$(dirname "$src")/.." && pwd)"
 
+# Prints NAME as a label value: lowercase, [a-z0-9-], starting and ending with a letter or digit, at most 63
+# characters; empty when NAME has no letter or digit.
+task_label() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9-]/-/g' -e 's/--*/-/g' -e 's/^-//' \
+    | cut -c1-63 | sed 's/-$//'
+}
+
+# Prints the result.json of run $1, or of the newest run (by run.json's started) whose name is $1 as --name writes it,
+# among the records of the repo at ${2:-$PWD}: its common git dir's, and those kept before records moved there in a
+# linked worktree's own git dir. Fails with one line on stderr when no run matches, or the newest has no result yet.
+result() {
+  local q label common dir best="" best_t="" t n
+  if [ $# -lt 1 ] || [ $# -gt 2 ]; then echo "usage: remote-agent result <name|run> [dir]" >&2; exit 1; fi
+  q="$1"
+  if [[ ! "$q" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then echo "remote-agent: not a task or run name: $q" >&2; exit 1; fi
+  common="$(git -C "${2:-$PWD}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
+  label="$(task_label "$q")"
+  for dir in "$common"/remote-agent/* "$common"/worktrees/*/remote-agent/*; do
+    [ -f "$dir/run.json" ] || continue
+    if [ "$(basename "$dir")" = "$q" ]; then best="$dir"; break; fi
+    n="$(jq -r 'if (.name | type) == "string" and (.started | type) == "number" then "\(.name) \(.started)" else empty end' \
+      "$dir/run.json" 2>/dev/null | tr -d '\r')" || continue
+    [ "${n% *}" = "$label" ] || continue
+    t="${n##* }"
+    # The later start wins; on a tie, the run.json written last.
+    if [ -z "$best" ] || [ "$t" -gt "$best_t" ] || { [ "$t" -eq "$best_t" ] && [ "$dir/run.json" -nt "$best/run.json" ]; }; then
+      best="$dir" best_t="$t"
+    fi
+  done
+  [ -n "$best" ] || { echo "remote-agent: no run named $q in $common/remote-agent" >&2; exit 1; }
+  [ -f "$best/result.json" ] || { echo "remote-agent: $(basename "$best") has no result yet (still running?): $best" >&2; exit 1; }
+  cat "$best/result.json"
+}
+
 # Places the session run $1 kept (<common git dir>/remote-agent/<run>/session.jsonl, or, for a run from before records
 # moved there, <common git dir>/worktrees/<name>/remote-agent/<run>/session.jsonl) where Claude Code looks for worktree
 # ${2:-$PWD}'s sessions: projects/<the worktree's real path, every character outside [A-Za-z0-9] made ->, its Windows
@@ -108,6 +146,7 @@ case "${1:-}" in
   setup) shift; exec "$REPO/scripts/remote-agent-setup.sh" "$@" ;;
   check) shift; exec "$REPO/scripts/remote-agent-check.sh" "$@" ;;
   resume) shift; resume "$@"; exit 0 ;;
+  result) shift; result "$@"; exit 0 ;;
 esac
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$REPO/scripts/hooks/lib.sh"
@@ -150,7 +189,7 @@ fi
 usage_text() {
   cat <<'EOF'
 usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]
-       remote-agent setup | check | ready [dir] | resume <run> [worktree]
+       remote-agent setup | check | ready [dir] | resume <run> [worktree] | result <name|run> [dir]
 Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
 from stdin. Exit 0 applied, 3 no changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
 EOF
@@ -166,9 +205,7 @@ while [ $# -gt 0 ]; do
       ;;
     --name)
       [ $# -ge 2 ] || usage
-      # A valid label value: lowercase, [a-z0-9-], starting and ending with a letter or digit, at most 63 characters.
-      name="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9-]/-/g' -e 's/--*/-/g' -e 's/^-//' \
-        | cut -c1-63 | sed 's/-$//')"
+      name="$(task_label "$2")"
       [ -n "$name" ] || { echo "remote-agent: --name needs a letter or digit: $2" >&2; exit 1; }
       ;;
     -h | --help) usage_text; exit 0 ;;
