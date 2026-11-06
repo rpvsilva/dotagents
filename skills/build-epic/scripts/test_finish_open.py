@@ -211,6 +211,22 @@ class OpenPrTest(StepCase):
         create = next(c for c in self.kit.gh_calls() if c[:2] == ["pr", "create"])
         self.assertEqual(create[create.index("--title") + 1], "JSON export")
 
+    def test_a_title_given_with_title_names_the_pr_instead_of_the_oldest_commit(self):
+        self.finished("test: speed up the export suite")
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out=URL + "\n")
+        p = self.kit.step(OPEN_PR, self.kit.run_dir, "01-02", "--title", "test: tune Alpha")
+        self.assertEqual(self.one_line(p), f"OK 01-02 pr=7 {URL}")
+        create = [c for c in self.kit.gh_calls() if c[:2] == ["pr", "create"]][0]
+        self.assertEqual(create[create.index("--title") + 1], "test: tune Alpha")
+
+    def test_an_empty_or_dangling_title_is_refused_before_pushing(self):
+        self.finished()
+        for args in (["--title"], ["--title", " "], ["--name", "x"]):
+            with self.subTest(args):
+                self.assert_fail(self.kit.step(OPEN_PR, self.kit.run_dir, "01-02", *args), "FAIL 01-02 usage: ")
+        self.assertEqual(self.kit.gh_calls(), [])
+
     def test_uncommitted_changes_fail_before_pushing(self):
         self.finished()
         self.write(self.wt, "b.txt", "b\n")
