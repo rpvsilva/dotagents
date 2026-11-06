@@ -28,7 +28,8 @@
 # Prints Claude's progress on stderr and the summary on stdout. The progress also goes to the sandbox's own log (its
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
 # SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
-# and Claude's full stream in <git dir>/remote-agent/<run>/, plus transcript.jsonl: Claude's raw stream-json events,
+# and Claude's full stream in <common git dir>/remote-agent/<run>/ (shared by every worktree of the repo, so it stays
+# when a linked worktree is removed; <run> is never one another run took), plus transcript.jsonl: Claude's raw stream-json events,
 # written as they arrive, its path printed before the sandbox is claimed, and session.jsonl: Claude's session. The
 # token's value is redacted in every kept file. The session is not placed for /resume at the end: the sandbox wrote it,
 # so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
@@ -58,16 +59,24 @@ while [ -L "$src" ]; do
 done
 REPO="$(cd "$(dirname "$src")/.." && pwd)"
 
-# Places the session run $1 kept (<git dir>/remote-agent/<run>/session.jsonl) where Claude Code looks for worktree
+# Places the session run $1 kept (<common git dir>/remote-agent/<run>/session.jsonl, or, for a run from before records
+# moved there, <common git dir>/worktrees/<name>/remote-agent/<run>/session.jsonl) where Claude Code looks for worktree
 # ${2:-$PWD}'s sessions: projects/<the worktree's real path, every character outside [A-Za-z0-9] made ->, its Windows
 # path under Git Bash, as Claude Code there sees it>, its cwd lines made that path. Warns before placing.
 resume() {
-  local run root keep id real dir w tmp dest
+  local run root common keep old id real dir w tmp dest
   if [ $# -lt 1 ] || [ $# -gt 2 ]; then echo "usage: remote-agent resume <run> [worktree]" >&2; exit 1; fi
   run="$1"
   if [[ ! "$run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then echo "remote-agent: not a run name: $run" >&2; exit 1; fi
   root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
-  keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
+  common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)"
+  keep="$common/remote-agent/$run"
+  # A run from before records moved to the common git dir is in its linked worktree's own git dir.
+  if [ ! -s "$keep/session.jsonl" ]; then
+    for old in "$common"/worktrees/*/remote-agent/"$run"; do
+      if [ -s "$old/session.jsonl" ]; then keep="$old"; break; fi
+    done
+  fi
   [ -s "$keep/session.jsonl" ] || { echo "remote-agent: no session kept in $keep" >&2; exit 1; }
   id="$(jq -rn 'first(inputs | .sessionId? // empty)' "$keep/session.jsonl" 2>/dev/null | tr -d '\r')" || true
   [[ "$id" =~ ^[A-Za-z0-9-]+$ ]] || { echo "remote-agent: no session id in $keep/session.jsonl" >&2; exit 1; }
@@ -191,12 +200,22 @@ export REMOTE_TASK="$name"
 backend_script || { echo "remote-agent: $why" >&2; exit 1; }
 max_mb="${REMOTE_MAX_MB:-200}"
 
-stage="$(mktemp -d)"
-run="agent-$(date +%Y%m%d-%H%M%S)-$RANDOM"
-tag="[${name:-$run}]"
 # What is kept of the run, outside the worktree: the live transcript from the start, the sandbox's ~/out at the end.
-keep="$(git -C "$root" rev-parse --absolute-git-dir)/remote-agent/$run"
-mkdir -p "$keep"
+# In the common git dir, shared by every worktree of the repo, so removing a linked worktree keeps it. The run folder
+# is made without -p, which fails when it is there: an id another run took is drawn again.
+records="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/remote-agent"
+mkdir -p "$records"
+tries=0
+while :; do
+  n="$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -dc '0-9')" || n=""
+  run="agent-$(date +%Y%m%d-%H%M%S)-${n:-$RANDOM}"
+  keep="$records/$run"
+  mkdir "$keep" 2>/dev/null && break
+  tries=$((tries + 1))
+  [ "$tries" -lt 20 ] || { echo "remote-agent: cannot make a run folder in $records" >&2; exit 1; }
+done
+stage="$(mktemp -d)"
+tag="[${name:-$run}]"
 : >>"$keep/transcript.jsonl"
 
 # Rewrites run.json through jq filter $1 (jq options after it), by way of run.json.<run_json_tmp> and `mv`, so a
