@@ -95,6 +95,7 @@ def step(ctx):
     gitops.Git(wt, ctx.log).fetch()
     catch_up(ctx, wt, f"origin/{ticket_branch}")
     suites = checks.run_all(checks.commands(run / "map.md"), wt, ctx.log)
+    checks.save(run, ctx.id, suites)
     if suites[-1].rc != 0:
         raise core.Fail(f"red {suites[-1].command}")
     git = gitops.Git(wt, ctx.log)

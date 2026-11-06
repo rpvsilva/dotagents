@@ -1,8 +1,10 @@
 """`map.md`'s `Checks`: the suite commands a merge runs in the task's worktree, each timed.
 
 The commands are the lines inside the fenced code blocks of the `## Checks` section, blank lines and `#` comments
-skipped. Each runs under `bash -c` in the worktree, its output in the step's log.
+skipped. Each runs under `bash -c` in the worktree, its output in the step's log. `save` keeps the results in
+`<run>/reports/<id>.checks.json`, the shape `prbody.py` reads.
 """
+import json
 import re
 import time
 from collections import namedtuple
@@ -38,3 +40,11 @@ def run_all(cmds, cwd, log):
         if res.rc != 0:
             break
     return done
+
+
+def save(run, ident, suites):
+    """Writes `suites` to `<run>/reports/<ident>.checks.json` as a list of `{command, rc, passed, seconds}`."""
+    path = core.resolve(run) / "reports" / f"{ident}.checks.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [{"command": s.command, "rc": s.rc, "passed": s.rc == 0, "seconds": round(s.seconds, 1)} for s in suites]
+    path.write_text(json.dumps(rows, indent=1) + "\n")
