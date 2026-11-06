@@ -962,6 +962,8 @@ grep -q "remote-agent result <name|run>" "$REPO/scripts/remote-agent.sh" || fail
 # live run. Records made by hand in a repo of their own.
 P="$SANDBOX/prune"
 git init -q "$P"
+# Physical, as prune prints it: on macOS mktemp gives /var/..., a link to /private/var/....
+P="$(cd -P "$P" && pwd -P)"
 now="$(date +%s)"
 # Makes record folder $1 (under $P/.git) with run.json $2 (none when empty), its mtime in 2020.
 rec() {
