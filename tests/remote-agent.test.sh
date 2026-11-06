@@ -957,6 +957,104 @@ rm -rf "$W/.git/remote-agent/agent-going"
 (cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "result <name|run>" || fail "--help does not list result"
 grep -q "remote-agent result <name|run>" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list result"
 
+# `remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]` removes the records older than the age, by run.json's
+# ended, else started, else the folder's mtime, in the common git dir and the old per-worktree locations; never a
+# live run. Records made by hand in a repo of their own.
+P="$SANDBOX/prune"
+git init -q "$P"
+now="$(date +%s)"
+# Makes record folder $1 (under $P/.git) with run.json $2 (none when empty), its mtime in 2020.
+rec() {
+  mkdir -p "$P/.git/$1"
+  [ -z "$2" ] || printf '%s\n' "$2" >"$P/.git/$1/run.json"
+  printf 'x\n' >"$P/.git/$1/progress.log"
+  touch -t 202001010000 "$P/.git/$1"
+}
+# A pid surely not alive: a finished child's.
+sh -c 'exit 0' &
+dead=$!
+wait "$dead" || true
+# A ps (as `ps -o lstart= -p <pid>`) that says this test's shell started at $me_start, $dead is not alive, and any
+# other pid started at another time; $SANDBOX/psbin-none holds one with no -o lstart (Git Bash's), where only
+# `kill -0` tells a live pid.
+me_start="Mon Jan  5 10:00:00 2026"
+mkdir -p "$SANDBOX/psbin" "$SANDBOX/psbin-none"
+printf '#!/bin/sh\ncase "$4" in %s) echo " %s" ;; %s) exit 1 ;; *) echo " Sat Jan  3 09:00:00 2026" ;; esac\n' \
+  "$$" "$me_start" "$dead" >"$SANDBOX/psbin/ps"
+printf '#!/bin/sh\necho "ps: unknown option -- o" >&2\nexit 1\n' >"$SANDBOX/psbin-none/ps"
+chmod +x "$SANDBOX/psbin/ps" "$SANDBOX/psbin-none/ps"
+psbin="$SANDBOX/psbin"
+# Runs `remote-agent prune` in $P with the arguments given; stdout to $SANDBOX/prune.out, stderr to $SANDBOX/prune.err.
+prune() {
+  (cd "$P" && env HOME="$H" PATH="$psbin:$PATH" "$REPO/scripts/remote-agent.sh" prune "$@") >"$SANDBOX/prune.out" 2>"$SANDBOX/prune.err"
+}
+old=$((now - 3 * 86400))
+make_records() {
+  rm -rf "$P/.git/remote-agent" "$P/.git/worktrees"
+  rec remote-agent/agent-done "{\"state\":\"done\",\"started\":$((old - 60)),\"ended\":$old,\"pid\":$dead}"
+  rec remote-agent/agent-stopped "{\"state\":\"running\",\"started\":$old,\"ended\":null,\"pid\":$dead,\"pid_start\":\"x\"}"
+  rec remote-agent/agent-reused "{\"state\":\"running\",\"started\":$old,\"ended\":null,\"pid\":$$,\"pid_start\":\"Thu Jan  1 00:00:00 1970\"}"
+  rec remote-agent/agent-young "{\"state\":\"done\",\"started\":$old,\"ended\":$((now - 3600)),\"pid\":$dead}"
+  rec remote-agent/agent-live "{\"state\":\"running\",\"started\":$old,\"ended\":null,\"pid\":$$,\"pid_start\":\"$me_start\"}"
+  rec remote-agent/agent-nojson ""
+  rec worktrees/wt/remote-agent/agent-oldplace "{\"state\":\"failed\",\"started\":$old,\"ended\":$old}"
+  # Not a run name, and a link out of the folder: neither is followed nor removed.
+  rec remote-agent/-x "{\"state\":\"done\",\"started\":$old,\"ended\":$old}"
+  mkdir -p "$SANDBOX/outside/agent-out"
+  printf "{\"state\":\"done\",\"started\":$old,\"ended\":$old}\n" >"$SANDBOX/outside/agent-out/run.json"
+  ln -s "$SANDBOX/outside/agent-out" "$P/.git/remote-agent/agent-link"
+  ln -s "$SANDBOX/outside" "$P/.git/remote-agent/agent-done/inside-link"
+  touch -t 202001010000 "$P/.git/remote-agent/agent-done"
+}
+gone="agent-done agent-stopped agent-reused agent-nojson"
+kept="agent-young agent-live -x"
+make_records
+prune --older-than 1d --dry-run || fail "prune --dry-run: exited non-zero: $(cat "$SANDBOX/prune.err")"
+for r in $gone $kept agent-oldplace; do
+  [ -d "$P/.git/remote-agent/$r" ] || [ -d "$P/.git/worktrees/wt/remote-agent/$r" ] || fail "prune --dry-run: removed $r"
+done
+[ "$(grep -c '^would remove /' "$SANDBOX/prune.out")" = 5 ] || fail "prune --dry-run: not one line per run that would go: $(cat "$SANDBOX/prune.out")"
+tail -1 "$SANDBOX/prune.out" | grep -q '^would remove 5 runs$' || fail "prune --dry-run: no count last: $(cat "$SANDBOX/prune.out")"
+prune --older-than 1d || fail "prune: exited non-zero: $(cat "$SANDBOX/prune.err")"
+for r in $gone; do
+  [ ! -e "$P/.git/remote-agent/$r" ] || fail "prune: kept old $r"
+  grep -qx "removed $P/.git/remote-agent/$r" "$SANDBOX/prune.out" || fail "prune: no line for $r: $(cat "$SANDBOX/prune.out")"
+done
+[ ! -e "$P/.git/worktrees/wt/remote-agent/agent-oldplace" ] || fail "prune: kept an old run in the old per-worktree location"
+for r in $kept; do [ -d "$P/.git/remote-agent/$r" ] || fail "prune: removed $r"; done
+[ "$(tail -1 "$SANDBOX/prune.out")" = "removed 5 runs" ] || fail "prune: no count last: $(cat "$SANDBOX/prune.out")"
+grep -q -- '-x' "$SANDBOX/prune.err" || fail "prune: a folder that is no run name not named on stderr: $(cat "$SANDBOX/prune.err")"
+if [ ! -L "$P/.git/remote-agent/agent-link" ] || [ ! -f "$SANDBOX/outside/agent-out/run.json" ]; then
+  fail "prune: followed or removed a link out of the folder"
+fi
+# Hours: a run that ended an hour ago stays under 2h, and goes once it ended 3 hours ago.
+prune --older-than 2h || fail "prune --older-than 2h: exited non-zero: $(cat "$SANDBOX/prune.err")"
+[ -d "$P/.git/remote-agent/agent-young" ] || fail "prune --older-than 2h: removed a run that ended an hour ago"
+[ "$(cat "$SANDBOX/prune.out")" = "removed 0 runs" ] || fail "prune with nothing to remove: $(cat "$SANDBOX/prune.out")"
+jq -c ".ended = $((now - 3 * 3600))" "$P/.git/remote-agent/agent-young/run.json" >"$SANDBOX/run.json" \
+  && mv "$SANDBOX/run.json" "$P/.git/remote-agent/agent-young/run.json"
+prune --older-than 2h || fail "prune --older-than 2h: exited non-zero: $(cat "$SANDBOX/prune.err")"
+[ ! -e "$P/.git/remote-agent/agent-young" ] || fail "prune --older-than 2h: kept a run that ended 3 hours ago"
+[ -d "$P/.git/remote-agent/agent-live" ] || fail "prune --older-than 2h: removed the live run"
+# Bad ages and arguments are refused with the usage, and nothing goes.
+make_records
+for a in "--older-than x" "--older-than 1" "--older-than 1w" "--older-than -1d" "--older-than" "" "--older-than 1d --what"; do
+  code=0
+  # shellcheck disable=SC2086 # each case is its words
+  prune $a || code=$?
+  [ "$code" = 1 ] || fail "prune $a: exited $code, not 1"
+  grep -q 'usage: remote-agent prune' "$SANDBOX/prune.err" || fail "prune $a: no usage: $(cat "$SANDBOX/prune.err")"
+  [ -d "$P/.git/remote-agent/agent-done" ] || fail "prune $a: removed a run"
+done
+# Without a ps that prints start times, a pid that is alive keeps its run.
+psbin="$SANDBOX/psbin-none"
+prune --older-than 1d || fail "prune, no ps: exited non-zero: $(cat "$SANDBOX/prune.err")"
+[ -d "$P/.git/remote-agent/agent-live" ] || fail "prune, no ps: removed the live run"
+[ ! -e "$P/.git/remote-agent/agent-stopped" ] || fail "prune, no ps: kept the stopped run"
+psbin="$SANDBOX/psbin"
+(cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "prune --older-than" || fail "--help does not list prune"
+grep -q "remote-agent prune --older-than" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list prune"
+
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
 code=0; run 0 "$patch" || code=$?

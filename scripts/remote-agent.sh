@@ -12,6 +12,8 @@
 #        remote-agent result <name|run> [dir]   (prints the result.json of run <run>, or of the newest run named
 #                                                <name> by --name, of the repo at dir, default the current one; one
 #                                                line on stderr and exit 1 when none matches or it has not ended)
+#        remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]   (removes the run records of the repo at dir older
+#                                                than N days or hours, never a live run: remote-agent-prune.sh)
 #        remote-agent ready [dir]   (whether skills may send the subagents of the repo at dir, default the current
 #                                    one, to the backend: checks the Settings and the token, then probes the backend
 #                                    (`<backend> ping`, at most a few seconds: kubectl version, docker info, an ssh
@@ -147,6 +149,7 @@ case "${1:-}" in
   check) shift; exec "$REPO/scripts/remote-agent-check.sh" "$@" ;;
   resume) shift; resume "$@"; exit 0 ;;
   result) shift; result "$@"; exit 0 ;;
+  prune) shift; exec "$REPO/scripts/remote-agent-prune.sh" "$@" ;;
 esac
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$REPO/scripts/hooks/lib.sh"
@@ -190,6 +193,7 @@ usage_text() {
   cat <<'EOF'
 usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]
        remote-agent setup | check | ready [dir] | resume <run> [worktree] | result <name|run> [dir]
+       remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]
 Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
 from stdin. Exit 0 applied, 3 no changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
 EOF
