@@ -135,7 +135,7 @@ def extracted_run():
 
 
 class RunWithSteps(unittest.TestCase):
-    """run-steps.json: a version 3 run with steps, shaped like the extractor's output, plus repo, date and
+    """run-steps.json: a version 4 run with steps, shaped like the extractor's output, plus repo, date and
     whole, which ticket 01's extractor adds (the extractor on this branch may not write them yet)."""
 
     def test_fixture_has_steps_in_the_extractor_shape(self):
