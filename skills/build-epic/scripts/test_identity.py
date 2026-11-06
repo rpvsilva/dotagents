@@ -1,0 +1,104 @@
+"""Tests for the identity check before every merge (`steplib/identity.py`, `steplib/merge.py`), through
+`merge_task.py` against a stub `gh`."""
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import test_merge_task  # noqa: E402
+from steplib import runfolder  # noqa: E402
+
+
+class IdentityTest(test_merge_task.MergeTaskTest):
+    """The merge_task sandbox; the base class's own tests run from test_merge_task.py only (see the end)."""
+
+    def setUp(self):
+        super().setUp()
+        self.kit.env["GH_TOKEN"] = "outer-token"
+
+    def decide(self, mode, human="rui"):
+        text = f"# Decisions\nmerge_identity: {mode}\n" + (f"human: {human}\n" if human else "")
+        (self.kit.run_dir / "decisions.md").write_text(text)
+
+    def merge_tokens(self):
+        """The `GH_TOKEN` each `gh pr merge` call ran with."""
+        return self.tokens("pr", "merge")
+
+    def tokens(self, *prefix):
+        """The `GH_TOKEN` each `gh <prefix...>` call ran with. The `pr view` wrapper logs calls but no tokens, so
+        tokens pair with the other calls only."""
+        stub_calls = [c for c in self.kit.gh_calls() if c[:2] != ["pr", "view"]]
+        return [t for c, t in zip(stub_calls, self.kit.gh_tokens()) if c[:len(prefix)] == list(prefix)]
+
+    def assert_wrong_identity(self, line):
+        self.assertTrue(line.startswith("FAIL 01-01 wrong-identity (log: "), line)
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+
+    def assert_no_auth_token(self):
+        self.assertEqual([c for c in self.kit.gh_calls() if c[:2] == ["auth", "token"]], [])
+
+    # human
+
+    def test_human_merges_without_gh_token_when_the_login_is_the_recorded_human(self):
+        self.decide("human")
+        self.kit.answer("api-user", out="rui\n")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertIn(["api", "user", "--jq", ".login"], self.kit.gh_calls())
+        self.assertEqual(self.merge_tokens(), [""])
+        self.assert_no_auth_token()
+
+    def test_human_refuses_a_login_other_than_the_recorded_human(self):
+        self.decide("human")
+        self.kit.answer("api-user", out="rpvsilva-agent[bot]\n")
+        self.assert_wrong_identity(self.merge())
+        self.assert_no_auth_token()
+
+    def test_human_checks_the_login_without_gh_token(self):
+        self.decide("human")
+        self.kit.answer("api-user", out="rui\n")
+        self.merge()
+        self.assertEqual(self.tokens("api", "user"), [""])
+
+    def test_human_with_no_recorded_human_is_refused(self):
+        self.decide("human", human=None)
+        self.kit.answer("api-user", out="rui\n")
+        self.assert_wrong_identity(self.merge())
+
+    def test_human_with_a_failing_login_call_is_refused(self):
+        self.decide("human")
+        self.kit.answer("api-user", err="gh: not logged in\n", rc=4)
+        self.assert_wrong_identity(self.merge())
+
+    # app
+
+    def test_app_merges_when_the_token_answers_installation_repositories(self):
+        self.decide("app")
+        self.kit.answer("api-installation_repositories", out='{"total_count": 1, "repositories": []}\n')
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertIn(["api", "installation/repositories"], self.kit.gh_calls())
+        self.assert_no_auth_token()
+
+    def test_app_refuses_a_token_that_is_not_an_installation_token(self):
+        self.decide("app")
+        self.kit.answer("api-installation_repositories", err="HTTP 403: Resource not accessible by integration\n",
+                        rc=1)
+        self.assert_wrong_identity(self.merge())
+        self.assert_no_auth_token()
+
+    def test_without_a_recorded_identity_the_setting_decides_and_defaults_to_app(self):
+        (self.kit.run_dir / "decisions.md").unlink(missing_ok=True)
+        self.kit.answer("api-installation_repositories", rc=1, err="HTTP 401: Bad credentials\n")
+        self.assert_wrong_identity(self.merge())
+        self.setting("merge_identity", "human")
+        self.kit.answer("api-user", out="rui\n")
+        self.assert_wrong_identity(self.merge())  # no `human:` recorded
+        self.assertEqual(self.calls("api", "user")[-1:], [["api", "user", "--jq", ".login"]])
+
+
+for _name in [n for n in dir(test_merge_task.MergeTaskTest) if n.startswith("test_")]:
+    setattr(IdentityTest, _name, None)
+
+if __name__ == "__main__":
+    unittest.main()
