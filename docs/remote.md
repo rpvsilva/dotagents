@@ -147,6 +147,7 @@ Each run keeps a folder at `<common git dir>/remote-agent/<run>/` (`git rev-pars
 | `transcript.jsonl` | The agent's events as they arrive. Follow it with `tail -f` |
 | `run.json` | State (`starting`, `running`, `done`, `failed`), timings, exit code |
 | `progress.log` | One line per step, the same as stderr |
+| `result.json` | What the run came to, written on every exit: exit code, `status`, the report's `status:` and `follow-up:` lines, changed files, turns, tokens, cost, model and `complete`. Read it, not stdout or stderr, when you need the outcome |
 | `changes.patch`, `summary.md` | What came back |
 | `session.jsonl` | Claude's session, for `remote-agent resume` |
 

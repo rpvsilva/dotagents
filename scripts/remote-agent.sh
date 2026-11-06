@@ -36,7 +36,9 @@
 # in the worktree's project folder, its cwd the worktree, after a warning saying so. Beside the transcript, for any reader:
 # run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
-# progress line, untagged), from the moment the folder is made.
+# progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
+# exit_code, status, report_status, changed, follow_up, report_path, duration_ms, num_turns, total_cost_usd, usage,
+# model, complete; unknowns null), through a temporary file and `mv`, the token's value redacted.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5 when
 # the run failed because the Claude account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
 # <time> (<time> as Claude gave it, e.g. 5:30pm (UTC), or unknown). Any other failed run exits with the sandbox's code,
@@ -338,6 +340,10 @@ cleanup() {
   run_json '.state = $state | .exit_code = $rc | .ended = $ended' --arg state "$state" --argjson rc "$rc" \
     --argjson ended "$(date +%s)"
   rm -f "$keep/run.json.tmp" "$keep/run.json.first"
+  # What the run came to, from the files above, the token's value redacted; never fails the run.
+  { "$REPO/scripts/remote-agent-result.sh" "$keep" "$rc" \
+      | scrub_token="$claude_token" awk "$redact_awk"' { print redact($0) }' >"$keep/result.json.tmp" \
+      && mv "$keep/result.json.tmp" "$keep/result.json"; } 2>/dev/null || rm -f "$keep/result.json.tmp"
   rm -rf "$stage"
 }
 trap cleanup EXIT

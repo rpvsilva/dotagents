@@ -114,7 +114,10 @@ case " \$* " in
     fi
     cat >"$SANDBOX/stdin"
     cp "$POD/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
-    mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"; echo "did the thing" >"$POD/out/summary.md"
+    # With $SANDBOX/events, Claude's raw events on stdout (the transcript); with $SANDBOX/summary, the report.
+    [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
+    mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"
+    if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "$POD/out/summary.md"; else echo "did the thing" >"$POD/out/summary.md"; fi
     # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
     # it read the victim in as the session, and a forged run.json.
     if [ -e "$SANDBOX/evil" ]; then
@@ -139,7 +142,7 @@ cat >"$SANDBOX/podbin/claude" <<EOF
 # With \$SANDBOX/limit, the account is over its usage limit: Claude says so, as an API error and an error result.
 if [ -e "$SANDBOX/limit" ]; then
   echo '{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You have hit your limit - resets 5:30pm (UTC)"}]}}'
-  echo '{"type":"result","is_error":true,"result":"You have hit your limit - resets 5:30pm (UTC)"}'
+  echo '{"type":"result","is_error":true,"total_cost_usd":0.42,"num_turns":3,"result":"You have hit your limit - resets 5:30pm (UTC)"}'
   exit 1
 fi
 if [ ! -e "$SANDBOX/nosession" ]; then
@@ -222,6 +225,16 @@ run_data() {
   grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "$1: the token is in run.json or progress.log"
   return 0
 }
+# Fails ($1 names the case) unless the last run's result.json is valid JSON matching jq condition $2, with no
+# result.json.* left beside it and no token in it.
+result_is() {
+  local k
+  k="$(kept)"
+  jq -e "$2" "$k/result.json" >/dev/null 2>&1 || fail "$1: result.json does not hold $2: $(cat "$k/result.json" 2>/dev/null)"
+  [ -z "$(find "$k" -name 'result.json.*')" ] || fail "$1: a temporary result.json left: $(find "$k" -name 'result.json.*')"
+  grep -q "sk-claude-secret" "$k/result.json" 2>/dev/null && fail "$1: the token is in result.json"
+  return 0
+}
 # The labels the claim asks for on its pod.
 pod_labels() { sed -n '/additionalPodMetadata/,$ s/^    labels: {\(.*\)}$/\1/p' "$SANDBOX/claim.yaml"; }
 patch='diff --git a/hello.txt b/hello.txt
@@ -291,6 +304,45 @@ code=0; run 0 "$stale" || code=$?
 [ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
 [ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
 run_data "stale patch run data" failed 4
+
+# result.json: what the run came to, for a caller that lost stdout, stderr or the exit code. Its figures come from
+# the transcript's last result event and the init event's model, the changed files from the patch, the report's
+# status and follow-ups from the summary. The events and the summary carry the token, which never reaches it.
+{
+  echo '{"type":"system","subtype":"init","model":"claude-test-1","session_id":"s"}'
+  echo '{"type":"result","is_error":false,"num_turns":1,"total_cost_usd":0.01,"usage":{"input_tokens":1}}'
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"key sk-claude-secret"}]}}'
+  echo '{"type":"result","is_error":false,"duration_ms":4200,"num_turns":7,"total_cost_usd":1.25,"result":"sk-claude-secret","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300}}'
+} >"$SANDBOX/events"
+printf 'status: done\nchanged: abc hello.txt\nfollow-up: document --flag\nfollow-up: token sk-claude-secret\n' >"$SANDBOX/summary"
+run 0 "$patch" --name "08-result" || fail "result on exit 0: exited non-zero: $(cat "$SANDBOX/out")"
+result_is "result on exit 0" '.exit_code == 0 and .status == "done" and .complete == true and .name == "08-result"
+  and (.run | startswith("agent-")) and .num_turns == 7 and .total_cost_usd == 1.25 and .duration_ms == 4200
+  and .usage == {"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300} and .model == "claude-test-1"
+  and .changed == ["hello.txt"] and .report_status == "done"
+  and .follow_up == ["document --flag", "token [redacted]"] and (.report_path | endswith("/summary.md"))'
+rm -f "$W/hello.txt"
+code=0; run 0 "" || code=$?
+[ "$code" = 3 ] || fail "result on exit 3: wanted exit 3, got $code"
+result_is "result on exit 3" '.exit_code == 3 and .status == "done" and .complete == true and .changed == []'
+# The patch is kept as it came, so a file named after the token is redacted in result.json only.
+code=0; run 0 "$stale"'diff --git a/sk-claude-secret.txt b/sk-claude-secret.txt
+new file mode 100644
+--- /dev/null
++++ b/sk-claude-secret.txt
+@@ -0,0 +1 @@
++x
+' || code=$?
+[ "$code" = 4 ] || fail "result on exit 4: wanted exit 4, got $code"
+result_is "result on exit 4" '.exit_code == 4 and .status == "failed" and .complete == true
+  and .changed == ["tracked.txt", "[redacted].txt"]'
+rm -f "$SANDBOX/events" "$SANDBOX/summary"
+# A failed run with no result event: every figure unknown, the time from run.json, and no report status.
+code=0; run 1 "$patch" || code=$?
+[ "$code" = 1 ] || fail "result on exit 1: wanted exit 1, got $code"
+result_is "result on exit 1" '.exit_code == 1 and .status == "failed" and .complete == false and .total_cost_usd == null
+  and .num_turns == null and .usage == null and .model == null and .report_status == null and .follow_up == []
+  and (.duration_ms | type) == "number"'
 
 # A hostile sandbox's out archive cannot write outside the run folder through links, nor replace run.json: its links
 # named after the files the host writes (run.json.tmp, progress.log, the scrub's temporaries) aim at $SANDBOX/victim.
@@ -430,6 +482,8 @@ fi
 [ ! -s "$SANDBOX/report" ] || fail "usage limit: something on stdout: $(cat "$SANDBOX/report")"
 [ ! -e "$W/hello.txt" ] || fail "usage limit: patch applied"
 run_data "usage limit run data" failed 5
+result_is "usage limit result" '.exit_code == 5 and .status == "failed" and .complete == false and .total_cost_usd == 0.42
+  and .num_turns == 3'
 rm -f "$SANDBOX/real" "$SANDBOX/limit"
 
 # --name labels the claim and its pod with the task and tags the progress; it is made a valid label value. run.json
@@ -671,6 +725,7 @@ if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
 fi
 jq -e '.state == "failed" and .exit_code == 143 and (.ended | type) == "number"' "$(kept)/run.json" >/dev/null 2>&1 \
   || fail "TERM: run.json not failed with exit 143: $(cat "$(kept)/run.json" 2>/dev/null)"
+result_is "TERM result" '.exit_code == 143 and .status == "failed" and .complete == false and .total_cost_usd == null'
 # INT does the same, exit 130. A background job of a script starts with INT ignored, which bash cannot undo: perl
 # sets it back to the default before running remote-agent.
 if command -v perl >/dev/null 2>&1; then
