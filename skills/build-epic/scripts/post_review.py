@@ -9,7 +9,8 @@ runs, so a relative path posts the file's text. `--comments` is a JSON array of 
 `<run>/logs/PR<n>-review.json` and posted with `gh api repos/{owner}/{repo}/pulls/<n>/reviews`.
 
 Prints `OK PR<n> review <url>`, or `FAIL PR<n> <reason> (log: ...)`: `empty-review` (the file is missing or blank),
-`bad-comments`, `pr-view`, `post`.
+`bad-comments`, `pr-view`, `post`, or `post-denied <report-file>` when GitHub refuses the review (HTTP 403, never
+retried): the report stays where it is, so the run's report can name it.
 """
 import json
 import re
@@ -20,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import core, gh, runfolder  # noqa: E402
 
+DENIED = re.compile(r"HTTP 403|returned error: 403")
 USAGE = "post_review.py <run> <PR> <report-file> [--comments <json>]"
 
 
@@ -90,6 +92,9 @@ def step(ctx):
     except (ValueError, AttributeError):
         url = None
     if res.rc != 0:
+        if DENIED.search(res.out + res.err):
+            ctx.note(f"GitHub refused the review; the findings stay in {report}")
+            raise core.Fail(f"post-denied {report}")
         raise core.Fail("post")
     return "review", url or f"#{number}"
 
