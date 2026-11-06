@@ -172,6 +172,104 @@ class RunWithSteps(unittest.TestCase):
             self.assertEqual(run[key], source[key], key)
 
 
+RUN_ROLES = str(FIXTURES / "run-roles.json")
+
+
+def role_rows(out):
+    """The by-role table's rows as {role: [runs, turns, cost, avg context]}, in printed order."""
+    rows = {}
+    for line in out.splitlines():
+        cells = [c.strip() for c in line.split("│")[1:-1]]
+        if cells and cells[0] != "Role":
+            rows[cells[0]] = cells[1:]
+    return rows
+
+
+def schema_3(run_text, descriptions):
+    """The run as schema 3 saved it: no role or cost per subagent, free-text descriptions."""
+    run = json.loads(run_text)
+    run["schemaVersion"] = 3
+    del run["pricingAsOf"]
+    agents = [a for span in run["spans"] for a in span["subagents"]]
+    assert len(agents) == len(descriptions)
+    for agent, description in zip(agents, descriptions):
+        del agent["role"], agent["cost"]
+        agent["description"] = description
+    return json.dumps(run)
+
+
+class ByRole(unittest.TestCase):
+    """run-roles.json: build-epic (4 subagents) then ship-pr (1), priced at model-a's $1 / $10 / $0.1 / $2 (1h write)."""
+
+    def test_one_row_per_role_after_the_orchestrator_by_cost(self):
+        # implement: 0.58 + 0.32; review: 0.01 + 0.05 + 0.05 + 0.10; other: 0.01 + 0.05 + 0.02; fix: 0.01 + 0.02 + 0.02
+        rows = role_rows(report(RUN_ROLES, "--by-role"))
+        self.assertEqual(list(rows), ["orchestrator", "implement", "review", "other", "fix", "Total"])
+        self.assertEqual(rows["implement"], ["2", "50", "$0.90", ""])
+        self.assertEqual(rows["review"], ["1", "10", "$0.21", ""])
+        self.assertEqual(rows["other"], ["1", "5", "$0.08", ""])
+        self.assertEqual(rows["fix"], ["1", "5", "$0.05", ""])
+
+    def test_the_orchestrator_is_each_span_minus_its_subagents(self):
+        # Turns 100 - 65 + 15 - 5 = 45; input 25k + 5k, output 10k + 3k, cache read 2.8M + 0.5M, write 100k:
+        # 0.03 + 0.13 + 0.33 + 0.20 = $0.69. Average context: 3.3M cache read / 45 turns = 73,333.
+        rows = role_rows(report(RUN_ROLES, "--by-role"))
+        self.assertEqual(rows["orchestrator"], ["1", "45", "$0.69", "73k"])
+        self.assertEqual(rows["Total"], ["6", "115", "$1.93", ""])
+
+    def test_the_total_adds_remote_runs_and_counts_those_without_cost(self):
+        # fixtures/remote: one run at $1.25 and 40 turns, one lost (nulls), one failed with 12 turns and no cost.
+        out = report(RUN_ROLES, "--by-role", "--run-folder", str(FIXTURES))
+        rows = role_rows(out)
+        self.assertEqual(rows["remote"], ["3", "52", "$1.25", ""])
+        self.assertEqual(rows["Total"], ["9", "167", "$3.18", ""])
+        self.assertEqual(list(rows)[-2:], ["remote", "Total"])
+        self.assertIn("\n2 remote runs without cost\n", out)
+
+    def test_a_run_folder_without_remote_runs_adds_no_remote_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = report(RUN_ROLES, "--by-role", "--run-folder", folder)
+        self.assertNotIn("remote", role_rows(out))
+        self.assertNotIn("without cost", out)
+
+    def test_a_schema_3_run_without_roles_falls_back_to_type_and_keywords(self):
+        run = schema_3(Path(RUN_ROLES).read_text(),
+                       ["Implement 01-01", "Implement 01-02", "Re-review PR 12", "Look around", "Fix PR 12"])
+        rows = role_rows(report("-", "--by-role", stdin=run))
+        self.assertEqual(rows["implement"], ["2", "50", "$0.90", ""])
+        self.assertEqual(rows["re-review"], ["1", "10", "$0.21", ""])
+        self.assertEqual(rows["other"], ["1", "5", "$0.08", ""])
+        self.assertEqual(rows["fix"], ["1", "5", "$0.05", ""])
+        self.assertNotIn("review", rows)
+
+    def test_old_names_map_onto_todays_roles(self):
+        # Ticket and tuner reviews, conflict resolvers and security reviews, as gh-35 described them.
+        run = schema_3(Path(RUN_ROLES).read_text(),
+                       ["Ticket review 01", "Review tuner PR 9", "Resolve conflicts in PR 3", "Security review PR 4", "x"])
+        run = run.replace('"Explore"', '"security-reviewer"').replace('"pr-fixer"', '"epic-planner"')
+        rows = role_rows(report("-", "--by-role", stdin=run))
+        self.assertEqual([r for r in rows if r not in ("orchestrator", "Total")],
+                         ["ticket-review", "review", "resolve", "security", "plan"])
+
+    def test_a_role_written_by_the_extractor_is_kept_over_the_fallback(self):
+        run = json.loads(Path(RUN_ROLES).read_text())
+        run["spans"][0]["subagents"][0]["role"] = "other"
+        rows = role_rows(report("-", "--by-role", stdin=json.dumps(run)))
+        self.assertEqual(rows["implement"][:2], ["1", "20"])
+        self.assertEqual(rows["other"][:2], ["2", "35"])
+
+    def test_cost_is_unknown_when_a_model_has_no_price(self):
+        rows = role_rows(report("-", "--by-role", stdin=unpriced(Path(RUN_ROLES).read_text())))
+        self.assertEqual(rows["implement"][2], "unknown")
+        self.assertEqual(rows["Total"][2], "unknown")
+
+    def test_run_folder_needs_by_role(self):
+        proc = subprocess.run([sys.executable, str(HERE / "report.py"), RUN_ROLES, "--run-folder", str(FIXTURES)],
+                              capture_output=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("--run-folder needs --by-role", proc.stderr)
+
+
 class PriceCheckHint(unittest.TestCase):
     """Fixture pricing.json is dated 2026-01-01."""
 

@@ -170,20 +170,128 @@ def price_check_hint(run, pricing, today):
     return None
 
 
+ROLE_HEADERS = ["Role", "Runs", "Turns", "Cost", "Avg context"]
+ROLE_KEY = ("Runs = subagents of that role · orchestrator = the spans minus their subagents · "
+            "Avg context = its cache-read tokens per turn")
+# Before schema 4 a subagent had no role: read it from its description's keywords, else its type.
+KEYWORD_ROLES = (("resolve", "resolve"), ("re-review", "re-review"), ("ticket", "ticket-review"),
+                 ("tuner", "review"), ("security", "security"))
+TYPE_ROLES = {"security-reviewer": "security", "pr-reviewer": "review", "epic-implementer": "implement",
+              "epic-planner": "plan", "epic-explorer": "explore", "test-tuner": "tune", "pr-fixer": "fix"}
+
+
+def role_of(agent):
+    if isinstance(agent.get("role"), str):
+        return agent["role"]
+    description = agent.get("description")
+    description = description.lower() if isinstance(description, str) else ""
+    for keyword, role in KEYWORD_ROLES:
+        if keyword in description:
+            return role
+    return TYPE_ROLES.get(agent.get("type"), "other")
+
+
+def minus(tokens_by_model, others):
+    left = {model: dict(counts) for model, counts in tokens_by_model.items()}
+    for other in others:
+        for model, counts in other.items():
+            into = left.setdefault(model, dict.fromkeys(TOKEN_KINDS, 0))
+            for kind in TOKEN_KINDS:
+                into[kind] -= counts[kind]
+    return left
+
+
+def plus(*costs):
+    return None if None in costs else sum(costs)
+
+
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def remote_runs(run_folder):
+    """(runs, turns, cost, runs without cost) over <run>/remote/*.json; unreadable files count as runs without cost."""
+    runs = turns = missing = 0
+    total = 0.0
+    for path in sorted((run_folder / "remote").glob("*.json")):
+        try:
+            result = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            result = None
+        result = result if isinstance(result, dict) else {}
+        runs += 1
+        turns += result["num_turns"] if is_number(result.get("num_turns")) else 0
+        if is_number(result.get("total_cost_usd")):
+            total += result["total_cost_usd"]
+        else:
+            missing += 1
+    return runs, turns, total, missing
+
+
+def by_role(run, pricing, run_folder=None):
+    """The cost-by-role table, and a line naming the remote runs without cost (or None)."""
+    roles = {}
+    for span in run["spans"]:
+        for agent in span["subagents"]:
+            entry = roles.setdefault(role_of(agent), {"runs": 0, "turns": 0, "tokens": []})
+            entry["runs"] += 1
+            entry["turns"] += agent["turns"]
+            entry["tokens"].append(agent["tokensByModel"])
+    agents = [a for span in run["spans"] for a in span["subagents"]]
+    own_turns = sum(s["turns"] for s in run["spans"]) - sum(a["turns"] for a in agents)
+    own_tokens = minus(merged_tokens(run["spans"]), [a["tokensByModel"] for a in agents])
+    own_cost = cost(own_tokens, pricing)
+    context = token_total(own_tokens, "cacheRead") // own_turns if own_turns > 0 else 0
+
+    body = [["orchestrator", "1", str(own_turns), money(own_cost), tokens(context)]]
+    runs, turns, total = 1, own_turns, own_cost
+    priced = []
+    for name, entry in roles.items():
+        role_cost = plus(*(cost(t, pricing) for t in entry["tokens"]))
+        priced.append((name, entry, role_cost))
+    priced.sort(key=lambda item: (item[2] is None, -(item[2] or 0), item[0]))
+    for name, entry, role_cost in priced:
+        body.append([name, str(entry["runs"]), str(entry["turns"]), money(role_cost), ""])
+        runs, turns, total = runs + entry["runs"], turns + entry["turns"], plus(total, role_cost)
+
+    note = None
+    if run_folder is not None:
+        remote, remote_turns, remote_cost, missing = remote_runs(run_folder)
+        if remote:
+            body.append(["remote", str(remote), str(remote_turns), money(remote_cost), ""])
+            runs, turns, total = runs + remote, turns + remote_turns, plus(total, remote_cost)
+        if missing:
+            note = f"{missing} remote run{'' if missing == 1 else 's'} without cost"
+    return table(body, ["Total", str(runs), str(turns), money(total), ""], ROLE_HEADERS, ROLE_KEY), note
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", help="run JSON file, or '-' for stdin")
     parser.add_argument("--pricing", default=HERE / "pricing.json")
     parser.add_argument("--save", metavar="LABEL", help="save the run as JSON under this label")
     parser.add_argument("--dir", type=Path, help="saved runs folder (default: <repo root>/.agents/telemetry)")
+    parser.add_argument("--by-role", action="store_true", help="one row per subagent role, plus the orchestrator")
+    parser.add_argument("--run-folder", type=Path, help="build-epic run folder whose remote/*.json add a remote row")
     parser.add_argument("--today", type=date.fromisoformat, default=date.today(), help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.run_folder and not args.by_role:
+        parser.error("--run-folder needs --by-role")
     # The table uses non-ASCII characters; Windows consoles default to a legacy code page.
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 
     pricing = json.loads(Path(args.pricing).read_text(encoding="utf-8"))
     run = load_run(args.run)
+    if args.by_role:
+        out, note = by_role(run, pricing, args.run_folder)
+        print(out)
+        if note:
+            print(f"\n{note}")
+        hint = price_check_hint(run, pricing, args.today)
+        if hint:
+            print(f"\n{hint}")
+        return
     body = [span_row(span, pricing) for span in run["spans"]]
     print(table(body, total_row(run, pricing) if len(body) > 1 else None))
     for span in run["spans"]:
