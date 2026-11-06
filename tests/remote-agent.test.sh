@@ -981,6 +981,7 @@ wait "$dead" || true
 # `kill -0` tells a live pid.
 me_start="Mon Jan  5 10:00:00 2026"
 mkdir -p "$SANDBOX/psbin" "$SANDBOX/psbin-none"
+# shellcheck disable=SC2016 # $4 is for the stub ps, not this shell
 printf '#!/bin/sh\ncase "$4" in %s) echo " %s" ;; %s) exit 1 ;; *) echo " Sat Jan  3 09:00:00 2026" ;; esac\n' \
   "$$" "$me_start" "$dead" >"$SANDBOX/psbin/ps"
 printf '#!/bin/sh\necho "ps: unknown option -- o" >&2\nexit 1\n' >"$SANDBOX/psbin-none/ps"
@@ -1003,7 +1004,7 @@ make_records() {
   # Not a run name, and a link out of the folder: neither is followed nor removed.
   rec remote-agent/-x "{\"state\":\"done\",\"started\":$old,\"ended\":$old}"
   mkdir -p "$SANDBOX/outside/agent-out"
-  printf "{\"state\":\"done\",\"started\":$old,\"ended\":$old}\n" >"$SANDBOX/outside/agent-out/run.json"
+  printf '{"state":"done","started":%s,"ended":%s}\n' "$old" "$old" >"$SANDBOX/outside/agent-out/run.json"
   ln -s "$SANDBOX/outside/agent-out" "$P/.git/remote-agent/agent-link"
   ln -s "$SANDBOX/outside" "$P/.git/remote-agent/agent-done/inside-link"
   touch -t 202001010000 "$P/.git/remote-agent/agent-done"
