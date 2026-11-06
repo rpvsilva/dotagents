@@ -59,6 +59,15 @@ def run(*args, script=HERE / "extract.py"):
     return copy.deepcopy(_RUNS[key])
 
 
+PRICING = json.loads((HERE.parents[2] / "skills" / "telemetry" / "pricing.json").read_text())
+
+
+def price(tokens_by_model):
+    """The cost of these tokens at the repo's prices, as the extractor saves it."""
+    return round(sum(tokens[kind] * PRICING["models"][model][kind] for model, tokens in tokens_by_model.items()
+                     for kind in tokens) / 1_000_000, 6)
+
+
 def by_name(run_):
     return {span["name"]: span for span in run_["spans"]}
 
@@ -97,8 +106,9 @@ class Spans(unittest.TestCase):
         self.assertEqual(span["toolCalls"], 2)
         self.assertEqual(span["wallClockSeconds"], 120)
         self.assertEqual(span["subagents"], [{
-            "type": "general-purpose", "description": "Fix PR", "turns": 2, "toolCalls": 1,
+            "type": "general-purpose", "description": "Fix PR", "role": "other", "turns": 2, "toolCalls": 1,
             "tools": {"Read": 1}, "tokensByModel": {"claude-haiku-5-5": times(HAIKU_TURN, 2)},
+            "cost": price({"claude-haiku-5-5": times(HAIKU_TURN, 2)}),
         }])
         self.assertEqual(self.spans["renovate-prs-2"]["subagents"], [])
 
@@ -236,8 +246,8 @@ class Steps(unittest.TestCase):
         cls.steps = cls.out["steps"]
         cls.by_label = {(s["tool"], s["label"]): s for s in cls.steps}
 
-    def test_the_run_is_schema_version_3(self):
-        self.assertEqual(self.out["schemaVersion"], 3)
+    def test_the_run_is_schema_version_4(self):
+        self.assertEqual(self.out["schemaVersion"], 4)
 
     def test_one_step_per_tool_call_in_start_order_subagents_included(self):
         self.assertEqual([(s["tool"], s["start"]) for s in self.steps], [
@@ -339,6 +349,100 @@ class Steps(unittest.TestCase):
     def test_a_patterns_file_with_rules_gives_labels(self):
         # Guards the two tests above: the copied tree itself is not what empties the labels.
         self.assertIn("git status", self.labels_from_a_copy("token ghp_[A-Za-z0-9]{36}\n"))
+
+
+class Roles(unittest.TestCase):
+    """roles.jsonl: Bash, bash and bash_placeholder calls, then three subagents: "review: PR 12" (haiku, with its own
+    bash and bash_placeholder), "Fix PR" (haiku) and "plan: epic 5" (a model with no price)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.out = run("--session", str(FIXTURES / "roles.jsonl"))
+        cls.span = cls.out["spans"][0]
+        cls.agents = {a["description"]: a for a in cls.span["subagents"]}
+
+    def test_a_subagent_saves_the_role_its_description_starts_with(self):
+        self.assertEqual(self.agents["review: PR 12"]["role"], "review")
+        self.assertEqual(self.agents["plan: epic 5"]["role"], "plan")
+
+    def test_a_subagent_with_no_known_prefix_saves_other(self):
+        self.assertEqual(self.agents["Fix PR"]["role"], "other")
+
+    def test_every_listed_prefix_names_its_role_and_nothing_else_does(self):
+        for role in extractor.ROLES:
+            self.assertEqual(extractor.role(f"{role}: PR 3"), role)
+        self.assertEqual(extractor.ROLES, ("implement", "review", "re-review", "ticket-review", "security", "fix",
+                                           "resolve", "tune", "plan", "explore"))
+        for description in ("review", "Review PR 3", "reviews: PR 3", "implement PR 3", "", None, 7):
+            self.assertEqual(extractor.role(description), "other")
+
+    def test_a_subagent_saves_its_cost_at_the_repos_prices(self):
+        agent = self.agents["review: PR 12"]
+        self.assertEqual(agent["tokensByModel"], {"claude-haiku-5-5": {
+            "input": 1000, "output": 2000, "cacheRead": 30000, "cacheWrite5m": 4000, "cacheWrite1h": 5000}})
+        self.assertEqual(agent["cost"], price(agent["tokensByModel"]))
+        self.assertGreater(agent["cost"], 0)
+
+    def test_a_subagent_on_a_model_with_no_price_saves_null_cost(self):
+        self.assertIsNone(self.agents["plan: epic 5"]["cost"])
+
+    def test_the_run_names_the_date_of_its_prices(self):
+        self.assertEqual(self.out["pricingAsOf"], PRICING["asOf"])
+
+    def from_a_copy(self, pricing=None, link=False):
+        """The run from an extractor at a/b/c/extract.py in a throwaway tree, holding this pricing text if any;
+        with link, that file is a link to the repo's extractor."""
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "a" / "b" / "c" / "extract.py"
+            script.parent.mkdir(parents=True)
+            if link:
+                script.symlink_to(HERE / "extract.py")
+            else:
+                shutil.copy(HERE / "extract.py", script)
+            if pricing is not None:
+                prices = Path(folder) / "skills" / "telemetry" / "pricing.json"
+                prices.parent.mkdir(parents=True)
+                prices.write_text(pricing)
+            proc = subprocess.run([sys.executable, str(script), "--session", str(FIXTURES / "roles.jsonl")],
+                                  capture_output=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_with_no_pricing_file_every_cost_is_null(self):
+        out = self.from_a_copy()
+        self.assertEqual([a["cost"] for a in out["spans"][0]["subagents"]], [None, None, None])
+        self.assertIsNone(out["pricingAsOf"])
+
+    def test_with_an_unreadable_pricing_file_every_cost_is_null(self):
+        out = self.from_a_copy("{not json")
+        self.assertEqual([a["cost"] for a in out["spans"][0]["subagents"]], [None, None, None])
+        self.assertIsNone(out["pricingAsOf"])
+
+    def test_prices_come_from_the_tree_the_extractor_sits_in(self):
+        prices = {"asOf": "2030-01-01", "models": {"claude-haiku-5-5": {
+            "input": 1, "output": 0, "cacheRead": 0, "cacheWrite5m": 0, "cacheWrite1h": 0}}}
+        out = self.from_a_copy(json.dumps(prices))
+        agents = {a["description"]: a for a in out["spans"][0]["subagents"]}
+        self.assertEqual((agents["review: PR 12"]["cost"], agents["Fix PR"]["cost"]), (0.001, 0.00001))
+        self.assertEqual(out["pricingAsOf"], "2030-01-01")
+
+    def test_a_linked_extractor_finds_prices_beside_its_real_file(self):
+        out = self.from_a_copy(link=True)
+        self.assertEqual(out["pricingAsOf"], PRICING["asOf"])
+        self.assertIsNotNone(out["spans"][0]["subagents"][0]["cost"])
+
+    def test_tool_names_differing_only_in_case_count_as_one(self):
+        self.assertEqual(self.agents["review: PR 12"]["tools"], {"Bash": 1})
+        self.assertEqual(self.span["tools"], {"Bash": 4, "Agent": 3})
+        self.assertEqual([s["tool"] for s in self.out["steps"]], ["Bash"] * 2 + ["Agent"] * 3 + ["Bash"] * 2)
+
+    def test_a_lowercase_bash_step_gets_a_bash_label(self):
+        self.assertIn("pytest -q", [s["label"] for s in self.out["steps"]])
+
+    def test_placeholder_calls_are_left_out_of_tools_tool_calls_and_steps(self):
+        self.assertEqual(self.agents["review: PR 12"]["toolCalls"], 1)
+        self.assertEqual(self.span["toolCalls"], 7)
+        self.assertNotIn("placeholder", json.dumps(self.out))
 
 
 class CrlfPatterns(unittest.TestCase):
