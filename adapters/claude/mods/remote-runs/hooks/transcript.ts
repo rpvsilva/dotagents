@@ -108,14 +108,31 @@ function firstLine(content: unknown): string {
       .filter(Boolean)
       .join('\n')
   }
-  return text.split('\n').find(l => l.trim() !== '') ?? ''
+  return text.split('\n').find(l => tidy(l).trim() !== '') ?? ''
 }
 
-function toolResult(block: Record<string, unknown>, toolNames: ReadonlyMap<string, string>): string {
-  const id = str(block.tool_use_id)
-  const tool = id === null ? undefined : toolNames.get(id)
-  const parts = ['<-', block.is_error === true ? 'ERROR' : '', tool ? `${tool}:` : '', firstLine(block.content)]
-  return parts.filter(Boolean).join(' ')
+/** What opens each kind of log line; lineStyle colors a line by it. */
+export const CALL = '▸ '
+export const RESULT = '  ⎿ '
+export const RESULT_ERROR = '  ⎿ ✗ '
+export const SESSION = '── session'
+export const DONE = '✓ done'
+export const FAILED = '✗ failed'
+
+// The sandbox's working copy, `/home/<user>/.remote-agent/runs/<run>/work`: a path under it is shown relative to it,
+// the folder itself as `.`.
+const SANDBOX_WORK = /(?:\/[^\s/'"`]+)*\/\.remote-agent\/runs\/[^\s/'"`]+\/work(?:(\/)|(?![\w.-]))/g
+
+/** `text` without the markup Claude Code wraps around some text (`<br>`, `<tool_use_error>`) and sandbox paths. */
+export function tidy(text: string): string {
+  return text
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/?tool_use_error>/g, '')
+    .replace(SANDBOX_WORK, (_m, slash) => (slash ? '' : '.'))
+}
+
+function toolResult(block: Record<string, unknown>): [string, string] {
+  return [block.is_error === true ? RESULT_ERROR : RESULT, firstLine(block.content) || '(no output)']
 }
 
 function contentBlocks(ev: Record<string, unknown>): unknown[] {
@@ -123,44 +140,47 @@ function contentBlocks(ev: Record<string, unknown>): unknown[] {
   return isObject(message) && Array.isArray(message.content) ? message.content : []
 }
 
-/** The final line of a run's stream: `done in <s>s, $<cost>`, or `FAILED <subtype>` when Claude ended in error. */
+/** The final line of a run's stream: `✓ done in <s>s · $<cost>`, or `✗ failed (<subtype>)` when Claude ended in error. */
 function resultLine(ev: Record<string, unknown>): string {
   const subtype = str(ev.subtype)
-  if (ev.is_error === true || (subtype !== null && subtype !== 'success')) return ['FAILED', subtype].filter(Boolean).join(' ')
+  if (ev.is_error === true || (subtype !== null && subtype !== 'success')) return subtype ? `${FAILED} (${subtype})` : FAILED
   const ms = num(ev.duration_ms)
   const cost = num(ev.total_cost_usd)
   const parts = [ms === null ? '' : `in ${Math.round(ms / 1000)}s`, cost === null ? '' : `$${cost.toFixed(2)}`].filter(Boolean)
-  return parts.length ? `done ${parts.join(', ')}` : 'done'
+  return parts.length ? `${DONE} ${parts.join(' · ')}` : DONE
 }
 
 /**
- * The log lines of one event, each through `oneLine`: the agent's text, `-> <tool> <summary>` per tool call,
- * `<- [ERROR] [<tool>:] <first line>` per tool result, `session started (<model>)` for the init event, and the
- * `result` line. Thinking, other system events and unknown types give none. Records each tool call's id in
- * `toolNames`, so its result names the tool.
+ * The log lines of one event, each one row (`oneLine`) after `tidy`: the agent's text, `▸ <tool> <summary>` per tool
+ * call, `  ⎿ <first line>` per tool result (`  ⎿ ✗ ` when it errored), `── session · <model> ──` for the init event,
+ * and the `result` line. Thinking, other system events and unknown types give none. Records each tool call's id in
+ * `toolNames`.
  */
 export function renderEvent(ev: TranscriptEvent, toolNames: Map<string, string>): string[] {
-  const raw: string[] = []
+  const raw: [string, string][] = []
   if (ev.type === 'system') {
-    if (ev.subtype === 'init') raw.push(['session started', str(ev.model) ? `(${ev.model})` : ''].filter(Boolean).join(' '))
+    if (ev.subtype === 'init') raw.push(['', str(ev.model) ? `${SESSION} · ${ev.model} ──` : `${SESSION} ──`])
   } else if (ev.type === 'assistant') {
     for (const b of contentBlocks(ev)) {
       if (!isObject(b)) continue
-      if (b.type === 'text' && str(b.text)?.trim()) raw.push(b.text as string)
+      if (b.type === 'text' && str(b.text)?.trim()) raw.push(['', b.text as string])
       if (b.type === 'tool_use') {
         const name = str(b.name) ?? 'tool'
         if (str(b.id)) toolNames.set(b.id as string, name)
-        raw.push(['->', name, summary(b.input)].filter(Boolean).join(' '))
+        raw.push([CALL, [name, summary(b.input)].filter(Boolean).join(' ')])
       }
     }
   } else if (ev.type === 'user') {
-    for (const b of contentBlocks(ev)) if (isObject(b) && b.type === 'tool_result') raw.push(toolResult(b, toolNames))
+    for (const b of contentBlocks(ev)) if (isObject(b) && b.type === 'tool_result') raw.push(toolResult(b))
   } else if (ev.type === 'tool_result') {
-    raw.push(toolResult(ev, toolNames))
+    raw.push(toolResult(ev))
   } else if (ev.type === 'result') {
-    raw.push(resultLine(ev))
+    raw.push(['', resultLine(ev)])
   }
-  return raw.map(l => oneLine(l)).filter(Boolean)
+  return raw
+    .map(([lead, text]) => [lead, oneLine(tidy(text), LINE_MAX - lead.length)])
+    .filter(([, text]) => text !== '')
+    .map(([lead, text]) => lead + text)
 }
 
 /** Every log line of a whole transcript's text, in order; a last line with no newline yet is left out. */
@@ -318,19 +338,33 @@ function shellQuote(s: string): string {
 }
 
 /**
- * How to pick a finished (done, failed or stopped) run up: `remote-agent resume <run> <worktree>` (the worktree
- * from run.json, shell-quoted) and the warning that it places a session the sandbox wrote; with no session.jsonl
- * (`hasSession` false), that it cannot be resumed. None for a run still going or one with no run.json. Mirrors the
- * session line remote-agent prints at the end of a run.
+ * The command that picks a finished (done, failed or stopped) run with a session up: `remote-agent resume <run>
+ * <worktree>` (the worktree from run.json, shell-quoted); null for a run still going or one with no session.jsonl.
+ */
+export function resumeCommand(row: Run, hasSession: boolean): string | null {
+  if (row.state !== 'done' && row.state !== 'failed' && row.state !== 'stopped') return null
+  if (!hasSession) return null
+  return ['remote-agent', 'resume', shellQuote(printable(row.id)), ...(row.worktree === null ? [] : [shellQuote(row.worktree)])].join(' ')
+}
+
+/** The warning under the resume command: it places a session the sandbox wrote. */
+export const RESUME_WARNING = "⚠ the sandbox wrote this session and it may hold forged turns: read the run folder's session.jsonl first"
+
+/**
+ * How to pick a finished run up: `resume: <resumeCommand>` and RESUME_WARNING; with no session.jsonl (`hasSession`
+ * false), that it cannot be resumed. None for a run still going. Mirrors the session line remote-agent prints at the
+ * end of a run.
  */
 export function resumeHint(row: Run, hasSession: boolean): string[] {
   if (row.state !== 'done' && row.state !== 'failed' && row.state !== 'stopped') return []
-  if (!hasSession) return ['no session came back: this run cannot be resumed']
-  const command = ['remote-agent', 'resume', shellQuote(printable(row.id)), ...(row.worktree === null ? [] : [shellQuote(row.worktree)])]
-  return [
-    `to resume: ${command.join(' ')}`,
-    `warning: it places a session the sandbox wrote, which may hold forged turns that read as yours: read ${printable(row.folder)}/session.jsonl first`,
-  ]
+  const command = resumeCommand(row, hasSession)
+  if (command === null) return ['no session came back: this run cannot be resumed']
+  return [`resume: ${command}`, RESUME_WARNING]
+}
+
+/** `path` with the home folder (`/Users/<name>` or `/home/<name>`) as `~`. */
+export function shortPath(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
 }
 
 /** How many rows `line` takes wrapped at `columns`, as a terminal wraps text: at spaces, a longer word cut. */
@@ -352,18 +386,70 @@ export function wrappedRows(line: string, columns: number): number {
 }
 
 /** How the pane draws a log line: a theme color, or dim; `{}` for the agent's own text. */
-export type LineStyle = { color?: 'suggestion' | 'success' | 'error'; dimColor?: true }
+export type LineStyle = { color?: 'suggestion' | 'success' | 'error' | 'warning'; dimColor?: true }
 
 /**
- * A log line's style from what renderEvent made of it: a tool call (`->`) in the suggestion color, a tool result
- * (`<-`) dim and an errored one red, the session line dim, the end line green (`done`) or red (`FAILED`).
+ * A log line's style from what renderEvent made of it: a tool call in the suggestion color, a tool result dim and an
+ * errored one red, the session rule dim, the end line green (done) or red (failed); the resume warning in the
+ * warning color.
  */
 export function lineStyle(line: string): LineStyle {
-  if (line.startsWith('-> ')) return { color: 'suggestion' }
-  if (line.startsWith('<- ERROR')) return { color: 'error' }
-  if (line.startsWith('<- ')) return { dimColor: true }
-  if (line.startsWith('session started')) return { dimColor: true }
-  if (/^done( in \d+s)?(,? ?\$\d+\.\d{2})?$/.test(line)) return { color: 'success' }
-  if (/^FAILED( \S+)?$/.test(line)) return { color: 'error' }
+  if (line.startsWith(CALL)) return { color: 'suggestion' }
+  if (line.startsWith(RESULT_ERROR)) return { color: 'error' }
+  if (line.startsWith(RESULT)) return { dimColor: true }
+  if (line.startsWith(SESSION)) return { dimColor: true }
+  if (line === RESUME_WARNING) return { color: 'warning' }
+  if (/^✓ done(?: in \d+s)?(?:(?: ·)? \$\d+\.\d{2})?$/.test(line)) return { color: 'success' }
+  if (/^✗ failed( \(\S+\))?$/.test(line)) return { color: 'error' }
   return {}
+}
+
+/** What kind of log line a renderEvent line is, and its parts: a call's tool name, the text after the lead. */
+export type LinePart =
+  | { kind: 'call'; tool: string; rest: string }
+  | { kind: 'result' | 'error' | 'done' | 'failed' | 'text'; rest: string }
+  | { kind: 'session'; rest: string }
+
+/** A log line split for drawing: a tool call's name apart from its summary, a result without its lead. */
+export function lineParts(line: string): LinePart {
+  if (line.startsWith(CALL)) {
+    const body = line.slice(CALL.length)
+    const space = body.indexOf(' ')
+    return space < 0 ? { kind: 'call', tool: body, rest: '' } : { kind: 'call', tool: body.slice(0, space), rest: body.slice(space + 1) }
+  }
+  if (line.startsWith(RESULT_ERROR)) return { kind: 'error', rest: line.slice(RESULT_ERROR.length) }
+  if (line.startsWith(RESULT)) return { kind: 'result', rest: line.slice(RESULT.length) }
+  if (line.startsWith(SESSION)) return { kind: 'session', rest: line.replace(/ ──$/, '') }
+  const style = lineStyle(line)
+  if (line.startsWith(DONE) && style.color === 'success') return { kind: 'done', rest: line.slice(DONE.length).trim() }
+  if (line.startsWith(FAILED) && style.color === 'error') return { kind: 'failed', rest: line.slice(FAILED.length).trim() }
+  return { kind: 'text', rest: line }
+}
+
+/** A session line as a rule across `width` columns: `── session · <model> ─────…`. */
+export function sessionRule(line: string, width: number): string {
+  const head = `${line.replace(/ ──$/, '')} `
+  return head + '─'.repeat(Math.max(2, Math.floor(width) - head.length))
+}
+
+/** How many rows code takes at `columns`: a terminal may cut it at any character, or wrap it at spaces. */
+function codeRows(source: string, columns: number): number {
+  const width = Math.max(1, Math.floor(columns))
+  return Math.max(wrappedRows(source, width), Math.ceil(source.length / width) || 1)
+}
+
+/** The columns a bordered card with one column of padding each side takes from its content. */
+export const CARD_X = 4
+
+/**
+ * How many rows the part under the log takes at `columns`, with the blank row above it: the resume card (its border,
+ * the command and the warning) for a run that can be resumed, the no-session note for a finished one that cannot,
+ * none for a run still going.
+ */
+export function hintRows(row: Run, hasSession: boolean, columns: number): number {
+  const hint = resumeHint(row, hasSession)
+  if (hint.length === 0) return 0
+  const command = resumeCommand(row, hasSession)
+  if (command === null) return 1 + hint.reduce((n, line) => n + wrappedRows(line, columns), 0)
+  return 1 + 2 + codeRows(command, columns - CARD_X) + wrappedRows(RESUME_WARNING, columns - CARD_X)
 }

@@ -204,7 +204,8 @@ export function formatRow(r: Run): { label: string; status: string; detail: stri
   return {
     label: r.name ?? r.id,
     status: [[r.state, r.elapsed].filter(Boolean).join(' '), r.ago].filter(Boolean).join(' · '),
-    detail: [...timings, ...(r.step ? [r.step] : [])].join(' · '),
+    // The last step without the `remote-agent: ` every progress line opens with.
+    detail: [...(r.step ? [r.step.replace(/^remote-agent: /, '')] : []), ...timings].join(' · '),
     ...LOOK[r.state],
   }
 }
@@ -272,4 +273,23 @@ export function newLiveRuns(runs: readonly Run[], known: ReadonlySet<string> | n
  */
 export function openPaneSetting(exitCode: number | null, stdout: string): boolean {
   return !(exitCode === 0 && stdout.trim() === 'false')
+}
+
+/**
+ * The log header's second row: the exit code once finished, the claim / send / first-event timings, and the worktree's
+ * folder name; `no details yet` when none is known.
+ */
+export function metaLine(r: Run): string {
+  const timings = ([['claim', r.claim_s], ['send', r.send_s], ['first event', r.first_event_s]] as const)
+    .filter(([, s]) => s !== null)
+    .map(([what, s]) => `${what} ${s}s`)
+  const exit = r.exit_code !== null && r.state !== 'starting' && r.state !== 'running' ? [`exit ${r.exit_code}`] : []
+  const worktree = r.worktree === null ? [] : [r.worktree.replace(/\/+$/, '').split('/').pop() ?? '']
+  const parts = [...exit, ...timings, ...worktree].filter(Boolean)
+  return parts.length ? parts.join(' · ') : 'no details yet'
+}
+
+/** The log header's status beside the state badge: elapsed time and, once finished, how long ago. */
+export function whenLine(r: Run): string {
+  return [r.elapsed, r.ago].filter(Boolean).join(' · ')
 }
