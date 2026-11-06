@@ -6,7 +6,7 @@ leaves them open. A ticket body is the orchestrator's text (filling the repo's P
 `PR:` links, then `Closes #n` for each issue. `empty_sections` names the template's sections a body leaves empty.
 
 `<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`),
-`passed` or `rc`, and optionally `seconds`.
+`rc` (or, in older files, a boolean `passed`), and optionally `seconds`.
 """
 import json
 import re
@@ -48,7 +48,7 @@ def _result(run, ident):
         if not isinstance(s, dict):
             continue
         name = s.get("command") or s.get("suite") or s.get("name") or "?"
-        passed = s["passed"] if "passed" in s else s.get("rc") == 0
+        passed = s["rc"] == 0 if "rc" in s else s.get("passed") is True
         secs = f" in {s['seconds']:g}s" if isinstance(s.get("seconds"), (int, float)) else ""
         lines.append(f"- `{name}`: {'passed' if passed else 'failed'}{secs}")
     return "\n".join(lines) or NO_RESULT
