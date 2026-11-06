@@ -134,7 +134,7 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 
 ## 🚀 Install
 
-Needs `bash`, `git` and `jq`. The `claude` CLI is needed for plugins and MCP servers. `python3` is needed for `telemetry`, and `gh` for the PR skills.
+Needs `bash`, `git` and `jq`. The `claude` CLI is needed for plugins and MCP servers. `python3` (3.9 or later) is needed for `telemetry` and `build-epic` (its step scripts), and `gh` for the PR skills.
 
 ```sh
 git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
