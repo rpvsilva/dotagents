@@ -2,6 +2,7 @@
 """The run's tracker updates outside starting a ticket: the plan comment, the `blocked` label, claims, held updates.
 
 Usage: python3 -I tracker_cmd.py <run> planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush
+                                      | close-epic [<n>]
 
 - `planned` puts the plan in one comment on every ticket's issue, claimed ones included, editing the comment that
   starts with `<!-- build-epic-plan -->` when there is one. The comment holds `<run>/plan/TT.md` when the orchestrator
@@ -13,6 +14,8 @@ Usage: python3 -I tracker_cmd.py <run> planned | blocked <TT|TT-NN> <why> | unbl
 - `claims` sets each `ready` ticket with an issue assigned to anyone but the human to `claimed`, recording who on a
   `Claimed by:` line. Prints `OK claims claimed <n> tickets [TT ...]`.
 - `flush` applies the updates held while the identity was away. Prints `OK tracker flushed <n> held`.
+- `close-epic` closes the epic's issue (`<n>`, else `run.md`'s `Epic:` line from `init_run.py --epic`) once every
+  ticket's issue is closed. Prints `OK epic closed #<n>`, or `OK epic open #<a> #<b>` naming the issues still open.
 
 Every command applies held updates first. When the `tracker` Setting names another tracker, nothing is touched and
 the line ends `manual tracker=<name>`: the orchestrator makes the update through that tracker's connector.
@@ -24,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import core, gh, runfolder, tracker  # noqa: E402
 
-USAGE = "planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush"
+USAGE = "planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush | close-epic [<n>]"
 BLOCKED = "blocked"
 
 
@@ -159,6 +162,33 @@ def flush(ctx):
     return "flushed", f"{held} held"
 
 
+def close_epic(ctx):
+    if len(ctx.args) > 1:
+        raise core.Fail(f"usage: tracker_cmd.py <run> {USAGE}")
+    given = ctx.args[0] if ctx.args else runfolder.get(ctx.run_dir / "run.md", "Epic")
+    found = tracker.issues(given)
+    if len(found) != 1:
+        raise core.Fail("no-epic: name it, or record it with init_run.py --epic <n>")
+    epic = found[0]
+    t, other = open_tracker(ctx)
+    if other:
+        return "manual", f"tracker={other}"
+    still = []
+    for ticket in tickets(ctx.run_dir):
+        for n in tracker.issues(runfolder.get(ticket, "Issue")):
+            if n == epic or f"#{n}" in still:
+                continue
+            res = gh.gh(["issue", "view", str(n), "--json", "state", "--jq", ".state"], ctx.log, cwd=t.repo)
+            if res.rc != 0:
+                raise core.Fail("gh-issue-view")
+            if res.out.strip().upper() != "CLOSED":
+                still.append(f"#{n}")
+    if still:
+        return "open", " ".join(still)
+    t.close(epic, "Every ticket of this epic is closed.")
+    return "closed", f"#{epic}"
+
+
 def no_args(fn):
     def step(ctx):
         if ctx.args:
@@ -169,7 +199,7 @@ def no_args(fn):
 
 # The commands that act on the run: the id on their output line and their step.
 RUN_COMMANDS = {"planned": ("plan", no_args(planned)), "claims": ("claims", no_args(claims)),
-                "flush": ("tracker", no_args(flush))}
+                "flush": ("tracker", no_args(flush)), "close-epic": ("epic", close_epic)}
 # The commands that act on one ticket, named by its number or a task's id: `fn(ctx, target)`.
 TICKET_COMMANDS = {"blocked": blocked, "unblocked": unblocked}
 

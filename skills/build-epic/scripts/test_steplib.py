@@ -114,9 +114,15 @@ class RunFolderPathTest(KitCase):
         p = self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.one_line(p),
-                         f"OK run initialised repo={self.kit.clone} default=main remote={self.kit.origin}")
+                         f"OK run initialised repo={self.kit.clone} default=main remote={self.kit.origin} identity=login")
         self.assertEqual(runfolder.run_info(self.kit.run_dir),
                          {"Repo": str(self.kit.clone), "Default": "main", "Remote": str(self.kit.origin)})
+        self.assertEqual(runfolder.get(self.kit.run_dir / "run.md", "Identity"), "login")
+
+    def test_init_run_records_the_epic_given_with_epic(self):
+        p = self.kit.step(INIT_RUN, self.kit.run_dir, self.kit.clone, "--epic", "#181")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(runfolder.get(self.kit.run_dir / "run.md", "Epic"), "#181")
 
     def test_from_root_from_a_linked_run_and_from_a_relative_run_give_the_same_result(self):
         linked = self.kit.link(self.kit.run_dir, "run-link")

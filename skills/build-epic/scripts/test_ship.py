@@ -15,7 +15,7 @@ SHIP = SCRIPTS / "ship_ticket.py"
 REPO = SCRIPTS.parents[2]
 
 # `gh pr view` answers like GitHub: the PR's head is the ticket branch's tip on origin, its state `answers/pr-state`
-# (default MERGED). Every other call goes to the testkit stub.
+# (default MERGED), its base `answers/pr-base` (default main). Every other call goes to the testkit stub.
 PR_VIEW = r'''#!{python} -IS
 import os, sys
 d = os.environ["GH_STUB_DIR"]
@@ -25,12 +25,44 @@ if args[:2] != ["pr", "view"]:
 import json, subprocess
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
-p = os.path.join(d, "answers", "pr-state")
-state = open(p).read().strip() if os.path.exists(p) else "MERGED"
+with open(os.path.join(d, "gh-tokens.log"), "a") as f:
+    f.write(os.environ.get("GH_TOKEN", "") + "\n")
+
+def answer(name, default):
+    p = os.path.join(d, "answers", name)
+    return open(p).read().strip() if os.path.exists(p) else default
+
 head = subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "feat/t"], capture_output=True, text=True)
-print(json.dumps({{"state": state, "headRefOid": head.stdout.strip()}}))
+print(json.dumps({{"state": answer("pr-state", "MERGED"), "headRefOid": head.stdout.strip(),
+                  "baseRefName": answer("pr-base", "main")}}))
 '''
 
+TEMPLATE = """## Summary
+
+## Testing
+
+<!-- What you ran and its result. TODO, N/A or an unchecked box counts as empty. -->
+
+## Risk
+
+## How to revert
+"""
+FILLED = """## Summary
+
+Cuts the JSON step in two.
+
+## Testing
+
+tests/run.sh: all ok
+
+## Risk
+
+Low: scripts only.
+
+## How to revert
+
+Revert the squash commit.
+"""
 TICKET = "# 01: Ship JSON things\nStatus: building\nIssue: #7, #8\nBranch: feat/t\nBlocked by: none\n"
 TASK = "# 01-{nn}: task {nn}\nStatus: done\nTicket: 01\nBlocked by: none\nWrites: x\nPR: https://github.com/o/r/pull/{pr}\n"
 REVIEWS = "api-repos__owner___repo__pulls_{n}_reviews"
@@ -71,6 +103,21 @@ class Base(unittest.TestCase):
 
     def head(self):
         return self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", "feat/t")
+
+    def commit_to_base(self, path, text):
+        """Commits `path` on `main` and moves `feat/t` along, as a file the repo had before the ticket started."""
+        clone = self.kit.clone
+        (clone / path).parent.mkdir(parents=True, exist_ok=True)
+        (clone / path).write_text(text)
+        self.kit.git("add", path, cwd=clone)
+        self.kit.git("commit", "-qm", f"add {path}", cwd=clone)
+        self.kit.git("push", "-q", "origin", "main", "main:feat/t", cwd=clone)
+        self.kit.git("fetch", "-q", "origin", cwd=clone)
+
+    def set_setting(self, key, value):
+        p = subprocess.run([str(self.kit.home / ".agents/bin/settings"), "set", "build-epic", key, value, "--machine"],
+                           env=self.kit.env, text=True, capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
 
 
 class PostReviewTest(Base):
@@ -177,6 +224,52 @@ class ShipOpenTest(Base):
         self.assertRegex(self.ship("open"), r"^FAIL 01 pr-create \(log: ")
         self.assertIsNone(runfolder.get(self.ticket, "PR"))
 
+    def body_file(self, text):
+        path = self.kit.tmp / "body.md"
+        path.write_text(text)
+        return path
+
+    def test_the_orchestrators_body_fills_the_template_and_the_script_adds_tasks_and_closes(self):
+        self.commit_to_base(".github/pull_request_template.md", TEMPLATE)
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
+        body = self.body_file(FILLED)
+        line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open", "--body-file", body))
+        self.assertEqual(line, "OK 01 open pr=20")
+        edit = self.calls("pr", "edit")[0]
+        sent = Path(edit[edit.index("--body-file") + 1]).read_text()
+        self.assertTrue(sent.startswith(FILLED), sent)
+        self.assertIn("task 01: https://github.com/o/r/pull/5", sent)
+        self.assertIn("Closes #7\nCloses #8", sent)
+
+    def test_a_relative_body_file_is_read_from_the_callers_folder(self):
+        work = self.kit.tmp / "work"
+        work.mkdir()
+        (work / "body.md").write_text(FILLED)
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
+        line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open", "--body-file", "body.md", cwd=work))
+        self.assertEqual(line, "OK 01 open pr=20")
+        edit = self.calls("pr", "edit")[0]
+        self.assertIn("Cuts the JSON step", Path(edit[edit.index("--body-file") + 1]).read_text())
+
+    def test_a_template_section_left_empty_todo_or_na_is_refused_and_nothing_is_sent(self):
+        self.commit_to_base(".github/pull_request_template.md", TEMPLATE)
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
+        cases = {
+            "no body": None,
+            "empty Risk": FILLED.replace("Low: scripts only.", ""),
+            "TODO Testing": FILLED.replace("tests/run.sh: all ok", "TODO"),
+            "N/A revert": FILLED.replace("Revert the squash commit.", "N/A"),
+            "only a comment": FILLED.replace("Low: scripts only.", "<!-- say the risk -->"),
+            "an unchecked box": FILLED.replace("tests/run.sh: all ok", "- [ ] ran the tests"),
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                args = ["open"] if text is None else ["open", "--body-file", self.body_file(text)]
+                line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", *args))
+                self.assertRegex(line, r"^FAIL 01 empty-template-section ")
+        self.assertEqual(self.calls("pr", "edit"), [])
+        self.assertEqual(self.calls("pr", "ready"), [])
+
 
 class ShipMergeTest(Base):
     def setUp(self):
@@ -207,10 +300,35 @@ class ShipMergeTest(Base):
         self.assertFalse(self.wt.exists())
         self.assertEqual(self.kit.git("branch", "--list", "feat/t", cwd=self.kit.clone), "")
 
-    def test_a_non_default_base_leaves_the_issues_open(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
+    def test_a_pr_into_another_base_leaves_the_issues_open_whatever_decisions_md_says(self):
+        (self.kit.answers / "pr-base").write_text("integ")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_a_pr_into_the_default_branch_closes_the_issues_whatever_decisions_md_says(self):
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
+        self.assertEqual([c[:3] for c in self.calls("issue", "close")], [["issue", "close", "7"], ["issue", "close", "8"]])
+
+    def test_without_a_merge_rule_a_gated_repo_refuses_to_merge_into_the_default_branch(self):
+        self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 no-merge-rule \(log: ")
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+        self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
+        self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
+        (self.kit.answers / "pr-base").write_text("integ")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
+        self.assertEqual(len(self.calls("pr", "merge")), 1)
+
+    def test_a_gh_merge_naming_a_required_review_fails_and_is_never_in_review(self):
+        (self.kit.answers / "pr-state").write_text("OPEN")
+        self.kit.answer("pr-merge", err="X Pull request #20 is not mergeable: At least 1 approving review is required.\n",
+                        rc=1)
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 merge \(log: ")
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
 
     def test_a_rule_waiting_on_a_human_approval_leaves_it_in_review(self):
         (self.kit.answers / "pr-state").write_text("OPEN")
@@ -232,6 +350,69 @@ class ShipMergeTest(Base):
     def test_without_a_pr_it_fails(self):
         (self.kit.run_dir / "tickets" / "01-t.md").write_text(TICKET)
         self.assertRegex(self.ship("merge"), r"^FAIL 01 no-pr \(log: ")
+
+
+class IdentityTest(Base):
+    """The run's identity, decided by `init_run.py` from the `identity_command` Setting, mints a token per gh call."""
+
+    def token_command(self):
+        """A command printing `tok<n>` on its n-th run, counting its runs in `tokens.count`."""
+        path = self.kit.tmp / "token.sh"
+        count = self.kit.tmp / "tokens.count"
+        path.write_text(f'#!/usr/bin/env bash\nn=$(( $(cat "{count}" 2>/dev/null || echo 0) + 1 ))\n'
+                        f'echo "$n" >"{count}"\necho "tok$n"\n')
+        path.chmod(0o755)
+        return path
+
+    def init(self):
+        p = self.kit.step(SCRIPTS / "init_run.py", self.kit.run_dir, self.kit.clone)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        return p.stdout
+
+    def test_every_gh_call_gets_a_fresh_token_from_the_identity_command(self):
+        self.set_setting("identity_command", str(self.token_command()))
+        self.init()
+        self.assertEqual(runfolder.get(self.kit.run_dir / "run.md", "Identity"), str(self.kit.tmp / "token.sh"))
+        self.kit.answer("pr-list", err="HTTP 502: Bad Gateway", rc=1, n=1)
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
+        self.assertEqual(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open")), "OK 01 open pr=30")
+        tokens = self.kit.gh_tokens()
+        self.assertEqual(len(tokens), 3)
+        self.assertEqual(len(set(tokens)), 3, tokens)
+        self.assertTrue(all(t.startswith("tok") for t in tokens), tokens)
+        log = (self.kit.run_dir / "logs" / "01-ship_ticket.log").read_text()
+        self.assertNotIn("tok1", log)
+
+    def test_the_merge_rule_runs_as_the_identity(self):
+        self.set_setting("identity_command", str(self.token_command()))
+        self.init()
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
+        seen = self.kit.tmp / "rule-token"
+        rule = self.kit.tmp / "merge-rule.sh"
+        rule.write_text(f'#!/usr/bin/env bash\necho "$GH_TOKEN" >"{seen}"\n')
+        rule.chmod(0o755)
+        self.set_setting("merge_command", f"{rule} {{pr}}")
+        self.assertEqual(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "merge")), "OK 01 merged pr=20")
+        self.assertRegex(seen.read_text().strip(), r"^tok\d+$")
+
+    def test_a_failing_identity_command_fails_the_step_and_calls_no_gh(self):
+        bad = self.kit.tmp / "bad.sh"
+        bad.write_text("#!/usr/bin/env bash\necho 'no key' >&2\nexit 1\n")
+        bad.chmod(0o755)
+        self.set_setting("identity_command", str(bad))
+        self.init()
+        self.assertRegex(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open")),
+                         r"^FAIL 01 identity-token \(log: ")
+        self.assertEqual(self.kit.gh_calls(), [])
+
+    def test_with_no_identity_named_gh_runs_as_the_current_login(self):
+        self.init()
+        self.assertEqual(runfolder.get(self.kit.run_dir / "run.md", "Identity"), "login")
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
+        self.assertEqual(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open")), "OK 01 open pr=30")
+        self.assertEqual(set(self.kit.gh_tokens()), {""})
 
 
 class ChecksReportTest(unittest.TestCase):

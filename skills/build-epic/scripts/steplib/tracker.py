@@ -65,8 +65,8 @@ class Tracker:
 
     # -- gh ------------------------------------------------------------------------------------------------------
 
-    def _gh(self, args, what, env=None):
-        res = gh.gh(args, self.log, cwd=self.repo, env=env)
+    def _gh(self, args, what, env=None, identity=True):
+        res = gh.gh(args, self.log, cwd=self.repo, env=env, identity=identity)
         if res.rc != 0:
             raise core.Fail(f"gh-{what}")
         return res.out
@@ -86,7 +86,7 @@ class Tracker:
             state = self._load()
             if not state["human"]:
                 env = {k: v for k, v in os.environ.items() if k != "GH_TOKEN"}
-                login = self._gh(["api", "user", "--jq", ".login"], "human", env=env).strip()
+                login = self._gh(["api", "user", "--jq", ".login"], "human", env=env, identity=False).strip()
                 if not login:
                     raise core.Fail("gh-human")
                 state["human"] = login

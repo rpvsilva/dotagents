@@ -1,0 +1,6 @@
+{
+  "build-epic": {
+    "merge_command": "scripts/merge-pr.sh {pr}",
+    "identity_command": "scripts/gh-app-token.sh"
+  }
+}

@@ -3,7 +3,8 @@
 The rule is the `merge_command` Setting (e.g. `scripts/merge-pr.sh {pr}`, run from the repo root with `{pr}` and
 `{sha}` filled in) or, when it is unset, `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`.
 Before merging, the PR's head must be the pushed `sha` (a fresh push can take a few seconds to show); after, the PR
-must read `MERGED` at that head. Fails `head-moved` or `merge`.
+must read `MERGED` at that head. Fails `head-moved` or `merge`; a `merge` failure carries the rule's own output in
+its `said` attribute, so a caller can read the rule's answer and nothing else.
 """
 import json
 import os
@@ -29,8 +30,8 @@ def setting(repo, key, log, section="build-epic"):
 
 
 def view(pr, log, repo):
-    """The PR's `state` and `headRefOid`, as a dict."""
-    res = gh.gh(["pr", "view", pr, "--json", "state,headRefOid"], log, cwd=repo)
+    """The PR's `state`, `headRefOid` and `baseRefName`, as a dict."""
+    res = gh.gh(["pr", "view", str(pr), "--json", "state,headRefOid,baseRefName"], log, cwd=repo)
     try:
         got = json.loads(res.out) if res.rc == 0 else None
     except ValueError:
@@ -65,7 +66,9 @@ def merge(pr, sha, repo, log, command=None):
         log.write(f"PR #{pr} head stayed {head}; pushed {sha}\n")
         raise core.Fail("head-moved")
     argv = merge_argv(command, pr, sha)
-    res = gh.retry(argv, log, cwd=repo) if argv[0] == "gh" else core.run(argv, log, cwd=repo)
+    # The rule runs as the run's identity too: its own `gh` calls read `GH_TOKEN`.
+    res = gh.retry(argv, log, cwd=repo) if argv[0] == "gh" else core.run(argv, log, cwd=repo,
+                                                                         env=gh.identity_env(log))
     if res.rc != 0 and re.search(r"match-head-commit|Head branch was modified|expected head sha",
                                  res.out + res.err, re.IGNORECASE):
         raise core.Fail("head-moved")
@@ -74,6 +77,8 @@ def merge(pr, sha, repo, log, command=None):
     got = view(pr, log, repo)
     log.write(f"PR #{pr} reads {got.get('state')} at {got.get('headRefOid')}; merge rule exited {res.rc}\n")
     if got.get("state") != "MERGED":
-        raise core.Fail("merge")
+        fail = core.Fail("merge")
+        fail.said = res.out + res.err
+        raise fail
     if got.get("headRefOid") != sha:
         raise core.Fail("head-moved")

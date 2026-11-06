@@ -184,6 +184,37 @@ class ClaimsTest(RunCase):
         self.assertTrue(self.one_line(p).startswith("FAIL launch usage: "), p.stdout)
 
 
+class CloseEpicTest(RunCase):
+    def state(self, call, state):
+        """The n-th `gh issue view` answers `state`."""
+        self.kit.answer(key("issue", "view"), out=state + "\n", n=call)
+
+    def close_epic(self, *args):
+        return self.kit.step(TRACKER, self.kit.run_dir, "close-epic", *args)
+
+    def test_closes_the_epic_once_every_ticket_issue_is_closed(self):
+        runfolder.set_header(self.kit.run_dir / "run.md", "Epic", "#4")
+        for n in (1, 2, 3):
+            self.state(n, "CLOSED")
+        self.assertEqual(self.ok(self.close_epic()), "OK epic closed #4")
+        views = [c[2] for c in self.updates() if c[:2] == ["issue", "view"]]
+        self.assertEqual(views, ["5", "6", "7"])
+        closes = [c for c in self.updates() if c[:2] == ["issue", "close"]]
+        self.assertEqual([c[2] for c in closes], ["4"])
+
+    def test_an_open_ticket_issue_leaves_the_epic_open(self):
+        self.state(1, "CLOSED")
+        self.state(2, "OPEN")
+        self.state(3, "CLOSED")
+        self.assertEqual(self.ok(self.close_epic("4")), "OK epic open #6")
+        self.assertEqual([c for c in self.updates() if c[:2] == ["issue", "close"]], [])
+
+    def test_without_an_epic_issue_it_is_refused(self):
+        line = self.one_line(self.close_epic())
+        self.assertRegex(line, r"^FAIL epic no-epic: ")
+        self.assertEqual([c for c in self.updates() if c[:2] == ["issue", "close"]], [])
+
+
 class CleanTest(RunCase):
     def setUp(self):
         super().setUp()

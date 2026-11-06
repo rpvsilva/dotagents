@@ -7,7 +7,8 @@ the run folder `init_run.py` writes are built once per process and copied into e
 The stub `gh` appends each call's argv as one JSON line to `kit.gh_log` and answers from files in `kit.answers`:
 for a call whose first two arguments are `pr merge`, the key is `pr-merge`; the n-th such call prints
 `<key>.<n>.out` to stdout and `<key>.<n>.err` to stderr and exits with `<key>.<n>.rc`, falling back to `<key>.out`,
-`<key>.err` and `<key>.rc`, and to empty output and rc 0. `kit.answer(...)` writes those files.
+`<key>.err` and `<key>.rc`, and to empty output and rc 0. `kit.answer(...)` writes those files. Each call's
+`GH_TOKEN` (empty when unset) goes on one line of `kit.gh_tokens()`.
 """
 import atexit
 import json
@@ -38,6 +39,8 @@ def quote(s):  # json.dumps(s), without importing json: that import is half this
 
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write("[" + ", ".join(map(quote, sys.argv[1:])) + "]\n")
+with open(os.path.join(d, "gh-tokens.log"), "a") as f:
+    f.write(os.environ.get("GH_TOKEN", "") + "\n")
 key = "".join(c if c.isascii() and (c.isalnum() or c in "_.-") else "_" for c in "-".join(sys.argv[1:3])) or "none"
 count = os.path.join(d, "answers", key + ".count")
 n = int(open(count).read()) + 1 if os.path.exists(count) else 1
@@ -176,6 +179,11 @@ class Kit:
         if not self.gh_log.exists():
             return []
         return [json.loads(line) for line in self.gh_log.read_text().splitlines()]
+
+    def gh_tokens(self):
+        """The `GH_TOKEN` each call of the stub `gh` ran with ("" when unset), in order."""
+        path = self.stub / "gh-tokens.log"
+        return path.read_text().splitlines() if path.exists() else []
 
     def link(self, target, name):
         """A symlink `<tmp>/<name>` to `target`; returns its path."""

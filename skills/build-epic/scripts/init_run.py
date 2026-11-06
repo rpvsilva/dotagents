@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
-"""Records the run's repo, its default branch and its remote in `<run>/run.md`, so later steps never read the
-current folder.
+"""Records the run's repo, its default branch, its remote and its identity in `<run>/run.md`, so later steps never
+read the current folder.
 
-Usage: python3 -I init_run.py <run> <repo>
-Prints `OK run initialised repo=<path> default=<branch> remote=<url>`. Rerunning updates the three lines.
+Usage: python3 -I init_run.py <run> <repo> [--epic <n>]
+Prints `OK run initialised repo=<path> default=<branch> remote=<url> identity=<command|login>`. Rerunning updates the
+lines. The identity is the `identity_command` Setting, a command printing a GitHub token (e.g.
+`scripts/gh-app-token.sh`) that every later `gh` call gets a fresh token from (`steplib/gh.py`); unset: `login`, the
+current `gh` login. `--epic` records the epic's issue for `tracker_cmd.py close-epic`.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, runfolder  # noqa: E402
+from steplib import core, gh, runfolder, tracker  # noqa: E402
+
+USAGE = "usage: init_run.py <run> <repo> [--epic <n>]"
 
 
 def step(ctx):
-    if len(ctx.args) != 1:
-        raise core.Fail("usage: init_run.py <run> <repo>")
-    given = core.resolve(ctx.args[0])
+    args, epic = list(ctx.args), None
+    if "--epic" in args:
+        at = args.index("--epic")
+        if at + 1 >= len(args) or not args[at + 1].lstrip("#").isdigit():
+            raise core.Fail(USAGE)
+        epic = args[at + 1].lstrip("#")
+        del args[at:at + 2]
+    if len(args) != 1:
+        raise core.Fail(USAGE)
+    given = core.resolve(args[0])
     top = ctx.run(["git", "-C", given, "rev-parse", "--show-toplevel"])
     if top.rc != 0:
         raise core.Fail(f"not-a-repo: {given}")
@@ -35,9 +47,11 @@ def step(ctx):
         raise core.Fail("no-default-branch")
     run_md = ctx.run_dir / "run.md"
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
-    for key, value in (("Repo", repo), ("Default", default), ("Remote", remote.out.strip())):
+    who = tracker.setting("build-epic", "identity_command", str(repo), ctx.log) or gh.LOGIN
+    lines = [("Repo", repo), ("Default", default), ("Remote", remote.out.strip()), ("Identity", who)]
+    for key, value in lines + ([("Epic", f"#{epic}")] if epic else []):
         runfolder.set_header(run_md, key, value)
-    return "initialised", f"repo={repo} default={default} remote={remote.out.strip()}"
+    return "initialised", f"repo={repo} default={default} remote={remote.out.strip()} identity={who}"
 
 
 if __name__ == "__main__":

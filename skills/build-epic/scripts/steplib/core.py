@@ -18,6 +18,9 @@ ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 Result = namedtuple("Result", "rc out err")
 
+# The run folder of the step running in this process, set by `main`; `gh.identity_env` reads its `run.md`.
+RUN_DIR = None
+
 
 class Fail(Exception):
     """A clean failure: `reason` goes on the FAIL line."""
@@ -115,7 +118,8 @@ def main(step, fn, takes_id=True, usage="", argv=None):
         # One id per call: a list that was never split (zsh) arrives as one argument and is refused, not acted on.
         out.write(f"FAIL {ident.split()[0] if ident.split() else '?'} bad-id: one id per call, got {ident!r}\n")
         sys.exit(2)
-    run_dir = resolve(argv[0])
+    global RUN_DIR
+    run_dir = RUN_DIR = resolve(argv[0])
     args = argv[need:]
     log_path = run_dir / "logs" / f"{ident}-{step}.log"
     if takes_id and not run_dir.is_dir():

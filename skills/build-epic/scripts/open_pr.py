@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Pushes a finished task's branch and opens its PR into the ticket branch, or finds the one already open.
 
-Usage: python3 -I open_pr.py <run> <TT-NN>
+Usage: python3 -I open_pr.py <run> <TT-NN> [--title <title>]
 
 Prints `OK TT-NN pr=<n> <url>` and records `PR: <url>` on the task. Run it after `finish_task.py`: a worktree with
-uncommitted changes or a merge in progress fails. The title is the subject of the oldest non-merge commit on the
-branch's first-parent chain since the ticket branch, as written; the body comes from `steplib/prbody.py` and is
+uncommitted changes or a merge in progress fails. The title is `--title` when given (a tuning task's
+`test: tune <ticket title>`), else the subject of the oldest non-merge commit on the branch's first-parent chain since
+the ticket branch, as written; the body comes from `steplib/prbody.py` and is
 kept in `<run>/logs/<TT-NN>-pr-body.md`. Before each `gh pr create` the step looks for an open PR from the branch
 (`gh pr list --head`), so a retry or a rerun never opens a second.
 """
@@ -43,7 +44,8 @@ def create(ctx, task, branch, title, body_file):
         if found:
             return found
         res = core.run(["gh", "pr", "create", "--base", task.ticket_branch, "--head", branch,
-                        "--title", title, "--body-file", body_file], ctx.log, cwd=task.worktree)
+                        "--title", title, "--body-file", body_file], ctx.log, cwd=task.worktree,
+                       env=gh.identity_env(ctx.log))
         m = URL.search(res.out) if res.rc == 0 else None
         if m:
             return m.group(1), m.group(0)
@@ -54,8 +56,11 @@ def create(ctx, task, branch, title, body_file):
 
 
 def step(ctx):
+    given = None
     if ctx.args:
-        raise core.Fail("usage: open_pr.py <run> <TT-NN>")
+        if len(ctx.args) != 2 or ctx.args[0] != "--title" or not ctx.args[1].strip():
+            raise core.Fail("usage: open_pr.py <run> <TT-NN> [--title <title>]")
+        given = ctx.args[1].strip()
     task = taskwt.Task(ctx)
     task.need_worktree()
     task.refuse_unfinished()
@@ -65,7 +70,7 @@ def step(ctx):
     subjects = [s for s in subjects.splitlines() if s.strip()]
     if not subjects:
         raise core.Fail("no-commits: run finish_task.py, which ends a task with no changes")
-    title = subjects[-1]
+    title = given or subjects[-1]
     if gitops.Git(task.worktree, ctx.log).push("origin", f"HEAD:refs/heads/{branch}").rc != 0:
         raise core.Fail("git-push")
     body_file = ctx.run_dir / "logs" / f"{ctx.id}-pr-body.md"
