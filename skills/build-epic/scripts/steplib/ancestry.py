@@ -5,9 +5,10 @@ parent: the ticket PR would then conflict with the base it already holds. `recor
 `git merge -s ours origin/<base>` would make on the ticket branch (the ticket's own tree, the base tip as a second
 parent), made with `git commit-tree` so no checkout is touched, and pushes it. It does so only when both guards hold:
 
-- the reviewed head contains the base tip, else `reviewed-head-lacks-base`: the base moved after the review, and the
-  ticket needs a real catch-up and a new review;
-- the ticket head's tree equals the reviewed tree, else `tree-mismatch`: something the reviewer never read would ship.
+- the ticket head's tree equals the reviewed tree, else `tree-mismatch`: something the reviewer never read would ship;
+- the base's content is already in that tree, else `reviewed-head-lacks-base`: the base moved after the review, and the
+  ticket needs a real catch-up and a new review. It is proven by content, not ancestry, since squash merges drop the
+  base tip from the ticket's history: `git merge-tree --write-tree origin/<base> <head>` must give the head's own tree.
 
 Either refusal pushes nothing. A reviewed head git does not know fails `reviewed-unknown`; a ticket branch that moved
 while pushing fails `head-moved`.
@@ -22,14 +23,18 @@ def record(git, branch, base, reviewed):
         reviewed = git.tip(reviewed)
     except core.Fail:
         raise core.Fail("reviewed-unknown")
-    base_tip, head = git.tip(f"origin/{base}"), git.tip(f"origin/{branch}")
-    if not git.is_ancestor(base_tip, reviewed):
-        git.log.write(f"reviewed head {reviewed} lacks origin/{base} at {base_tip}\n")
-        raise core.Fail("reviewed-head-lacks-base")
+    base_tip, head = git.tip(f"refs/remotes/origin/{base}"), git.tip(f"refs/remotes/origin/{branch}")
     tree = git.tree(head)
     if tree != git.tree(reviewed):
         git.log.write(f"origin/{branch} at {head} has tree {tree}; the reviewed head {reviewed} has {git.tree(reviewed)}\n")
         raise core.Fail("tree-mismatch")
+    merged = git._git("merge-tree", "--write-tree", base_tip, head, check=False)
+    if merged.rc not in (0, 1):  # 1 is a conflict; anything else is git failing (before 2.38: no --write-tree)
+        raise core.Fail("git-merge-tree")
+    if merged.rc != 0 or merged.out.split("\n", 1)[0].strip() != tree:
+        git.log.write(f"merging origin/{base} at {base_tip} into {head} changes its tree: the base holds content the "
+                      f"reviewed head {reviewed} lacks\n")
+        raise core.Fail("reviewed-head-lacks-base")
     if git.is_ancestor(base_tip, head):
         return head
     message = f"Merge origin/{base} into {branch}\n\nRecords the integration ancestry; the tree is the reviewed one.\n"

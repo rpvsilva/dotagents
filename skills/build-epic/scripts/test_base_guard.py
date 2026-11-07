@@ -1,5 +1,6 @@
 """Tests for the base guard and the task merge method in `steplib/merge.py`, through `merge_task.py` and
-`ship_ticket.py merge` against a stub `gh`: a PR merges only into the run's base or one of its ticket branches."""
+`ship_ticket.py merge` against a stub `gh`: a task PR merges only into its own ticket branch, a ticket PR only into the
+run's base."""
 import sys
 import unittest
 from pathlib import Path
@@ -40,10 +41,15 @@ class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual(len(self.calls("pr", "merge")), 1)
 
-    def test_a_pr_into_another_ticket_branch_of_the_run_merges(self):
+    def test_a_pr_into_another_ticket_branch_of_the_run_is_refused(self):
         (self.kit.run_dir / "tickets" / "02-u.md").write_text("# 02: U\nStatus: building\nBranch: feat/u\n", encoding="utf-8")
         self.into("feat/u")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assert_wrong_base(self.merge(), "feat/u")
+
+    def test_a_task_pr_into_the_runs_base_is_refused(self):
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
+        self.into("int/x")
+        self.assert_wrong_base(self.merge(), "int/x")
 
     # task_merge_method
 
@@ -91,6 +97,13 @@ class TicketBaseGuardTest(test_ship.Base):
         self.assertTrue(line.startswith("FAIL 01 wrong-base main (log: "), line)
         self.assertEqual(self.calls("pr", "merge"), [])
         self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+
+    def test_a_ticket_pr_into_a_ticket_branch_is_refused(self):
+        (self.kit.run_dir / "tickets" / "02-u.md").write_text("# 02: U\nStatus: building\nBranch: feat/u\n", encoding="utf-8")
+        (self.kit.answers / "pr-base").write_text("feat/u", encoding="utf-8")
+        line = self.ship()
+        self.assertTrue(line.startswith("FAIL 01 wrong-base feat/u (log: "), line)
+        self.assertEqual(self.calls("pr", "merge"), [])
 
     def test_a_ticket_pr_into_the_base_merges_and_squashes_whatever_the_task_merge_method(self):
         (self.kit.answers / "pr-base").write_text("int/x", encoding="utf-8")

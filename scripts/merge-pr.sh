@@ -4,9 +4,11 @@
 # It runs the gate's read-only CLI (`agent-pr-gate check`, pinned to GATE_REF, the commit the gate
 # workflow uses): the same rules, read from the base commit, so a PR cannot change its own gate. The
 # CLI waits for CI, judges CI, evidence, approvals and code owners, and prints the verdict as JSON.
-# A PR into another branch (build-epic's task PR into a ticket branch) skips the gate: CI and the gate
-# run on PRs into the default branch only, and the ticket's own PR into it is judged in full. Whoever
-# merges it runs the checks locally first.
+# A PR into another branch (build-epic's task PR into a ticket branch, or its ticket PR into an
+# integration branch) skips the gate: CI and the gate run on PRs into the default branch only. Whoever
+# merges it runs the checks locally first (ship_ticket.py runs map.md's Checks, tests/run.sh among
+# them, on a ticket head). The PR into the default branch that carries it (the ticket's own PR, or the
+# integration branch's) is judged in full, approvals included.
 # It squashes, or with --merge (build-epic's task_merge_method=merge) makes a merge commit.
 # Usage: scripts/merge-pr.sh [--merge] <pr-number>   (needs GH_TOKEN, node and npx)
 set -euo pipefail

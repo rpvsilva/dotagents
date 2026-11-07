@@ -35,6 +35,11 @@ class AncestryTest(Base):
         self.git("merge", "-q", "--no-edit", f"origin/{BASE}")
         self.task2 = self.commit("c.txt", "c\n")
         self.squash(self.task2)
+        # The tuning task and the review fixes, squash-merged too, then the ticket PR's review is posted on its head.
+        self.squash(self.commit("tune.txt", "fast\n", on="origin/feat/t"))
+        self.squash(self.commit("fix.txt", "fixed\n", on="origin/feat/t"))
+        self.reviewed_head = self.head()
+        self.review(self.reviewed_head)
 
     def git(self, *args):
         return self.kit.git(*args, cwd=self.work)
@@ -56,6 +61,10 @@ class AncestryTest(Base):
         self.push(sha, "feat/t")
         return sha
 
+    def review(self, sha):
+        """The ticket PR's review as `post_review.py` keeps it: posted on `sha`."""
+        (self.kit.run_dir / "logs" / "PR20-review.json").write_text(json.dumps({"commit_id": sha}), encoding="utf-8")
+
     def ship(self, *args):
         return self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", *args))
 
@@ -67,36 +76,38 @@ class AncestryTest(Base):
 
     def test_squashed_tasks_ship_into_a_moved_base_with_no_conflict_and_the_reviewed_tree(self):
         before = self.head()
-        self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 merged pr=20")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         head = self.head()
         self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", f"{head}^@").split(),
                          [before, self.base_tip])
         self.git("fetch", "-q", "origin")
         self.git("checkout", "-q", "--detach", f"origin/{BASE}")
         self.git("merge", "--no-edit", head)  # raises on a conflict
-        self.assertEqual(self.tree("HEAD"), self.tree(self.task2))
-        self.assertEqual(self.tree(head), self.tree(self.task2))
+        self.assertEqual(self.tree("HEAD"), self.tree(self.reviewed_head))
+        self.assertEqual(self.tree(head), self.tree(self.reviewed_head))
         self.assertEqual(runfolder.get(self.ticket, "Status"), "merged")
 
     def test_the_merge_is_pinned_to_the_pushed_ancestry_commit(self):
-        self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 merged pr=20")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.merge_calls(),
                          [["pr", "merge", "20", "--squash", "--delete-branch", "--match-head-commit", self.head()]])
 
-    def test_the_reviewed_head_defaults_to_the_commit_the_posted_review_was_on(self):
-        (self.kit.run_dir / "logs" / "PR20-review.json").write_text(json.dumps({"commit_id": self.task2}), encoding="utf-8")
-        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
-        self.assertEqual(self.tree(self.head()), self.tree(self.task2))
+    def test_reviewed_names_another_commit_with_the_reviewed_tree(self):
+        self.review("0" * 40)
+        self.assertEqual(self.ship("merge", "--reviewed", self.reviewed_head), "OK 01 merged pr=20")
+        self.assertEqual(self.tree(self.head()), self.tree(self.reviewed_head))
 
     def test_with_no_review_and_no_reviewed_head_nothing_merges(self):
+        (self.kit.run_dir / "logs" / "PR20-review.json").unlink()
         before = self.head()
         self.assertRegex(self.ship("merge"), r"^FAIL 01 no-review \(log: ")
         self.assertEqual(self.merge_calls(), [])
         self.assertEqual(self.head(), before)
 
-    def test_a_reviewed_head_missing_the_base_tip_is_refused_and_nothing_merges(self):
+    def test_a_base_holding_content_the_reviewed_head_lacks_is_refused_and_nothing_merges(self):
+        self.push(self.commit("e.txt", "late base\n", on=f"origin/{BASE}"), BASE)
         before = self.head()
-        self.assertRegex(self.ship("merge", "--reviewed", self.task1), r"^FAIL 01 reviewed-head-lacks-base \(log: ")
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 reviewed-head-lacks-base \(log: ")
         self.assertEqual(self.merge_calls(), [])
         self.assertEqual(self.head(), before)
         self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
@@ -104,7 +115,7 @@ class AncestryTest(Base):
     def test_a_ticket_tree_other_than_the_reviewed_tree_is_refused_and_nothing_merges(self):
         self.squash(self.commit("d.txt", "late\n", on="origin/feat/t"))
         before = self.head()
-        self.assertRegex(self.ship("merge", "--reviewed", self.task2), r"^FAIL 01 tree-mismatch \(log: ")
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 tree-mismatch \(log: ")
         self.assertEqual(self.merge_calls(), [])
         self.assertEqual(self.head(), before)
         self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
@@ -113,12 +124,37 @@ class AncestryTest(Base):
         self.assertRegex(self.ship("merge", "--reviewed", "0" * 40), r"^FAIL 01 reviewed-unknown \(log: ")
         self.assertEqual(self.merge_calls(), [])
 
+    def test_a_pr_retargeted_to_another_branch_fails_wrong_base_and_pushes_nothing(self):
+        self.kit.branch_from_main("release")
+        self.push(self.commit("r.txt", "release\n", on="origin/release"), "release")
+        (self.kit.answers / "pr-base").write_text("release", encoding="utf-8")
+        before = self.head()
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 wrong-base release \(log: ")
+        self.assertEqual(self.merge_calls(), [])
+        self.assertEqual(self.head(), before)
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+
+    def test_the_checks_run_on_the_ticket_head_before_the_merge(self):
+        seen = self.kit.tmp / "checked"
+        self.checks(f"git rev-parse HEAD^{{tree}} >'{seen}'")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
+        self.assertEqual(seen.read_text(encoding="utf-8").strip(), self.tree(self.reviewed_head))
+        self.assertEqual(list((self.kit.run_dir / "worktrees").glob("*")), [])
+
+    def test_a_red_check_fails_and_nothing_merges_or_pushes(self):
+        self.checks("exit 3")
+        before = self.head()
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 red exit 3 \(log: ")
+        self.assertEqual(self.merge_calls(), [])
+        self.assertEqual(self.head(), before)
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+
     def test_an_ancestry_push_origin_refuses_fails_head_moved_and_nothing_merges(self):
         hook = self.kit.origin / "hooks" / "pre-receive"
         hook.write_text("#!/bin/sh\necho 'the ticket branch moved' >&2\nexit 1\n", encoding="utf-8")
         hook.chmod(0o755)
         before = self.head()
-        self.assertRegex(self.ship("merge", "--reviewed", self.task2), r"^FAIL 01 head-moved \(log: ")
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 head-moved \(log: ")
         self.assertEqual(len(self.calls("pr", "view")), 1, "the merge step ran: only its own head check refused")
         self.assertEqual(self.merge_calls(), [])
         self.assertEqual(self.head(), before)
@@ -136,13 +172,13 @@ class AncestryTest(Base):
     def test_shipping_again_after_the_ancestry_is_pushed_adds_no_second_one(self):
         (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.rule('echo "needs an approval from a code owner"; exit 1')
-        self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 in-review pr=20")
+        self.assertEqual(self.ship("merge"), "OK 01 in-review pr=20")
         first = self.head()
         self.kit.answer("pr-list", out="[]")
         self.assertEqual(self.ship("open"), "OK 01 open pr=20")
         self.rule("exit 0")
         (self.kit.answers / "pr-state").write_text("MERGED", encoding="utf-8")
-        self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 merged pr=20")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.head(), first)
 
     def test_with_merge_commits_no_ancestry_step_runs(self):
@@ -154,11 +190,14 @@ class AncestryTest(Base):
                          [["pr", "merge", "20", "--squash", "--delete-branch", "--match-head-commit", before]])
 
     def test_the_issues_stay_open_and_get_a_merged_to_base_label(self):
-        self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 merged pr=20")
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.calls("issue", "close"), [])
         self.assertEqual([c for c in self.calls("issue", "edit")],
                          [["issue", "edit", "7", "--add-label", f"merged-to-{BASE}"],
                           ["issue", "edit", "8", "--add-label", f"merged-to-{BASE}"]])
+
+    def checks(self, command):
+        (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\n{command}\n```\n", encoding="utf-8")
 
     def rule(self, script):
         path = self.kit.tmp / "merge-rule.sh"
