@@ -32,3 +32,11 @@ Each remote run takes a **remote slot**, not a local one: at most `~/.agents/bin
    Then, whatever the exit code, read `killed` and `lost`:
    - **`killed`** (`memory` or `timeout`, each kill in `capped_kills` as `{kind, cmd}`): the sandbox's caps (`remote.cap_mb`, `remote.cap_secs`) killed at least one of the subagent's shell commands, and stderr has a `[<task>] killed: <kind> <command>` line for each. The run went on after it, so a kill alone is no failure: act on the exit code and the report as above. When the report says `blocked` or the run failed, the kill is the likely cause: retry as the skill says (build-epic retries once with a cap note), else treat it as `blocked`, naming the kind and the command.
    - **`lost: true`**: the sandbox itself is gone (its container or pod vanished with no kill line before), so no cap is at fault: act as on **Anything else**.
+
+### A resolver
+
+A subagent sent back to resolve conflict markers (build-epic's implementer with `resolve:`) runs remotely on the worktree its skill left mid-merge, as in the steps above, with these differences:
+
+- **Before**: the merge stays in progress in the worktree, its markers in the files (build-epic: `finish_task.py` leaves it so on `FAIL TT-NN conflict <files>`). The snapshot carries the files with their markers but not the merge itself: no `MERGE_HEAD`, no unmerged index, no history of either side. Name the conflicted files from the failure in the message, and attach what the brief reads; the markers hold both sides.
+- **After**, on exit 0: the patch sits in the working tree, the merge still in progress. Do not commit it yourself; run the skill's finishing step (build-epic: `finish_task.py`), which commits it as the merge commit, with both parents, once no marker is left, and fails `conflict <files>` again while one is. On exit 3 the markers are still there: treat it as `blocked`.
+- **Limits**: only content conflicts can be resolved remotely. A modify/delete, rename or binary conflict leaves no marker in a file, and a file deleted on one side is missing from the worktree, so the snapshot never holds it. When a conflicted file (`git diff --name-only --diff-filter=U`) has no `<<<<<<<` line, or is missing, resolve the merge locally.
