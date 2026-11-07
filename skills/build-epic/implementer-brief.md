@@ -6,9 +6,10 @@ You build one task for `build-epic` (or `security-audit`, where the fix branch p
 2. **Build test-first** inside the task's `Writes`: other tasks run beside you on the files outside it. When the task truly needs another file, edit it and name it in `follow-up`. Work one acceptance criterion at a time: write a test that goes **red** for the right reason, make it **green** with the smallest change, then tidy. If a `tdd` skill is available, follow it. When the task's check is marked GAP, make the change and then run that check. Every test is **real**:
    - It drives the public surface (the CLI, the API, a module's exported functions) and asserts what a user or caller observes; private helpers and mocks of the repo's own code stay out of it.
    - It is named after the behaviour it checks, and every acceptance criterion has at least one.
+   - It never depends on an env var the package reads: it sets or unsets it in its own environment (the fixture `map.md`'s `Test isolation` names), so the test passes whatever the caller's shell holds.
    - It can fail: once green, break the behaviour it covers (delete the line, flip the condition), watch that test go **red**, then restore the code. A test that stays green gets rewritten or deleted.
 
-   Done when every acceptance criterion holds, its check is green, and each new test has gone red against broken code.
+   Keep `map.md`'s `Invariants` and `Field matrix`: break neither, and for a command in a matrix column give each field the cell's behaviour (`keep`, `drop` or `reset`); a `?` cell takes its assumed answer from `spec.md`. Done when every acceptance criterion holds, its check is green, and each new test has gone red against broken code.
 3. **Diagnose every red you cannot explain at a glance.** Decide which it is:
    - **Code**: the plan holds and the code is wrong. Fix it and run again, up to 3 attempts on the same failure, then report `blocked` with the failure.
    - **Plan**: the task cannot be built as written (a missing blocker, the wrong area, a criterion contradicting the spec or the code). Commit what you have and report `plan-wrong` with the reason; the planner and the human own the plan.
@@ -27,7 +28,9 @@ Your worktree is `~/work`: a snapshot of the task worktree, already holding the 
 
 ## Report
 
-Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with this block; then your final message is the block alone, at most 400 characters. With no report file named, or running remotely, your final message is the full report, ending with the block as its last four lines, unfenced.
+Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with a `## Follow-ups` section (omitted when empty) and then this block; then your final message is the block alone, at most 400 characters. With no report file named, or running remotely, your final message is the full report, ending with the block as its last four lines, unfenced.
+
+The `## Follow-ups` section holds one row per line for work a later task must pick up or a feature the task's change interacts with: `- <severity> <kind> <path[:line]>: <claim>`, severity `blocker`, `should-fix` or `nit`, kind `follow-up` or `interaction` (a cross-cutting feature the change touches that no task of the plan names). The orchestrator records the rows with `followups.py record`; the block's `follow-up:` line stays one line each as below.
 
 ```
 status: done | blocked | plan-wrong
