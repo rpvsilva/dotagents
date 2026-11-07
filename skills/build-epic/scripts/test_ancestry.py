@@ -19,6 +19,7 @@ class AncestryTest(Base):
         super().setUp()
         kit = self.kit
         kit.branch_from_main(BASE)
+        (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {BASE}\n")  # the run's base, or 10-03's guard refuses
         (kit.answers / "pr-base").write_text(BASE)
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         kit.answer("pr-list", out="[]")
