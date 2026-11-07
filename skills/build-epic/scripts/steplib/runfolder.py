@@ -1,8 +1,8 @@
 """Ticket, task and run files of a run folder: find them by number, read and set their `Key: value` header lines.
 
-Parsing reuses `header`, `norm` and `blockers` from `skills/build-epic/plan_check.py`. A header write replaces the file
-atomically (temp file in the same folder, then rename) under a lock, so a reader never sees half a file and two
-writers never lose each other's change.
+Parsing reuses `header`, `norm`, `blockers` and `section` from `skills/build-epic/plan_check.py`. A header or
+criteria write replaces the file atomically (temp file in the same folder, then rename) under a lock, so a reader never
+sees half a file and two writers never lose each other's change.
 """
 import importlib.util
 import os
@@ -16,7 +16,7 @@ _spec = importlib.util.spec_from_file_location(
     "build_epic_plan_check", Path(__file__).resolve().parents[2] / "plan_check.py")
 plan_check = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(plan_check)
-header, norm, blockers = plan_check.header, plan_check.norm, plan_check.blockers
+header, norm, blockers, section = plan_check.header, plan_check.norm, plan_check.blockers, plan_check.section
 
 HEADER_LINE = re.compile(r"^[A-Z][A-Za-z0-9 _-]*:[ \t]")
 
@@ -52,17 +52,55 @@ def set_header(path, key, value, title="# Run"):
             while at < len(lines) and HEADER_LINE.match(lines[at]):
                 at += 1
             lines.insert(at, line)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-            if path.exists():
-                os.chmod(tmp, path.stat().st_mode & 0o777)
-            os.replace(tmp, str(path))
-        except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
+        _write(path, lines)
+
+
+def _write(path, lines):
+    """Replaces the file at `path` with `lines` atomically; the caller holds the folder's `.headers.lock`."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        if path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+        os.replace(tmp, str(path))
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def append_criteria(path, new):
+    """Adds each line of `new` not already in the task file's `## Acceptance criteria` section at its end (before
+    its trailing blank lines), adding the section at the end of the file when it is missing. Returns how many it added.
+    The write is atomic and locked per folder, like `set_header`."""
+    path = core.resolve(path)
+    with core.file_lock(path.parent / ".headers.lock"):
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        start = next((i + 1 for i, line in enumerate(lines)
+                      if re.match(r"^## Acceptance criteria[ \t]*$", line.rstrip("\n"))), None)
+        if start is None:
+            if lines and lines[-1].strip():
+                lines.append("\n")
+            lines.append("## Acceptance criteria\n")
+            start = len(lines)
+        end = next((i for i in range(start, len(lines)) if lines[i].startswith("## ")), len(lines))
+        have = {line.rstrip("\n") for line in lines[start:end]}
+        added = []
+        for line in new:
+            if "\n" in line or "\r" in line:
+                raise ValueError("a criteria line has a newline")
+            if line not in have:
+                have.add(line)
+                added.append(f"{line}\n")
+        if added:
+            while end > start and not lines[end - 1].strip():
+                end -= 1
+            lines[end:end] = added
+            _write(path, lines)
+        return len(added)
 
 
 def _one(found, what):
