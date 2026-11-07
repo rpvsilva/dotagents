@@ -66,6 +66,8 @@ class Base(unittest.TestCase):
         self.ticket.write_text(TICKET, encoding="utf-8")
         (kit.run_dir / "tasks" / "01-01-a.md").write_text(TASK.format(nn="01", pr=5), encoding="utf-8")
         (kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", pr=6), encoding="utf-8")
+        # The Checks `ship_ticket.py merge` runs on the ticket head before a merge into a non-default base.
+        (kit.run_dir / "map.md").write_text("# Map\n\n## Checks\n\n```\ntrue\n```\n", encoding="utf-8")
 
     def one_line(self, p):
         self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)
@@ -258,15 +260,10 @@ class ShipMergeTest(Base):
         self.assertFalse(self.wt.exists())
         self.assertEqual(self.kit.git("branch", "--list", "feat/t", cwd=self.kit.clone), "")
 
-    def test_a_pr_into_another_base_leaves_the_issues_open_whatever_decisions_md_says(self):
-        (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
-        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
-        self.assertEqual(self.calls("issue", "close"), [])
-
-    def test_a_pr_into_the_default_branch_closes_the_issues_whatever_decisions_md_says(self):
+    def test_a_pr_into_the_default_branch_while_decisions_md_names_another_base_closes_nothing(self):
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
-        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
-        self.assertEqual([c[:3] for c in self.calls("issue", "close")], [["issue", "close", "7"], ["issue", "close", "8"]])
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 wrong-base main \(log: ")  # test_base_guard.py covers the guard
+        self.assertEqual(self.calls("issue", "close"), [])
 
     def test_without_a_merge_rule_a_gated_repo_refuses_to_merge_into_the_default_branch(self):
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
@@ -276,7 +273,9 @@ class ShipMergeTest(Base):
         self.assertEqual(self.calls("issue", "close"), [])
 
     def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
+        self.set_setting("task_merge_method", "merge")  # no ancestry step: test_ancestry.py covers it
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
         (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(len(self.calls("pr", "merge")), 1)
