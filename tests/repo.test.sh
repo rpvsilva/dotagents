@@ -92,6 +92,80 @@ for f in skills/*/settings.json remote/settings.json; do
   esac
 done
 
+# Needs declarations (scripts/parts.sh): each a JSON object with a group from groups.json, needs naming a part as
+# required or optional, and agents as a list of names. Every skill, mod and hook has one; skills/_shared is core and
+# has none. Every subagent wrapper's stem is owned by exactly one skill, the one holding the brief it names, and every
+# owned agent has a wrapper. No part or group takes a tool word install.sh reserves.
+parts_list="$(scripts/parts.sh list 2>&1 | tr -d '\r')" || { fail "scripts/parts.sh list: $parts_list"; parts_list=""; }
+part_names="$(cut -f1 <<<"$parts_list")"
+decls=()
+for f in skills/*/needs.json adapters/claude/mods/*/needs.json scripts/hooks/*.needs.json remote/needs.json \
+  mcp/needs.json global/needs.json; do
+  [ -f "$f" ] || continue
+  case "$f" in skills/_*) fail "$f: skills/_* is core, it has no needs.json"; continue ;; esac
+  decls+=("$f")
+done
+# One jq reads every declaration; only when that fails, each is read alone to name the bad ones.
+if [ ${#decls[@]} -gt 0 ] && ! jq -en '[inputs | type == "object"] | all' "${decls[@]}" >/dev/null 2>&1; then
+  good=()
+  for f in "${decls[@]}"; do
+    if jq -e 'type == "object"' "$f" >/dev/null 2>&1; then good+=("$f"); else fail "$f: not a JSON object"; fi
+  done
+  decls=(${good[@]+"${good[@]}"})
+fi
+if [ ${#decls[@]} -gt 0 ]; then
+  while read -r bad; do fail "$bad"; done < <(jq -r --slurpfile g groups.json --arg parts "$part_names" '
+    ($parts | split("\n")) as $names | input_filename as $f
+    | [(if (.group | type) != "string" then "no group"
+        elif (.group as $grp | $g[0] | has($grp) | not) then "group \(.group) is not in groups.json"
+        else empty end),
+      (if (.needs | type) != "object" then "needs is not an object"
+       else .needs | to_entries[]
+         | .key as $k | if $parts != "" and (any($names[]; . == $k) | not) then "need \(.key) is not a part (scripts/parts.sh list)"
+           elif .value != "required" and .value != "optional" then "need \(.key): \(.value | tojson) is not required or optional"
+           else empty end end),
+      (if has("agents") and ((.agents | type) != "array" or any(.agents[]; type != "string")) then "agents is not a list of names"
+       else empty end),
+      (keys - ["group", "needs", "agents"] | .[] | "unknown key \(.)")][] | "\($f): \(.)"' "${decls[@]}" | tr -d '\r')
+fi
+for d in skills/*/ adapters/claude/mods/*/; do
+  [ -d "$d" ] || continue
+  case "$d" in skills/_*) continue ;; esac
+  [ -f "${d}needs.json" ] || fail "${d}needs.json missing: declare the part's group and needs"
+done
+for h in scripts/hooks/*.sh; do
+  [ "$h" = scripts/hooks/lib.sh ] || [ -f "${h%.sh}.needs.json" ] || fail "${h%.sh}.needs.json missing: declare the hook's group and needs"
+done
+for f in remote/needs.json mcp/needs.json global/needs.json; do [ -f "$f" ] || fail "$f missing"; done
+# owners: `agent TAB skill` for each agent a skill lists.
+owners=""
+[ ${#decls[@]} -eq 0 ] || owners="$(jq -r 'input_filename as $f | select($f | startswith("skills/"))
+  | (.agents // [])[]? | strings | "\(.)\t\($f | split("/")[1])"' "${decls[@]}" | tr -d '\r')"
+while read -r bad; do fail "$bad"; done < <({
+  [ -z "$owners" ] || awk '{print "O\t" $0}' <<<"$owners"
+  for a in adapters/*/agents/*; do [ ! -f "$a" ] || printf 'W\t%s\n' "$a"; done
+  grep -oHE '[~]/\.agents/skills/[^`" ]+' adapters/*/agents/* 2>/dev/null | sed 's/^/R\t/' || true
+} | awk -F'\t' '
+  $1 == "O" { if ($2 in own) own[$2] = own[$2] " " $3; else own[$2] = $3; next }
+  $1 == "W" { s = $2; sub(/.*\//, "", s); sub(/\.[^.]*$/, "", s); stem[$2] = s; wrapped[s] = 1; next }
+  $1 == "R" { i = index($2, ":"); f = substr($2, 1, i - 1); r = substr($2, i + 1); sub(/^~\/\.agents\/skills\//, "", r); refs[f] = refs[f] " " r }
+  END {
+    for (f in stem) {
+      s = stem[f]; o = own[s]
+      if (o == "") { print f ": no skill lists " s " in its needs.json agents"; continue }
+      if (o ~ / /) { print f ": " s " is listed in agents by more than one skill: " o; continue }
+      c = split(refs[f], rs, " ")
+      for (j = 1; j <= c; j++) if (substr(rs[j], 1, length(o) + 1) != o "/") print f ": follows skills/" rs[j] ", but " s " is owned by " o
+    }
+    for (s in own) if (!(s in wrapped)) {
+      c = split(own[s], os, " ")
+      for (j = 1; j <= c; j++) print "skills/" os[j] "/needs.json: agent " s " has no wrapper in adapters/*/agents/"
+    }
+  }' | sort)
+for n in $part_names $(jq -r 'keys[]' groups.json | tr -d '\r'); do
+  case "$n" in all | shared | claude | codex | cursor) fail "$n: a part or group named as an install.sh tool word" ;; esac
+done
+
 # Skills read Settings through ~/.agents/bin/settings, never from a notes file: a skill or brief line naming a
 # declared key next to a notes file must call it a Setting.
 keys="$(jq -rs 'map(keys[]) | unique[]' skills/*/settings.json remote/settings.json)"
@@ -120,6 +194,68 @@ for a in adapters/*/agents/*; do
     [ -f "skills/${r#\~/.agents/skills/}" ] || fail "$a: $r does not exist in skills/"
   done
 done
+
+# Couplings: a part's files (scripts/parts.sh files, minus tests and fixtures) refer to another part only as a declared
+# need. References: a markdown link into skills/<x>/, ~/.agents/skills/<x> or $HOME/.agents/skills/<x>,
+# ~/.agents/bin/remote-agent (part remote), .agents/hooks/<x>, and a subagent's name in backticks in a skill's *.md.
+# Never needs: the part itself, a skill's own agents, an agent's own skill, and core (_shared, configure,
+# ~/.agents/bin/settings, the hooks library).
+agent_names="$(awk -F'\t' '$2 == "agent" {print $1}' <<<"$parts_list" | paste -sd'|' -)"
+# shellcheck disable=SC2016 # a regex: $HOME is matched, not expanded
+refs_re='\]\([^)[:space:]]+\)|(~|\$HOME)/\.agents/(skills|bin)/[A-Za-z0-9_-]+|\.agents/hooks/[A-Za-z0-9_.-]+'
+[ -z "$agent_names" ] || refs_re="$refs_re|\`($agent_names)\`"
+# One awk reads tagged lines: P (part, kind, declaration), O (agent, owning skill), N (declaration, its needs and
+# agents), F (part, file), then R (file:reference, from one grep over every part's files).
+part_files=""
+files=()
+while IFS=$'\t' read -r p _; do
+  [ -n "$p" ] || continue
+  while read -r f; do
+    case "/$f" in */fixtures/* | */test_* | *.test.*) continue ;; esac
+    part_files="$part_files"$'F\t'"$p"$'\t'"$f"$'\n'
+    files+=("$f")
+  done < <(scripts/parts.sh files "$p" | tr -d '\r')
+done <<<"$parts_list"
+while IFS=$'\t' read -r f n p decl; do
+  fail "$f: refers to $n, not a need of $p in $decl"
+done < <({
+  [ -z "$parts_list" ] || awk '{print "P\t" $0}' <<<"$parts_list"
+  [ -z "$owners" ] || awk '{print "O\t" $0}' <<<"$owners"
+  [ ${#decls[@]} -eq 0 ] || jq -r 'input_filename as $f | [$f, (.needs // {} | keys[]?), (.agents // [])[]?] | "N\t" + join(" ")' \
+    "${decls[@]}" 2>/dev/null | tr -d '\r'
+  printf '%s' "$part_files"
+  [ ${#files[@]} -eq 0 ] || grep -oHE "$refs_re" "${files[@]}" | sed 's/^/R\t/'
+} | awk -F'\t' '
+  $1 == "P" { kind[$2] = $3; decl[$2] = $5; next }
+  $1 == "O" { owner[$2] = $3; next }
+  $1 == "N" { k = index($2, " "); needs[k ? substr($2, 1, k - 1) : $2] = k ? substr($2, k) : ""; next }
+  $1 == "F" { parts[$3] = parts[$3] " " $2; next }
+  {
+    r = substr($0, 3); i = index(r, ":"); f = substr(r, 1, i - 1); m = substr(r, i + 1); n = ""
+    if (m ~ /^\]\(/) {
+      if (f !~ /\.md$/) next
+      t = substr(m, 3, length(m) - 3); sub(/#.*/, "", t)
+      if (t == "" || t ~ /^[a-z]+:/ || t ~ /^\//) next
+      d = f; sub(/\/[^\/]*$/, "", d); if (d == f) d = "."
+      k = split(d "/" t, seg, "/"); top = 0
+      for (j = 1; j <= k; j++) {
+        if (seg[j] == "" || seg[j] == ".") continue
+        if (seg[j] == "..") { if (top > 0) top--; continue }
+        out[++top] = seg[j]
+      }
+      if (top >= 2 && out[1] == "skills") n = out[2]
+    } else if (m ~ /agents\/skills\//) { n = m; sub(/.*agents\/skills\//, "", n) }
+    else if (m ~ /agents\/bin\//) { n = m; sub(/.*agents\/bin\//, "", n); n = (n == "remote-agent") ? "remote" : "settings" }
+    else if (m ~ /agents\/hooks\//) { n = m; sub(/.*agents\/hooks\//, "", n); sub(/\.[a-z]+$/, "", n) }
+    else if (m ~ /^`/) { if (f !~ /^skills\/.*\.md$/) next; n = substr(m, 2, length(m) - 2) }
+    if (n == "") next
+    c = split(parts[f], ps, " ")
+    for (j = 1; j <= c; j++) {
+      p = ps[j]
+      ok = " " p " _shared configure settings lib secret-patterns " (kind[p] == "agent" ? owner[p] : needs[decl[p]]) " "
+      if (index(ok, " " n " ") == 0) print f "\t" n "\t" p "\t" decl[p]
+    }
+  }' | sort -u)
 
 # Hook snippets are valid JSON and call a hook script that exists.
 for h in adapters/*/hooks/*.json adapters/*/settings/*.json; do
