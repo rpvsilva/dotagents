@@ -12,7 +12,7 @@ This page is the overview. Every flag, file and backend detail is in [remote/REA
 
 ## When a subagent runs remotely
 
-Only subagents a skill marks **remote-capable** can run remotely: ones that only change their own worktree. Today those are the implementer and test-tuner in `build-epic`, the test-tuner in `tune-tests` and the fix implementers in `security-audit`. Before each one starts, the skill runs `remote-agent ready` in the repo:
+Only **remote-capable** subagents can run remotely: ones that only change their own worktree. Each is declared once, in the `remote` list of the `needs.json` beside its brief, as [remote-subagents](../skills/remote-subagents/SKILL.md) says. Before each one starts, the skill runs `remote-agent ready` in the repo:
 
 ```mermaid
 flowchart TD
@@ -30,7 +30,7 @@ flowchart TD
   slot --> remote["Run with remote-agent"]
 ```
 
-When remote runs are off, the skill says why once, then runs subagents locally as usual. Every other subagent (planners, reviewers, anything that needs GitHub) always runs locally.
+When remote runs are off, the skill says why once, then runs subagents locally as usual. A subagent no `remote` list names (a planner, anything that needs GitHub) always runs locally.
 
 ## What one run does
 
