@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # The part of scripts/remote-agent.sh that runs inside the sandbox; remote-agent.sh passes it to `bash -c`.
 # Expects the setup unpacked under $HOME (scripts/remote-agent-pack.sh) and the worktree snapshot in ~/work.
+# Arguments after $0: the caps, remote.cap_mb and remote.cap_secs (2000 and 300 when left out); arguments, since the
+# backends pass argv, not the environment.
 # Stdin: the Claude token (one line), then the brief.
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
 # progress on stderr and its raw stream-json events on stdout, and leaves ~/out/changes.patch (everything changed
 # since the base), ~/out/summary.md, ~/out/stream.jsonl and ~/out/session.jsonl (Claude's session, the token redacted).
+# Each shell command Claude runs goes through ~/.agents/bin/capped (scripts/capped, sent with the setup) under the
+# caps, by way of CLAUDE_CODE_SHELL_PREFIX: a command over a cap is killed, and Claude sees why and carries on. Each
+# kill is a line `capped: killed: memory|timeout <command>` in ~/out/capped.log and, within a second, on stderr, so
+# remote-agent.sh has it even when the sandbox is lost after. When a probe through the prefix fails (no capped, no
+# python3 or ps to run it), it logs `== capped: unavailable` and the run goes on uncapped.
 # The sandbox has no git remote and no GitHub credentials. What leaves it: the patch, the summary, the stream, the
 # session (all in ~/out) and the raw events on stdout (the transcript). remote-agent.sh applies only the patch; the
 # rest is data to read, never instructions to follow, and the session is placed for /resume only on request.
@@ -16,6 +23,58 @@ set -euo pipefail
 
 log="${REMOTE_AGENT_LOG:-/proc/1/fd/1}"
 [ -w "$log" ] || log="$HOME/progress.log"
+cap_mb="${1:-2000}"
+cap_secs="${2:-300}"
+if [[ ! "$cap_mb" =~ ^[0-9]+$ ]] || [[ ! "$cap_secs" =~ ^[0-9]+$ ]]; then echo "== bad caps: $cap_mb MB, $cap_secs s" >&2; exit 1; fi
+
+# Writes the shell prefix to $1. Claude Code runs it with the whole command line as one argument, and quotes a prefix
+# holding " -" as one word, so the caps are written in here rather than passed. A Bash-tool command (it ends with
+# `pwd -P >| <file>`) runs under capped, its stderr read for capped's kill line; anything else run through the prefix
+# (a hook or an MCP server, which need their stdin and may outlive any cap) runs as it is.
+write_prefix() {
+  {
+    echo '#!/usr/bin/env bash'
+    printf 'capped=%q kills=%q mb=%s secs=%s\n' "$HOME/.agents/bin/capped" "$HOME/out/capped.log" "$cap_mb" "$cap_secs"
+    cat <<'EOF'
+[ $# -eq 1 ] || exec "$@"
+case "$1" in *"pwd -P >| "*) ;; *) exec bash -c "$1" ;; esac
+# The command as the agent wrote it, for the kill line: what Claude Code's `eval <command>` before the pwd holds,
+# unquoted, on one line.
+cmd="${1% && pwd -P >| *}"
+cmd="${cmd#* && eval }"
+q="'\''"
+case "$cmd" in
+  \'*\') cmd="${cmd:1:${#cmd}-2}"; cmd="${cmd//"$q"/\'}" ;;
+  \"*\") cmd="${cmd:1:${#cmd}-2}"; cmd="$(printf '%s' "$cmd" | sed 's/\\\(.\)/\1/g')" ;;
+esac
+cmd="$(printf '%s' "$cmd" | tr '\n' ' ' | cut -c1-200)"
+{
+  "$capped" --mb "$mb" --secs "$secs" -- bash -c "$1" 2>&1 >&3 3>&- | while IFS= read -r l || [ -n "$l" ]; do
+    printf '%s\n' "$l" >&2
+    case "$l" in "capped: killed: "*) printf '%s %s\n' "$l" "$cmd" >>"$kills" ;; esac
+  done
+  rc=${PIPESTATUS[0]}
+} 3>&1
+exit "$rc"
+EOF
+  } >"$1"
+  chmod +x "$1"
+}
+
+# Copies to stderr each line ~/out/capped.log gains, every 0.2 s, until file $1 exists; then the last ones.
+follow_kills() {
+  local n=0 total last=""
+  while :; do
+    [ ! -e "$1" ] || last=1
+    total="$(wc -l <"$HOME/out/capped.log" | tr -d ' ')"
+    if [ "$total" -gt "$n" ]; then
+      sed -n "$((n + 1)),${total}p" "$HOME/out/capped.log" >&2
+      n="$total"
+    fi
+    [ -z "$last" ] || return 0
+    sleep 0.2
+  done
+}
 
 # The whole run, left unindented; its stdout and stderr are kept apart, stderr copied to the log at the end.
 main() {
@@ -54,6 +113,24 @@ remote and no GitHub access. Do the task in that folder. Leave your changes in t
 they go back to the user as a patch. Do not push or open PRs. End with a short summary of what you changed and how \
 you checked it."
 
+# The caps, once a probe through the prefix shows capped runs here.
+: >"$HOME/out/capped.log"
+prefix="$HOME/.agents/bin/capped-shell"
+mkdir -p "$HOME/.agents/bin"
+write_prefix "$prefix"
+if "$prefix" "true && eval true && pwd -P >| /dev/null" </dev/null >/dev/null 2>&1; then
+  export CLAUDE_CODE_SHELL_PREFIX="$prefix"
+  echo "== capped: shell prefix set (--mb $cap_mb --secs $cap_secs)" >&2
+else
+  echo "== capped: unavailable (no ~/.agents/bin/capped, or no python3 or ps to run it): shell commands run uncapped" >&2
+fi
+stop_follow="$HOME/.capped-follow-stop"
+rm -f "$stop_follow"
+follow_kills "$stop_follow" &
+follower=$!
+# Stopped on any exit too (a failed claude ends main under set -e), so it never holds stderr open.
+trap ': >"$stop_follow"; wait "$follower" || true' EXIT
+
 echo "== claude" >&2
 # Progress: Claude's text and each tool call, one line each; the full stream is kept for the summary, and goes out
 # raw, as it comes, on the run's stdout (fd 3: see the end), which remote-agent.sh keeps as the live transcript.
@@ -76,6 +153,9 @@ claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules
       else .out = [] end;
       .out[])' >&2
 jq -r 'select(.type == "result") | .result // ""' "$HOME/out/stream.jsonl" >"$HOME/out/summary.md"
+: >"$stop_follow"
+wait "$follower" || true
+trap - EXIT
 
 # The session Claude wrote, named by its init event, goes back as ~/out/session.jsonl with the token's value (through
 # the environment, never argv) replaced by [redacted]; `remote-agent resume` places it for /resume. Missing: said, not fatal.

@@ -73,8 +73,10 @@ grep -q "keyed" "$SANDBOX/pack.err" || fail "pack: dropped MCP server not report
 # --- remote-agent.sh against a stub kubectl. The "pod" is $POD (its $HOME). Exec runs the given sh -c
 # command locally with HOME=$POD, except the sandbox script, which is replaced by a fake run that writes
 # $POD/out from $SANDBOX/patch (empty file = no changes); with $SANDBOX/real, the real script runs, with a fake
-# claude that writes hello.txt. The pod's main-process stdout (/proc/1/fd/1) is the file $POD/main-stdout, absent
-# with $SANDBOX/nomain.
+# claude that writes hello.txt, and its arguments after the script (the caps); with $SANDBOX/nocapped, the setup sent
+# has no capped. The pod's main-process stdout (/proc/1/fd/1) is the file $POD/main-stdout, absent with
+# $SANDBOX/nomain. With $SANDBOX/vanish, the fake run prints that file on stderr and fails, as a run whose container
+# went away mid-run.
 POD="$SANDBOX/pod"
 mkdir -p "$SANDBOX/bin" "$SANDBOX/config/dotagents"
 cat >"$SANDBOX/bin/kubectl" <<EOF
@@ -114,12 +116,14 @@ case " \$* " in
   *" remote-agent-sandbox"*)
     if [ -e "$SANDBOX/real" ]; then
       while [ "\$1" != "-c" ]; do shift; done
+      [ ! -e "$SANDBOX/nocapped" ] || rm -f "\$pod/.agents/bin/capped"
       # A pod does not get this machine's CLAUDE_CONFIG_DIR.
-      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="\$pod" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/\$pod/main-stdout}" "\$3"
+      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="\$pod" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/\$pod/main-stdout}" "\${@:3}"
       exit
     fi
     cat >"$SANDBOX/stdin"
     cp "\$pod/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
+    if [ -e "$SANDBOX/vanish" ]; then cat "$SANDBOX/vanish" >&2; exit 1; fi
     # With $SANDBOX/events, Claude's raw events on stdout (the transcript); with $SANDBOX/summary, the report.
     [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
     mkdir -p "\$pod/out"; cp "\$patch" "\$pod/out/changes.patch"
@@ -141,10 +145,20 @@ EOF
 chmod +x "$SANDBOX/bin/kubectl"
 mkdir -p "$SANDBOX/podbin"
 # It also starts a session as Claude does, under $HOME/.claude/projects/<munged cwd>, holding the token and cwd
-# lines; not with $SANDBOX/nosession.
+# lines; not with $SANDBOX/nosession. It saves the shell prefix it was given to $SANDBOX/prefix. With $SANDBOX/killmsg,
+# it prints that file on stderr, as capped's kill line. With $SANDBOX/loop, it runs a red test that loops (a minute: a broken cap fails, not hangs, this test) as
+# Claude Code runs a Bash command under CLAUDE_CODE_SHELL_PREFIX: the prefix, then the whole command line as one
+# argument, its output kept for the tool result, not on Claude's own stderr; the test's exit code goes to
+# $SANDBOX/loop-rc.
 cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
+printf '%s' "\${CLAUDE_CODE_SHELL_PREFIX:-}" >"$SANDBOX/prefix"
+[ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >&2
+if [ -e "$SANDBOX/loop" ]; then
+  "\$CLAUDE_CODE_SHELL_PREFIX" "shopt -u extglob 2>/dev/null || true && eval 'while [ \\\$SECONDS -lt 60 ]; do :; done' && pwd -P >| /dev/null" >/dev/null 2>&1
+  echo "\$?" >"$SANDBOX/loop-rc"
+fi
 # With \$SANDBOX/limit, the account is over its usage limit: Claude says so, as an API error and an error result.
 if [ -e "$SANDBOX/limit" ]; then
   echo '{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You have hit your limit - resets 5:30pm (UTC)"}]}}'
@@ -512,6 +526,77 @@ run_data "usage limit run data" failed 5
 result_is "usage limit result" '.exit_code == 5 and .status == "failed" and .complete == false and .total_cost_usd == 0.42
   and .num_turns == 3'
 rm -f "$SANDBOX/real" "$SANDBOX/limit"
+
+# Caps: the sandbox runs the agent's shell commands under scripts/capped, with remote.cap_mb and remote.cap_secs as
+# arguments after the script. A red test that loops forever is killed at the time cap, the agent carries on, and
+# the run ends done with its patch; the kill shows as one line on stderr and in result.json, apart from a lost sandbox.
+: >"$SANDBOX/real"
+: >"$SANDBOX/loop"
+rm -f "$SANDBOX/loop-rc" "$SANDBOX/prefix"
+# capped refuses to run without ps; where this machine has none, the pod gets one listing nothing (no memory cap,
+# which tests/capped.test.sh covers), so the time cap still runs here.
+if ! command -v ps >/dev/null; then printf '#!/bin/sh\nexit 0\n' >"$SANDBOX/podbin/ps"; chmod +x "$SANDBOX/podbin/ps"; fi
+t=$SECONDS
+code=0; REMOTE_CAP_SECS=1 run 0 "" --name caps-loop || code=$?
+[ "$code" = 0 ] || fail "caps loop: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
+[ $((SECONDS - t)) -lt 60 ] || fail "caps loop: took $((SECONDS - t))s"
+[ "$(cat "$SANDBOX/loop-rc" 2>/dev/null)" = 124 ] || fail "caps loop: the looping test was not killed at the time cap: $(cat "$SANDBOX/loop-rc" 2>/dev/null)"
+grep -q "remote-agent-sandbox 2000 1\$" "$SANDBOX/calls" || fail "caps loop: the caps are not the arguments after the script: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
+case "$(cat "$SANDBOX/prefix" 2>/dev/null)" in /*) ;; *) fail "caps loop: no absolute CLAUDE_CODE_SHELL_PREFIX: $(cat "$SANDBOX/prefix" 2>/dev/null)" ;; esac
+[ -f "$POD/.agents/bin/capped" ] || fail "caps loop: capped not sent with the setup"
+grep -q "^\[caps-loop\] == capped: shell prefix set" "$SANDBOX/err" || fail "caps loop: shell prefix not reported: $(cat "$SANDBOX/err")"
+grep -qxF "[caps-loop] killed: timeout while [ \$SECONDS -lt 60 ]; do :; done" "$SANDBOX/err" || fail "caps loop: no kill line: $(cat "$SANDBOX/err")"
+grep -q "capped: killed: timeout" "$POD/out/capped.log" 2>/dev/null || fail "caps loop: the kill not in ~/out/capped.log"
+[ -f "$(kept)/capped.log" ] || fail "caps loop: capped.log not kept"
+grep -q "^capped: killed: timeout while" "$(kept)/progress.log" || fail "caps loop: the kill did not come live on the sandbox's stderr"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps loop: patch not applied"
+# shellcheck disable=SC2016 # jq, with a literal $SECONDS in the expected command
+result_is "caps loop result" '.status == "done" and .killed == "timeout" and .lost == false
+  and .capped_kills == [{"kind": "timeout", "cmd": "while [ $SECONDS -lt 60 ]; do :; done"}]'
+rm -f "$W/hello.txt" "$SANDBOX/loop"
+
+printf 'capped: killed: memory npm test\n' >"$SANDBOX/killmsg"
+code=0; run 0 "" --name caps-mem || code=$?
+[ "$code" = 0 ] || fail "caps memory: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
+if ! { [ "$(grep -c "killed: " "$SANDBOX/err")" = 2 ] && grep -qx "\[caps-mem\] killed: memory npm test" "$SANDBOX/err"; }; then
+  fail "caps memory: not one line [caps-mem] killed: memory npm test: $(cat "$SANDBOX/err")"
+fi
+result_is "caps memory result" '.killed == "memory" and .lost == false and .capped_kills == [{"kind": "memory", "cmd": "npm test"}]'
+rm -f "$W/hello.txt"
+printf 'capped: killed: timeout\n' >"$SANDBOX/killmsg"
+run 0 "" --name caps-time || fail "caps timeout: exited non-zero: $(cat "$SANDBOX/out")"
+grep -qx "\[caps-time\] killed: timeout" "$SANDBOX/err" || fail "caps timeout: no kill line: $(cat "$SANDBOX/err")"
+result_is "caps timeout result" '.killed == "timeout" and .lost == false and .capped_kills == [{"kind": "timeout", "cmd": null}]'
+rm -f "$W/hello.txt" "$SANDBOX/killmsg"
+
+# Without capped, or without a python3 to run it, the run goes on uncapped and says so.
+: >"$SANDBOX/nocapped"
+run 0 "" || fail "caps no capped: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "== capped: unavailable" "$SANDBOX/err" || fail "caps no capped: not reported: $(cat "$SANDBOX/err")"
+[ ! -s "$SANDBOX/prefix" ] || fail "caps no capped: a shell prefix set anyway: $(cat "$SANDBOX/prefix")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps no capped: patch not applied"
+result_is "caps no capped result" '.killed == null and .lost == false and .capped_kills == []'
+rm -f "$W/hello.txt" "$SANDBOX/nocapped"
+printf '#!/bin/sh\nexit 127\n' >"$SANDBOX/podbin/python3"
+chmod +x "$SANDBOX/podbin/python3"
+run 0 "" || fail "caps no python3: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "== capped: unavailable" "$SANDBOX/err" || fail "caps no python3: not reported: $(cat "$SANDBOX/err")"
+[ ! -s "$SANDBOX/prefix" ] || fail "caps no python3: a shell prefix set anyway: $(cat "$SANDBOX/prefix")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps no python3: patch not applied"
+rm -f "$W/hello.txt" "$SANDBOX/podbin/python3" "$SANDBOX/podbin/ps" "$SANDBOX/real"
+
+# A sandbox that went away mid-run with no kill line before it is lost; one killed first reads as the kill.
+echo "Error from server: error executing command in container: No such container: claude-runner-abc" >"$SANDBOX/vanish"
+code=0; run 0 "$patch" || code=$?
+[ "$code" = 1 ] || fail "lost: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+grep -q "killed: " "$SANDBOX/err" && fail "lost: a kill line printed: $(cat "$SANDBOX/err")"
+result_is "lost result" '.lost == true and .killed == null and .capped_kills == [] and .status == "failed"'
+{ echo "capped: killed: memory make test"; echo "Error from server: No such container: claude-runner-abc"; } >"$SANDBOX/vanish"
+code=0; run 0 "$patch" || code=$?
+[ "$code" = 1 ] || fail "killed then lost: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+grep -q "^\[agent-[^]]*\] killed: memory make test$" "$SANDBOX/err" || fail "killed then lost: no kill line: $(cat "$SANDBOX/err")"
+result_is "killed then lost result" '.lost == false and .killed == "memory"'
+rm -f "$SANDBOX/vanish"
 
 # --name labels the claim and its pod with the task and tags the progress; it is made a valid label value. run.json
 # keeps the name though --attach comes after it.

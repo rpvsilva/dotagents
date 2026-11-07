@@ -8,7 +8,11 @@
 # lines, [] when none); report_path (summary.md, null when none came back); duration_ms, num_turns, total_cost_usd,
 # usage (from the last result event of transcript.jsonl; duration_ms from run.json's started and ended without one);
 # model (the init event's, else the first of the result's modelUsage); complete (true only on exit 0, 3 or 4 with a
-# result event that is not an error). Anything unknown is null, never 0.
+# result event that is not an error); capped_kills (each command the sandbox's caps killed, [{kind, cmd}], kind memory
+# or timeout and cmd null when the line names none: from progress.log's `capped: killed: <kind> <cmd>` lines, which
+# came live, else from the capped.log that came back); killed (the last kill's kind, else null); lost (true when the
+# run failed with an exit other than 3, 4 or 5, no kill line, and a progress line saying its container or pod was gone).
+# Anything unknown is null, never 0.
 set -euo pipefail
 
 keep="$1"
@@ -103,6 +107,16 @@ if [ -f "$keep/summary.md" ]; then
   cp "$keep/summary.md" "$tmp/summary"
 fi
 
+# The caps' kills, and whether the sandbox was lost: from the progress lines, CRs dropped.
+: >"$tmp/progress"
+[ ! -f "$keep/progress.log" ] || tr -d '\r' <"$keep/progress.log" >"$tmp/progress"
+: >"$tmp/kills"
+grep -E '^capped: killed: (memory|timeout)( |$)' "$tmp/progress" >"$tmp/kills" 2>/dev/null \
+  || { [ ! -f "$keep/capped.log" ] || tr -d '\r' <"$keep/capped.log" | grep -E '^capped: killed: (memory|timeout)( |$)' >"$tmp/kills"; } \
+  || true
+gone=false
+if grep -qE 'No such container|container not found|pods? "[^"]*" not found' "$tmp/progress"; then gone=true; fi
+
 # The transcript's last result event and init model, read one event at a time; a partial last line (a killed run) is
 # skipped.
 echo '{}' >"$tmp/events"
@@ -115,9 +129,11 @@ if [ -f "$keep/transcript.jsonl" ]; then
 fi
 
 # shellcheck disable=SC2016 # jq's variables
-jq -c --argjson rc "$rc" --slurpfile changed "$tmp/changed" --argjson report "$report" \
+jq -c --argjson rc "$rc" --argjson gone "$gone" --rawfile kills "$tmp/kills" --slurpfile changed "$tmp/changed" --argjson report "$report" \
   --rawfile summary "$tmp/summary" --slurpfile ev "$tmp/events" '
   ($ev[0].result // null) as $r
+  | [$kills | split("\n")[] | capture("^capped: killed: (?<kind>memory|timeout)( (?<cmd>.+))?$")
+      | {kind, cmd: (.cmd // null)}] as $k
   | ($summary | split("\n") | map(sub("\r$"; "") | sub("^[\\s>*`-]+"; ""))) as $lines
   | {run: .run, name: .name, exit_code: $rc,
      status: (if $rc == 0 or $rc == 3 then "done" else "failed" end),
@@ -129,5 +145,7 @@ jq -c --argjson rc "$rc" --slurpfile changed "$tmp/changed" --argjson report "$r
        then (.ended - .started) * 1000 else null end)),
      num_turns: ($r.num_turns // null), total_cost_usd: ($r.total_cost_usd // null), usage: ($r.usage // null),
      model: ($ev[0].model // ($r.modelUsage // {} | keys_unsorted | first) // null),
-     complete: ($r != null and $r.is_error != true and ($rc == 0 or $rc == 3 or $rc == 4))}' "$keep/run.json" \
+     complete: ($r != null and $r.is_error != true and ($rc == 0 or $rc == 3 or $rc == 4)),
+     capped_kills: $k, killed: ($k | last | .kind // null),
+     lost: ($gone and ($k | length) == 0 and ([0, 3, 4, 5] | index($rc)) == null)}' "$keep/run.json" \
   | tr -d '\r'
