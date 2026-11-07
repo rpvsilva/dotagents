@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Shows a run at a glance: one line per ticket, each followed by its tasks, read from the run folder only.
 
-Usage: python3 -I status.py <run> [--line <TT> | --write]
+Usage: python3 -I status.py <run> [--report | --line <TT> | --write]
 
 Each line is `<id> <status> <PR> <blocked by> <title>`, columns aligned, tasks indented under their ticket; `-` marks
-no PR or no blocker. The one step that prints several stdout lines. Exits 0, or prints
+no PR or no blocker. `--report` adds, for the final report, a `## Not exercised here` section listing each ticket's
+saved skip reasons under `<id> <title>`, as its ticket PR body does; a run with none prints no such section. The one
+step that prints several stdout lines. Exits 0, or prints
 `FAIL run no-run-folder: <path>` and exits 1.
 
 `--line <TT>` prints the ticket's one status line for the human, at most 160 characters:
@@ -26,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ci, core, runfolder  # noqa: E402
+from steplib import ci, core, prbody, runfolder  # noqa: E402
 
 
 def task_id(path):
@@ -64,6 +66,17 @@ def table(run):
         rows += [["  " + r[0]] + r[1:] for r in (row(task_id(f), f) for f in tasks.get(tt, ()))]
     widths = [max((len(r[i]) for r in rows), default=0) for i in range(4)]
     return ["  ".join(c.ljust(w) for c, w in zip(r, widths)) + "  " + r[4] for r in rows]
+
+
+def not_exercised(run):
+    """The `## Not exercised here` lines for the final report, by ticket; [] when no ticket saved a skip reason."""
+    lines = []
+    for f in sorted((run / "tickets").glob("*.md")):
+        reasons = prbody.skip_reasons(run, f)
+        if reasons:
+            name = f"{f.stem.split('-', 1)[0]} {title(f.read_text(encoding='utf-8'))}"
+            lines += ["", name] + [f"- {r}" for r in reasons]
+    return ["", "## Not exercised here"] + lines if lines else []
 
 
 MAX_LINE = 160
@@ -229,7 +242,7 @@ def write_state(run):
     path = run / "state.md"
     fd, tmp = tempfile.mkstemp(dir=str(run), prefix=".state.md.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("\n".join(Run(run).state()) + "\n")
         os.replace(tmp, str(path))
     except BaseException:
@@ -240,9 +253,9 @@ def write_state(run):
 
 
 def main(argv):
-    if not (len(argv) == 1 or (len(argv) == 2 and argv[1] == "--write")
+    if not (len(argv) == 1 or (len(argv) == 2 and argv[1] in ("--write", "--report"))
             or (len(argv) == 3 and argv[1] == "--line")):
-        print("FAIL run usage: status.py <run> [--line <TT> | --write]")
+        print("FAIL run usage: status.py <run> [--report | --line <TT> | --write]")
         return 2
     run = core.resolve(argv[0])
     if not run.is_dir():
@@ -255,10 +268,10 @@ def main(argv):
             print(f"FAIL {argv[2]} no-ticket")
             return 1
         print(state.line(tt))
-    elif len(argv) == 2:
+    elif len(argv) == 2 and argv[1] == "--write":
         print(f"OK run state {write_state(run)}")
     else:
-        for line in table(run):
+        for line in table(run) + (not_exercised(run) if len(argv) == 2 else []):
             print(line.rstrip())
     return 0
 

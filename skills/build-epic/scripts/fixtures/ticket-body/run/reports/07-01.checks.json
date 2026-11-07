@@ -1,0 +1,6 @@
+[
+ {"command": "tests/run.sh", "rc": 0, "passed": 12, "failed": 0, "skipped": 1, "seconds": 30.2,
+  "skip_reasons": ["zsh not installed"]},
+ {"command": "python3 -m unittest discover -s skills/build-epic/scripts -p 'test_*.py'", "rc": 0, "passed": true,
+  "seconds": 3}
+]
