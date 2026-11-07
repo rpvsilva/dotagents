@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-from . import core, gh, runfolder
+from . import core, decisions, gh, runfolder
 
 POLL_WAIT = 30
 POLLS = 120  # an hour of pending checks, then `ticket-ci-timeout`
@@ -18,8 +18,7 @@ CONVENTIONAL = re.compile(r"^[a-z]+(\([^)]*\))?!?: ")
 
 def enabled(run):
     """False when `<run>/decisions.md` says `ci: off` or `ci: none`; True otherwise (no file: CI assumed on)."""
-    path = core.resolve(run) / "decisions.md"
-    value = runfolder.get(path, "ci") if path.exists() else None
+    value = decisions.get(run, "ci")
     return (value or "on").lower() not in ("off", "none", "no")
 
 
