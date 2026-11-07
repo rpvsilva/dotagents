@@ -47,4 +47,11 @@ For a PR, `review-pr` gives you all of it as one prompt (`review_prompt.py secur
 3. **Other bugs**: file:line and one sentence each, or "none".
 4. **Process**: the `process:` lines, or nothing when there are none.
 
-With a report path, write the report there and return exactly one line, nothing else: findings by severity, and whether the coverage table is complete. The details live in the file.
+With a report path, report as [Reports](../_shared/conventions.md#reports) says: write the report there, ending with this block, then your final message is the block alone, at most 400 characters. The details live in the file. With none, your final message is the report.
+
+```
+status: done | blocked
+changed: <the report path>
+why: <one line, when blocked>
+follow-up: <findings by severity, and whether the coverage table is complete>
+```
