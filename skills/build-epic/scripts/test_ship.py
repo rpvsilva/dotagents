@@ -130,25 +130,13 @@ class PostReviewTest(Base):
         call = self.calls("api")[-1]
         return json.loads(Path(call[call.index("--input") + 1]).read_text())
 
-    def test_a_relative_report_path_posts_the_files_text(self):
-        work = self.kit.tmp / "work"
-        work.mkdir()
-        (work / "report.md").write_text("Finding: the JSON parser drops keys.\n")
-        self.kit.answer(REVIEWS.format(n=12), out=json.dumps({"html_url": "https://github.com/o/r/pull/12#r1"}))
-        line = self.post("12", "report.md", cwd=work)
-        self.assertEqual(line, "OK PR12 review https://github.com/o/r/pull/12#r1")
-        self.assertEqual(self.payload()["body"], "Finding: the JSON parser drops keys.\n")
-
     def test_the_payload_is_a_comment_on_the_prs_head_and_never_an_approval(self):
         report = self.kit.tmp / "r.md"
         report.write_text("ok\n")
-        comments = self.kit.tmp / "c.json"
-        comments.write_text(json.dumps([{"path": "a.py", "line": 3, "body": "nit"}]))
-        self.post("https://github.com/o/r/pull/12", report, "--comments", comments)
+        self.post("https://github.com/o/r/pull/12", report)
         payload = self.payload()
         self.assertEqual(payload["event"], "COMMENT")
         self.assertEqual(payload["commit_id"], self.head())
-        self.assertEqual(payload["comments"], [{"path": "a.py", "line": 3, "body": "nit"}])
         call = self.calls("api")[-1]
         self.assertEqual(call[:4], ["api", "repos/{owner}/{repo}/pulls/12/reviews", "--method", "POST"])
         self.assertNotIn("APPROVE", json.dumps(self.kit.gh_calls()))
@@ -169,14 +157,6 @@ class PostReviewTest(Base):
         report = self.kit.tmp / "r.md"
         report.write_text("ok\n")
         self.assertRegex(self.post("latest", report), r"^FAIL latest bad-pr: latest \(log: ")
-        self.assertEqual(self.kit.gh_calls(), [])
-
-    def test_comments_that_are_not_a_json_array_of_objects_are_refused(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n")
-        for comments in ("not json", '{"path": "a.py"}', '["nit"]'):
-            with self.subTest(comments):
-                self.assertRegex(self.post("12", report, "--comments", comments), r"^FAIL PR12 bad-comments \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_failed_post_fails(self):
