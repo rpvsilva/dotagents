@@ -173,9 +173,10 @@ def price_check_hint(run, pricing, today):
 ROLE_HEADERS = ["Role", "Runs", "Turns", "Cost", "Avg context"]
 ROLE_KEY = ("Runs = subagents of that role · orchestrator = the spans minus their subagents · "
             "Avg context = its cache-read tokens per turn")
-# Before schema 4 a subagent had no role: read it from its description's keywords, else its type.
-KEYWORD_ROLES = (("resolve", "resolve"), ("re-review", "re-review"), ("ticket", "ticket-review"),
-                 ("tuner", "review"), ("security", "security"))
+# Before schema 4 a subagent had no role: read it from its type, else (a pr-reviewer, an unknown type) from its
+# description's keywords, as compare_runs.role() does. A conflict resolver is any type told to resolve.
+KEYWORD_ROLES = (("re-review", "re-review"), ("ticket", "ticket-review"), ("tuner", "review"),
+                 ("security", "security"))
 TYPE_ROLES = {"security-reviewer": "security", "pr-reviewer": "review", "epic-implementer": "implement",
               "epic-planner": "plan", "epic-explorer": "explore", "test-tuner": "tune", "pr-fixer": "fix"}
 
@@ -185,6 +186,10 @@ def role_of(agent):
         return agent["role"]
     description = agent.get("description")
     description = description.lower() if isinstance(description, str) else ""
+    if "resolve" in description:
+        return "resolve"
+    if agent.get("type") in TYPE_ROLES and agent.get("type") != "pr-reviewer":
+        return TYPE_ROLES[agent["type"]]
     for keyword, role in KEYWORD_ROLES:
         if keyword in description:
             return role

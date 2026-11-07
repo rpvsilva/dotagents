@@ -247,9 +247,19 @@ class ByRole(unittest.TestCase):
         run = schema_3(Path(RUN_ROLES).read_text(),
                        ["Ticket review 01", "Review tuner PR 9", "Resolve conflicts in PR 3", "Security review PR 4", "x"])
         run = run.replace('"Explore"', '"security-reviewer"').replace('"pr-fixer"', '"epic-planner"')
+        run = run.replace('"epic-implementer"', '"pr-reviewer"')
         rows = role_rows(report("-", "--by-role", stdin=run))
         self.assertEqual([r for r in rows if r not in ("orchestrator", "Total")],
                          ["ticket-review", "review", "resolve", "security", "plan"])
+
+    def test_a_schema_3_agent_type_wins_over_description_keywords(self):
+        # gh-35 named its security reviews "Ticket NN security review": the type says security, not ticket-review.
+        run = schema_3(Path(RUN_ROLES).read_text(), ["Implement 01-01", "Implement 01-02", "Ticket 03 security review",
+                                                     "Look around", "Fix PR 12"])
+        run = run.replace('"pr-reviewer"', '"security-reviewer"')
+        rows = role_rows(report("-", "--by-role", stdin=run))
+        self.assertEqual(rows["security"][:2], ["1", "10"])
+        self.assertNotIn("ticket-review", rows)
 
     def test_a_role_written_by_the_extractor_is_kept_over_the_fallback(self):
         run = json.loads(Path(RUN_ROLES).read_text())

@@ -86,7 +86,7 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`add-plugin`](skills/add-plugin/SKILL.md) | Add a Claude Code plugin after showing what it adds and costs |
 | [`configure`](skills/configure/SKILL.md) | Show or change the Settings skills read, for this machine or this repo |
 | [`remember`](skills/remember/SKILL.md) | After a skill run, save what it learned about the repo for next time |
-| [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill, compare runs over time, and find wasted steps |
+| [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill or per subagent role (`--by-role`), compare runs over time, find wasted steps, and measure and compare build-epic runs (`run_metrics.py`, `compare_runs.py`) |
 
 ### 🧑‍🤝‍🧑 Subagents
 
