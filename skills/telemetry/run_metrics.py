@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Outcome metrics for one build-epic run, read from its run folder and GitHub.
+
+Usage: python3 -I run_metrics.py <run> [--gh <cmd>]
+
+Prints one JSON object (`schema: build-epic-run-metrics/v1`):
+- `tickets`, `tasks`: counts by `Status:`; tasks also by kind (`implement`, `fix` for `TT-NN-review-fixes` and
+  `TT-NN-fix-ci`, `tune` for `TT-tests`), the task file names build-epic's SKILL.md gives them.
+- `fix_rounds`: the `OK <id> pushed` lines in `logs/<id>-push_fix.log`, one per fix pushed to an open PR, the red
+  merges (`FAIL <id> red` in `logs/<id>-merge_task.log`) and the fix tasks.
+- `reviews`: the reviewer reports in `reviews/<PR>-<sha7>.md`; each after a PR's first is a re-review.
+- `follow_ups`: the list lines of `followups.md` and the reports in `reports/<id>.md` with a `follow-up:`.
+- `suites`: the suites of `reports/<id>.checks.json` (a count may be `null`: output it could not read), or, for an id
+  without one, the old `reports/<id>.checks` whose last line says `N passed` and `N failed`.
+- `remote`: the remote runs' results in `remote/<task>.json`; `cost_usd` sums those with a cost and
+  `runs_without_cost` counts the rest.
+- `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
+  folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network.
+- `gaps`: what could not be measured, one line each.
+"""
+import argparse
+import json
+import re
+import shlex
+import statistics
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+SCHEMA = "build-epic-run-metrics/v1"
+PR_FIELDS = "number,url,state,additions,deletions,changedFiles,createdAt,mergedAt,mergedBy,reviews"
+FIX_TASK = re.compile(r"^\d+-\d+-.*(?:review-fixes|fix-ci)$")
+TUNE_TASK = re.compile(r"^\d+-tests$")
+TASK_ID = re.compile(r"^(\d+-\d+)(?:-|$)")
+OLD_PASSED = re.compile(r"(\d+) passed")
+OLD_FAILED = re.compile(r"(\d+) failed")
+NO_FOLLOW_UP = {"", "none", "-", "n/a"}
+
+
+def header(path, key):
+    """The value of the first `key: value` line in the file, or None."""
+    m = re.search(rf"^{re.escape(key)}:[ \t]*(.*?)[ \t]*$", path.read_text(encoding="utf-8"), re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def tally(values):
+    counts = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def is_count(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_number(value):
+    return is_count(value) or isinstance(value, float)
+
+
+def task_id(stem):
+    """`01-02` for `tasks/01-02-slug.md`; the whole stem for the orchestrator's tasks (`01-tests`)."""
+    m = TASK_ID.match(stem)
+    return m.group(1) if m else stem
+
+
+def task_kind(stem):
+    if TUNE_TASK.match(stem):
+        return "tune"
+    if FIX_TASK.match(stem):
+        return "fix"
+    return "implement"
+
+
+def plan(run):
+    """(tickets, tasks): one dict per file, with its id, status and PR line."""
+    tickets = [{"id": f.stem.split("-", 1)[0], "status": header(f, "Status") or "unknown", "pr": header(f, "PR")}
+               for f in sorted((run / "tickets").glob("*.md"))]
+    tasks = [{"id": task_id(f.stem), "kind": task_kind(f.stem), "status": header(f, "Status") or "unknown",
+              "pr": header(f, "PR")}
+             for f in sorted((run / "tasks").glob("*.md"))]
+    return tickets, tasks
+
+
+def fix_rounds(run, tasks):
+    def count(step, line):
+        """{id: lines of `logs/<id>-<step>.log` starting with `line`, `<id>` filled in}."""
+        found = {}
+        for path in sorted((run / "logs").glob(f"*-{step}.log")):
+            ident = path.name[:-len(f"-{step}.log")]
+            start = line.replace("<id>", ident)
+            n = sum(1 for text in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if text.startswith(start))
+            if n:
+                found[ident] = n
+        return found
+
+    pushed = count("push_fix", "OK <id> pushed")
+    red = count("merge_task", "FAIL <id> red ")
+    return {"pushed": sum(pushed.values()), "tasks_pushed": len(pushed), "red_merges": sum(red.values()),
+            "fix_tasks": sum(1 for t in tasks if t["kind"] == "fix")}
+
+
+def reviews(run):
+    per_pr = tally(p.stem.split("-", 1)[0] for p in sorted((run / "reviews").glob("*.md")))
+    total = sum(per_pr.values())
+    return {"reports": total, "prs": len(per_pr), "re_reviews": total - len(per_pr)}
+
+
+def follow_ups(run):
+    path = run / "followups.md"
+    lines = 0
+    if path.is_file():
+        lines = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if re.match(r"^\s*[-*] \S", line))
+    reported = 0
+    for report in sorted((run / "reports").glob("*.md")):
+        value = header(report, "follow-up")
+        if value is not None and value.strip().lower() not in NO_FOLLOW_UP:
+            reported += 1
+    return {"followups_md": lines, "reports_with_follow_up": reported}
+
+
+def suites(run, gaps):
+    rows = []
+    reports = run / "reports"
+    new = sorted(reports.glob("*.checks.json"))
+    for path in new:
+        ident = path.name[:-len(".checks.json")]
+        try:
+            suites_ = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            gaps.append(f"suite results: {path.name} is not JSON")
+            continue
+        for s in suites_ if isinstance(suites_, list) else []:
+            if isinstance(s, dict):
+                rows.append((ident, s))
+    have = {p.name[:-len(".checks.json")] for p in new}
+    for path in sorted(reports.glob("*.checks")):
+        if path.stem in have:
+            continue
+        lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+        last = lines[-1] if lines else ""
+        passed, failed = OLD_PASSED.search(last), OLD_FAILED.search(last)
+        rows.append((path.stem, {"passed": int(passed.group(1)) if passed else None,
+                                 "failed": int(failed.group(1)) if failed else (0 if passed else None),
+                                 "skipped": None, "seconds": None, "skip_reasons": [], "rc": None}))
+    if not rows:
+        gaps.append("suite results: no reports/*.checks.json")
+    out = {"merges": len({ident for ident, _ in rows}), "runs": len(rows), "red": 0, "unparsed": 0,
+           "passed": 0, "failed": 0, "skipped": 0, "seconds": 0.0, "skip_reasons": []}
+    reasons = set()
+    for _, s in rows:
+        rc = s.get("rc")
+        if is_count(rc) and rc != 0 or rc is None and is_count(s.get("failed")) and s["failed"] > 0:
+            out["red"] += 1
+        counts = [s.get(k) for k in ("passed", "failed", "skipped")]
+        if not all(is_count(c) for c in counts):
+            out["unparsed"] += 1
+        for key, value in zip(("passed", "failed", "skipped"), counts):
+            out[key] += value if is_count(value) else 0
+        if is_number(s.get("seconds")):
+            out["seconds"] += s["seconds"]
+        reasons.update(r for r in s.get("skip_reasons") or [] if isinstance(r, str))
+    out["seconds"] = round(out["seconds"], 1)
+    out["skip_reasons"] = sorted(reasons)
+    return out
+
+
+def remote(run, gaps):
+    out = {"runs": 0, "by_status": {}, "complete": 0, "cost_usd": 0.0, "runs_without_cost": 0, "turns": 0,
+           "duration_ms": 0, "tokens": {}, "models": {}, "killed": {}, "lost": 0}
+    statuses, models, killed = [], [], []
+    for path in sorted((run / "remote").glob("*.json")):
+        out["runs"] += 1
+        try:
+            r = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            r = None
+        if not isinstance(r, dict):
+            gaps.append(f"remote: {path.name} is not a result")
+            out["runs_without_cost"] += 1
+            statuses.append("unreadable")
+            continue
+        statuses.append(r.get("status") if isinstance(r.get("status"), str) else "unknown")
+        out["complete"] += r.get("complete") is True
+        if is_number(r.get("total_cost_usd")):
+            out["cost_usd"] += r["total_cost_usd"]
+        else:
+            out["runs_without_cost"] += 1
+        for key, field in (("turns", "num_turns"), ("duration_ms", "duration_ms")):
+            if is_count(r.get(field)):
+                out[key] += r[field]
+        for kind, n in (r.get("usage") or {}).items() if isinstance(r.get("usage"), dict) else []:
+            if is_count(n):
+                out["tokens"][kind] = out["tokens"].get(kind, 0) + n
+        if isinstance(r.get("model"), str):
+            models.append(r["model"])
+        if isinstance(r.get("killed"), str):
+            killed.append(r["killed"])
+        out["lost"] += r.get("lost") is True
+    out["by_status"], out["models"], out["killed"] = tally(statuses), tally(models), tally(killed)
+    out["tokens"] = dict(sorted(out["tokens"].items()))
+    out["cost_usd"] = round(out["cost_usd"], 4)
+    if out["runs_without_cost"]:
+        gaps.append(f"remote: {out['runs_without_cost']} run(s) without cost")
+    return out
+
+
+def when(stamp):
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+
+
+def pr_view(gh, pr, cwd, gaps):
+    """`gh pr view <pr> --json ...` as a dict, or None (named in `gaps`) when the command fails or answers no JSON."""
+    try:
+        res = subprocess.run(gh + ["pr", "view", pr, "--json", PR_FIELDS], cwd=cwd, capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        gaps.append(f"github: {pr}: {e}")
+        return None
+    if res.returncode != 0:
+        gaps.append(f"github: {pr}: exit {res.returncode}")
+        return None
+    try:
+        data = json.loads(res.stdout)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        gaps.append(f"github: {pr}: no JSON")
+        return None
+    return data
+
+
+def prs(run, gh, items, gaps):
+    repo = header(run / "run.md", "Repo") if (run / "run.md").is_file() else None
+    cwd = repo if repo and Path(repo).is_dir() else None
+    rows = []
+    for item in items:
+        if not item["pr"]:
+            continue
+        data = pr_view(gh, item["pr"], cwd, gaps) or {}
+        created, merged = when(data.get("createdAt")), when(data.get("mergedAt"))
+        merged_by = data.get("mergedBy") if isinstance(data.get("mergedBy"), dict) else {}
+        rows.append({
+            "id": item["id"],
+            "pr": data.get("number") if is_count(data.get("number")) else item["pr"],
+            "state": data.get("state"),
+            "additions": data.get("additions") if is_count(data.get("additions")) else None,
+            "deletions": data.get("deletions") if is_count(data.get("deletions")) else None,
+            "changed_files": data.get("changedFiles") if is_count(data.get("changedFiles")) else None,
+            "hours_to_merge": round((merged - created).total_seconds() / 3600, 2) if created and merged else None,
+            "merged_by": merged_by.get("login"),
+            "reviews": len(data["reviews"]) if isinstance(data.get("reviews"), list) else None,
+        })
+    hours = [r["hours_to_merge"] for r in rows if r["hours_to_merge"] is not None]
+
+    def total(key):
+        return sum(r[key] for r in rows if r[key] is not None)
+
+    return {"count": len(rows), "merged": sum(1 for r in rows if r["state"] == "MERGED"),
+            "additions": total("additions"), "deletions": total("deletions"),
+            "changed_files": total("changed_files"), "reviews": total("reviews"),
+            "merged_by": tally(r["merged_by"] for r in rows if r["merged_by"]),
+            "hours_to_merge": {"median": round(statistics.median(hours), 2) if hours else None,
+                               "max": max(hours) if hours else None},
+            "list": rows}
+
+
+def metrics(run, gh):
+    gaps = []
+    tickets, tasks = plan(run)
+    if not tickets and not tasks:
+        gaps.append("plan: no tickets/*.md or tasks/*.md")
+    return {
+        "schema": SCHEMA,
+        "run": run.name,
+        "tickets": {"count": len(tickets), "by_status": tally(t["status"] for t in tickets)},
+        "tasks": {"count": len(tasks), "by_status": tally(t["status"] for t in tasks),
+                  "by_kind": tally(t["kind"] for t in tasks)},
+        "fix_rounds": fix_rounds(run, tasks),
+        "reviews": reviews(run),
+        "follow_ups": follow_ups(run),
+        "suites": suites(run, gaps),
+        "remote": remote(run, gaps),
+        "prs": prs(run, gh, tickets + tasks, gaps),
+        "gaps": gaps,
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Outcome metrics for one build-epic run, as JSON.")
+    parser.add_argument("run", type=Path, help="the run folder")
+    parser.add_argument("--gh", default="gh", help="the command to run for gh, split like a shell would (default: gh)")
+    args = parser.parse_args(argv)
+    run = args.run.resolve()
+    if not run.is_dir():
+        parser.error(f"no run folder: {args.run}")
+    gh = shlex.split(args.gh)
+    if not gh:
+        parser.error("--gh is empty")
+    print(json.dumps(metrics(run, gh), indent=1))
+
+
+if __name__ == "__main__":
+    main()
