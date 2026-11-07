@@ -15,7 +15,8 @@ MERGE_TASK = SCRIPTS / "merge_task.py"
 REPO = SCRIPTS.parents[2]
 
 # `gh pr view` answers like GitHub: the PR's head is the task branch's tip on origin (or `answers/pr-head`), its state
-# `answers/pr-state` (default MERGED). Every other call goes to the testkit stub.
+# `answers/pr-state` (default MERGED), its base `answers/pr-base` (default the ticket branch). Every other call goes to the
+# testkit stub.
 PR_VIEW = r'''#!{python} -IS
 import os, sys
 d = os.environ["GH_STUB_DIR"]
@@ -33,7 +34,7 @@ def read(name, default):
     return open(p, encoding="utf-8").read().strip() if os.path.exists(p) else default
 head = read("pr-head", "") or subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "task/t/01"],
                                              capture_output=True, text=True, encoding="utf-8").stdout.strip()
-print(json.dumps({{"state": read("pr-state", "MERGED"), "headRefOid": head}}))
+print(json.dumps({{"state": read("pr-state", "MERGED"), "headRefOid": head, "baseRefName": read("pr-base", "feat/t")}}))
 '''
 
 TICKET = "# 01: Merge JSON things\nStatus: building\nIssue: #7\nBranch: feat/t\nBlocked by: none\n"
