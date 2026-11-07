@@ -94,8 +94,9 @@ for f in skills/*/settings.json remote/settings.json; do
 done
 
 # Needs declarations (scripts/parts.sh): each a JSON object with a group from groups.json, needs naming a part as
-# required or optional (never a core part: _shared or one of group core), and agents as a list of names. Every skill, mod and hook has one; skills/_shared is core and
-# has none. Every subagent wrapper's stem is owned by exactly one skill, the one holding the brief it names, and every
+# required or optional (never a core part: _shared or one of group core), agents as a list of names, and remote as
+# the list of those agents that may run remotely (skills/remote-subagents/SKILL.md). Every skill, mod and hook has
+# one; skills/_shared is core and has none. Every subagent wrapper's stem is owned by exactly one skill, the one holding the brief it names, and every
 # owned agent has a wrapper. No part or group takes a tool word install.sh reserves.
 parts_list="$(scripts/parts.sh list 2>&1 | tr -d '\r')" || { fail "scripts/parts.sh list: $parts_list"; parts_list=""; }
 part_names="$(cut -f1 <<<"$parts_list")"
@@ -130,7 +131,11 @@ $core_names" '
            else empty end end),
       (if has("agents") and ((.agents | type) != "array" or any(.agents[]; type != "string")) then "agents is not a list of names"
        else empty end),
-      (keys - ["group", "needs", "agents"] | .[] | "unknown key \(.)")][] | "\($f): \(.)"' "${decls[@]}" | tr -d '\r')
+      (if has("remote") | not then empty
+       elif (.remote | type) != "array" or any(.remote[]; type != "string") then "remote is not a list of names"
+       else (if (.agents | type) == "array" then .agents else [] end) as $a | .remote[] | select(. as $r | any($a[]; . == $r) | not)
+         | "remote \(.) is not in this file'"'"'s agents" end),
+      (keys - ["group", "needs", "agents", "remote"] | .[] | "unknown key \(.)")][] | "\($f): \(.)"' "${decls[@]}" | tr -d '\r')
 fi
 for d in skills/*/ adapters/claude/mods/*/; do
   [ -d "$d" ] || continue
@@ -326,7 +331,8 @@ while read -r p; do
 done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
 
 # The remote-subagents skill says to give the human the transcript path, to leave remote-agent's stderr unredirected,
-# and to read the outcome from result.json through remote-agent result. The shared conventions only link to it.
+# to read the outcome from result.json through remote-agent result, that the remote list in needs.json declares
+# which agents are remote-capable, and which uses of an agent that entry covers. The shared conventions only link to it.
 rs=skills/remote-subagents/SKILL.md
 if [ -f "$rs" ]; then
   remote="$(cat "$rs")"
@@ -334,9 +340,16 @@ if [ -f "$rs" ]; then
   grep -qi 'not redirect' <<<"$remote" || fail "$rs: does not say to leave stderr unredirected"
   grep -q 'result\.json' <<<"$remote" || fail "$rs: does not name result.json"
   grep -q 'remote-agent result' <<<"$remote" || fail "$rs: does not name remote-agent result"
+  # shellcheck disable=SC2016 # literal backticks: `remote` is matched, not run
+  grep -q 'needs\.json.*under `remote`' <<<"$remote" || fail "$rs: does not say an agent is remote-capable when its needs.json lists it under remote"
+  grep -q 'The entry covers \*\*every use\*\*' <<<"$remote" || fail "$rs: does not say which uses of an agent its remote entry covers"
 else
   fail "$rs is missing"
 fi
+# No other skill restates which agents are remote-capable: each links the declaration through remote-subagents.
+while IFS= read -r hit; do
+  fail "$hit: says remote-capable; only skills/remote-subagents/SKILL.md does, the others link it"
+done < <(grep -rli 'remote-capable' skills --exclude-dir=remote-subagents || true)
 if grep -q '^## Remote subagents' skills/_shared/conventions.md; then
   fail "skills/_shared/conventions.md: restates Remote subagents; link ../remote-subagents/SKILL.md instead"
 fi
