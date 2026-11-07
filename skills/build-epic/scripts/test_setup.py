@@ -1,4 +1,5 @@
 """Tests for `setup.py`: the run's test environment, test command, CI fact, identity and skipped tools, once."""
+import io
 import re
 import sys
 import unittest
@@ -6,10 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, decisions  # noqa: E402
-from testkit import SCRIPTS, Kit  # noqa: E402
+import setup as setup_step  # noqa: E402
+from steplib import checks, core, decisions, identity  # noqa: E402
+from testkit import SCRIPTS, Kit, env_tool_setup  # noqa: E402
 
 SETUP = SCRIPTS / "setup.py"
+REPO = SCRIPTS.parents[2]
 PERMISSIONS = "api-repos__owner___repo__actions_permissions"
 
 PR_INTO_MAIN = """name: ci
@@ -48,6 +51,9 @@ class SetupCase(unittest.TestCase):
         self.run_dir = self.kit.run_dir
         self.kit.answer("api-user", out="rui\n")
         self.kit.answer(PERMISSIONS, out="true\n")
+        self.kit.env.pop("XDG_CONFIG_HOME", None)
+        (self.kit.home / ".agents" / "bin").mkdir(parents=True)
+        (self.kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
         self.write_map("echo suite ok")
 
     def write_map(self, checks_block, setup="Setup: none."):
@@ -76,6 +82,17 @@ class SetupCase(unittest.TestCase):
     def decided(self, key):
         return decisions.get(self.run_dir, key)
 
+    def setting(self, key, value):
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "set", "build-epic", key, value, "--machine")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def suite_printing(self, out, only_with_all=False):
+        """A Checks command printing `out` (with `--all` only, when `only_with_all`)."""
+        script = self.kit.tmp / "suite.sh"
+        guard = '[ "$1" = --all ] || exit 0\n' if only_with_all else ""
+        script.write_text(f"{guard}cat <<'EOF'\n{out}EOF\n", encoding="utf-8")
+        return f"bash {script}"
+
 
 class PrintsOneLine(SetupCase):
     def test_prints_ci_env_and_skips(self):
@@ -96,6 +113,31 @@ class PrintsOneLine(SetupCase):
     def test_without_checks_fails(self):
         (self.run_dir / "map.md").write_text("# Map\n\n## Checks\n\nSetup: none\n", encoding="utf-8")
         self.assertTrue(self.setup(ok=False).startswith("FAIL run no-checks"))
+
+    def test_without_map_md_fails(self):
+        (self.run_dir / "map.md").unlink()
+        self.assertTrue(self.setup(ok=False).startswith("FAIL run no-map: "))
+
+    def test_an_extra_argument_is_a_usage_failure(self):
+        p = self.kit.step(SETUP, self.run_dir, "extra")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertTrue(p.stdout.startswith("FAIL run usage: setup.py <run>"), p.stdout)
+        self.assertFalse((self.run_dir / "env").exists())
+
+    def test_a_setup_line_that_is_no_command_fails_unclear(self):
+        self.write_map("echo hi", setup="Setup: make a venv first.")
+        self.assertTrue(self.setup(ok=False).startswith("FAIL run unclear-setup: "))
+
+    def test_a_setup_heading_with_a_note_and_no_command_fails_unclear(self):
+        self.write_map("echo hi", setup="Setup (fresh worktree): python3 -m venv .venv")
+        self.assertTrue(self.setup(ok=False).startswith("FAIL run unclear-setup: "))
+        self.assertFalse((self.run_dir / "env" / ".setup-done").exists())
+
+    def test_a_setup_line_in_another_form_fails_unclear_instead_of_meaning_none(self):
+        for line in ("Setup - `touch x`", "Setup is a virtualenv: `touch x`"):
+            with self.subTest(line):
+                self.write_map("echo hi", setup=line)
+                self.assertTrue(self.setup(ok=False).startswith("FAIL run unclear-setup: "))
 
 
 class RecordsTheRunsFacts(SetupCase):
@@ -127,6 +169,28 @@ class RecordsTheRunsFacts(SetupCase):
         env = self.run_dir / "env"
         self.assertEqual(self.decided("test_command"),
                          f"export BUILD_EPIC_ENV={env} && . {env}/bin/activate && echo hi")
+
+    def test_a_setup_heading_with_a_note_runs_its_code_spans(self):
+        made = 'mkdir -p "$BUILD_EPIC_ENV" && echo ok > "$BUILD_EPIC_ENV/made"'
+        self.write_map("echo hi", setup=f"Setup (fresh worktree): `{made}`")
+        self.setup()
+        env = self.run_dir / "env"
+        self.assertTrue((env / "made").exists())
+        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env} && echo hi")
+
+    def test_a_setup_heading_with_a_note_runs_its_block_and_the_block_is_no_suite(self):
+        made = 'echo ok > "$BUILD_EPIC_ENV/made"'
+        self.write_map("echo hi", setup=f"Setup (once, in the repo):\n\n```\n{made}\n```")
+        self.setup()
+        env = self.run_dir / "env"
+        self.assertTrue((env / "made").exists())
+        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env} && echo hi")
+        self.assertEqual(checks.commands(self.run_dir / "map.md"), ["echo hi"])
+
+    def test_setup_none_puts_no_env_in_the_test_command(self):
+        self.write_map("echo hi", setup="Setup (fresh worktree): none.")
+        self.setup()
+        self.assertEqual(self.decided("test_command"), "echo hi")
 
     def test_failing_setup_fails_and_is_run_again_next_time(self):
         count = self.kit.tmp / "count"
@@ -162,22 +226,54 @@ class DetectsCI(SetupCase):
         self.workflows({"ci.yml": "on:\n  push:\n    branches: [main]\njobs: {}\n"})
         self.assertIn(" ci=off ", self.setup())
 
+    def test_a_yaml_workflow_counts_and_other_files_do_not(self):
+        self.workflows({"ci.yaml": PR_INTO_MAIN, "notes.md": PR_INTO_MAIN})
+        self.assertIn(" ci=on ", self.setup())
+        self.kit.git("rm", "-q", ".github/workflows/ci.yaml", cwd=self.kit.clone)
+        self.workflows({})
+        self.assertIn(" ci=off ", self.setup())
+
+    def test_an_unreadable_actions_setting_lets_the_workflows_decide(self):
+        self.kit.answer(PERMISSIONS, err="HTTP 403\n", rc=1)
+        self.workflows({"ci.yml": PR_INTO_MAIN})
+        self.assertIn(" ci=on ", self.setup())
+
+    def test_a_base_origin_lacks_fails_recording_no_ci(self):
+        (self.run_dir / "decisions.md").write_text("# Decisions\nbase: nowhere\n", encoding="utf-8")
+        self.setup(ok=False)
+        self.assertIsNone(self.decided("ci"))
+
+
+class TriggerForms(unittest.TestCase):
+    """The workflow parser alone: `DetectsCI` drives it through `setup.py` and git; these are its YAML forms."""
+
     def test_trigger_forms(self):
         for name, text, want in [
-            ("bare", "on: pull_request\n", "on"),
-            ("list", "on: [push, pull_request]\n", "on"),
-            ("quoted key", '"on":\n  pull_request:\n', "on"),
-            ("types only", "on:\n  pull_request:\n    types: [opened]\n", "on"),
-            ("block list", "on:\n  pull_request:\n    branches:\n      - 'main'\n", "on"),
-            ("other branch", "on:\n  pull_request:\n    branches:\n      - dev\n", "off"),
-            ("glob", "on:\n  pull_request:\n    branches: ['ma*']\n", "on"),
-            ("ignored", "on:\n  pull_request:\n    branches-ignore: [main]\n", "off"),
-            ("negated", "on:\n  pull_request:\n    branches: ['*', '!main']\n", "off"),
-            ("commented", "# on: pull_request\non:\n  push: # pull_request\n", "off"),
+            ("bare", "on: pull_request\n", True),
+            ("list", "on: [push, pull_request]\n", True),
+            ("quoted key", '"on":\n  pull_request:\n', True),
+            ("types only", "on:\n  pull_request:\n    types: [opened]\n", True),
+            ("block list", "on:\n  pull_request:\n    branches:\n      - 'main'\n", True),
+            ("other branch", "on:\n  pull_request:\n    branches:\n      - dev\n", False),
+            ("glob", "on:\n  pull_request:\n    branches: ['ma*']\n", True),
+            ("ignored", "on:\n  pull_request:\n    branches-ignore: [main]\n", False),
+            ("negated", "on:\n  pull_request:\n    branches: ['*', '!main']\n", False),
+            ("commented", "# on: pull_request\non:\n  push: # pull_request\n", False),
+            ("target", "on:\n  pull_request_target:\n    branches: [main]\n", True),
+            ("flow mapping", "on: {pull_request: {branches: [dev]}}\n", True),
+            ("flow event", "on:\n  pull_request: {branches: [dev]}\n", True),
+            ("double star", "on:\n  pull_request:\n    branches: ['**']\n", True),
+            ("question mark", "on:\n  pull_request:\n    branches: ['mai?']\n", True),
+            ("no on", "name: ci\njobs: {}\n", False),
         ]:
             with self.subTest(name):
-                self.workflows({"ci.yml": text})
-                self.assertIn(f" ci={want} ", self.setup())
+                self.assertIs(setup_step.triggers_on_pr(text, "main"), want)
+
+    def test_a_star_stays_within_a_path_segment(self):
+        text = "on:\n  pull_request:\n    branches: ['release/*']\n"
+        self.assertTrue(setup_step.triggers_on_pr(text, "release/1"))
+        self.assertFalse(setup_step.triggers_on_pr(text, "release/1/x"))
+        self.assertTrue(setup_step.triggers_on_pr(text.replace("/*", "/**"), "release/1/x"))
 
 
 class ListsSkippedTools(SetupCase):
@@ -185,9 +281,7 @@ class ListsSkippedTools(SetupCase):
         out = ("mod.test.sh: skipped (node not installed)\n"
                "== shellcheck: not installed, skipped (install shellcheck)\n"
                "SKIPPED [1] tests/test_x.py:3: requires docker\n")
-        script = self.kit.tmp / "suite.sh"
-        script.write_text(f"cat <<'EOF'\n{out}EOF\n", encoding="utf-8")
-        self.write_map(f"bash {script}")
+        self.write_map(self.suite_printing(out))
         line = self.setup()
         self.assertTrue(line.endswith(" skips=3"), line)
         skips = (self.run_dir / "skips.md").read_text(encoding="utf-8")
@@ -197,9 +291,32 @@ class ListsSkippedTools(SetupCase):
             self.assertRegex(skips, rf"(?m)^\| {tool} \|")
 
     def test_a_red_suite_still_lists_its_skips(self):
-        self.write_map("echo 'zsh.test.sh: skipped (zsh is not installed)'; exit 1")
+        self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'; exit 1")
         self.assertTrue(self.setup().endswith(" skips=1"))
         self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| zsh \|")
+
+    def test_suites_run_in_a_throwaway_worktree_of_the_base_not_the_checkout(self):
+        where = self.kit.tmp / "where"
+        self.write_map(f"pwd > {where}; git rev-parse HEAD >> {where}")
+        self.kit.git("commit", "-q", "--allow-empty", "-m", "local only", cwd=self.kit.clone)
+        self.setup()
+        ran_in, head = where.read_text(encoding="utf-8").split()
+        self.assertNotEqual(Path(ran_in).resolve(), self.kit.clone.resolve())
+        self.assertFalse(Path(ran_in).exists())
+        self.assertEqual(head, self.kit.git("rev-parse", "origin/main", cwd=self.kit.clone))
+        self.assertEqual(len(self.kit.git("worktree", "list", "--porcelain", cwd=self.kit.clone).split("\nworktree ")), 1)
+
+    def test_a_checks_command_the_map_names_with_all_lists_every_suites_skips(self):
+        suite = self.suite_printing("== tests/zsh.test.sh (0s)\nzsh.test.sh: skipped (zsh is not installed)\n",
+                                    only_with_all=True)
+        self.write_map(suite, setup=f"Setup: none. Before a ticket ships, run `{suite} --all`.")
+        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.assertEqual(self.decided("test_command"), suite)
+
+    def test_suites_run_in_the_runs_environment(self):
+        self.write_map("envtool", setup=env_tool_setup("envtool", "SKIPPED [1] t.py:1: needs docker"))
+        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| docker \|")
 
 
 class Reruns(SetupCase):
@@ -211,22 +328,94 @@ class Reruns(SetupCase):
         self.assertEqual(first, second)
         self.assertEqual(count.read_text(encoding="utf-8"), "x\n")
 
+    def test_rerun_keeps_recorded_identity_and_human_so_the_merge_still_refuses(self):
+        self.setup()
+        self.assertEqual((self.decided("merge_identity"), self.decided("human")), ("app", "rui"))
+        self.setting("merge_identity", "human")
+        self.kit.answer("api-user", out="someone-else\n")
+        self.setup()
+        self.assertEqual((self.decided("merge_identity"), self.decided("human")), ("app", "rui"))
+        with self.assertRaises(core.Fail) as caught:
+            identity.prove(self.run_dir, "human", self.kit.clone, io.StringIO())
+        self.assertEqual(str(caught.exception), "wrong-identity")
+
+    def test_rerun_records_a_human_left_unset_before(self):
+        self.kit.answer("api-user", err="HTTP 401\n", rc=1)
+        self.setup()
+        self.assertIsNone(self.decided("human"))
+        self.kit.answer("api-user", out="rui\n")
+        self.setup()
+        self.assertEqual(self.decided("human"), "rui")
+
+    def test_rerun_keeps_skips_md_until_it_is_deleted(self):
+        self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'")
+        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.write_map("echo all ran")
+        self.assertTrue(self.setup().endswith(" skips=1"))
+        (self.run_dir / "skips.md").unlink()
+        self.assertTrue(self.setup().endswith(" skips=0"))
+
 
 class SkipReasons(unittest.TestCase):
+    def tools(self, out):
+        return [(s.tool, s.reason) for s in checks.skip_reasons(out)]
+
     def test_reads_pytest_unittest_and_suite_lines(self):
-        got = checks.skip_reasons(
+        self.assertEqual(self.tools(
+            "== tests/mod.test.sh (1s)\n"
             "SKIPPED [2] tests/test_a.py:10: docker is not installed\n"
             "test_z (test_s.Zsh) ... skipped 'zsh is not installed'\n"
             "mod.test.sh: skipped (opt in with REMOTE_SMOKE=1)\n"
             "WARN: node not installed, mod unit tests skipped (install node 22.6+)\n"
+            "== shellcheck: 0.11.0 not installed and the docker daemon is not running, skipped (start docker)\n"
             "Ran 3 tests in 0.1s\nOK (skipped=1)\n"
-            "all good\n")
-        self.assertEqual([(s.tool, s.reason) for s in got], [
+            "all good\n"), [
             ("docker", "docker is not installed"),
             ("zsh", "zsh is not installed"),
-            (None, "mod.test.sh: skipped (opt in with REMOTE_SMOKE=1)"),
-            ("node", "WARN: node not installed, mod unit tests skipped (install node 22.6+)"),
+            (None, "mod.test.sh: opt in with REMOTE_SMOKE=1"),
+            ("node", "WARN: node not installed, mod unit tests (install node 22.6+)"),
+            ("shellcheck", "shellcheck: 0.11.0 not installed and the docker daemon is not running (start docker)"),
         ])
+
+    def test_they_are_the_reasons_counts_reads_each_once(self):
+        out = ("== tests/a.test.sh (1s)\nzsh.test.sh: skipped (zsh is not installed)\n"
+               "SKIPPED [1] t.py:1: no docker\nSKIPPED [1] t.py:2: no docker\n"
+               "test_z (m.Z) ... skipped 'no git'\n")
+        reasons = checks.counts(out)[3]
+        self.assertEqual(reasons, ["zsh.test.sh: zsh is not installed", "no docker", "no docker", "no git"])
+        self.assertEqual([s.reason for s in checks.skip_reasons(out)], list(dict.fromkeys(reasons)))
+
+    def test_a_skip_named_twice_counts_once(self):
+        out = "SKIPPED [1] a.py:1: requires docker\nSKIPPED [3] b.py:9: requires docker\n"
+        self.assertEqual(self.tools(out), [("docker", "requires docker")])
+
+    def test_count_summaries_are_not_skip_rows(self):
+        for out in ("============ 3 passed, 2 skipped in 0.12s ============\n",
+                    "3 passed, 2 skipped in 0.12s\n",
+                    "Tests:       1 failed, 2 skipped, 40 passed, 43 total\n",
+                    "== tests/a.test.sh (1s)\nTests:       2 skipped, 40 passed, 42 total\n",
+                    "== tests/a.test.sh (1s)\n===== 3 passed, 2 skipped in 0.1s =====\n",
+                    "Ran 3 tests in 0.1s\n\nOK (skipped=2)\n"):
+            with self.subTest(out):
+                self.assertEqual(self.tools(out), [])
+
+    def test_a_framed_jest_summary_still_counts_its_skips(self):
+        out = "== tests/a.test.sh (1s)\nTests:       2 skipped, 40 passed, 42 total\n"
+        self.assertEqual(checks.counts(out), (40, 0, 2, []))
+
+    def test_words_that_name_no_tool_are_never_the_tool(self):
+        for reason, want in [
+            ("no such file or directory", None),
+            ("install a newer git first", None),
+            ("requires network access", None),
+            ("unit tests not found", None),
+            ("needs such a thing", None),
+            ("node 22.6+ is missing", "node"),
+            ("requires docker", "docker"),
+            ("no zsh", "zsh"),
+        ]:
+            with self.subTest(reason):
+                self.assertEqual(self.tools(f"SKIPPED [1] t.py:1: {reason}\n"), [(want, reason)])
 
 
 if __name__ == "__main__":

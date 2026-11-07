@@ -13,6 +13,7 @@ for a call whose first two arguments are `pr merge`, the key is `pr-merge`; the 
 import atexit
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,16 @@ sys.stdout.write(part("out"))
 sys.stderr.write(part("err"))
 sys.exit(int(part("rc", "0").strip() or 0))
 '''
+
+def env_tool_setup(tool, output):
+    """A `map.md` `Setup:` block that installs `tool` into the run's environment, as a virtualenv would: an executable
+    `$BUILD_EPIC_ENV/bin/<tool>` printing `output`, and a `bin/activate` putting that folder first on `PATH`. Only a
+    suite run inside that environment finds `tool`."""
+    make = (f'mkdir -p "$BUILD_EPIC_ENV/bin" && printf \'#!/bin/sh\\necho "%s"\\n\' {shlex.quote(output)} '
+            f'> "$BUILD_EPIC_ENV/bin/{tool}" && chmod +x "$BUILD_EPIC_ENV/bin/{tool}"')
+    activate = 'echo \'PATH="$BUILD_EPIC_ENV/bin:$PATH"\' > "$BUILD_EPIC_ENV/bin/activate"'
+    return f"Setup:\n\n```\n{make}\n{activate}\n```\n"
+
 
 zsh = shutil.which("zsh")
 skip_without_zsh = unittest.skipUnless(zsh, "zsh is not installed")

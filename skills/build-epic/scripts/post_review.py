@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Posts a reviewer's own report as one COMMENT review on a PR's head commit. It never approves.
 
-Usage: python3 -I post_review.py <run> <PR> <report-file> [--note <text>]
+Usage: python3 -I post_review.py <run> <PR> <report-file> [--base <ref>] [--note <text>]
 
-`<PR>` is a number, `#n` or a PR URL. The report path is resolved against the caller's folder before anything else
-runs, so a relative path posts the same body as an absolute one. The body is one header line (the PR, the head commit
-and the merge-base diff read, and the run's `test_command:` from `decisions.md`), a blank line, the report file's
-bytes unchanged, then the note when given, as its own paragraph. There are no inline comments: findings cite
-`path:line` in the report's text. The body is saved beside the report as `<name>.posted<ext>`, and the payload
-`{commit_id, event: COMMENT, body}` is kept in `<run>/logs/PR<n>-review.json` and posted with
+`<PR>` is a number, `#n` or a PR URL. The report path is resolved against the caller's folder before anything else runs,
+so a relative path posts the same body as an absolute one. The body is one header line, a blank line, the report file's
+bytes unchanged, then the note when given, as its own paragraph. The header names only what is known about the review:
+the PR and head it reviewed, read from the report's name (`<PR>-<sha7>[-<suffix>].<ext>`; with any other name, the
+reviewed head is not recorded), `posted on PR #<n>` when that PR is not the one posted on (a hub report on its ticket
+PR), the diff read (`git diff <ref>...<sha7>`) only when `--base` gives the base the reviewer was given (for a
+re-review, the head it reviewed before), and the run's `test_command:` from `decisions.md`. There are no inline
+comments: findings cite `path:line` in the report's text. The body is saved beside the report as `<name>.posted<ext>`,
+and the payload `{commit_id, event: COMMENT, body}` is kept in `<run>/logs/PR<n>-review.json` and posted with
 `gh api repos/{owner}/{repo}/pulls/<n>/reviews`.
 
 Prints `OK PR<n> review <url>`, or `FAIL PR<n> <reason> (log: ...)`: `empty-review` (the file is missing or blank),
@@ -27,32 +30,40 @@ from steplib import core, decisions, gh, runfolder  # noqa: E402
 
 DENIED = re.compile(r"HTTP 403|returned error: 403")
 RATE_LIMIT = re.compile(r"rate limit", re.IGNORECASE)
-USAGE = "post_review.py <run> <PR> <report-file> [--note <text>]"
+USAGE = "post_review.py <run> <PR> <report-file> [--base <ref>] [--note <text>]"
+REPORT_NAME = re.compile(r"(\d+)-([0-9a-f]{7,40})(?:-.*)?")
 
 
 def parse(args):
-    """(report path, note) from the arguments after the PR, the report path already resolved."""
-    report, note, rest = None, None, list(args)
+    """(report path, note, base) from the arguments after the PR, the report path already resolved."""
+    report, opts, rest = None, {"note": None, "base": None}, list(args)
     while rest:
         a = rest.pop(0)
-        if a == "--note" and rest:
-            note = rest.pop(0)
-        elif a.startswith("--note="):
-            note = a.split("=", 1)[1]
+        key = a[2:].split("=", 1)[0] if a.startswith("--") else None
+        if key in opts and "=" in a:
+            opts[key] = a.split("=", 1)[1]
+        elif key in opts and rest:
+            opts[key] = rest.pop(0)
         elif report is None and not a.startswith("--"):
             report = a
         else:
             raise core.Fail(f"usage: {USAGE}")
     if report is None:
         raise core.Fail(f"usage: {USAGE}")
-    return core.resolve(report), note
+    return core.resolve(report), opts["note"], opts["base"]
 
 
-def header(number, head, base, test_command):
-    """The one line above the report: what the reviewer read and what it ran."""
+def header(number, report, base, test_command):
+    """The one line above the report: what the reviewer read, as far as its name and `base` say, and what it ran."""
+    m = REPORT_NAME.fullmatch(report.stem)
+    reviewed, sha = (m.group(1), m.group(2)[:7]) if m else (number, None)
+    line = f"Review of PR #{reviewed} at `{sha}`" if sha else f"Review of PR #{reviewed} (reviewed head not recorded)"
+    if reviewed != number:
+        line += f", posted on PR #{number}"
+    if base and sha:
+        line += f": read `git diff {base}...{sha}` (from the merge base)"
     ran = f"`{test_command}`" if test_command else "no test command recorded"
-    return (f"Review of PR #{number} at `{head[:7]}`: read `git diff {base}...{head[:7]}` (from the merge base); "
-            f"the run's tests: {ran}. The report below is the reviewer's own.")
+    return f"{line}; the run's tests: {ran}. The report below is the reviewer's own."
 
 
 def with_note(body, note):
@@ -66,7 +77,7 @@ def step(ctx):
     if not re.fullmatch(r"PR\d+", ctx.id):
         raise core.Fail(f"bad-pr: {ctx.id}")
     number = ctx.id[2:]
-    report, note = parse(ctx.args)
+    report, note, base = parse(ctx.args)
     try:
         data = report.read_bytes()
     except OSError:
@@ -80,15 +91,14 @@ def step(ctx):
         ctx.note(f"report {report} is not UTF-8")
         raise core.Fail("bad-report")
     repo = core.resolve(runfolder.run_info(ctx.run_dir)["Repo"])
-    res = gh.gh(["pr", "view", number, "--json", "headRefOid,baseRefName"], ctx.log, cwd=repo)
+    res = gh.gh(["pr", "view", number, "--json", "headRefOid"], ctx.log, cwd=repo)
     try:
-        view = json.loads(res.out) if res.rc == 0 else {}
-        head, base = view.get("headRefOid"), view.get("baseRefName") or "base"
+        head = (json.loads(res.out) if res.rc == 0 else {}).get("headRefOid")
     except (ValueError, AttributeError):
         head = None
     if not head:
         raise core.Fail("pr-view")
-    body = with_note(header(number, head, base, decisions.get(ctx.run_dir, "test_command")) + "\n\n" + text, note)
+    body = with_note(header(number, report, base, decisions.get(ctx.run_dir, "test_command")) + "\n\n" + text, note)
     with open(report.with_name(f"{report.stem}.posted{report.suffix}"), "w", encoding="utf-8", newline="") as f:
         f.write(body)
     payload = {"commit_id": head, "event": "COMMENT", "body": body}
@@ -120,4 +130,4 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     if len(argv) >= 2:
         argv[1] = pr_id(argv[1])
-    core.main("post_review", step, usage="<report-file> [--note <text>]", argv=argv)
+    core.main("post_review", step, usage="<report-file> [--base <ref>] [--note <text>]", argv=argv)

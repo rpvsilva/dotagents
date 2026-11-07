@@ -6,34 +6,41 @@ Usage: python3 -I setup.py <run>
 Prints `OK run set up ci=<on|off> env=<run>/env skips=<n>`.
 
 - **Environment**: `map.md`'s `Setup` runs once, each command under `bash -c` in the repo with `BUILD_EPIC_ENV` set
-  to `<run>/env/`, where it puts what it makes (e.g. `python3 -m venv "$BUILD_EPIC_ENV"`). `Setup: none` runs
-  nothing; otherwise the commands are the code spans on the `Setup:` line, or the code block after it. Once it
-  succeeds, `<run>/env/.setup-done` is written and a rerun does not run `Setup` again; a failed `Setup` fails
-  `setup-failed` and runs again next time.
-- **Test command**: `map.md`'s `Checks` joined with `&&`, after `export BUILD_EPIC_ENV=<env>` when `Setup` is not
-  none and `. <env>/bin/activate` when it made a virtualenv there. Recorded as `decisions.md`'s `test_command:`; every
-  agent is given that exact line.
+  to `<run>/env/`, where it puts what it makes (e.g. `python3 -m venv "$BUILD_EPIC_ENV"`). The line is `Setup:` or
+  `Setup (<anything>):`; `Setup: none` runs nothing; otherwise the commands are the code spans on the line, or the
+  code block after it. Any other line starting `Setup` fails `unclear-setup`, never meaning none. Once it succeeds,
+  `<run>/env/.setup-done` is written and a rerun does not run `Setup` again; a failed `Setup` fails `setup-failed`
+  and runs again next time.
+- **Test command**: `map.md`'s `Checks` joined with `&&`, inside the run's environment (`steplib/checks.py`'s
+  `in_env`: `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` when it made a
+  virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`; every agent is given that
+  exact line.
 - **CI**: `ci: on` when the repo's Actions are enabled and a `.github/workflows/*.yml` on the base (`decisions.md`'s
   `base:`, else `run.md`'s `Default:`) triggers on `pull_request` (or `pull_request_target`) into it, its `branches`
   and `branches-ignore` filters applied; else `ci: off`. When the Actions setting cannot be read, the workflows decide.
 - **Identity**: `merge_identity:` from the `merge_identity` Setting (default `app`), and `human:` from `gh api user`
-  run with the tokens unset (left unset when that does not answer).
-- **Skipped tools**: one run of the test command in the repo, its skip reasons (`steplib/checks.py`) written to
-  `<run>/skips.md`, one row per missing tool; `skips=<n>` counts the rows. A red run still lists its skips. A rerun
-  keeps an existing `skips.md`; delete it to list them again.
+  run with the tokens unset (left unset when that does not answer), each recorded only when `decisions.md` has none:
+  a rerun after the Setting or the login changed leaves the record, so the merge still refuses (`wrong-identity`).
+- **Skipped tools**: every Checks command, once, inside the run's environment, in a throwaway worktree of the base
+  (removed after), never the human's checkout. A command `map.md` also names with `--all` in a code span (e.g.
+  `` `tests/run.sh --all` ``) runs as that, so a runner that picks only changed suites runs them all. Their skip
+  reasons (`steplib/checks.py`'s `skip_reasons`) are written to `<run>/skips.md`, one row per tool (`(not named)` for
+  a reason naming none); `skips=<n>` counts the rows. A red run still lists its skips. A rerun keeps an existing
+  `skips.md`; delete it to list them again.
 """
 import os
 import re
-import shlex
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import checks, core, decisions, gh, gitops, identity, runfolder, tracker  # noqa: E402
 
-ENV_VAR = "BUILD_EPIC_ENV"
-DONE = ".setup-done"
+ENV_VAR = checks.ENV_VAR
+DONE = checks.SETUP_DONE
 PR_EVENTS = ("pull_request", "pull_request_target")
 NOT_NAMED = "(not named)"
 FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
@@ -42,26 +49,35 @@ FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 # -- map.md's Setup ----------------------------------------------------------------------------------------------
 
 def setup_commands(map_md):
-    """The commands of `map.md`'s `Setup:` line: none for `Setup: none` or no such line; the code spans on the line;
-    else the lines of the code block after it."""
+    """The commands of `map.md`'s `Setup:` (or `Setup (<anything>):`) line: none for `Setup: none` or no line
+    starting `Setup`; the code spans on the line; else the lines of the code block after it. Fails `unclear-setup` on
+    any other line starting `Setup`."""
     text = map_md.read_text(encoding="utf-8")
-    m = re.search(r"^Setup:[ \t]*(.*)$", text, re.MULTILINE)
-    if not m or re.match(r"none\b", m.group(1).strip(), re.IGNORECASE):
+    line = checks.SETUP_LINE.search(text)
+    if not line:
         return []
-    spans = re.findall(r"`([^`\n]+)`", m.group(1))
+    m = checks.SETUP_HEADING.match(line.group(0))
+    if not m:
+        raise core.Fail(f"unclear-setup: {line.group(0)[:80]!r} is neither `Setup:` nor `Setup (...):`")
+    rest = m.group(1).strip()
+    if re.match(r"none\b", rest, re.IGNORECASE):
+        return []
+    spans = re.findall(r"`([^`\n]+)`", rest)
     if spans:
         return spans
-    block = FENCE.search(text, m.end())
-    if m.group(1).strip() or not block:
-        raise core.Fail("unclear-setup: map.md's Setup: is neither none, code spans, nor a code block")
+    block = FENCE.search(text, line.end())
+    if rest or not block:
+        raise core.Fail("unclear-setup: map.md's Setup is neither none, code spans, nor a code block")
     return [line.strip() for line in block.group(1).splitlines() if line.strip() and not line.strip().startswith("#")]
 
 
 def make_env(ctx, repo, commands):
-    """Runs `commands` once into `<run>/env/`; returns the env folder."""
+    """Runs `commands` once into `<run>/env/`; returns the env folder. With no command it stays empty and unmade."""
     env_dir = ctx.run_dir / "env"
     env_dir.mkdir(exist_ok=True)
     done = env_dir / DONE
+    if not commands:
+        return env_dir
     if done.exists():
         ctx.note(f"{env_dir}: set up before, Setup not run again")
         return env_dir
@@ -73,14 +89,9 @@ def make_env(ctx, repo, commands):
     return env_dir
 
 
-def test_command(suites, env_dir, has_setup):
-    """The one line every agent runs its tests with."""
-    parts = []
-    if has_setup:
-        parts.append(f"export {ENV_VAR}={shlex.quote(str(env_dir))}")
-        if (env_dir / "bin" / "activate").is_file():
-            parts.append(f". {shlex.quote(str(env_dir / 'bin' / 'activate'))}")
-    return " && ".join(parts + list(suites))
+def test_command(run, suites):
+    """The one line every agent runs its tests with: the suites inside the run's environment."""
+    return checks.in_env(run, " && ".join(suites))
 
 
 # -- CI ------------------------------------------------------------------------------------------------------------
@@ -242,18 +253,45 @@ def _cell(text):
     return text.replace("\\", "\\\\").replace("|", "\\|")
 
 
-def list_skips(ctx, repo, command):
-    """Runs `command` once and writes `<run>/skips.md`; returns its row count. An existing `skips.md` is kept."""
+def full_suites(map_md, suites):
+    """`suites`, each as its `--all` form when `map.md` names that in a code span."""
+    text = map_md.read_text(encoding="utf-8")
+    return [f"{s} --all" if f"`{s} --all`" in text else s for s in suites]
+
+
+def run_in_base(ctx, repo, base, suites):
+    """Runs `suites` in the run's environment in a throwaway worktree of `origin/<base>`; returns their output and
+    the last exit code. The worktree is removed on any exit."""
+    tmp = Path(tempfile.mkdtemp(prefix="build-epic-skips-"))
+    wt = tmp / "base"
+    git = gitops.Git(repo, ctx.log)
+    git.worktree_add(wt, f"origin/{base}", detach=True)
+    try:
+        outs, rc = [], 0
+        for suite in suites:
+            res = ctx.run(["bash", "-c", checks.in_env(ctx.run_dir, suite)], cwd=wt)
+            outs += [res.out, res.err]
+            rc = res.rc or rc
+        return "\n".join(outs), rc
+    finally:
+        git.worktree_remove(wt)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def list_skips(ctx, repo, base, map_md, suites):
+    """Runs every suite once in a worktree of the base and writes `<run>/skips.md`; returns its row count. An
+    existing `skips.md` is kept."""
     path = ctx.run_dir / "skips.md"
     if not path.exists():
-        res = ctx.run(["bash", "-c", command], cwd=repo)
+        full = full_suites(map_md, suites)
+        out, rc = run_in_base(ctx, repo, base, full)
         by_tool = {}
-        for skip in checks.skip_reasons(res.out + "\n" + res.err):
+        for skip in checks.skip_reasons(out):
             reasons = by_tool.setdefault(skip.tool or NOT_NAMED, [])
             if skip.reason not in reasons:
                 reasons.append(skip.reason)
         rows = "".join(f"| {_cell(t)} | {_cell('; '.join(r))} |\n" for t, r in by_tool.items())
-        path.write_text(f"# Skipped tools\n\ntest_command: {command}\nrc: {res.rc}\n\n"
+        path.write_text(f"# Skipped tools\n\nran: {' && '.join(full)} (in origin/{base})\nrc: {rc}\n\n"
                         f"| tool | reasons |\n| --- | --- |\n{rows}", encoding="utf-8")
     return sum(1 for line in path.read_text(encoding="utf-8").splitlines()
                if line.startswith("| ") and not line.startswith(("| tool |", "| --- |")))
@@ -272,23 +310,28 @@ def step(ctx):
     suites = checks.commands(map_md)
     commands = setup_commands(map_md)
     env_dir = make_env(ctx, repo, commands)
-    command = test_command(suites, env_dir, bool(commands))
+    command = test_command(ctx.run_dir, suites)
 
     base = decisions.get(ctx.run_dir, "base") or info["Default"]
     ci = "on" if ci_runs(ctx, repo, base) else "off"
     who = identity.mode(ctx.run_dir, lambda: tracker.setting("build-epic", "merge_identity", str(repo), ctx.log))
     human = identity.human_login(repo, ctx.log)
-    facts = {"ci": ci, "test_command": command, "merge_identity": who}
-    if human:
-        facts["human"] = human
-    for key, value in facts.items():
-        decisions.check_value(key, value)
+    facts = {"ci": ci, "test_command": command}
+    kept = {"merge_identity": who, "human": human}  # recorded once: a rerun never widens who may merge
+    for key, value in {**facts, **kept}.items():
+        if value:
+            decisions.check_value(key, value)
     with decisions.lock(ctx.run_dir):
         d = decisions.load(ctx.run_dir) or decisions.Decisions()
         d.headers.update(facts)
+        for key, value in kept.items():
+            if value and not (d.headers.get(key) or "").strip():
+                d.headers[key] = value
+            elif value and d.headers[key].strip() != value:
+                ctx.note(f"{key}: decisions.md keeps {d.headers[key].strip()}, now {value}")
         decisions.save(ctx.run_dir, d)
 
-    skips = list_skips(ctx, repo, command)
+    skips = list_skips(ctx, repo, base, map_md, suites)
     return "set up", f"ci={ci} env={env_dir} skips={skips}"
 
 
