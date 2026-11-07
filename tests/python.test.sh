@@ -32,10 +32,38 @@ fi
 if [ "${PYTHON_TEST_LIST:-}" = 1 ]; then echo "$dirs"; exit 0; fi
 [ "$dirs" = "$all" ] || echo "python.test.sh: only the folders holding a changed file (tests/run.sh --all runs every one)"
 
+# Each test file runs in its own unittest process, up to TEST_JOBS at once (default: the CPU count; 1 runs them one by
+# one), largest first, each with its output kept apart and printed in folder order.
+out="$(mktemp -d)"
+trap 'rm -rf "$out"' EXIT
+jobs="${TEST_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 2)}"
+case "$jobs" in "" | *[!0-9]* | 0) jobs=2 ;; esac
+i=0
 while read -r dir; do
-  echo "-- $dir"
-  python3 -m unittest discover -s "$dir" -p 'test_*.py' || status=1
+  for f in "$dir"/test_*.py; do
+    [ -f "$f" ] || continue
+    i=$((i + 1))
+    printf '%s %s %s\n' "$i" "$dir" "${f##*/}" >>"$out/list"
+    echo "$(wc -c <"$f" | tr -d ' ') $i $dir ${f##*/}" >>"$out/sizes"
+  done
 done <<<"$dirs"
+[ -f "$out/list" ] || { echo "python.test.sh: no test files"; exit 1; }
+
+# xargs -P, as in tests/parallel.sh: bash 3.2 and Git Bash both have it. A worker always exits 0.
+# shellcheck disable=SC2016 # expanded by the worker's sh
+sort -rn "$out/sizes" | while read -r _ n dir file; do printf '%s\0%s\0%s\0' "$n" "$dir" "$file"; done |
+  xargs -0 -n 3 -P "$jobs" sh -c '
+    python3 -m unittest discover -s "$2" -p "$3" >"$0/$1.out" 2>&1
+    echo "$?" >"$0/$1.code"' "$out"
+
+shown=""
+while read -r n dir file; do
+  [ "$dir" = "$shown" ] || { echo "-- $dir"; shown="$dir"; }
+  echo "- $file"
+  cat "$out/$n.out" 2>/dev/null
+  code="$(cat "$out/$n.code" 2>/dev/null || echo "no result")"
+  [ "$code" = 0 ] || { echo "python.test.sh: $dir/$file failed (exit $code)"; status=1; }
+done <"$out/list"
 
 [ "$status" -eq 0 ] || { echo "python.test.sh: failures"; exit 1; }
 echo "python.test.sh: ok"

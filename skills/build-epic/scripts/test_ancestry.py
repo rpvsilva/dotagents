@@ -19,8 +19,8 @@ class AncestryTest(Base):
         super().setUp()
         kit = self.kit
         kit.branch_from_main(BASE)
-        (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {BASE}\n")  # the run's base, or 10-03's guard refuses
-        (kit.answers / "pr-base").write_text(BASE)
+        (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {BASE}\n", encoding="utf-8")  # the run's base, or 10-03's guard refuses
+        (kit.answers / "pr-base").write_text(BASE, encoding="utf-8")
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         kit.answer("pr-list", out="[]")
         self.assertEqual(self.ship("open"), "OK 01 open pr=20")
@@ -44,7 +44,7 @@ class AncestryTest(Base):
     def commit(self, path, text, on=None):
         if on:
             self.git("checkout", "-q", "--detach", on)
-        (self.work / path).write_text(text)
+        (self.work / path).write_text(text, encoding="utf-8")
         self.git("add", path)
         self.git("commit", "-qm", f"add {path}")
         return self.git("rev-parse", "HEAD")
@@ -87,7 +87,7 @@ class AncestryTest(Base):
                          [["pr", "merge", "20", "--squash", "--delete-branch", "--match-head-commit", self.head()]])
 
     def test_the_reviewed_head_defaults_to_the_commit_the_posted_review_was_on(self):
-        (self.kit.run_dir / "logs" / "PR20-review.json").write_text(json.dumps({"commit_id": self.task2}))
+        (self.kit.run_dir / "logs" / "PR20-review.json").write_text(json.dumps({"commit_id": self.task2}), encoding="utf-8")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.tree(self.head()), self.tree(self.task2))
 
@@ -117,14 +117,14 @@ class AncestryTest(Base):
         self.assertEqual(self.merge_calls(), [])
 
     def test_shipping_again_after_the_ancestry_is_pushed_adds_no_second_one(self):
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.rule('echo "needs an approval from a code owner"; exit 1')
         self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 in-review pr=20")
         first = self.head()
         self.kit.answer("pr-list", out="[]")
         self.assertEqual(self.ship("open"), "OK 01 open pr=20")
         self.rule("exit 0")
-        (self.kit.answers / "pr-state").write_text("MERGED")
+        (self.kit.answers / "pr-state").write_text("MERGED", encoding="utf-8")
         self.assertEqual(self.ship("merge", "--reviewed", self.task2), "OK 01 merged pr=20")
         self.assertEqual(self.head(), first)
 
@@ -145,7 +145,7 @@ class AncestryTest(Base):
 
     def rule(self, script):
         path = self.kit.tmp / "merge-rule.sh"
-        path.write_text(f"#!/usr/bin/env bash\n{script}\n")
+        path.write_text(f"#!/usr/bin/env bash\n{script}\n", encoding="utf-8")
         path.chmod(0o755)
         self.set_setting("merge_command", f"{path} {{pr}}")
 

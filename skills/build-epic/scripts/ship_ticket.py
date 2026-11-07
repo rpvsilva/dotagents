@@ -77,19 +77,19 @@ class Ship:
             raise core.Fail("pr-list")
         return (str(prs[0]["number"]), prs[0].get("url") or f"#{prs[0]['number']}") if prs else None
 
-    def open(self, lead_file=None):
+    def open(self, lead_file=None, encoding="utf-8"):
         lead = ""
         if lead_file:
             path = core.resolve(lead_file)
             if not path.is_file():
                 raise core.Fail(f"no-body-file: {path}")
-            lead = path.read_text()
+            lead = path.read_text(encoding="utf-8")
         self.git.fetch()
         if not self.worktree.is_dir():
             self.git.worktree_add(self.worktree, ref=f"origin/{self.branch}", branch=self.branch)
         body = prbody.ticket_body(self.run, self.ticket, lead)
         body_file = self.run / "logs" / f"{self.ctx.id}-pr-body.md"
-        body_file.write_text(body)
+        body_file.write_text(body, encoding="utf-8")
         template = prbody.template(self.worktree)
         empty = prbody.empty_sections(template, body) if template is not None else []
         if empty:
@@ -131,7 +131,7 @@ class Ship:
             return given
         path = self.run / "logs" / f"PR{number}-review.json"
         try:
-            commit = json.loads(path.read_text()).get("commit_id") if path.is_file() else None
+            commit = json.loads(path.read_text(encoding="utf-8")).get("commit_id") if path.is_file() else None
         except (ValueError, AttributeError):
             commit = None
         if not commit:

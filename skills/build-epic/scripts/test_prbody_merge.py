@@ -23,9 +23,9 @@ class MergeSectionTest(unittest.TestCase):
         (run / "tickets").mkdir()
         (run / "tasks").mkdir()
         self.ticket = run / "tickets" / "01-alpha.md"
-        self.ticket.write_text(TICKET)
+        self.ticket.write_text(TICKET, encoding="utf-8")
         self.task = run / "tasks" / "01-02-json-export.md"
-        self.task.write_text(TASK)
+        self.task.write_text(TASK, encoding="utf-8")
 
     def decide(self, verb, *args):
         """What `decide.py <run> set|clause ...` records (its writing is tested in test_decisions.py), in-process."""

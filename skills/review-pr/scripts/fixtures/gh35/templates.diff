@@ -1,0 +1,629 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo copy ID                        # add an open copy of an item under a new id, see Copy
++todo template [save NAME ID... | use NAME]   # list templates, save items as one, or add copies of one, see Templates
++### Copy
++
++`todo copy ID` adds an open copy of an item under a new id and prints `copied 1 as 5: write report`. The source is not changed.
++
++- The copy keeps the title, tags, priority, due date, due time, project, estimate and recurrence rule.
++- It drops everything else: notes, focus time, done state, doing, snooze, dependencies (`block`), parent, and the done date and done-time priority. So copying a done item gives an open one, and a copy of a subtask is a top-level item.
++- A recurring item is copied as the start of a new series: the copy has the same rule and due date, a new hidden series id and occurrence 1. It is not linked to the source's series, so `todo done` on one never touches the other.
++- The new id is above every id ever used (todo file, archive, trash and undo history), so it is never one that was used before.
++- An unknown id, or no free id, exits 2 and writes nothing.
++
++### Templates
++
++A template is a named list of item shapes, kept in `$TODO_FILE.templates`, next to the todo file. `todo template save NAME ID...` stores the title, tags, priority, recurrence rule, project and estimate of each item. It does not store due dates, due times or any other field.
++
++```
++$ todo template save weekly 1 2 3
++saved template weekly: 3 items
++$ todo template
++weekly
++$ todo template use weekly
++added 7: write report
++added 8: plan week
++added 9: clean desk
++```
++
++- `todo template` with no action lists the template names, one per line, in alphabetical order, ignoring letter case.
++- `save` with a name that exists replaces that template. A name is 1 to 40 printable characters. A store holds at most 100 templates, and a template at most 100 items.
++- `use NAME` adds one new open item per entry, each with a new id (above every id ever used), and prints `added ID: title` for each. Items get no due date, except recurring ones: a recurring copy is due today and starts a new series (occurrence 1). Nothing else carries over: no due time, notes, focus time, doing, snooze, dependencies or parent.
++- An unknown template name, a bad name, an unknown item id, or no free id exits 2 and writes nothing. A damaged templates file exits 1 with an error starting `templates file:`.
++- Templates are not synced: `todo sync` does not touch them.
++
++- Item ids go from 1 to 2**53 (9007199254740992); a file holding a larger id stops with an error, and `todo add`, `todo copy` and `todo template use` stop once that id is taken (exit 2).
+diff --git a/tests/cli/test_cli_copy.py b/tests/cli/test_cli_copy.py
++++ b/tests/cli/test_cli_copy.py
++import os
++from datetime import date, datetime, time, timezone
++from pathlib import Path
++
++import pytest
++
++from todo.storage import FocusSession, Item, JsonStore, Note
++
++TODAY = date(2026, 11, 6)
++NOW = datetime(2026, 11, 6, 10, 0)
++STAMP = datetime(2026, 1, 1, tzinfo=timezone.utc)
++
++
++def run(cli, *argv):
++    return cli(*argv, today=TODAY, now=NOW)
++
++
++def store():
++    return JsonStore(Path(os.environ["TODO_FILE"]), today=lambda: TODAY)
++
++
++def fail(cli, capsys, code, *argv):
++    with pytest.raises(SystemExit) as exc:
++        run(cli, *argv)
++    assert exc.value.code == code
++    return capsys.readouterr().err
++
++
++def full_item(**over):
++    base = dict(
++        id=1,
++        title="write report",
++        done=True,
++        due=date(2026, 11, 20),
++        due_time=time(9, 30),
++        updated_at=STAMP,
++        tags=["work", "q4"],
++        priority="high",
++        done_on=date(2026, 11, 1),
++        done_priority="low",
++        created_on=date(2026, 10, 1),
++        snoozed_until=date(2026, 11, 10),
++        doing=True,
++        parent=2,
++        project="alpha",
++        estimate=90,
++        blocked_on=[2],
++        notes=[Note(STAMP, "a note")],
++        focus=[FocusSession(date(2026, 11, 2), 25)],
++    )
++    base.update(over)
++    return Item(**base)
++
++
++def seed(*items):
++    store().save(list(items))
++
++
++def copy_of(new_id):
++    return next(i for i in store().load() if i.id == new_id)
++
++
++def test_copy_prints_old_and_new_id_and_title(cli):
++    run(cli, "add", "milk")
++    assert run(cli, "copy", "1") == ["copied 1 as 2: milk"]
++
++
++def test_copy_leaves_the_source_untouched(cli):
++    seed(full_item(), Item(2, "parent"))
++    before = store().load()[0]
++    run(cli, "copy", "1")
++    assert store().load()[0] == before
++
++
++@pytest.mark.parametrize(
++    "field,value",
++    [
++        ("title", "write report"),
++        ("tags", ["work", "q4"]),
++        ("priority", "high"),
++        ("due", date(2026, 11, 20)),
++        ("due_time", time(9, 30)),
++        ("project", "alpha"),
++        ("estimate", 90),
++    ],
++)
++def test_copy_keeps_field(cli, field, value):
++    seed(full_item(), Item(2, "parent"))
++    run(cli, "copy", "1")
++    assert getattr(copy_of(3), field) == value
++
++
++@pytest.mark.parametrize(
++    "field,default",
++    [
++        ("done", False),
++        ("done_on", None),
++        ("done_priority", None),
++        ("snoozed_until", None),
++        ("doing", False),
++        ("parent", None),
++        ("blocked_on", []),
++        ("notes", []),
++        ("focus", []),
++    ],
++)
++def test_copy_drops_field(cli, field, default):
++    seed(full_item(), Item(2, "parent"))
++    run(cli, "copy", "1")
++    assert getattr(copy_of(3), field) == default
++
++
++def test_copy_is_stamped_and_created_today(cli):
++    seed(full_item())
++    run(cli, "copy", "1")
++    new = copy_of(2)
++    assert new.created_on == TODAY
++    assert new.updated_at > STAMP
++
++
++def test_copy_keeps_the_rule_as_a_new_series(cli):
++    run(cli, "add", "water", "--every", "week")
++    run(cli, "done", "1")  # item 2 is occurrence 2 of the series
++    run(cli, "copy", "2")
++    src, new = copy_of(2), copy_of(3)
++    assert new.every == "week"
++    assert new.anchor_day == src.anchor_day
++    assert new.occurrence == 1
++    assert new.series_id and new.series_id != src.series_id
++    assert new.due == src.due
++
++
++def test_copy_of_a_one_off_has_no_series(cli):
++    run(cli, "add", "milk")
++    run(cli, "copy", "1")
++    new = copy_of(2)
++    assert (new.every, new.series_id, new.occurrence) == (None, None, None)
++
++
++def test_copy_gets_an_id_above_a_trashed_id(cli, tmp_path):
++    run(cli, "add", "milk")
++    (tmp_path / "todo.json.trash").write_text('[{"id": 9, "title": "gone"}]')
++    assert run(cli, "copy", "1") == ["copied 1 as 10: milk"]
++
++
++def test_copy_gets_an_id_above_an_archived_id(cli, tmp_path):
++    run(cli, "add", "milk")
++    (tmp_path / "todo.json.archive").write_text('[{"id": 20, "title": "old", "done": true}]')
++    assert run(cli, "copy", "1") == ["copied 1 as 21: milk"]
++
++
++def test_copy_gets_an_id_above_the_history_high_water(cli, tmp_path):
++    run(cli, "add", "milk")
++    (tmp_path / "todo.json.history").write_text('{"high_water": 77, "steps": []}')
++    assert run(cli, "copy", "1") == ["copied 1 as 78: milk"]
++
++
++def test_copy_of_an_unknown_id_exits_2_and_writes_nothing(cli, capsys):
++    run(cli, "add", "milk")
++    before = Path(os.environ["TODO_FILE"]).read_bytes()
++    err = fail(cli, capsys, 2, "copy", "7")
++    assert err.startswith("todo: error:")
++    assert Path(os.environ["TODO_FILE"]).read_bytes() == before
++
++
++def test_copy_of_a_non_id_exits_2(cli, capsys):
++    fail(cli, capsys, 2, "copy", "x!")
++
++
++def test_copy_with_no_free_id_exits_2_and_writes_nothing(cli, capsys):
++    seed(full_item(id=1))
++    (Path(os.environ["TODO_FILE"] + ".history")).write_text(
++        '{"high_water": 9007199254740992, "steps": []}'
++    )
++    err = fail(cli, capsys, 2, "copy", "1")
++    assert err.startswith("todo: error: no free id")
++    assert [i.id for i in store().load()] == [1]
+diff --git a/tests/cli/test_cli_templates.py b/tests/cli/test_cli_templates.py
++++ b/tests/cli/test_cli_templates.py
++import json
++import os
++from datetime import date, datetime
++from pathlib import Path
++
++import pytest
++
++from todo.storage import Item, JsonStore
++
++TODAY = date(2026, 11, 6)
++NOW = datetime(2026, 11, 6, 10, 0)
++
++
++def run(cli, *argv):
++    return cli(*argv, today=TODAY, now=NOW)
++
++
++def store():
++    return JsonStore(Path(os.environ["TODO_FILE"]), today=lambda: TODAY)
++
++
++def templates_path():
++    return Path(os.environ["TODO_FILE"] + ".templates")
++
++
++def fail(cli, capsys, code, *argv):
++    with pytest.raises(SystemExit) as exc:
++        run(cli, *argv)
++    assert exc.value.code == code
++    return capsys.readouterr().err
++
++
++def seed_two(cli):
++    run(cli, "add", "pack bag", "--tag", "trip,home", "--priority", "high", "--due", "2026-12-01")
++    run(cli, "add", "water plants", "--every", "week")
++    store().modify([2], lambda i: setattr(i, "project", "house"))
++    store().modify([1], lambda i: setattr(i, "estimate", 30))
++
++
++def test_save_then_list_names(cli):
++    seed_two(cli)
++    assert run(cli, "template", "save", "weekend", "1", "2") == ["saved template weekend: 2 items"]
++    run(cli, "template", "save", "alpha", "1")
++    assert run(cli, "template") == ["alpha", "weekend"]
++
++
++def test_use_adds_open_copies_with_new_ids(cli):
++    seed_two(cli)
++    run(cli, "template", "save", "weekend", "1", "2")
++    store().complete(1, TODAY)
++    out = run(cli, "template", "use", "weekend")
++    assert out == ["added 3: pack bag", "added 4: water plants"]
++    items = {i.id: i for i in store().load()}
++    bag, plants = items[3], items[4]
++    assert (bag.done, bag.due, bag.tags, bag.priority, bag.estimate) == (False, None, ["trip", "home"], "high", 30)
++    assert bag.created_on == TODAY and bag.updated_at is not None
++    assert (plants.every, plants.due, plants.occurrence, plants.project) == ("week", TODAY, 1, "house")
++    assert plants.series_id and plants.series_id != items[2].series_id
++
++
++def test_use_takes_ids_above_archive_trash_and_history(cli):
++    run(cli, "add", "one")
++    run(cli, "template", "save", "t", "1")
++    path = os.environ["TODO_FILE"]
++    Path(path + ".history").write_text(json.dumps({"high_water": 40, "steps": []}))
++    assert run(cli, "template", "use", "t") == ["added 41: one"]
++
++
++def test_save_replaces_template_of_same_name(cli):
++    seed_two(cli)
++    run(cli, "template", "save", "t", "1", "2")
++    run(cli, "template", "save", "t", "2")
++    run(cli, "template", "use", "t")
++    assert [i.title for i in store().load()][2:] == ["water plants"]
++    assert run(cli, "template") == ["t"]
++
++
++def test_use_unknown_template_exits_2_and_adds_nothing(cli, capsys):
++    run(cli, "add", "one")
++    err = fail(cli, capsys, 2, "template", "use", "nope")
++    assert err == "todo: error: no template 'nope'\n"
++    assert len(store().load()) == 1
++
++
++def test_save_unknown_item_exits_2_and_writes_nothing(cli, capsys):
++    run(cli, "add", "one")
++    fail(cli, capsys, 2, "template", "save", "t", "1", "9")
++    assert not templates_path().exists()
++
++
++@pytest.mark.parametrize("name", ["", " ", "x" * 41, "a\nb"])
++def test_save_bad_name_exits_2(cli, capsys, name):
++    run(cli, "add", "one")
++    fail(cli, capsys, 2, "template", "save", name, "1")
++    assert not templates_path().exists()
++
++
++def test_save_more_than_100_items_exits_2(cli, capsys):
++    store().save([Item(n, f"t{n}") for n in range(1, 102)])
++    fail(cli, capsys, 2, "template", "save", "big", *map(str, range(1, 102)))
++    assert not templates_path().exists()
++
++
++def test_save_101st_template_exits_2(cli, capsys):
++    run(cli, "add", "one")
++    templates_path().write_text(json.dumps({f"t{n}": [{"title": "x"}] for n in range(100)}))
++    fail(cli, capsys, 2, "template", "save", "extra", "1")
++    run(cli, "template", "save", "t5", "1")  # replacing one is fine
++
++
++@pytest.mark.parametrize(
++    "content",
++    [
++        "{not json",
++        "[]",
++        '{"t": "x"}',
++        '{"t": []}',
++        '{"t": [5]}',
++        '{"t": [{}]}',
++        '{"t": [{"title": "x", "bogus": 1}]}',
++        '{"t": [{"title": "x", "priority": "urgent"}]}',
++        '{"t": [{"title": "x", "estimate": 0}]}',
++        '{"t": [{"title": "x", "estimate": true}]}',
++        '{"t": [{"title": "x", "every": "fortnight"}]}',
++        '{"t": [{"title": "x", "tags": "a"}]}',
++        '{"t": [{"title": "x", "tags": ["a b"]}]}',
++        '{"t": [{"title": "x", "project": ""}]}',
++        '{"t": [{"title": 5}]}',
++        json.dumps({"x" * 41: [{"title": "x"}]}),
++        json.dumps({"t": [{"title": "x"}] * 101}),
++        json.dumps({f"t{n}": [{"title": "x"}] for n in range(101)}),
++    ],
++)
++@pytest.mark.parametrize("argv", [("template",), ("template", "use", "t"), ("template", "save", "t", "1")])
++def test_malformed_templates_file_exits_1_labelled(cli, capsys, content, argv):
++    run(cli, "add", "one")
++    templates_path().write_text(content)
++    err = fail(cli, capsys, 1, *argv)
++    assert err.startswith("todo: error: templates file: ")
++    assert len(store().load()) == 1
++    assert templates_path().read_text() == content
++
++
++def test_templates_path_that_is_not_a_regular_file_is_labelled(cli, capsys):
++    run(cli, "add", "one")
++    templates_path().mkdir()
++    err = fail(cli, capsys, 1, "template")
++    assert err.startswith("todo: error: templates file: ")
++
++
++def test_deeply_nested_templates_file_exits_1_labelled(cli, capsys):
++    templates_path().write_text("[" * 100000)
++    assert fail(cli, capsys, 1, "template").startswith("todo: error: templates file: ")
++
++
++def test_file_with_control_characters_in_title_is_cleaned_on_use(cli):
++    templates_path().write_text(json.dumps({"t": [{"title": "a\u001b[31mb"}]}))
++    run(cli, "template", "use", "t")
++    assert store().load()[0].title == "a?[31mb"
++
++
++def test_template_use_with_no_free_id_exits_2_and_writes_nothing(cli, capsys):
++    templates_path().write_text(json.dumps({"t": [{"title": "x"}]}))
++    Path(os.environ["TODO_FILE"] + ".history").write_text(
++        json.dumps({"high_water": 9007199254740992, "steps": []})
++    )
++    err = fail(cli, capsys, 2, "template", "use", "t")
++    assert err.startswith("todo: error: no free id")
++    assert store().load() == []
++
++
++def test_template_names_list_in_case_insensitive_order(cli):
++    run(cli, "add", "one")
++    for name in ("b", "Zed", "a", "Alpha"):
++        run(cli, "template", "save", name, "1")
++    assert run(cli, "template") == ["a", "Alpha", "b", "Zed"]
+diff --git a/todo/cli/commands/copy_cmd.py b/todo/cli/commands/copy_cmd.py
++++ b/todo/cli/commands/copy_cmd.py
++"""todo copy ID: add an open copy of an item under a new id."""
++
++from todo.cli.errors import UsageError
++from todo.cli.refs import add_ref_argument, resolve
++from todo.storage import Item, StoreError
++from todo.storage.model import new_series_id
++
++
++def register(parser) -> None:
++    add_ref_argument(parser)
++
++
++def run(args, ctx) -> None:
++    source = resolve(ctx.store.load(), args.ref)
++    # Keeps title, tags, priority, due, due time, rule, project and estimate; every other field starts at its default.
++    copy = Item(
++        id=source.id,
++        title=source.title,
++        due=source.due,
++        due_time=source.due_time,
++        tags=list(source.tags),
++        priority=source.priority,
++        every=source.every,
++        anchor_day=source.anchor_day,
++        series_id=None if source.every is None else new_series_id(),
++        occurrence=None if source.every is None else 1,
++        project=source.project,
++        estimate=source.estimate,
++    )
++    try:
++        (new,) = ctx.store.insert([copy], ctx.today)
++    except StoreError:
++        raise  # a bad todo file: main exits 1
++    except ValueError as e:  # no free id
++        raise UsageError(str(e)) from None
++    ctx.out(f"copied {source.id} as {new.id}: {new.title}")
+diff --git a/todo/cli/commands/template.py b/todo/cli/commands/template.py
++++ b/todo/cli/commands/template.py
++"""todo template [save NAME ID... | use NAME]: save items as a named template, or add open copies of one."""
++from todo.cli.errors import UsageError
++from todo.cli.refs import add_ref_argument, resolve_all
++from todo.storage import Item, StoreError
++from todo.storage.model import new_series_id, show
++from todo.storage.templates import MAX_ENTRIES, MAX_TEMPLATES, TemplateEntry, check_name, load_templates, save_templates
++
++
++def register(parser) -> None:
++    sub = parser.add_subparsers(dest="template_action")
++    save = sub.add_parser("save")
++    save.add_argument("name")
++    add_ref_argument(save, many=True)
++    use = sub.add_parser("use")
++    use.add_argument("name")
++
++
++def run(args, ctx) -> None:
++    file = ctx.sides.templates_file
++    action = args.template_action
++    if action is None:
++        for name in sorted(load_templates(file), key=lambda n: (n.casefold(), n)):
++            ctx.out(name)
++    elif action == "save":
++        _save(args, ctx, file)
++    else:
++        _use(args, ctx, file)
++
++
++def _save(args, ctx, file) -> None:
++    try:
++        name = check_name(args.name)
++    except ValueError as e:
++        raise UsageError(str(e)) from None
++    items = resolve_all(ctx.store.load(), args.ref)
++    if len(items) > MAX_ENTRIES:
++        raise UsageError(f"too many items ({len(items)}), a template holds at most {MAX_ENTRIES}")
++    templates = load_templates(file)
++    if name not in templates and len(templates) >= MAX_TEMPLATES:
++        raise UsageError(f"too many templates, at most {MAX_TEMPLATES}")
++    templates[name] = [
++        TemplateEntry(i.title, list(i.tags), i.priority, i.every, i.project, i.estimate) for i in items
++    ]
++    save_templates(file, templates)
++    ctx.out(f"saved template {name}: {len(items)} items")
++
++
++def _use(args, ctx, file) -> None:
++    templates = load_templates(file)
++    entries = templates.get(args.name)
++    if entries is None:
++        raise UsageError(f"no template {show(args.name)}")
++    items = [
++        Item(
++            id=0,
++            title=e.title,
++            tags=list(e.tags),
++            priority=e.priority,
++            due=ctx.today if e.every else None,
++            every=e.every,
++            series_id=new_series_id() if e.every else None,
++            occurrence=1 if e.every else None,
++            project=e.project,
++            estimate=e.estimate,
++        )
++        for e in entries
++    ]
++    try:
++        added = ctx.store.insert(items, ctx.today)
++    except StoreError:
++        raise  # a bad todo file: main exits 1
++    except ValueError as e:  # no free id
++        raise UsageError(str(e)) from None
++    for new in added:
++        ctx.out(f"added {new.id}: {new.title}")
+diff --git a/todo/storage/templates.py b/todo/storage/templates.py
++++ b/todo/storage/templates.py
++"""Templates: named lists of item shapes kept in `SideFiles.templates_file` as `{name: [entry, ...]}`.
++
++The file is untrusted: every row is checked once, in a single linear pass, and every error starts
++with `templates file: `.
++"""
++from dataclasses import dataclass, field
++
++from todo.storage.json_file import JsonFile
++from todo.storage.model import (
++    MAX_ESTIMATE,
++    StoreError,
++    normalize_project,
++    normalize_rule,
++    normalize_tags,
++    normalize_title,
++    parse_priority,
++    show,
++)
++
++LABEL = "templates file"
++MAX_NAME = 40
++MAX_TEMPLATES = 100
++MAX_ENTRIES = 100
++ENTRY_KEYS = ("title", "tags", "priority", "every", "project", "estimate")
++
++
++@dataclass
++class TemplateEntry:
++    title: str
++    tags: list[str] = field(default_factory=list)
++    priority: str | None = None
++    every: str | None = None
++    project: str | None = None
++    estimate: int | None = None
++
++
++def check_name(name) -> str:
++    """The template name, or ValueError: 1..MAX_NAME printable characters, not blank."""
++    if not isinstance(name, str):
++        raise ValueError(f"invalid template name {show(name)}")
++    if not 1 <= len(name) <= MAX_NAME or not name.strip() or not all(c.isprintable() for c in name):
++        raise ValueError(f"invalid template name {show(name)}, expected 1..{MAX_NAME} printable characters")
++    return name
++
++
++def _entry_from_row(raw, where: str) -> TemplateEntry:
++    if not isinstance(raw, dict):
++        raise ValueError(f"{where} is not an object")
++    unknown = raw.keys() - set(ENTRY_KEYS)
++    if unknown:
++        raise ValueError(f"{where} has unknown field {show(sorted(unknown)[0])}")
++    if "title" not in raw:
++        raise ValueError(f"{where} has no title")
++    estimate = raw.get("estimate")
++    if estimate is not None and (type(estimate) is not int or not 1 <= estimate <= MAX_ESTIMATE):
++        raise ValueError(f"{where}: invalid estimate {show(estimate)}")
++    project = raw.get("project")
++    every = raw.get("every")
++    tags = raw.get("tags", [])
++    if not isinstance(tags, list):
++        raise ValueError(f"{where}: tags is not a list")
++    if len(tags) > 1000:
++        raise ValueError(f"{where}: too many tags")
++    try:
++        return TemplateEntry(
++            title=normalize_title(raw["title"]),
++            tags=normalize_tags(tags),
++            priority=parse_priority(raw.get("priority")),
++            every=normalize_rule(every) if every is not None else None,
++            project=normalize_project(project) if project is not None else None,
++            estimate=estimate,
++        )
++    except ValueError as e:
++        raise ValueError(f"{where}: {e}") from None
++
++
++def _from_data(data) -> dict[str, list[TemplateEntry]]:
++    if not isinstance(data, dict):
++        raise ValueError("expected an object of template names")
++    if len(data) > MAX_TEMPLATES:
++        raise ValueError(f"too many templates ({len(data)}), at most {MAX_TEMPLATES}")
++    out = {}
++    for name, rows in data.items():
++        check_name(name)
++        if not isinstance(rows, list):
++            raise ValueError(f"template {show(name)} is not a list")
++        if not 1 <= len(rows) <= MAX_ENTRIES:
++            raise ValueError(f"template {show(name)} holds {len(rows)} items, expected 1..{MAX_ENTRIES}")
++        out[name] = [_entry_from_row(r, f"template {show(name)} item {n}") for n, r in enumerate(rows, 1)]
++    return out
++
++
++def _label(e: Exception) -> StoreError:
++    text = str(e)
++    return StoreError(text if text.startswith(f"{LABEL}: ") else f"{LABEL}: {text}")
++
++
++def load_templates(file: JsonFile) -> dict[str, list[TemplateEntry]]:
++    """Every template, checked; `{}` when the file is missing. StoreError (`templates file: ...`) when it is bad."""
++    try:
++        data = file.read_json()
++        return {} if data is None else _from_data(data)
++    except (StoreError, ValueError) as e:
++        raise _label(e) from None
++    except OSError as e:  # a directory or an unreadable file at the path
++        raise StoreError(f"{LABEL}: cannot read {file.path}: {e.strerror}") from None
++
++
++def save_templates(file: JsonFile, templates: dict[str, list[TemplateEntry]]) -> None:
++    """Write `templates`, refusing what a load would refuse (ValueError, nothing written)."""
++    rows = {n: [{k: getattr(e, k) for k in ENTRY_KEYS} for e in es] for n, es in templates.items()}
++    try:
++        _from_data(rows)
++    except ValueError as e:
++        raise ValueError(str(e)) from None
++    try:
++        file.write_json(rows)
++    except StoreError as e:
++        raise _label(e) from None

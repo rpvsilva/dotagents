@@ -34,7 +34,7 @@ class StartCase(unittest.TestCase):
         self.write_ticket("ready", "#5")
 
     def write_ticket(self, status, issue):
-        self.ticket.write_text(f"# 01: JSON\nStatus: {status}\nIssue: {issue}\nBranch: {BRANCH}\n\nBody.\n")
+        self.ticket.write_text(f"# 01: JSON\nStatus: {status}\nIssue: {issue}\nBranch: {BRANCH}\n\nBody.\n", encoding="utf-8")
 
     def one_line(self, p):
         self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)
@@ -59,7 +59,7 @@ class StartCase(unittest.TestCase):
     def commit(self, branch, name, text, msg):
         """Commits `name` with `text` on `branch` in the clone and pushes it."""
         self.kit.git("checkout", "-q", "-B", branch, f"origin/{branch}", cwd=self.kit.clone)
-        (self.kit.clone / name).write_text(text)
+        (self.kit.clone / name).write_text(text, encoding="utf-8")
         self.kit.git("add", name, cwd=self.kit.clone)
         self.kit.git("commit", "-qm", msg, cwd=self.kit.clone)
         self.kit.git("push", "-q", "origin", branch, cwd=self.kit.clone)
@@ -70,7 +70,7 @@ class StartCase(unittest.TestCase):
         tool = self.kit.home / ".agents" / "bin" / "settings"
         tool.parent.mkdir(parents=True, exist_ok=True)
         cases = "".join(f'  {k}) echo "{v}" ;;\n' for k, v in values.items())
-        tool.write_text(f'#!/bin/sh\ncase "$5" in\n{cases}esac\n')
+        tool.write_text(f'#!/bin/sh\ncase "$5" in\n{cases}esac\n', encoding="utf-8")
         tool.chmod(0o755)
 
 
@@ -118,13 +118,13 @@ class StartTicketTest(StartCase):
 
     def test_a_failed_push_fails_and_leaves_the_ticket_ready(self):
         hook = self.kit.origin / "hooks" / "pre-receive"
-        hook.write_text("#!/bin/sh\necho 'refusing every push' >&2\nexit 1\n")
+        hook.write_text("#!/bin/sh\necho 'refusing every push' >&2\nexit 1\n", encoding="utf-8")
         hook.chmod(0o755)
         p = self.kit.step(START_TICKET, self.kit.run_dir, "01")
         self.assertEqual(p.returncode, 1)
         line = self.one_line(p)
         self.assertTrue(line.startswith("FAIL 01 push (log: "), line)
-        self.assertIn("refusing every push", self.log_of(line).read_text())
+        self.assertIn("refusing every push", self.log_of(line).read_text(encoding="utf-8"))
         self.assertEqual(self.status(self.ticket), "ready")
         self.assertEqual(self.kit.gh_calls(), [])
 
@@ -142,11 +142,11 @@ class StartTicketTest(StartCase):
         no_branch = "# 01: JSON\nStatus: ready\nIssue: #5\n"
         for text, reason in ((planned, "not-ready status=planned"), (no_branch, "no-branch")):
             with self.subTest(reason):
-                self.ticket.write_text(text)
+                self.ticket.write_text(text, encoding="utf-8")
                 p = self.kit.step(START_TICKET, self.kit.run_dir, "01")
                 self.assertEqual(p.returncode, 1)
                 self.assertTrue(self.one_line(p).startswith(f"FAIL 01 {reason} (log: "), p.stdout)
-                self.assertEqual(self.ticket.read_text(), text)
+                self.assertEqual(self.ticket.read_text(encoding="utf-8"), text)
                 self.assertIsNone(self.remote_tip(BRANCH))
                 self.assertEqual(self.kit.gh_calls(), [])
 
@@ -250,9 +250,9 @@ class StartTaskTest(StartCase):
         self.kit.git("push", "-q", "origin", f"origin/main:refs/heads/{BRANCH}", cwd=self.kit.clone)
         self.commit(BRANCH, "ticket.txt", "ticket work\n", "ticket work")
         tasks = self.kit.run_dir / "tasks"
-        (tasks / "01-01-lib.md").write_text("# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: none\n")
-        (tasks / "01-02-hub.md").write_text("# 01-02: Hub\nStatus: ready\nTicket: 01\nBlocked by: 01, ticket 02\n")
-        (tasks / "01-tests.md").write_text("# 01-tests: Tune\nStatus: ready\n")
+        (tasks / "01-01-lib.md").write_text("# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: none\n", encoding="utf-8")
+        (tasks / "01-02-hub.md").write_text("# 01-02: Hub\nStatus: ready\nTicket: 01\nBlocked by: 01, ticket 02\n", encoding="utf-8")
+        (tasks / "01-tests.md").write_text("# 01-tests: Tune\nStatus: ready\n", encoding="utf-8")
 
     def task(self, name):
         return self.kit.run_dir / "tasks" / name
@@ -286,7 +286,7 @@ class StartTaskTest(StartCase):
         self.assertEqual(self.one_line(p), f"OK 01-02 in-progress wt={wt} tip={head[:7]} synced={main[:7]}")
         self.kit.git("merge-base", "--is-ancestor", main, head, cwd=wt)
         self.kit.git("merge-base", "--is-ancestor", self.remote_tip(BRANCH), head, cwd=wt)
-        self.assertEqual((wt / "hub.md").read_text(), "merged ticket\n")
+        self.assertEqual((wt / "hub.md").read_text(encoding="utf-8"), "merged ticket\n")
 
     def test_a_hub_task_conflict_names_the_files_and_leaves_no_worktree(self):
         self.commit(BRANCH, "README.md", "ticket side\n", "ticket edit")
@@ -321,11 +321,11 @@ class StartTaskTest(StartCase):
 
     def test_a_task_not_ready_a_ticket_without_a_branch_or_a_leftover_branch_is_refused(self):
         lib = self.task("01-01-lib.md")
-        lib.write_text(lib.read_text().replace("Status: ready", "Status: planned"))
+        lib.write_text(lib.read_text(encoding="utf-8").replace("Status: ready", "Status: planned"), encoding="utf-8")
         p = self.kit.step(START_TASK, self.kit.run_dir, "01-01")
         self.assertTrue(self.one_line(p).startswith("FAIL 01-01 not-ready status=planned (log: "), p.stdout)
-        lib.write_text(lib.read_text().replace("Status: planned", "Status: ready"))
-        self.ticket.write_text("# 01: JSON\nStatus: building\nIssue: none\n")
+        lib.write_text(lib.read_text(encoding="utf-8").replace("Status: planned", "Status: ready"), encoding="utf-8")
+        self.ticket.write_text("# 01: JSON\nStatus: building\nIssue: none\n", encoding="utf-8")
         p = self.kit.step(START_TASK, self.kit.run_dir, "01-01")
         self.assertTrue(self.one_line(p).startswith("FAIL 01-01 no-branch (log: "), p.stdout)
         self.write_ticket("building", "none")
@@ -346,7 +346,7 @@ class RefspecShellTest(StartCase):
 
     def check(self, shell):
         self.write_ticket("ready", "none")
-        (self.kit.run_dir / "tasks" / "01-01-lib.md").write_text("# 01-01\nStatus: ready\nBlocked by: none\n")
+        (self.kit.run_dir / "tasks" / "01-01-lib.md").write_text("# 01-01\nStatus: ready\nBlocked by: none\n", encoding="utf-8")
         p = self.start_both(shell)
         lines = p.stdout.splitlines()
         self.assertEqual(len(lines), 2, p.stdout + p.stderr)

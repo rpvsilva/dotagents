@@ -18,7 +18,7 @@ class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
     """The merge_task sandbox; the base class's own tests run from test_merge_task.py only (see the end)."""
 
     def into(self, base):
-        (self.kit.answers / "pr-base").write_text(base)
+        (self.kit.answers / "pr-base").write_text(base, encoding="utf-8")
 
     def assert_wrong_base(self, line, base):
         self.assertTrue(line.startswith(f"FAIL 01-01 wrong-base {base} (log: "), line)
@@ -26,7 +26,7 @@ class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
 
     def test_a_pr_into_the_default_branch_while_the_base_is_another_branch_is_refused(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
         self.into("main")
         self.assert_wrong_base(self.merge(), "main")
 
@@ -35,13 +35,13 @@ class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
         self.assert_wrong_base(self.merge(), "feat/other")
 
     def test_a_pr_into_its_ticket_branch_merges(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
         self.into("feat/t")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual(len(self.calls("pr", "merge")), 1)
 
     def test_a_pr_into_another_ticket_branch_of_the_run_merges(self):
-        (self.kit.run_dir / "tickets" / "02-u.md").write_text("# 02: U\nStatus: building\nBranch: feat/u\n")
+        (self.kit.run_dir / "tickets" / "02-u.md").write_text("# 02: U\nStatus: building\nBranch: feat/u\n", encoding="utf-8")
         self.into("feat/u")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
 
@@ -61,17 +61,17 @@ class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
     def test_merge_method_passes_merge_to_merge_pr_sh(self):
         log = self.kit.tmp / "rule.log"
         rule = self.kit.tmp / "merge-pr.sh"
-        rule.write_text(f'#!/usr/bin/env bash\necho "$*" >>"{log}"\n')
+        rule.write_text(f'#!/usr/bin/env bash\necho "$*" >>"{log}"\n', encoding="utf-8")
         rule.chmod(0o755)
         self.setting("merge_command", f"{rule} {{pr}}")
         self.setting("task_merge_method", "merge")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(log.read_text(), "--merge 5\n")
+        self.assertEqual(log.read_text(encoding="utf-8"), "--merge 5\n")
 
     def test_merge_method_with_a_rule_that_has_no_merge_option_merges_nothing(self):
         log = self.kit.tmp / "rule.log"
         rule = self.kit.tmp / "my-merge"
-        rule.write_text(f'#!/usr/bin/env bash\necho "$*" >>"{log}"\n')
+        rule.write_text(f'#!/usr/bin/env bash\necho "$*" >>"{log}"\n', encoding="utf-8")
         rule.chmod(0o755)
         self.setting("merge_command", f"{rule} {{pr}}")
         self.setting("task_merge_method", "merge")
@@ -85,7 +85,7 @@ class TicketBaseGuardTest(test_ship.Base):
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         self.kit.answer("pr-list", out="[]")
         self.assertEqual(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open")), "OK 01 open pr=20")
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
 
     def ship(self):
         return self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "merge"))
@@ -97,7 +97,7 @@ class TicketBaseGuardTest(test_ship.Base):
         self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
 
     def test_a_ticket_pr_into_the_base_merges_and_squashes_whatever_the_task_merge_method(self):
-        (self.kit.answers / "pr-base").write_text("int/x")
+        (self.kit.answers / "pr-base").write_text("int/x", encoding="utf-8")
         self.set_setting("task_merge_method", "merge")
         self.assertEqual(self.ship(), "OK 01 merged pr=20")
         self.assertIn("--squash", self.calls("pr", "merge")[0])

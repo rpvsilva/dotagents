@@ -10,7 +10,7 @@
 ![Cursor](https://img.shields.io/badge/Cursor-partial-000000?logo=cursor&logoColor=white)
 ![Shell](https://img.shields.io/badge/shell-bash_3.2+-4EAA25?logo=gnubash&logoColor=white)
 
-🧩 13 skills · 🧑‍🤝‍🧑 9 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
+🧩 13 skills · 🧑‍🤝‍🧑 10 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
 
 [What's included](#-whats-included) · [Install](#-install) · [Use](#-use) · [Docs](#-docs) · [Contributing](#-contributing)
 
@@ -62,7 +62,7 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`address-review`](skills/address-review/SKILL.md) | Work through a PR's open review threads: fix what holds up, reply to the rest |
 | [`fix-pr`](skills/fix-pr/SKILL.md) | Make one PR's failing checks pass and push |
 | [`renovate-prs`](skills/renovate-prs/SKILL.md) | Fix, verify and merge open Renovate PRs, one subagent per PR |
-| [`review-pr`](skills/review-pr/SKILL.md) | First-pass PR review by fresh subagents, posted as a comment-only review |
+| [`review-pr`](skills/review-pr/SKILL.md) | First-pass PR review by fresh subagents at the depth the change's risk tier needs, posted as a comment-only review |
 | [`ship-pr`](skills/ship-pr/SKILL.md) | Take the current changes to a merged PR, by the repo's own rules |
 
 #### 🗺️ Epics
@@ -86,7 +86,7 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`add-plugin`](skills/add-plugin/SKILL.md) | Add a Claude Code plugin after showing what it adds and costs |
 | [`configure`](skills/configure/SKILL.md) | Show or change the Settings skills read, for this machine or this repo |
 | [`remember`](skills/remember/SKILL.md) | After a skill run, save what it learned about the repo for next time |
-| [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill, compare runs over time, and find wasted steps |
+| [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill or per subagent role (`--by-role`), compare runs over time, find wasted steps, and measure and compare build-epic runs (`run_metrics.py`, `compare_runs.py`) |
 
 ### 🧑‍🤝‍🧑 Subagents
 
@@ -99,7 +99,8 @@ Some skills start **subagents**: focused helpers, each with a fresh context. Eac
 | `epic-implementer` | `build-epic` | Builds one task test-first in its own worktree |
 | `source-reader` | `to-epic` | Reads one source and notes its needs, decisions and open questions |
 | `pr-fixer` | `fix-pr`, `renovate-prs` | Takes one PR's failing checks to green |
-| `pr-reviewer` | `review-pr` | Finds bugs, rule breaks and missing tests in one PR |
+| `pr-reviewer` | `review-pr`, `build-epic` | Finds bugs, rule breaks and missing tests in one PR |
+| `pr-reviewer-light` | `review-pr`, `build-epic` | The same review on a small model: task PRs and re-reviews of fixes |
 | `security-mapper` | `security-audit` | Maps the attack surface into areas and flows |
 | `security-reviewer` | `security-audit`, `review-pr` | Hunts security issues in one PR, area or flow |
 | `test-tuner` | `tune-tests`, `build-epic` | Makes tests faster and widens coverage |

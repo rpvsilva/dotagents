@@ -20,8 +20,8 @@ class MergedToLabelTest(Base):
     def test_a_ticket_merged_into_a_non_default_base_leaves_its_issues_open_and_labelled(self):
         kit = self.kit
         kit.branch_from_main(NEW)
-        (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {NEW}\n")
-        (kit.answers / "pr-base").write_text(NEW)
+        (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {NEW}\n", encoding="utf-8")
+        (kit.answers / "pr-base").write_text(NEW, encoding="utf-8")
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         self.set_setting("task_merge_method", "merge")
         p = kit.step(SHIP, kit.run_dir, "01", "merge")
@@ -57,14 +57,14 @@ class CatchUpCase(unittest.TestCase):
 
     def ticket(self, tt, status, branch, extra=""):
         path = self.kit.run_dir / "tickets" / f"{tt}-t.md"
-        path.write_text(f"# {tt}: T\nStatus: {status}\nIssue: none\nBranch: {branch}\n{extra}\nBody.\n")
+        path.write_text(f"# {tt}: T\nStatus: {status}\nIssue: none\nBranch: {branch}\n{extra}\nBody.\n", encoding="utf-8")
         return path
 
     def commit(self, branch, path, text, start=None):
         """Commits `path` on origin's `branch` (or on `start` for a new branch) through a scratch worktree."""
         kit, work = self.kit, self.kit.tmp / "scratch"
         kit.git("worktree", "add", "-q", "--detach", str(work), f"origin/{start or branch}", cwd=kit.clone)
-        (work / path).write_text(text)
+        (work / path).write_text(text, encoding="utf-8")
         kit.git("add", path, cwd=work)
         kit.git("commit", "-qm", f"add {path}", cwd=work)
         kit.git("push", "-q", "origin", f"HEAD:refs/heads/{branch}", cwd=work)
@@ -100,7 +100,7 @@ class CatchUpTest(CatchUpCase):
     def test_with_apply_it_records_the_base_and_start_ticket_cuts_from_it(self):
         line = self.catch_up(NEW, "--apply")
         self.assertTrue(line.startswith(f"OK run caught-up base={NEW} 2 unstarted 1 started"), line)
-        self.assertIn(f"base: {NEW}\n", (self.kit.run_dir / "decisions.md").read_text())
+        self.assertIn(f"base: {NEW}\n", (self.kit.run_dir / "decisions.md").read_text(encoding="utf-8"))
         p = self.kit.step(START_TICKET, self.kit.run_dir, "02")
         self.assertEqual(p.stdout.strip(), f"OK 02 building branch=feat/b base={self.new_tip[:7]}", p.stdout)
         self.assertEqual(self.remote("feat/b"), self.new_tip)
@@ -125,7 +125,7 @@ class CatchUpTest(CatchUpCase):
         line = self.catch_up(NEW, "--apply")
         self.assertRegex(line, r"^FAIL run conflict 01: x\.txt \(log: ")
         self.assertEqual(self.remote("feat/a"), before)
-        self.assertIn(f"base: {NEW}\n", (self.kit.run_dir / "decisions.md").read_text())
+        self.assertIn(f"base: {NEW}\n", (self.kit.run_dir / "decisions.md").read_text(encoding="utf-8"))
         self.assertEqual(list((self.kit.run_dir / "worktrees").glob("*")), [])
 
     def test_a_base_missing_on_origin_is_refused_and_nothing_changes(self):

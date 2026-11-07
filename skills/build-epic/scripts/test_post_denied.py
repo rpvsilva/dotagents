@@ -18,7 +18,7 @@ class PostDeniedTest(Base):
     def report(self):
         report = self.kit.tmp / "reviews" / "12-abc1234.md"
         report.parent.mkdir(exist_ok=True)
-        report.write_text("Finding: the JSON parser drops keys.\n")
+        report.write_text("Finding: the JSON parser drops keys.\n", encoding="utf-8")
         return report
 
     def deny(self):
@@ -29,7 +29,7 @@ class PostDeniedTest(Base):
         report = self.deny()
         line = self.post("12", report)
         self.assertRegex(line, rf"^FAIL PR12 post-denied {re.escape(str(report))} \(log: .+\)$")
-        self.assertEqual(report.read_text(), "Finding: the JSON parser drops keys.\n")
+        self.assertEqual(report.read_text(encoding="utf-8"), "Finding: the JSON parser drops keys.\n")
 
     def test_a_denied_post_is_not_retried(self):
         report = self.deny()
