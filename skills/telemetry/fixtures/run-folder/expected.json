@@ -34,7 +34,15 @@
   "re_reviews": 1
  },
  "follow_ups": {
-  "followups_md": 2,
+  "rows": 3,
+  "by_severity": {
+   "nit": 1,
+   "should-fix": 2
+  },
+  "by_kind": {
+   "follow-up": 2,
+   "owner-doc": 1
+  },
   "reports_with_follow_up": 1
  },
  "suites": {
