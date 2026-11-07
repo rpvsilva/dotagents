@@ -345,6 +345,10 @@ if [ -f "$rs" ]; then
 else
   fail "$rs is missing"
 fi
+# No other skill restates which agents are remote-capable: each links the declaration through remote-subagents.
+while IFS= read -r hit; do
+  fail "$hit: says remote-capable; only skills/remote-subagents/SKILL.md does, the others link it"
+done < <(grep -rli 'remote-capable' skills --exclude-dir=remote-subagents || true)
 if grep -q '^## Remote subagents' skills/_shared/conventions.md; then
   fail "skills/_shared/conventions.md: restates Remote subagents; link ../remote-subagents/SKILL.md instead"
 fi

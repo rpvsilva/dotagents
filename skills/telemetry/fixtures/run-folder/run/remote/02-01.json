@@ -9,6 +9,7 @@
   "total_cost_usd": null,
   "usage": null,
   "model": null,
-  "killed": "memory",
+  "capped_kills": [{"kind": "memory", "cmd": "pytest"}, {"kind": "timeout", "cmd": null}],
+  "killed": "timeout",
   "lost": false
 }
