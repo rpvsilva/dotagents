@@ -304,6 +304,7 @@ class ShipMergeTest(Base):
 
     def test_a_pr_into_another_base_leaves_the_issues_open(self):
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
+        self.set_setting("task_merge_method", "merge")  # no ancestry step: test_ancestry.py covers it
         (self.kit.answers / "pr-base").write_text("integ")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.calls("issue", "close"), [])
@@ -316,6 +317,7 @@ class ShipMergeTest(Base):
         self.assertEqual(self.calls("issue", "close"), [])
 
     def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
+        self.set_setting("task_merge_method", "merge")  # no ancestry step: test_ancestry.py covers it
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
         (self.kit.answers / "pr-base").write_text("integ")
