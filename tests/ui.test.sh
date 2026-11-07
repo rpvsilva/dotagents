@@ -49,9 +49,29 @@ out="$(view install bogus <<<"usage: ./install.sh [all|shared|claude|codex|curso
 grep -q "Stopped" <<<"$out" || fail "usage error not shown as stopped: $out"
 grep -q "usage:" <<<"$out" || fail "usage line dropped: $out"
 
+# A selection word (a group or part) is no tool word: the run still covers every tool, and the title names it.
+out="$(view install remote <<'PLAIN'
+shared
+  parts: _shared configure remote remote-runs remote-subagents
+  /home/me/.agents/skills/remote-subagents -> /repo/skills/remote-subagents
+claude
+  /home/me/.claude/skills/remote-runs -> /repo/adapters/claude/mods/remote-runs
+codex
+cursor
+PLAIN
+)"
+grep -q "install · all · remote" <<<"$out" || fail "selection not in the title: $out"
+grep -q "✓ cursor  nothing to do" <<<"$out" || fail "a selection word was taken for a tool: $out"
+grep -q "· parts: _shared configure" <<<"$out" || fail "parts line not shown as a note: $out"
+grep -q "✓ Installed .* 2 linked$" <<<"$out" || fail "selective run not summed up: $out"
+out="$(view install epics claude <<<"shared")"
+grep -q "install · claude · epics" <<<"$out" || fail "tool and selection not both in the title: $out"
+
 # Off a terminal both scripts print the plain lines the other tests read.
 out="$(HOME="$SANDBOX" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" shared)"
 grep -qx shared <<<"$out" || fail "install.sh off a terminal did not print plain lines: $out"
+out="$(HOME="$SANDBOX/sel" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" remote shared)"
+grep -qx shared <<<"$out" || fail "install.sh with a selection did not print its section: $out"
 
 [ "$fails" -eq 0 ] || exit 1
 echo "ui: ok"
