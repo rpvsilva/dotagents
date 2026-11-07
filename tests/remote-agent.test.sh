@@ -339,6 +339,32 @@ run_data "failed run data" failed 1
 result_is "result on exit 1" '.exit_code == 1 and .status == "failed" and .complete == false and .total_cost_usd == null
   and .num_turns == null and .usage == null and .model == null and .report_status == null and .follow_up == []
   and (.duration_ms | type) == "number"'
+# A rename to a name of another length lists both its paths, and a non-ASCII name, which git C-quotes
+# ("b/caf\303\251.txt"), is listed as it is on disk.
+code=0; run 0 'diff --git a/tracked.txt b/tracked-renamed.txt
+similarity index 100%
+rename from tracked.txt
+rename to tracked-renamed.txt
+diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"
+new file mode 100644
+index 0000000..ce01362
+--- /dev/null
++++ "b/caf\303\251.txt"
+@@ -0,0 +1 @@
++hello
+' || code=$?
+[ "$code" = 0 ] || fail "result of a rename: exited $code: $(cat "$SANDBOX/out")"
+result_is "result of a rename and a non-ASCII name" '.changed == ["tracked.txt", "tracked-renamed.txt", "café.txt"]'
+[ ! -f "$W/tracked-renamed.txt" ] || mv "$W/tracked-renamed.txt" "$W/tracked.txt"
+rm -f "$W"/caf*.txt
+# A report and a last result event each over 200 KB, more than one argument may hold, still give a result.
+big="$(head -c 210000 /dev/zero | tr '\0' x)"
+printf '{"type":"result","is_error":false,"num_turns":2,"result":"%s"}\n' "$big" >"$SANDBOX/events"
+{ printf 'status: done\nfollow-up: read it all\n'; printf '%s\n' "$big"; } >"$SANDBOX/summary"
+run 0 "$patch" --name 08-big || fail "result of a big report: exited non-zero: $(tail -c 2000 "$SANDBOX/err")"
+result_is "result of a big report" '.complete == true and .num_turns == 2 and .report_status == "done"
+  and .follow_up == ["read it all"] and .changed == ["hello.txt"]'
+rm -f "$W/hello.txt" "$SANDBOX/events" "$SANDBOX/summary"
 # A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
 for c in 3 4 5; do
   code=0; run "$c" "$patch" || code=$?
@@ -964,6 +990,62 @@ code=0; result 08-retry || code=$?
 [ "$code" != 0 ] || fail "result of a run still going: exited 0 with $(cat "$SANDBOX/result")"
 grep -q "agent-going has no result yet" "$SANDBOX/err" || fail "result of a run still going: does not name it: $(cat "$SANDBOX/err")"
 rm -rf "$W/.git/remote-agent/agent-going"
+# Every worktree of the repo shares the records: a run made from the caller's worktree wins over a newer one made
+# from another under the same name, which counts only when none was made here.
+W2="$SANDBOX/w2"
+git -C "$W" worktree add -q --detach "$W2"
+# Makes a finished run $1 named 08-shared, from worktree $2, started at $3.
+shared() {
+  mkdir -p "$W/.git/remote-agent/$1"
+  jq -cn --arg r "$1" --arg w "$2" --argjson s "$3" '{run: $r, name: "08-shared", worktree: $w, started: $s,
+    state: "done"}' >"$W/.git/remote-agent/$1/run.json"
+  jq -cn --arg r "$1" '{run: $r, name: "08-shared", exit_code: 0}' >"$W/.git/remote-agent/$1/result.json"
+}
+now="$(date +%s)"
+shared agent-shared-here "$(git -C "$W" rev-parse --show-toplevel)" "$now"
+shared agent-shared-there "$(git -C "$W2" rev-parse --show-toplevel)" "$((now + 60))"
+result 08-shared || fail "result in a shared repo: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-here"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result in a shared repo: not this worktree's run: $(cat "$SANDBOX/result")"
+(cd "$W2" && env HOME="$H" "$REPO/scripts/remote-agent.sh" result 08-shared) >"$SANDBOX/result" 2>"$SANDBOX/err" \
+  || fail "result from the other worktree: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-there"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result from the other worktree: not its run: $(cat "$SANDBOX/result")"
+result 08-shared "$W2" || fail "result for the other worktree's dir: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-there"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result for the other worktree's dir: not its run: $(cat "$SANDBOX/result")"
+rm -rf "$W/.git/remote-agent/agent-shared-here"
+result 08-shared || fail "result made only from another worktree: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-there"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result made only from another worktree: not found: $(cat "$SANDBOX/result")"
+rm -rf "$W/.git/remote-agent/agent-shared-there"
+git -C "$W" worktree remove --force "$W2"
+# A run just begun is found by its name from its first write of run.json: never the previous run's result. A stub ps
+# holds the run between that write and the next while $SANDBOX/ps-hold is there.
+run 0 "" --name 08-started || true
+# Then it runs the real ps, or fails as a missing one would.
+real_ps="$(command -v ps || true)"
+cat >"$SANDBOX/bin/ps" <<EOF
+#!/bin/sh
+if [ -e "$SANDBOX/ps-hold" ]; then
+  : >"$SANDBOX/ps-held"
+  while [ -e "$SANDBOX/ps-hold" ]; do sleep 0.1; done
+fi
+[ -z "$real_ps" ] || exec "$real_ps" "\$@"
+exit 127
+EOF
+chmod +x "$SANDBOX/bin/ps"
+: >"$SANDBOX/ps-hold"
+start 08-started >/dev/null 2>&1 &
+begun=$!
+i=0
+while [ ! -e "$SANDBOX/ps-held" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+code=0; result 08-started || code=$?
+[ "$code" != 0 ] || fail "result of a run just begun: exited 0 with the previous run's $(cat "$SANDBOX/result")"
+grep -q "has no result yet" "$SANDBOX/err" || fail "result of a run just begun: does not say so: $(cat "$SANDBOX/err")"
+rm -f "$SANDBOX/ps-hold"
+wait "$begun" || true
+rm -f "$SANDBOX/bin/ps" "$SANDBOX/ps-held"
 (cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "result <name|run>" || fail "--help does not list result"
 grep -q "remote-agent result <name|run>" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list result"
 
@@ -1058,6 +1140,11 @@ for a in "--older-than x" "--older-than 1" "--older-than 1w" "--older-than -1d" 
   [ "$code" = 1 ] || fail "prune $a: exited $code, not 1"
   grep -q 'usage: remote-agent prune' "$SANDBOX/prune.err" || fail "prune $a: no usage: $(cat "$SANDBOX/prune.err")"
   [ -d "$P/.git/remote-agent/agent-done" ] || fail "prune $a: removed a run"
+done
+# A huge age removes nothing: the number is capped, never overflowing into a negative age.
+for a in 9999999999999999d 99999999999999999999h; do
+  prune --older-than "$a" || fail "prune --older-than $a: exited non-zero: $(cat "$SANDBOX/prune.err")"
+  [ "$(cat "$SANDBOX/prune.out")" = "removed 0 runs" ] || fail "prune --older-than $a: $(cat "$SANDBOX/prune.out")"
 done
 # Without a ps that prints start times, a pid that is alive keeps its run.
 psbin="$SANDBOX/psbin-none"

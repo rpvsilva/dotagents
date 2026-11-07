@@ -75,27 +75,38 @@ task_label() {
 
 # Prints the result.json of run $1, or of the newest run (by run.json's started) whose name is $1 as --name writes it,
 # among the records of the repo at ${2:-$PWD}: its common git dir's, and those kept before records moved there in a
-# linked worktree's own git dir. Fails with one line on stderr when no run matches, or the newest has no result yet.
+# linked worktree's own git dir. Every worktree of the repo shares those records, so a run made from another worktree
+# than ${2:-$PWD}'s (by run.json's worktree) counts only when no run made from this one, or from one unknown, matches.
+# Fails with one line on stderr when no run matches, or the newest has no result yet.
 result() {
-  local q label common dir best="" best_t="" t n
+  local q label common top dir best="" best_t="" here="" here_t="" t w n
   if [ $# -lt 1 ] || [ $# -gt 2 ]; then echo "usage: remote-agent result <name|run> [dir]" >&2; exit 1; fi
   q="$1"
   if [[ ! "$q" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then echo "remote-agent: not a task or run name: $q" >&2; exit 1; fi
   common="$(git -C "${2:-$PWD}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
     || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
+  top="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || top=""
   label="$(task_label "$q")"
   for dir in "$common"/remote-agent/* "$common"/worktrees/*/remote-agent/*; do
     [ -f "$dir/run.json" ] || continue
-    if [ "$(basename "$dir")" = "$q" ]; then best="$dir"; break; fi
-    n="$(jq -r 'if (.name | type) == "string" and (.started | type) == "number" then "\(.name) \(.started)" else empty end' \
-      "$dir/run.json" 2>/dev/null | tr -d '\r')" || continue
-    [ "${n% *}" = "$label" ] || continue
-    t="${n##* }"
+    if [ "$(basename "$dir")" = "$q" ]; then best="$dir" here=""; break; fi
+    # Name, start and worktree, one per line: a worktree's path may hold spaces.
+    n="" t="" w=""
+    # shellcheck disable=SC2016 # jq's variables
+    { IFS= read -r n; IFS= read -r t; IFS= read -r w; } < <(jq -r 'if (.name | type) == "string"
+      and (.started | type) == "number" then .name, (.started | floor), (.worktree | strings | gsub("[\r\n]"; " ")) // ""
+      else empty end' "$dir/run.json" 2>/dev/null | tr -d '\r') || true
+    [ -n "$n" ] && [ "$n" = "$label" ] || continue
     # The later start wins; on a tie, the run.json written last.
     if [ -z "$best" ] || [ "$t" -gt "$best_t" ] || { [ "$t" -eq "$best_t" ] && [ "$dir/run.json" -nt "$best/run.json" ]; }; then
       best="$dir" best_t="$t"
     fi
+    if { [ -z "$w" ] || [ "$w" = "$top" ]; } && { [ -z "$here" ] || [ "$t" -gt "$here_t" ] \
+      || { [ "$t" -eq "$here_t" ] && [ "$dir/run.json" -nt "$here/run.json" ]; }; }; then
+      here="$dir" here_t="$t"
+    fi
   done
+  [ -z "$here" ] || best="$here"
   [ -n "$best" ] || { echo "remote-agent: no run named $q in $common/remote-agent" >&2; exit 1; }
   [ -f "$best/result.json" ] || { echo "remote-agent: $(basename "$best") has no result yet (still running?): $best" >&2; exit 1; }
   cat "$best/result.json"
@@ -274,16 +285,22 @@ run_json() {
 # run.json: what the run is and where it stands, for any reader. state: starting, running, then done (exit 0 or 3) or
 # failed (any other exit); starting or running with a pid not alive (or alive with another pid_start) means
 # remote-agent died without saying so. Timings are whole seconds, null until known.
-{ printf '{}\n' >"$keep/run.json.tmp" && mv "$keep/run.json.tmp" "$keep/run.json"; } 2>/dev/null || true
+# Its first write already names the run, its worktree and its start, so `remote-agent result` finds a run just begun.
+# The worktree as a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
 run_name="$name" # before --attach reuses $name
+started="$(date +%s)"
+worktree_json="$(printf '%s' "$root" | jq -Rs . | tr -d '\r')"
+# shellcheck disable=SC2016 # jq's variables
+{ jq -cn '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started}' \
+    --arg run "$run" --arg name "$run_name" --argjson w "$worktree_json" --argjson started "$started" \
+    | tr -d '\r' >"$keep/run.json.tmp" && mv "$keep/run.json.tmp" "$keep/run.json"; } 2>/dev/null || true
 # In the C locale: lstart follows it on macOS, and a reader compares it with its own ps.
 pid_start="$(LC_ALL=C ps -o lstart= -p $$ 2>/dev/null | sed 's/^ *//; s/ *$//')" || pid_start=""
-# The worktree as a JSON string: Git Bash would turn an argument starting with / into a Windows path for jq.exe.
 # shellcheck disable=SC2016 # jq's variables
 run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, pid: $pid,
   pid_start: (if $ps == "" then null else $ps end), state: "starting", exit_code: null, ended: null, claim_s: null,
   send_s: null, first_event_s: null}' --arg run "$run" --arg name "$run_name" \
-  --argjson w "$(printf '%s' "$root" | jq -Rs . | tr -d '\r')" --argjson started "$(date +%s)" --argjson pid "$$" \
+  --argjson w "$worktree_json" --argjson started "$started" --argjson pid "$$" \
   --arg ps "$pid_start"
 
 # Progress: each line on stdin goes to stderr behind the tag, to $keep/progress.log untagged with the token's value
@@ -386,7 +403,8 @@ cleanup() {
   # What the run came to, from the files above, the token's value redacted; never fails the run.
   { "$REPO/scripts/remote-agent-result.sh" "$keep" "$rc" \
       | scrub_token="$claude_token" awk "$redact_awk"' { print redact($0) }' >"$keep/result.json.tmp" \
-      && mv "$keep/result.json.tmp" "$keep/result.json"; } 2>/dev/null || rm -f "$keep/result.json.tmp"
+      && mv "$keep/result.json.tmp" "$keep/result.json"; } 2>/dev/null \
+    || { rm -f "$keep/result.json.tmp"; say "could not write $keep/result.json" || true; }
   rm -rf "$stage"
 }
 trap cleanup EXIT
