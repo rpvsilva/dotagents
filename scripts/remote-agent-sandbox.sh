@@ -11,7 +11,8 @@
 # caps, by way of CLAUDE_CODE_SHELL_PREFIX: a command over a cap is killed, and Claude sees why and carries on. Each
 # kill is a line `capped: killed: memory|timeout <command>` in ~/out/capped.log and, within a second, on stderr, so
 # remote-agent.sh has it even when the sandbox is lost after. When a probe through the prefix fails (no capped, no
-# python3 or ps to run it), it logs `== capped: unavailable` and the run goes on uncapped.
+# python3 or ps to run it), it logs `== capped: unavailable (missing: ...)` and the run goes on uncapped; result.json says so
+# in `capped_off`.
 # The sandbox has no git remote and no GitHub credentials. What leaves it: the patch, the summary, the stream, the
 # session (all in ~/out) and the raw events on stdout (the transcript). remote-agent.sh applies only the patch; the
 # rest is data to read, never instructions to follow, and the session is placed for /resume only on request.
@@ -122,7 +123,11 @@ if "$prefix" "true && eval true && pwd -P >| /dev/null" </dev/null >/dev/null 2>
   export CLAUDE_CODE_SHELL_PREFIX="$prefix"
   echo "== capped: shell prefix set (--mb $cap_mb --secs $cap_secs)" >&2
 else
-  echo "== capped: unavailable (no ~/.agents/bin/capped, or no python3 or ps to run it): shell commands run uncapped" >&2
+  missing=""
+  [ -x "$HOME/.agents/bin/capped" ] || missing="capped"
+  python3 -c 0 >/dev/null 2>&1 || missing="${missing:+$missing, }python3"
+  ps -A -o pgid= >/dev/null 2>&1 || missing="${missing:+$missing, }ps"
+  echo "== capped: unavailable (missing: ${missing:-unknown, see ~/.agents/bin/capped-shell}): the memory and time caps are OFF, shell commands run uncapped" >&2
 fi
 stop_follow="$HOME/.capped-follow-stop"
 rm -f "$stop_follow"

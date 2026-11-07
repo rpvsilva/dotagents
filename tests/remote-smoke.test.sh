@@ -88,13 +88,19 @@ cap_case() {
   new_repo "$C"
   start="$(date +%s)"
   (cd "$C" && REMOTE_BACKEND="$b" REMOTE_HOURS=1 REMOTE_CAP_SECS=5 "$REPO/scripts/remote-agent.sh" --name "smoke-cap-$b" \
-    "Run exactly this shell command once, in the foreground (not in the background), with no timeout of your own: sleep 100. If it fails or is killed, do not retry it and do not investigate; just stop. Do nothing else.") \
+    "Run exactly this shell command once, in the foreground (not in the background), with no timeout of your own: python3 -c 'import time; time.sleep(100)'. If it fails or is killed, do not retry it and do not investigate; just stop. Do nothing else.") \
     >"$out" 2>&1 || code=$?
   elapsed=$(($(date +%s) - start))
-  [ "$code" -eq 0 ] || fail "$b: cap run: remote-agent exited $code: $(tail -5 "$out")"
+  # 3: the run changed nothing, which is all this case asks of it.
+  [ "$code" -eq 0 ] || [ "$code" -eq 3 ] || fail "$b: cap run: remote-agent exited $code: $(tail -5 "$out")"
   [ "$elapsed" -lt 120 ] || fail "$b: cap run took ${elapsed}s, not under 120s"
   if ! result="$(cd "$C" && "$REPO/scripts/remote-agent.sh" result "smoke-cap-$b" 2>&1)"; then
     fail "$b: cap run: no result.json: $result"
+    return
+  fi
+  off="$(printf '%s' "$result" | jq -r '.capped_off // empty' 2>/dev/null)"
+  if [ -n "$off" ]; then
+    fail "$b: cap run: the sandbox's caps are OFF, it lacks: $off (the runner image needs it; see docs/remote.md)"
     return
   fi
   printf '%s' "$result" | jq -e '.killed == "timeout"' >/dev/null 2>&1 \
@@ -134,7 +140,7 @@ for b in ${wanted[@]+"${wanted[@]}"}; do
   echo "== $b: real run"
   ran=$((ran + 1))
 
-  echo "== $b: cap run (sleep 100 under a 5 s cap)"
+  echo "== $b: cap run (a 100 s sleep under a 5 s cap)"
   cap_case
 
   out="$SANDBOX/$b/out"

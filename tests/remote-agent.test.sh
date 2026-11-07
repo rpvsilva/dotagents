@@ -572,17 +572,18 @@ rm -f "$W/hello.txt" "$SANDBOX/killmsg"
 # Without capped, or without a python3 to run it, the run goes on uncapped and says so.
 : >"$SANDBOX/nocapped"
 run 0 "" || fail "caps no capped: exited non-zero: $(cat "$SANDBOX/out")"
-grep -q "== capped: unavailable" "$SANDBOX/err" || fail "caps no capped: not reported: $(cat "$SANDBOX/err")"
+grep -q "== capped: unavailable (missing: capped)" "$SANDBOX/err" || fail "caps no capped: not reported: $(cat "$SANDBOX/err")"
 [ ! -s "$SANDBOX/prefix" ] || fail "caps no capped: a shell prefix set anyway: $(cat "$SANDBOX/prefix")"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps no capped: patch not applied"
-result_is "caps no capped result" '.killed == null and .lost == false and .capped_kills == []'
+result_is "caps no capped result" '.killed == null and .lost == false and .capped_kills == [] and .capped_off == "capped"'
 rm -f "$W/hello.txt" "$SANDBOX/nocapped"
 printf '#!/bin/sh\nexit 127\n' >"$SANDBOX/podbin/python3"
 chmod +x "$SANDBOX/podbin/python3"
 run 0 "" || fail "caps no python3: exited non-zero: $(cat "$SANDBOX/out")"
-grep -q "== capped: unavailable" "$SANDBOX/err" || fail "caps no python3: not reported: $(cat "$SANDBOX/err")"
+grep -q "== capped: unavailable (missing: python3)" "$SANDBOX/err" || fail "caps no python3: not reported: $(cat "$SANDBOX/err")"
 [ ! -s "$SANDBOX/prefix" ] || fail "caps no python3: a shell prefix set anyway: $(cat "$SANDBOX/prefix")"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps no python3: patch not applied"
+result_is "caps no python3 result" '.capped_off == "python3" and .capped_kills == []'
 rm -f "$W/hello.txt" "$SANDBOX/podbin/python3" "$SANDBOX/podbin/ps" "$SANDBOX/real"
 
 # A sandbox that went away mid-run with no kill line before it is lost; one killed first reads as the kill.
