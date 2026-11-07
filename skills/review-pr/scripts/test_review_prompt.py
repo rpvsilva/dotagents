@@ -46,7 +46,8 @@ def run(*args, cwd=None):
 
 class ReviewPromptTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        # Resolved, as the child's cwd is: macOS tmp is under a /var symlink, Windows tmp under an 8.3 short name.
+        self.tmp = Path(os.path.realpath(tempfile.mkdtemp()))
         self.findings = self.tmp / "findings.md"
         self.findings.write_text("1. blocker: x.py:3 crashes on empty input\n", encoding="utf-8")
 
@@ -118,7 +119,7 @@ class ReviewPromptTest(unittest.TestCase):
                 args = [a.replace("@FINDINGS@", str(self.findings)) for a in ARGS[mode]]
                 got = run(mode, *args, "--report", "reviews/42-abc1234.md", cwd=self.tmp)
                 self.assertEqual(got.returncode, 0, got.stderr)
-                report = str(Path(os.path.realpath(self.tmp), "reviews", "42-abc1234.md"))  # macOS tmp is under a /var symlink
+                report = str(self.tmp / "reviews" / "42-abc1234.md")
                 self.assertTrue(got.stdout.endswith(
                     f"\nWrite your report to {report}, the only file you may write, then return the block alone, "
                     "as the brief's Report says.\n"), got.stdout)

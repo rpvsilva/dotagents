@@ -81,7 +81,7 @@ def make_env(ctx, repo, commands):
     if done.exists():
         ctx.note(f"{env_dir}: set up before, Setup not run again")
         return env_dir
-    environ = {**os.environ, ENV_VAR: str(env_dir)}
+    environ = {**os.environ, ENV_VAR: env_dir.as_posix()}  # as the test command exports it (`checks.env_prefix`)
     for cmd in commands:
         if ctx.run(["bash", "-c", cmd], cwd=repo, env=environ).rc != 0:
             raise core.Fail(f"setup-failed: {cmd}")
