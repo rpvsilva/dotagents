@@ -60,6 +60,7 @@ class RunMetrics(unittest.TestCase):
         self.assertEqual(sorted(c[2].rsplit("/", 1)[-1] for c in calls), ["10", "11", "12", "13", "20", "21"])
         self.assertTrue(all(c[:2] == ["pr", "view"] and c[3] == "--json" for c in calls), calls)
 
+    @unittest.skipIf(os.name == "nt", "a #! stub cannot be started as `gh` on Windows; there the real gh is gh.exe")
     def test_without_gh_flag_the_gh_on_path_is_the_command(self):
         got = self.metrics(FIXTURE / "run")
         self.assertTrue((self.tmp / "path-gh-ran").exists())

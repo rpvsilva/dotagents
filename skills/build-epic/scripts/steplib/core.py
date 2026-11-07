@@ -95,7 +95,7 @@ def command(argv, env=None, cwd=None):
     path = (env if env is not None else os.environ).get("PATH", "")
     name = argv[0]
     if os.path.dirname(name) and not os.path.isabs(name) and cwd is not None:
-        name = os.path.join(str(cwd), name)
+        name = os.path.normpath(os.path.join(str(cwd), name))
     prog = _which(name, path)
     if prog is None:
         return argv
