@@ -10,7 +10,6 @@ it in `GH_TOKEN`, so no wait outlives the token; `login` (or no line) leaves the
 """
 import os
 import re
-import shlex
 import subprocess
 import time
 
@@ -61,7 +60,7 @@ def identity_env(log, env=None):
     command, repo = who
     log.write(f"$ {command}  (token for the run's identity, in {repo})\n")
     try:
-        p = subprocess.run(shlex.split(command), cwd=repo or None, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        p = subprocess.run(core.command(core.split(command), env, repo or None), cwd=repo or None, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True)
         rc, token, err = p.returncode, p.stdout.strip(), p.stderr
     except OSError as e:
