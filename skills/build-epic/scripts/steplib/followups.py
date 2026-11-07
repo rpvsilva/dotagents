@@ -5,7 +5,9 @@ A report file (an implementer's or a reviewer's) may hold a `## Follow-ups` sect
     - <severity> <kind> <path[:line]>: <claim>
 
 `severity` is `blocker`, `should-fix` or `nit`; `kind` is `follow-up` or `interaction`. Blank lines in the section are
-skipped; any other line that is not a row makes the section malformed. A recorded row holds `id` (1, 2, ... in file
+skipped. The section ends at the next `## ` heading or at the first other line that is not a row, so the report's
+block or a reviewer's `process:` lines after it are not read; a bullet (`- `, `* `, `+ `) that is not a row, or a
+first line that is not a row, makes the section malformed. A recorded row holds `id` (1, 2, ... in file
 order), `ticket`, `pr` (a number or null), `severity`, `kind`, `file`, `line` (a number or null), `claim` and `source`
 (the report's path), plus any key `mark` set (`carried`, `issue`). Rows are unique on (ticket, kind, file, claim).
 The carry file is the `interaction` rows not yet `carried`.
@@ -27,6 +29,7 @@ SEVERITIES = ("blocker", "should-fix", "nit")
 KINDS = ("follow-up", "interaction")
 ROW = re.compile(rf"^- ({'|'.join(map(re.escape, SEVERITIES))}) ({'|'.join(map(re.escape, KINDS))}) "
                  r"(\S+?)(?::(\d+))?: (\S.*?)\s*$")
+BULLET = re.compile(r"^\s*[-*+]\s")
 
 
 class BadRow(ValueError):
@@ -39,7 +42,8 @@ class BadRow(ValueError):
 
 def parse(text):
     """The rows of `text`'s `## Follow-ups` section as dicts (`severity`, `kind`, `file`, `line`, `claim`); `[]` when
-    there is no section. Raises `BadRow` on the first line that is neither blank nor a row."""
+    there is no section. The section ends at the first line that is neither blank nor a row; raises `BadRow` when that
+    line is a bullet or the section's first line."""
     m = re.search(rf"^## {re.escape(SECTION)}[ \t]*\n(.*?)(?=^## |\Z)", text + "\n", re.MULTILINE | re.DOTALL)
     rows = []
     for raw in (m.group(1).splitlines() if m else []):
@@ -47,6 +51,8 @@ def parse(text):
             continue
         row = ROW.match(raw)
         if not row:
+            if rows and not BULLET.match(raw):
+                break
             raise BadRow(raw.strip())
         severity, kind, path, line, claim = row.groups()
         rows.append({"severity": severity, "kind": kind, "file": path, "line": int(line) if line else None,
