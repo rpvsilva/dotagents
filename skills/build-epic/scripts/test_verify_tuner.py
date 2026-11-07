@@ -178,21 +178,27 @@ class VerifyTunerTest(unittest.TestCase):
         self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=1\n")
         self.assertEqual(self.snapshot(), before)
 
+    # The looping cases wait out their whole limit, so they cap the Checks line low; 2 s still lets the green run pass.
     def test_a_looping_mutation_is_stopped_by_the_checks_time_limit_and_counts_as_red(self):
+        self.checks("capped --mb 2000 --secs 2 -- python3 -m unittest -q")
         self.write_report("mutations: calc.py:6 return a - b -> while True: pass")
         before = self.snapshot()
         start = time.monotonic()
         p = self.verify()
-        self.assertLess(time.monotonic() - start, 20)
+        self.assertLess(time.monotonic() - start, 10)
         self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
         self.assertEqual(self.snapshot(), before)
         log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text()
-        self.assertIn("timeout after 8s", log)
+        self.assertIn("timeout after 2s", log)
 
     def test_a_looping_green_suite_fails_on_the_time_limit(self):
+        self.checks("capped --mb 2000 --secs 1 -- python3 -m unittest -q")
         self.tune("\n    def test_slow(self):\n        while True:\n            pass\n")
         self.write_report("mutations: calc.py:6 a - b -> a + b")
-        self.assertFails(self.verify(), "timeout capped --mb 2000 --secs 8 -- python3 -m unittest -q")
+        p = self.verify()
+        self.assertFails(p, "timeout capped --mb 2000 --secs 1 -- python3 -m unittest -q")
+        log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text()
+        self.assertIn("timeout after 1s", log)
 
     def test_an_interrupted_mutation_restores_the_worktree(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
