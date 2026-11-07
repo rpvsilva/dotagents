@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Removes old remote-agent run records, run as `remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]`: every run
 # folder of the repo at dir (default the current one) in <common git dir>/remote-agent/, and in the old per-worktree
-# locations (<common git dir>/worktrees/<name>/remote-agent/), whose age is over N days (d) or hours (h). Its age runs
-# from run.json's ended, else its started, else the folder's mtime. A live run is never removed: state starting or
-# running with its pid alive and the same pid_start (without a ps that prints start times, `kill -0` alone decides);
-# one whose pid is gone, or taken by another process, stopped and goes. A folder whose name is no run name
-# (^[A-Za-z0-9][A-Za-z0-9._-]*$) is left, with one line on stderr; a link is never followed nor removed.
-# Prints one line per folder removed (`removed <path>`; `would remove <path>` with --dry-run, which removes nothing),
-# then the count (`removed N runs`). Exit 1 with the usage on a bad argument, or when a folder could not be removed.
+# locations (<common git dir>/worktrees/<name>/remote-agent/), whose age is over N days (d) or hours (h), N capped at
+# 999999. Its age runs from run.json's ended, else its started, else the folder's mtime. A live run is never removed:
+# state starting or running with its pid alive and the same pid_start (without a ps that prints start times, `kill -0`
+# alone decides); one whose pid is gone, or taken by another process, stopped and goes. A folder whose name is no run
+# name (^[A-Za-z0-9][A-Za-z0-9._-]*$) is left, with one line on stderr; a link is never followed nor removed. Prints one
+# line per folder removed (`removed <path>`; `would remove <path>` with --dry-run, which removes nothing), then the
+# count (`removed N runs`). Exit 1 with the usage on a bad argument, or when a folder could not be removed.
 set -euo pipefail
 
 usage() { echo "usage: remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]" >&2; exit 1; }
@@ -23,7 +23,10 @@ while [ $# -gt 0 ]; do
 done
 [[ "$age" =~ ^[0-9]+[dh]$ ]] || usage
 n="${age%?}"
-n=$((10#$n))
+# Six digits at most (over 2700 years): a longer number would overflow the shell's arithmetic into a negative age.
+n="${n#"${n%%[!0]*}"}"
+[ ${#n} -le 6 ] || n=999999
+n=$((10#${n:-0}))
 case "$age" in *d) secs=$((n * 86400)) ;; *) secs=$((n * 3600)) ;; esac
 common="$(git -C "${dir:-$PWD}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
   || { echo "remote-agent: not in a git worktree: ${dir:-$PWD}" >&2; exit 1; }
