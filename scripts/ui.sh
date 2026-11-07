@@ -8,11 +8,13 @@ set -uo pipefail
 
 mode="${1:-install}"
 shift || true
-target=all dry=0
+target=all dry=0 picked=""
 for a in "$@"; do
   case "$a" in
     all | shared | claude | codex | cursor) target="$a" ;;
     --dry-run) dry=1 ;;
+    -*) ;;
+    *) picked+=" $a" ;; # a group or part: it picks what to install, not the tools
   esac
 done
 # How many tool sections the run prints, for the progress bar.
@@ -152,6 +154,7 @@ trap 'printf "%s\033[?25h\n" "$CL"; exit 130' INT TERM
 
 start=$SECONDS
 title="$mode · $target"
+[ -z "$picked" ] || title+=" ·$picked"
 [ "$dry" -eq 0 ] || title+=" · dry run"
 printf '\n %sdotagents%s %s%s%s\n\n' "$B" "$R" "$D" "$title" "$R"
 

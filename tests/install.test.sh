@@ -26,6 +26,26 @@ snapshot() {
 
 run() { HOME="$1" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" "${@:2}"; }
 
+# Prints every symlink under $1 as `<path relative to $1> -> <target>`, sorted.
+links() {
+  local p
+  find "$1" -type l ! -path '*/.dotagents-backup/*' | LC_ALL=C sort | while IFS= read -r p; do
+    echo "${p#"$1"/} -> $(readlink "$p")"
+  done
+}
+
+# Prints every regular file under $1 (backups aside) with its content, so two runs can be compared.
+configs() {
+  local f
+  find "$1" -type f ! -path '*/.dotagents-backup/*' | LC_ALL=C sort | while IFS= read -r f; do
+    echo "== ${f#"$1"/}"
+    cat "$f"
+  done
+}
+
+# Prints the link paths under $1 whose name is in folder $2, one per line, sorted: `.claude/agents` gives the stems.
+names_in() { links "$1" | sed -n "s|^$2/\([^/.]*\)[^ /]* -> .*|\1|p" | LC_ALL=C sort -u | tr '\n' ' '; }
+
 skills=()
 for d in "$REPO"/skills/*/; do skills+=("$(basename "$d")"); done
 
@@ -58,6 +78,34 @@ assert_hooks() {
   if run "$SANDBOX/bad" nope >/dev/null 2>&1; then touch "$SANDBOX/bad-exited-0"; fi
 ) &
 single=$!
+
+# Selective installs, each in a home with every tool's folder: remote alone, twice; then safety-hooks and pr-loop
+# added on top; and claude with epics. Each step's links land in $SANDBOX/<step>.links.
+(
+  home="$SANDBOX/remote"
+  mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+  echo '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' >"$home/.claude/settings.json"
+  run "$home" remote >"$SANDBOX/remote.out"
+  links "$home" >"$SANDBOX/remote.links"
+  configs "$home" >"$SANDBOX/remote.configs"
+  run "$home" remote >"$SANDBOX/remote-again.out"
+  links "$home" >"$SANDBOX/remote-again.links"
+  configs "$home" >"$SANDBOX/remote-again.configs"
+  run "$home" safety-hooks >"$SANDBOX/safety.out"
+  links "$home" >"$SANDBOX/safety.links"
+  configs "$home" >"$SANDBOX/safety.configs"
+  run "$home" pr-loop >"$SANDBOX/pr-loop.out"
+  links "$home" >"$SANDBOX/pr-loop.links"
+  home="$SANDBOX/epics"
+  mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+  run "$home" epics claude >"$SANDBOX/epics.out"
+  links "$home" >"$SANDBOX/epics.links"
+  home="$SANDBOX/badsel"
+  mkdir -p "$home/.claude"
+  if run "$home" remote nope >"$SANDBOX/badsel.out" 2>&1; then touch "$SANDBOX/badsel-exited-0"; fi
+  links "$home" >"$SANDBOX/badsel.links"
+) &
+selective=$!
 
 # all: a pre-existing real file is backed up, then everything is linked. Cursor's hooks.json already holds another
 # tool's hook, which the merge keeps.
@@ -153,6 +201,67 @@ home="$SANDBOX/migrate"
 assert_hooks "$home"
 [ -z "$(find "$REPO/scripts/hooks" -type l)" ] || fail "install.sh linked into the repo through the old ~/.agents/hooks link"
 if grep -q "backed up" "$SANDBOX/migrate.out"; then fail "replacing the old ~/.agents/hooks link backed something up"; fi
+
+wait "$selective" || fail "a selective install failed"
+
+# remote: exactly the remote parts plus core; no other skill, agent, hook, instructions or config.
+want_remote=".agents/bin/capped -> $REPO/scripts/capped
+.agents/bin/remote-agent -> $REPO/scripts/remote-agent.sh
+.agents/bin/settings -> $REPO/scripts/settings.sh
+.agents/hooks/lib.sh -> $REPO/scripts/hooks/lib.sh
+.agents/hooks/secret-patterns.txt -> $REPO/scripts/hooks/secret-patterns.txt
+.agents/skills/_shared -> $REPO/skills/_shared
+.agents/skills/configure -> $REPO/skills/configure
+.agents/skills/remote-subagents -> $REPO/skills/remote-subagents
+.claude/skills/_shared -> $SANDBOX/remote/.agents/skills/_shared
+.claude/skills/configure -> $SANDBOX/remote/.agents/skills/configure
+.claude/skills/remote-runs -> $REPO/adapters/claude/mods/remote-runs
+.claude/skills/remote-subagents -> $SANDBOX/remote/.agents/skills/remote-subagents"
+[ "$(cat "$SANDBOX/remote.links")" = "$want_remote" ] ||
+  fail "install.sh remote linked: $(diff <(echo "$want_remote") "$SANDBOX/remote.links")"
+for t in shared claude codex cursor; do grep -qx "$t" "$SANDBOX/remote.out" || fail "install.sh remote did not print section $t"; done
+grep -q "^== .claude/settings.json" "$SANDBOX/remote.configs" || fail "install.sh remote lost ~/.claude/settings.json"
+[ "$(grep -c '^== ' "$SANDBOX/remote.configs")" -eq 1 ] || fail "install.sh remote wrote config files: $(grep '^== ' "$SANDBOX/remote.configs")"
+
+# The same selective install twice changes nothing.
+cmp -s "$SANDBOX/remote.links" "$SANDBOX/remote-again.links" || fail "second install.sh remote changed the links"
+cmp -s "$SANDBOX/remote.configs" "$SANDBOX/remote-again.configs" || fail "second install.sh remote changed a config file"
+if grep -q "backed up" "$SANDBOX/remote-again.out"; then fail "second install.sh remote backed something up"; fi
+
+# Installs add up: each later group keeps every link already there and adds its own.
+[ -z "$(comm -23 "$SANDBOX/remote.links" "$SANDBOX/safety.links")" ] || fail "install.sh safety-hooks changed the remote links"
+[ -z "$(comm -23 "$SANDBOX/safety.links" "$SANDBOX/pr-loop.links")" ] || fail "install.sh pr-loop changed links already there"
+for h in guard-merge guard-secrets allow-task-cleanup; do
+  grep -qx ".agents/hooks/$h.sh -> $REPO/scripts/hooks/$h.sh" "$SANDBOX/safety.links" || fail "install.sh safety-hooks did not link $h"
+done
+if grep -q "telemetry-save" "$SANDBOX/safety.links"; then fail "install.sh safety-hooks linked telemetry-save"; fi
+home="$SANDBOX/remote"
+has_guard "$home/.claude/settings.json"
+has_guard "$home/.codex/hooks.json"
+has_guard "$home/.cursor/hooks.json"
+jq -e '.hooks.Stop[0].hooks[0].command == "orca"' "$home/.claude/settings.json" >/dev/null || fail "foreign Claude hook lost"
+jq -e '.permissions == null' "$home/.claude/settings.json" >/dev/null || fail "a selective install without personal merged the deny rules"
+[ "$(sed -n '/^== .claude\/settings.json/,/^== /p' "$SANDBOX/safety.configs" | sed '$d')" = \
+  "$(configs "$home" | sed -n '/^== .claude\/settings.json/,/^== /p' | sed '$d')" ] || fail "install.sh pr-loop changed the merged hooks"
+[ "$(names_in "$home" .claude/agents)" = "pr-fixer pr-reviewer pr-reviewer-light " ] ||
+  fail "pr-loop Claude agents: $(names_in "$home" .claude/agents)"
+[ "$(names_in "$home" .agents/skills)" = "_shared address-review configure fix-pr remote-subagents renovate-prs review-pr ship-pr " ] ||
+  fail "pr-loop on top of remote skills: $(names_in "$home" .agents/skills)"
+for f in .claude/CLAUDE.md .codex/AGENTS.md .codex/rules; do [ ! -e "$home/$f" ] || fail "a selective install without personal made ~/$f"; done
+
+# claude epics: the epics and pr-loop agents (epics requires pr-loop parts), for Claude only.
+home="$SANDBOX/epics"
+[ "$(names_in "$home" .claude/agents)" = "epic-explorer epic-implementer epic-planner pr-fixer pr-reviewer pr-reviewer-light source-reader test-tuner " ] ||
+  fail "install.sh claude epics agents: $(names_in "$home" .claude/agents)"
+[ -z "$(find "$home/.codex" "$home/.cursor" -mindepth 1)" ] || fail "install.sh claude epics touched codex or cursor"
+if grep -q "security\|remote-agent\|remote-runs\|hooks/guard" "$SANDBOX/epics.links"; then
+  fail "install.sh claude epics linked parts it does not need"
+fi
+
+# An unknown selection word: usage, exit 1, nothing linked.
+[ ! -e "$SANDBOX/badsel-exited-0" ] || fail "install.sh with an unknown part exited 0"
+grep -q "^usage: .*<group>" "$SANDBOX/badsel.out" || fail "install.sh with an unknown part did not print the usage: $(cat "$SANDBOX/badsel.out")"
+[ ! -s "$SANDBOX/badsel.links" ] || fail "install.sh with an unknown part linked something"
 
 # Unknown target exits non-zero.
 [ ! -e "$SANDBOX/bad-exited-0" ] || fail "unknown target exited 0"
