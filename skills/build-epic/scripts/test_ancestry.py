@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import runfolder  # noqa: E402
-from test_ship import SHIP, Base  # noqa: E402
+from test_ship import SHIP, TICKET, Base  # noqa: E402
 
 BASE = "integ"
 
@@ -22,8 +22,6 @@ class AncestryTest(Base):
         (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {BASE}\n", encoding="utf-8")  # the run's base, or 10-03's guard refuses
         (kit.answers / "pr-base").write_text(BASE, encoding="utf-8")
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
-        kit.answer("pr-list", out="[]")
-        self.assertEqual(self.ship("open"), "OK 01 open pr=20")
         self.work = kit.tmp / "work"
         kit.git("worktree", "add", "-q", "--detach", str(self.work), "origin/feat/t", cwd=kit.clone)
         # Task 1: a plain task, squash-merged.
@@ -50,8 +48,7 @@ class AncestryTest(Base):
         return self.git("rev-parse", "HEAD")
 
     def push(self, sha, branch):
-        self.git("push", "-q", "origin", f"{sha}:refs/heads/{branch}")
-        self.git("fetch", "-q", "origin")
+        self.git("push", "-q", "origin", f"{sha}:refs/heads/{branch}")  # moves origin/<branch> too: no fetch needed
 
     def squash(self, task):
         """What a squash merge of `task` into the ticket branch leaves: one commit with its tree, one parent."""
@@ -115,6 +112,26 @@ class AncestryTest(Base):
     def test_a_reviewed_head_git_does_not_know_is_refused(self):
         self.assertRegex(self.ship("merge", "--reviewed", "0" * 40), r"^FAIL 01 reviewed-unknown \(log: ")
         self.assertEqual(self.merge_calls(), [])
+
+    def test_an_ancestry_push_origin_refuses_fails_head_moved_and_nothing_merges(self):
+        hook = self.kit.origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\necho 'the ticket branch moved' >&2\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+        before = self.head()
+        self.assertRegex(self.ship("merge", "--reviewed", self.task2), r"^FAIL 01 head-moved \(log: ")
+        self.assertEqual(len(self.calls("pr", "view")), 1, "the merge step ran: only its own head check refused")
+        self.assertEqual(self.merge_calls(), [])
+        self.assertEqual(self.head(), before)
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+
+    def test_open_with_no_pr_yet_opens_the_ticket_pr_against_the_base(self):
+        self.ticket.write_text(TICKET, encoding="utf-8")
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
+        self.assertEqual(self.ship("open"), "OK 01 open pr=30")
+        for call in (self.calls("pr", "list")[0], self.calls("pr", "create")[0]):
+            self.assertEqual(call[call.index("--base") + 1], BASE, call)
+        self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/30")
 
     def test_shipping_again_after_the_ancestry_is_pushed_adds_no_second_one(self):
         (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")

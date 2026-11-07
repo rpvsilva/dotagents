@@ -53,7 +53,6 @@ class CatchUpCase(unittest.TestCase):
         self.commit("feat/a", "a.txt", "a\n")
         self.new_tip = self.commit(NEW, "x.txt", "x\n", start="main")
         kit.git("push", "-q", "origin", f"{self.new_tip}:refs/heads/feat/e", cwd=kit.clone)
-        kit.git("fetch", "-q", "origin", cwd=kit.clone)
 
     def ticket(self, tt, status, branch, extra=""):
         path = self.kit.run_dir / "tickets" / f"{tt}-t.md"
@@ -70,8 +69,7 @@ class CatchUpCase(unittest.TestCase):
         kit.git("push", "-q", "origin", f"HEAD:refs/heads/{branch}", cwd=work)
         sha = kit.git("rev-parse", "HEAD", cwd=work)
         kit.git("worktree", "remove", "--force", str(work), cwd=kit.clone)
-        kit.git("fetch", "-q", "origin", cwd=kit.clone)
-        return sha
+        return sha  # the push moved the clone's origin/<branch> too: no fetch needed
 
     def remote(self, ref):
         return self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", ref)
@@ -127,6 +125,16 @@ class CatchUpTest(CatchUpCase):
         self.assertEqual(self.remote("feat/a"), before)
         self.assertIn(f"base: {NEW}\n", (self.kit.run_dir / "decisions.md").read_text(encoding="utf-8"))
         self.assertEqual(list((self.kit.run_dir / "worktrees").glob("*")), [])
+
+    def test_an_in_review_ticket_is_caught_up_too_and_one_ticket_conflicting_stops_no_other(self):
+        self.ticket("07", "in-review", "feat/g")
+        self.kit.branch_from_main("feat/g")
+        self.commit("feat/a", "x.txt", "other\n")
+        self.assertIn("started=01,07", self.catch_up(NEW))
+        before = self.remote("feat/a")
+        self.assertRegex(self.catch_up(NEW, "--apply"), r"^FAIL run conflict 01: x\.txt \(log: ")
+        self.assertEqual(self.remote("feat/a"), before)
+        self.kit.git("--git-dir", str(self.kit.origin), "merge-base", "--is-ancestor", self.new_tip, "feat/g")
 
     def test_a_base_missing_on_origin_is_refused_and_nothing_changes(self):
         line = self.catch_up("int/none", "--apply")

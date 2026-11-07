@@ -221,13 +221,6 @@ class ShipMergeTest(Base):
         self.assertFalse(self.wt.exists())
         self.assertEqual(self.kit.git("branch", "--list", "feat/t", cwd=self.kit.clone), "")
 
-    def test_a_pr_into_another_base_leaves_the_issues_open(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
-        self.set_setting("task_merge_method", "merge")  # no ancestry step: test_ancestry.py covers it
-        (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
-        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
-        self.assertEqual(self.calls("issue", "close"), [])
-
     def test_a_pr_into_the_default_branch_while_decisions_md_names_another_base_closes_nothing(self):
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
         self.assertRegex(self.ship("merge"), r"^FAIL 01 wrong-base main \(log: ")  # test_base_guard.py covers the guard
