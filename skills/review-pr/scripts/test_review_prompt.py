@@ -177,7 +177,8 @@ def git(repo, *args):
                           capture_output=True, text=True, encoding="utf-8").stdout.strip()
 
 
-PR_FACTS = '{"title": "Add the review prompt", "body": "Closes #3", "headRefOid": "x", "baseRefName": "main"}\n'
+PR_FACTS = ('{"author": {"login": "Rui"}, "title": "Add the review prompt", "body": "Closes #3", "headRefOid": "x", '
+            '"baseRefName": "main"}\n')
 
 
 class RemotePromptTest(unittest.TestCase):
@@ -229,9 +230,10 @@ class RemotePromptTest(unittest.TestCase):
             "security": ["--base", "origin/main", "--task", f"{run_dir}/tickets/03-review.md"],
         }[mode]
 
-    def remote(self, args):
+    def remote(self, args, allow=("rui",)):
         env = dict(os.environ, PATH=f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}")
-        return subprocess.run([sys.executable, "-I", str(SCRIPT), *args, "--remote", str(self.out)],
+        allowed = [a for login in allow for a in ("--allow-author", login)]
+        return subprocess.run([sys.executable, "-I", str(SCRIPT), *args, *allowed, "--remote", str(self.out)],
                               capture_output=True, text=True, encoding="utf-8", env=env, cwd=self.tmp)
 
     def render(self, args):
@@ -285,7 +287,7 @@ class RemotePromptTest(unittest.TestCase):
                                    self.head) + "\n")
         self.assertEqual((self.out / "pr-42.json").read_text(encoding="utf-8"), PR_FACTS)
         self.assertEqual(self.gh_log.read_text(encoding="utf-8"),
-                         "pr view 42 --json title,body,headRefOid,baseRefName,files\n")
+                         "pr view 42 --json author,title,body,headRefOid,baseRefName,files\n")
         self.assertIn(str(self.out / "pr-42.diff"), attach)
         self.assertIn(str(self.out / "pr-42.json"), attach)
         self.assertIn("cat ~/attached/pr-42.diff", out)
@@ -340,6 +342,32 @@ class RemotePromptTest(unittest.TestCase):
 
     def test_remote_with_a_report_file_fails_with_usage(self):
         got = self.remote(self.args("task") + ["--report", str(self.tmp / "r.md")])
+        self.assertEqual(got.returncode, 2, got.stdout + got.stderr)
+        self.assertTrue(got.stderr.startswith("usage: review_prompt.py "), got.stderr)
+
+    def test_a_pr_by_an_author_not_allowed_is_refused_and_prints_no_prompt(self):
+        got = self.remote(self.args("task"), allow=("app/rpvsilva-agent", "someone"))
+        self.assertEqual(got.returncode, 1, got.stdout + got.stderr)
+        self.assertEqual(got.stdout, "")
+        self.assertIn("author Rui", got.stderr)
+        self.assertIn("not in --allow-author", got.stderr)
+        self.assertFalse((self.out / "attach.txt").exists())
+        self.assertFalse((self.out / "pr-42.diff").exists())
+
+    def test_a_pr_by_any_allowed_author_renders_whatever_the_login_case(self):
+        out, _ = self.render(self.args("task"))
+        self.assertIn("~/work", out)
+        got = self.remote(self.args("task"), allow=("app/rpvsilva-agent", "RUI"))
+        self.assertEqual(got.returncode, 0, got.stderr)
+
+    def test_a_pr_with_no_author_in_its_facts_is_refused(self):
+        self.stub_gh("echo '{\"title\": \"t\"}'\n")
+        got = self.remote(self.args("task"))
+        self.assertEqual(got.returncode, 1, got.stdout + got.stderr)
+        self.assertEqual(got.stderr, "review_prompt.py: author: pr-view names no author; review this PR locally\n")
+
+    def test_remote_without_an_allowed_author_fails_with_usage(self):
+        got = self.remote(self.args("task"), allow=())
         self.assertEqual(got.returncode, 2, got.stdout + got.stderr)
         self.assertTrue(got.stderr.startswith("usage: review_prompt.py "), got.stderr)
 

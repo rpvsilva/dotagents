@@ -331,8 +331,8 @@ while read -r p; do
 done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
 
 # The remote-subagents skill says to give the human the transcript path, to leave remote-agent's stderr unredirected,
-# to read the outcome from result.json through remote-agent result, and that the remote list in needs.json declares
-# which agents are remote-capable. The shared conventions only link to it.
+# to read the outcome from result.json through remote-agent result, that the remote list in needs.json declares
+# which agents are remote-capable, and which uses of an agent that entry covers. The shared conventions only link to it.
 rs=skills/remote-subagents/SKILL.md
 if [ -f "$rs" ]; then
   remote="$(cat "$rs")"
@@ -342,6 +342,7 @@ if [ -f "$rs" ]; then
   grep -q 'remote-agent result' <<<"$remote" || fail "$rs: does not name remote-agent result"
   # shellcheck disable=SC2016 # literal backticks: `remote` is matched, not run
   grep -q 'needs\.json.*under `remote`' <<<"$remote" || fail "$rs: does not say an agent is remote-capable when its needs.json lists it under remote"
+  grep -q 'The entry covers \*\*every use\*\*' <<<"$remote" || fail "$rs: does not say which uses of an agent its remote entry covers"
 else
   fail "$rs is missing"
 fi
