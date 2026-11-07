@@ -5,6 +5,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The runner image the `image` Setting defaults to.
+IMAGE="$(jq -r .image.default "$REPO/remote/settings.json" | tr -d '\r')"
 # shellcheck source=lib/remote-stubs.sh disable=SC1091
 . "$REPO/tests/lib/remote-stubs.sh"
 SANDBOX="$(mktemp -d)"
@@ -128,12 +130,12 @@ no_token "daemon down"
 # The image is missing: pulled when it can be, named when it cannot.
 : >"$S/image-missing"
 check || fail "image pull: exited non-zero: $(out)"
-grep -q "^pull ghcr.io/xgeekshq/agent-runner:main" "$S/calls" || fail "image pull: not pulled: $(cat "$S/calls")"
+grep -q "^pull $IMAGE" "$S/calls" || fail "image pull: not pulled: $(cat "$S/calls")"
 : >"$S/image-missing"
 : >"$S/no-pull"
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "image not pullable: exited 0"
-grep -q "image ghcr.io/xgeekshq/agent-runner:main" "$SANDBOX/out" || fail "image not pullable: image not named: $(out)"
+grep -q "image $IMAGE" "$SANDBOX/out" || fail "image not pullable: image not named: $(out)"
 rm -f "$S/image-missing" "$S/no-pull"
 
 # An image of another architecture: a note, but still a pass.
@@ -170,21 +172,30 @@ case "\$*" in
 esac
 EOF
 chmod +x "$SANDBOX/bin/kubectl"
-printf 'other\nmaxibombo\n' >"$S/contexts"
+printf 'other\ntest-ctx\n' >"$S/contexts"
 echo no >"$S/can-exec"
-config REMOTE_BACKEND=cluster
+config REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "cluster can-i: exited 0"
 grep -q "pods/exec" "$SANDBOX/out" || fail "cluster can-i: pods/exec permission not named: $(out)"
 grep -q "sandboxclaims" "$SANDBOX/out" && fail "cluster can-i: named a permission it has: $(out)"
-grep -q -- "--context maxibombo -n agents auth can-i create sandboxclaims" "$S/calls" \
+grep -q -- "--context test-ctx -n agents auth can-i create sandboxclaims" "$S/calls" \
   || fail "cluster can-i: sandboxclaims permission not asked in the namespace: $(cat "$S/calls")"
 grep -q "apply" "$S/calls" && fail "cluster can-i: the dry run ran anyway"
-config REMOTE_BACKEND=cluster REMOTE_CONTEXT=missing-ctx
+config REMOTE_BACKEND=cluster REMOTE_CONTEXT=missing-ctx REMOTE_POOL=test-pool
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "cluster context: exited 0"
 grep -q "context missing-ctx not found" "$SANDBOX/out" || fail "cluster context: context not named as missing: $(out)"
 grep -q "auth can-i" "$S/calls" && fail "cluster context: asked for permissions in a missing context"
+# No default kube context or warm pool: an unset one is named, and kubectl is never asked.
+for missing in CONTEXT POOL; do
+  if [ "$missing" = CONTEXT ]; then config REMOTE_BACKEND=cluster REMOTE_POOL=test-pool
+  else config REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx; fi
+  code=0; check || code=$?
+  [ "$code" != 0 ] || fail "cluster no $missing: exited 0"
+  grep -q "REMOTE_${missing} not set" "$SANDBOX/out" || fail "cluster no $missing: not named: $(out)"
+  [ ! -e "$S/calls" ] || fail "cluster no $missing: kubectl was called: $(cat "$S/calls")"
+done
 no_token cluster
 
 # --- no token file, no backend, no token, settings left in remote.env, unknown backend.
