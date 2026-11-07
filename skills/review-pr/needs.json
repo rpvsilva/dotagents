@@ -1,1 +1,1 @@
-{"group": "pr-loop", "needs": {"pr-reviewer": "required", "pr-reviewer-light": "required", "security-audit": "optional", "security-reviewer": "optional", "build-epic": "optional"}, "agents": ["pr-reviewer", "pr-reviewer-light"]}
+{"group": "pr-loop", "needs": {"pr-reviewer": "required", "pr-reviewer-light": "required", "security-audit": "optional", "security-reviewer": "optional", "build-epic": "optional"}, "agents": ["pr-reviewer", "pr-reviewer-light"], "remote": ["pr-reviewer", "pr-reviewer-light"]}
