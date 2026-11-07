@@ -45,6 +45,7 @@ expect() {
   [ "$got" = "$want" ] || { fail "$desc: wanted $want, got $got: $(cat "$SANDBOX/out")"; return; }
   if [ "$want" != refuse ]; then
     grep -q -- "--match-head-commit abc123" "$SANDBOX/merged" || fail "$desc: merged without pinning the judged head commit"
+    grep -q -- "--squash" "$SANDBOX/merged" || fail "$desc: merged without squashing"
   fi
   if [ "$want" = merge ]; then
     grep -qE "^--yes github:0xgui/agent-pr-gate#[0-9a-f]{40} check 7 --ci-wait-seconds [0-9]+$" "$SANDBOX/npx" || fail "$desc: gate not run as a pinned check of PR 7: $(cat "$SANDBOX/npx")"
@@ -69,6 +70,17 @@ pr MERGED false "$(verdict pass)" 0;                                  expect ref
 BASE=feat/gh-12-due-dates pr OPEN false "$(verdict blocked '"approvals"' "$problem")" 1
 expect merge-ungated "PR into a non-default branch"
 BASE=feat/gh-12-due-dates pr OPEN true "$(verdict pass)" 0;           expect refuse "draft into a non-default branch"
+
+# --merge merges with a merge commit, gated or not, still pinned to the head (`expect` checks that it squashes without).
+BASE=feat/gh-12-due-dates pr OPEN false "$(verdict pass)" 0
+rm -f "$SANDBOX/merged"
+PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" --merge 7 >"$SANDBOX/out" 2>&1 || fail "--merge into a non-default branch: $(cat "$SANDBOX/out")"
+grep -qx -- "pr merge 7 --merge --delete-branch --match-head-commit abc123" "$SANDBOX/merged" || fail "--merge ungated: $(cat "$SANDBOX/merged")"
+pr OPEN false "$(verdict pass)" 0
+rm -f "$SANDBOX/merged"
+PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" --merge 7 >"$SANDBOX/out" 2>&1 || fail "--merge through the gate: $(cat "$SANDBOX/out")"
+grep -qx -- "pr merge 7 --merge --delete-branch --match-head-commit abc123" "$SANDBOX/merged" || fail "--merge gated: $(cat "$SANDBOX/merged")"
+if PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" --rebase 7 >"$SANDBOX/out" 2>&1; then fail "--rebase: accepted an unknown option"; fi
 
 # The CI wait is configurable, so a caller can judge at once.
 pr OPEN false "$(verdict pass)" 0
