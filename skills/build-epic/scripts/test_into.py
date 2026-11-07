@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import runfolder  # noqa: E402
+from steplib import ci, merge, runfolder  # noqa: E402
 from test_merge_task import PR_VIEW  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
@@ -128,6 +128,25 @@ class TicketPrIntoTest(IntoCase):
         listed = self.calls("pr", "list")
         self.assertEqual(listed[0][listed[0].index("--base") + 1], BASE)
         self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/9")
+
+
+class BaseValueTest(unittest.TestCase):
+    """`ci.base` and `merge.run_base` read `decisions.md`'s `base:` the same way, in this process."""
+
+    def setUp(self):
+        self.kit = Kit()
+        self.addCleanup(self.kit.close)
+        self.kit.init_run()
+
+    def test_a_named_base_is_used_and_an_empty_one_means_the_default_branch(self):
+        run, decisions = self.kit.run_dir, self.kit.run_dir / "decisions.md"
+        self.assertEqual((ci.base(run), merge.run_base(run)), ("main", "main"))  # no decisions.md
+        for value, want in (("`int/x`", BASE), ("int/x", BASE), ("", "main"), ("none", "main"), ("Default", "main"),
+                            ("null", "main"), ("~", "main")):
+            with self.subTest(value=value):
+                decisions.write_text(f"# Decisions\nbase: {value}\n", encoding="utf-8")
+                self.assertEqual((ci.base(run), merge.run_base(run)), (want, want))
+        self.assertEqual(ci.base(run, "trunk"), "trunk")  # the caller's default, over run.md's
 
 
 if __name__ == "__main__":

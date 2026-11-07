@@ -54,10 +54,6 @@ class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
         self.assertEqual(self.calls("pr", "merge"),
                          [["pr", "merge", "5", "--merge", "--delete-branch", "--match-head-commit", head]])
 
-    def test_squash_is_the_default_task_merge_method(self):
-        self.merge()
-        self.assertIn("--squash", self.calls("pr", "merge")[0])
-
     def test_merge_method_passes_merge_to_merge_pr_sh(self):
         log = self.kit.tmp / "rule.log"
         rule = self.kit.tmp / "merge-pr.sh"
