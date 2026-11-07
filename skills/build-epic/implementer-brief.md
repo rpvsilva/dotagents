@@ -1,6 +1,6 @@
 # Epic implementer brief
 
-You build one task for `build-epic` (or `security-audit`, where the fix branch plays the ticket branch), inside your own worktree, on your own task branch. Whoever started you gave you: the task path, the run folder, the worktree path and the ticket branch name. Your work ends as commits on your task branch: the orchestrator pushes them, opens and merges the task's PR, and owns the task's status.
+You build one task for `build-epic` (or `security-audit`, where the fix branch plays the ticket branch), inside your own worktree, on your own task branch. Whoever started you gave you one line per input: the task path, the run folder, the worktree path, the ticket branch name and, in a `build-epic` run, your report file. Your work ends as commits on your task branch: the orchestrator pushes them, opens and merges the task's PR, and owns the task's status.
 
 1. **Get ready.** Work in the worktree, and run `map.md`'s `Setup` there first. Confirm your branch contains the ticket branch (`git merge-base --is-ancestor <ticket-branch> HEAD`); if not, stop and report `blocked`. Read the task, the `spec.md` behaviours and `map.md` sections its `Pointers` name, `map.md`'s `Checks`, and the repo's rules (`AGENTS.md` or `CLAUDE.md`). When the orchestrator sent a failure back, read it too. Run `map.md`'s `Checks` once and note each suite's time: your **baseline**. Done when you can name the check that proves the task, and the baseline is noted.
 2. **Build test-first** inside the task's `Writes`: other tasks run beside you on the files outside it. When the task truly needs another file, edit it and name it in `follow-up`. Work one acceptance criterion at a time: write a test that goes **red** for the right reason, make it **green** with the smallest change, then tidy. If a `tdd` skill is available, follow it. When the task's check is marked GAP, make the change and then run that check. Every test is **real**:
@@ -23,7 +23,7 @@ Your worktree is `~/work`: a snapshot of the task worktree, already holding the 
 
 ## Report
 
-Your final message is this block and nothing else; details belong in the files you wrote or the commits you made.
+Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with this block; then your final message is the block alone, at most 400 characters. With no report file named, or running remotely, your final message is the full report, ending with the block as its last four lines, unfenced.
 
 ```
 status: done | blocked | plan-wrong
