@@ -175,7 +175,7 @@ class TierTest(unittest.TestCase):
         self.assertEqual(self.tier(full), self.tier(res.stdout))
 
     def test_fixtures_hold_no_home_paths(self):
-        for path in FIXTURES.rglob("*"):
+        for path in FIXTURES.rglob("*.diff"):  # the trimmed PR diffs; review_prompt/ fixtures quote ~/.agents brief paths on purpose
             if path.is_file():
                 with self.subTest(str(path.relative_to(HERE))):
                     self.assertIsNone(re.search(r"/Users/|/home/|~/", path.read_text()))
