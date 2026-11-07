@@ -17,11 +17,17 @@ fails=0
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-# A throwaway home named $1, linked as install.sh links it: ~/.agents/hooks and ~/.agents/bin/settings.
+# A throwaway home named $1, linked as install.sh links it: one link per file in ~/.agents/hooks, and
+# ~/.agents/bin/settings. With $2 = folder, ~/.agents/hooks is one link to the repo folder, as older installs made it.
 home() {
-  local h="$SANDBOX/$1"
+  local h="$SANDBOX/$1" f
   mkdir -p "$h/.agents/bin"
-  ln -s "$REPO/scripts/hooks" "$h/.agents/hooks"
+  if [ "${2:-}" = folder ]; then
+    ln -s "$REPO/scripts/hooks" "$h/.agents/hooks"
+  else
+    mkdir -p "$h/.agents/hooks"
+    for f in "$REPO"/scripts/hooks/*; do ln -s "$f" "$h/.agents/hooks/${f##*/}"; done
+  fi
   ln -s "$REPO/scripts/settings.sh" "$h/.agents/bin/settings"
   echo "$h"
 }
@@ -84,6 +90,18 @@ if wait_for '[ -s "$saved" ]'; then
 else
   fail "real save: $saved never appeared"
 fi
+
+# The real extractor is found from the hook's own place in the repo whether the hook is run through a per-file link
+# (above), through an old folder link, or from the repo itself.
+h="$(home folder folder)"
+t="$(transcript sess-folder)"
+quiet "$h" "$(payload "$t")" "folder link"
+wait_for '[ -s "$h/.agents/telemetry/sess-folder.json" ]' || fail "folder link: the hook found no extractor"
+h="$(home direct)"
+t="$(transcript sess-direct)"
+out="$(HOME="$h" "$HOOK" <<<"$(payload "$t")" 2>&1)" || fail "from the repo: exit $?"
+[ -z "$out" ] || fail "from the repo: printed: $out"
+wait_for '[ -s "$h/.agents/telemetry/sess-direct.json" ]' || fail "from the repo: the hook found no extractor"
 
 # The hook returns while a slow extractor still runs, and its output appears afterwards. The extractor gets the
 # transcript, the session's folder and --whole. It blocks until the test writes its .go file (up to 10 s), which the
