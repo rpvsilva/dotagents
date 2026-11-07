@@ -28,7 +28,8 @@ pushes nothing. The reviewed head is `--reviewed <sha>` (the reviewed commit hol
 head), else the commit the ticket PR's review was posted on (`<run>/logs/PR<n>-review.json`), else it fails
 `no-review`. With `merge`, no ancestry step runs. A ticket merged into such a base labels its issues `merged-to-<base>`.
 
-Prints `OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `merge`, `head-moved`,
+Prints `OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `wrong-base <branch>` (a PR
+into neither the run's base nor a ticket branch), `merge`, `head-moved`,
 `no-pr`, `no-merge-rule`, `no-review`, `reviewed-unknown`, `reviewed-head-lacks-base`, `tree-mismatch`, `pr-view`,
 `pr-edit`, `pr-ready`, `pr-create`, `empty-template-section <sections>`, `no-body-file`.
 """
