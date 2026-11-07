@@ -29,6 +29,15 @@ run() { HOME="$1" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" "${@:2}"; }
 skills=()
 for d in "$REPO"/skills/*/; do skills+=("$(basename "$d")"); done
 
+# ~/.agents/hooks is a real folder of per-file links: lib.sh, secret-patterns.txt and each hook script.
+assert_hooks() {
+  local h="$1" f
+  [ -d "$h/.agents/hooks" ] && [ ! -L "$h/.agents/hooks" ] || { fail "$h/.agents/hooks is not a real folder"; return; }
+  for f in "$REPO"/scripts/hooks/*.sh "$REPO/scripts/hooks/secret-patterns.txt"; do
+    assert_link "$h/.agents/hooks/${f##*/}" "$f"
+  done
+}
+
 # The single-tool targets get homes of their own, installed in the background while the all target runs; the
 # assertions on them come after `wait`. Each step's output lands in $SANDBOX/<step>.out.
 (
@@ -41,6 +50,11 @@ for d in "$REPO"/skills/*/; do skills+=("$(basename "$d")"); done
   home="$SANDBOX/shared"
   mkdir -p "$home"
   run "$home" shared >"$SANDBOX/shared.out"
+  # A home from before per-file hook links: ~/.agents/hooks is one link to the repo folder.
+  home="$SANDBOX/migrate"
+  mkdir -p "$home/.agents"
+  ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+  run "$home" shared >"$SANDBOX/migrate.out"
   if run "$SANDBOX/bad" nope >/dev/null 2>&1; then touch "$SANDBOX/bad-exited-0"; fi
 ) &
 single=$!
@@ -67,7 +81,7 @@ for m in "$REPO"/adapters/claude/mods/*/; do
   mods=$((mods + 1))
 done
 [ "$mods" -gt 0 ] || fail "no mod found under adapters/claude/mods"
-assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
+assert_hooks "$home"
 assert_link "$home/.agents/bin/remote-agent" "$REPO/scripts/remote-agent.sh"
 assert_link "$home/.agents/bin/settings" "$REPO/scripts/settings.sh"
 assert_link "$home/.agents/bin/capped" "$REPO/scripts/capped"
@@ -77,6 +91,15 @@ for a in "$REPO"/adapters/claude/agents/*.md; do assert_link "$home/.claude/agen
 for a in "$REPO"/adapters/codex/agents/*.toml; do assert_link "$home/.codex/agents/$(basename "$a")" "$a"; done
 for r in "$REPO"/adapters/codex/rules/*.rules; do assert_link "$home/.codex/rules/$(basename "$r")" "$r"; done
 for a in "$REPO"/adapters/cursor/agents/*.md; do assert_link "$home/.cursor/agents/$(basename "$a")" "$a"; done
+# The guards source lib.sh (and through it secret-patterns.txt) beside themselves: the per-file links carry them.
+code=0
+"$home/.agents/hooks/guard-secrets.sh" 'cat .env' 2>/dev/null || code=$?
+[ "$code" -eq 2 ] || fail "guard-secrets through ~/.agents/hooks: wanted exit 2 on cat .env, got $code"
+"$home/.agents/hooks/guard-secrets.sh" 'cat src/app.ts' || fail "guard-secrets through ~/.agents/hooks blocked a plain file"
+git init -q "$SANDBOX/gated" && touch "$SANDBOX/gated/.review-gate.yml"
+code=0
+(cd "$SANDBOX/gated" && "$home/.agents/hooks/guard-merge.sh" 'gh pr merge 1' 2>/dev/null) || code=$?
+[ "$code" -eq 2 ] || fail "guard-merge through ~/.agents/hooks: wanted exit 2 on gh pr merge, got $code"
 grep -rqx "old instructions" "$home/.dotagents-backup" 2>/dev/null || fail "replaced CLAUDE.md was not backed up"
 
 # Second run, with no target (the default, all): same links, nothing backed up, every tool installed again.
@@ -122,8 +145,14 @@ grep -q "skipping" "$SANDBOX/cursor.out" || fail "cursor without ~/.cursor did n
 # shared: ~/.agents only, no tool's folder.
 home="$SANDBOX/shared"
 assert_link "$home/.agents/skills/${skills[0]}" "$REPO/skills/${skills[0]}"
-assert_link "$home/.agents/hooks" "$REPO/scripts/hooks"
+assert_hooks "$home"
 for d in .claude .codex .cursor; do [ ! -e "$home/$d" ] || fail "install.sh shared created ~/$d"; done
+
+# migrate: the old folder link is replaced by per-file links, and nothing was linked or moved into the repo through it.
+home="$SANDBOX/migrate"
+assert_hooks "$home"
+[ -z "$(find "$REPO/scripts/hooks" -type l)" ] || fail "install.sh linked into the repo through the old ~/.agents/hooks link"
+if grep -q "backed up" "$SANDBOX/migrate.out"; then fail "replacing the old ~/.agents/hooks link backed something up"; fi
 
 # Unknown target exits non-zero.
 [ ! -e "$SANDBOX/bad-exited-0" ] || fail "unknown target exited 0"
