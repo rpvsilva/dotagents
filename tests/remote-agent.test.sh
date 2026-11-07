@@ -557,7 +557,19 @@ grep -q "^== capped: killed: timeout while" "$(kept)/progress.log" || fail "caps
 # shellcheck disable=SC2016 # jq, with a literal $SECONDS in the expected command
 result_is "caps loop result" '.status == "done" and .killed == "timeout" and .lost == false
   and .capped_kills == [{"kind": "timeout", "cmd": "while [ $SECONDS -lt 60 ]; do :; done"}]'
+# The prefix the run left: a Bash-tool command runs under capped, stdin closed; anything else (a hook, an MCP server)
+# runs as it is, with its stdin and arguments.
+pre="$POD/.agents/bin/capped-shell"
+[ "$(echo in | "$pre" "cat && pwd -P >| /dev/null" 2>/dev/null)" = "" ] || fail "prefix: a Bash-tool command read the caller's stdin"
+[ "$(echo in | "$pre" "cat" 2>/dev/null)" = in ] || fail "prefix: a hook command lost its stdin"
+[ "$(echo in | "$pre" printf '%s-%s' a 'b c' 2>/dev/null)" = "a-b c" ] || fail "prefix: several arguments not run as a command"
 rm -f "$W/hello.txt" "$SANDBOX/loop"
+# Caps that are not whole numbers never reach the backend; the sandbox script refuses them too.
+code=0; REMOTE_CAP_SECS=abc run 0 "" || code=$?
+if [ "$code" = 0 ] || [ -e "$SANDBOX/calls" ]; then fail "bad cap: not refused before the backend: $code $(cat "$SANDBOX/err")"; fi
+code=0; HOME="$SANDBOX/badcaps" bash "$REPO/scripts/remote-agent-sandbox.sh" 2000 5s </dev/null >/dev/null 2>"$SANDBOX/err" || code=$?
+[ "$code" = 1 ] || fail "sandbox bad caps: wanted exit 1, got $code"
+grep -qx "== bad caps: 2000 MB, 5s s" "$SANDBOX/err" || fail "sandbox bad caps: not said: $(cat "$SANDBOX/err")"
 
 printf 'capped: killed: memory npm test\n' >"$SANDBOX/killmsg"
 code=0; run 0 "" --name caps-mem || code=$?

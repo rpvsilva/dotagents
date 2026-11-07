@@ -267,7 +267,11 @@ def run(args):
         if deadline is not None and time.monotonic() >= deadline:
             say("killed: timeout")
             return finish(EXIT_TIMEOUT)
-        time.sleep(POLL)
+        # Woken as soon as the command exits, rather than a whole POLL after it.
+        try:
+            proc.wait(POLL if deadline is None else max(0, min(POLL, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def group_alive(pgid):

@@ -75,7 +75,11 @@ follow_kills() {
       n="$total"
     fi
     [ -z "$last" ] || return 0
-    sleep 0.2
+    # The 0.2 s in steps, so a stop is seen within 0.05 s rather than holding up the run's end.
+    for _ in 1 2 3 4; do
+      [ ! -e "$1" ] || break
+      sleep 0.05
+    done
   done
 }
 
