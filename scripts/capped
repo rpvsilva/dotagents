@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Runs one command under a memory and a time cap, or stops the commands it capped in one worktree.
+
+  capped [--mb N] [--secs N] -- <cmd> [args...]
+  capped stop <worktree>
+
+The command runs in its own process group with stdin from /dev/null. Every 0.2 s the runner sums the group's RSS from
+`ps -A -o pgid=,rss=` (the same call on macOS and Linux). Over --mb it kills the group, prints `capped: killed: memory`
+on stderr and exits 137; over --secs it prints `capped: killed: timeout` and exits 124. A cap left out is not enforced.
+Otherwise it exits with the command's code (128+N for signal N). When the command exits, what is left of its group is
+killed too, and SIGTERM, SIGINT or SIGHUP to the runner kills the group before the runner exits. Without `ps` it refuses
+to run (exit 125) rather than run uncapped. A process that leaves the group (setsid, a daemon) escapes the caps and stop.
+
+Inside a git worktree, each group is registered as <git common dir>/capped/<sha1 of the worktree's real path>/<pgid>
+until it ends. `capped stop <worktree>` kills only those groups: TERM, then KILL after 3 s. It refuses /, $HOME and a
+repo's main checkout, so one permission rule (`capped stop *`) can approve it.
+
+On Windows only --secs works: --mb and stop exit 125. Python 3.9+, stdlib only.
+"""
+
+import hashlib
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+POLL = 0.2
+EXIT_MEMORY = 137
+EXIT_TIMEOUT = 124
+EXIT_REFUSED = 125
+WINDOWS = os.name == "nt"
+USAGE = "usage: capped [--mb N] [--secs N] -- <cmd> [args...]\n       capped stop <worktree>"
+
+
+def say(msg):
+    sys.stderr.write("capped: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def git(cwd, *args):
+    """Prints git's output for args in cwd, or None outside a repo."""
+    try:
+        out = subprocess.run(["git", "-C", cwd] + list(args), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, universal_newlines=True)
+    except OSError:
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def worktree_of(path):
+    """(real worktree root, real git common dir, real git dir) of path, or None outside a git worktree."""
+    out = git(path, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--git-dir")
+    if not out or len(out.splitlines()) != 3:
+        return None
+    return tuple(os.path.realpath(p) for p in out.splitlines())
+
+
+def registry(common, worktree):
+    return os.path.join(common, "capped", hashlib.sha1(worktree.encode()).hexdigest())
+
+
+def started(pid):
+    """The start time ps gives for pid, or "" when it is gone."""
+    out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, universal_newlines=True)
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def group_kb(pgid):
+    """Summed RSS in KB of the processes in group pgid, or None when ps fails."""
+    out = subprocess.run(["ps", "-A", "-o", "pgid=,rss="], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, universal_newlines=True)
+    if out.returncode != 0:
+        return None
+    total = 0
+    for line in out.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == str(pgid) and fields[1].isdigit():
+            total += int(fields[1])
+    return total
+
+
+def kill_group(proc):
+    if WINDOWS:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def parse_run(args):
+    caps = {"--mb": None, "--secs": None}
+    while args and args[0] != "--":
+        if args[0] not in caps or len(args) < 2:
+            return None
+        try:
+            caps[args[0]] = float(args[1])
+        except ValueError:
+            return None
+        if caps[args[0]] <= 0:
+            return None
+        args = args[2:]
+    if len(args) < 2:
+        return None
+    return caps["--mb"], caps["--secs"], args[1:]
+
+
+def run(args):
+    parsed = parse_run(args)
+    if parsed is None:
+        print(USAGE, file=sys.stderr)
+        return 2
+    mb, secs, cmd = parsed
+    if WINDOWS and mb is not None:
+        say("--mb needs ps process groups, which Windows lacks; refusing to run uncapped")
+        return EXIT_REFUSED
+    if not WINDOWS and shutil.which("ps") is None:
+        say("no ps on PATH, so no memory cap; refusing to run uncapped")
+        return EXIT_REFUSED
+
+    # A signal is only noted here and acted on in the loop below, so one arriving while the command starts still
+    # kills its group.
+    caught = []
+    for s in ("SIGTERM", "SIGINT", "SIGHUP"):
+        if hasattr(signal, s):
+            signal.signal(getattr(signal, s), lambda signum, _frame: caught.append(signum))
+
+    where = None if WINDOWS else worktree_of(os.getcwd())
+    try:
+        if WINDOWS:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        else:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        say("cannot run %s: %s" % (cmd[0], e.strerror))
+        return 127
+
+    entry = None
+    if where:
+        folder = registry(where[1], where[0])
+        entry = os.path.join(folder, str(proc.pid))
+        try:
+            os.makedirs(folder, exist_ok=True)
+            with open(entry, "w") as f:
+                f.write("%s\n%s\n%s\n%s\n" % (where[0], os.getpid(), started(os.getpid()), started(proc.pid)))
+        except OSError:
+            entry = None
+
+    def finish(code):
+        kill_group(proc)
+        proc.wait()
+        if entry:
+            try:
+                os.remove(entry)
+            except OSError:
+                pass
+        return code
+
+    deadline = None if secs is None else time.monotonic() + secs
+    while True:
+        if caught:
+            return finish(128 + caught[0])
+        code = proc.poll()
+        if code is not None:
+            return finish(code if code >= 0 else 128 - code)
+        if mb is not None:
+            kb = group_kb(proc.pid)
+            if kb is None:
+                say("ps -A -o pgid=,rss= failed, so no memory cap; stopping the command")
+                return finish(EXIT_REFUSED)
+            if kb > mb * 1024:
+                say("killed: memory")
+                return finish(EXIT_MEMORY)
+        if deadline is not None and time.monotonic() >= deadline:
+            say("killed: timeout")
+            return finish(EXIT_TIMEOUT)
+        time.sleep(POLL)
+
+
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def stop(args):
+    if len(args) != 1:
+        print(USAGE, file=sys.stderr)
+        return 2
+    if WINDOWS:
+        say("stop needs process groups, which Windows lacks")
+        return EXIT_REFUSED
+    path = os.path.realpath(args[0])
+    home = os.path.realpath(os.path.expanduser("~"))
+    if path in ("/", home):
+        say("refusing to stop everything under %s" % path)
+        return 2
+    where = worktree_of(path)
+    if where is None or where[0] != path:
+        say("%s is not the root of a git worktree" % path)
+        return 2
+    if where[2] == where[1]:
+        say("%s is a repo's main checkout, not a task worktree" % path)
+        return 2
+
+    folder = registry(where[1], where[0])
+    groups = []
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        entry = os.path.join(folder, name)
+        try:
+            with open(entry) as f:
+                _, runner, runner_start, leader_start = (f.read().split("\n") + [""] * 4)[:4]
+        except OSError:
+            continue
+        if not name.isdigit():
+            continue
+        pgid = int(name)
+        # A pid can be reused once its process ends: the group is ours only while its runner or its leader is the
+        # process that registered it.
+        ours = (runner.isdigit() and runner_start and started(int(runner)) == runner_start) or \
+               (leader_start and started(pgid) == leader_start)
+        if ours and group_alive(pgid):
+            groups.append(pgid)
+        else:
+            try:
+                os.remove(entry)
+            except OSError:
+                pass
+
+    for pgid in groups:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and any(group_alive(g) for g in groups):
+        time.sleep(0.1)
+    for pgid in groups:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+    print("capped: stopped %d group(s) in %s" % (len(groups), where[0]))
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["stop"]:
+        return stop(argv[1:])
+    return run(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
