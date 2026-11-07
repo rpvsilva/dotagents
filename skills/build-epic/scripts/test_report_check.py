@@ -84,6 +84,12 @@ class ReportCheckTest(unittest.TestCase):
     def test_empty_status_is_a_violation(self):
         self.assertViolation(BLOCK.replace("status: done", "status:"), "shape")
 
+    def test_status_of_more_than_one_word_is_a_violation(self):
+        self.assertViolation(BLOCK.replace("status: done", "status: done mostly"), "shape")
+
+    def test_blank_lines_inside_a_tagged_code_fence_are_not_extra_lines(self):
+        self.assertEqual(self.check("```text\n\n" + BLOCK + "\n```"), (0, "OK 04-02 done"))
+
     def test_empty_message_is_a_violation(self):
         self.assertViolation("", "lines=0")
 
