@@ -182,5 +182,27 @@ echo '{"max_parallel": 3}' >"$MACHINE"
 s -- check && [ "$(out)" = ok ] || fail "check: a valid setup: $(out) $(err)"
 rm -f "$MACHINE" "$R/.agents/settings.json"
 
+# --- Installed parts only: with ~/.agents/skills present, list names the linked skills, shared always, and remote
+# only with a ~/.agents/bin/remote-agent link. A value saved for an unlinked skill is kept, valid and never listed.
+mkdir -p "$SANDBOX/.agents/skills" "$SANDBOX/.agents/bin"
+ln -s "$REPO/skills/build-epic" "$SANDBOX/.agents/skills/build-epic"
+echo '{"to-epic": {"labels": ["epic"]}}' >"$MACHINE"
+s -- list || fail "list installed: exited non-zero: $(err)"
+grep -q '^build-epic\.' "$SANDBOX/out" && grep -q '^shared\.max_parallel' "$SANDBOX/out" || fail "list installed: no build-epic or shared keys: $(out)"
+grep -v -e '^build-epic\.' -e '^shared\.' "$SANDBOX/out" | grep -q . && fail "list installed: lists an uninstalled part: $(out)"
+s -- list to-epic || fail "list of an uninstalled skill: exited non-zero: $(err)"
+[ ! -s "$SANDBOX/out" ] || fail "list of an uninstalled skill: printed '$(out)'"
+ln -s "$REPO/scripts/remote-agent.sh" "$SANDBOX/.agents/bin/remote-agent"
+s -- list; grep -q '^remote\.backend' "$SANDBOX/out" || fail "list with remote linked: no remote keys: $(out)"
+s -- check && [ "$(out)" = ok ] || fail "check with a value for an uninstalled skill: $(out) $(err)"
+expect to-epic labels epic
+s -- set build-epic max_parallel 2 --machine || fail "set beside an uninstalled skill's value: $(err)"
+jq -e '."to-epic".labels == ["epic"] and ."build-epic".max_parallel == 2' "$MACHINE" >/dev/null \
+  || fail "set: the uninstalled skill's value was not kept: $(cat "$MACHINE")"
+s -- list; grep -q '^to-epic\.' "$SANDBOX/out" && fail "list installed: lists the uninstalled skill's saved value: $(out)"
+rm -rf "$SANDBOX/.agents/skills"
+s -- list; grep -q '^to-epic\.labels' "$SANDBOX/out" && grep -q '^review-pr\.' "$SANDBOX/out" || fail "list with no ~/.agents/skills: not everything: $(out)"
+rm -rf "$SANDBOX/.agents" "$MACHINE"
+
 [ "$fails" -eq 0 ] || { echo "settings.test.sh: $fails failure(s)"; exit 1; }
 echo "settings.test.sh: ok"
