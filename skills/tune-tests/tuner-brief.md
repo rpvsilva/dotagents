@@ -23,7 +23,7 @@ Speed and coverage pull against each other: the cheap way to a fast suite is del
    - A real dependency: stub it at the boundary, the way the repo's other tests stub.
    - Repeated setup: build it once where the cases stay independent of each other.
    - A duplicate: merge it only when every assertion it held lives on in the merged case.
-   - An uncovered entry point: add a test that drives the public surface, and watch it go **red** against broken code (delete the line, flip the condition) before restoring the code.
+   - An uncovered entry point: add a test that drives the public surface, and watch it go **red** against broken code (delete the line, flip the condition) before restoring the code. Note that break as a `mutations:` entry of your report: whoever started you applies each one with a script and runs the suites, and the PR merges only when every one turns them red.
    - Real work: leave it.
 
    Done when each change is green and makes its suite faster or its coverage wider.
@@ -44,7 +44,10 @@ changed: <the last commit SHA>
 baseline: <suite: time>, one per suite in scope, before your changes
 time: <suite: before -> after, the cause>, one per suite you changed
 covered: <entry point: the test added>, one per gap closed
-moved: <assertion removed or merged: where it lives now>, one each
+moved: <assertion removed or merged, by its text or its old file:line: where it lives now>, one each
+mutations: <file:line old -> new>, one per new test: the break that turns it red
 left: <slow spots left alone and why (real work, out of scope, could not fix)>
 why: <one line, when status is blocked>
 ```
+
+A key with several values takes one per line, each indented or as a `- ` item under the key; `none` means no value. Each `mutations:` entry names a line of the code under test in your worktree (`file` relative to its root, `line` its line number there), the first `old` text on that line and the `new` text that replaces it (empty to delete it), e.g. `src/parse.py:42 >= 0 -> > 0`. A removed or merged assertion that `moved:` does not name, or a mutation that leaves the suites green, sends the PR to an agent review.
