@@ -185,10 +185,15 @@ same "$(echo '{"group": "core"}' | PARTS_REPO="$SANDBOX/empty" "$PARTS" list)" "
 same "$("$PARTS" groups | cut -f1 | tr '\n' ' ')" "core remote pr-loop epics security safety-hooks small-tools personal " \
   "real repo: groups.json does not name the eight groups"
 # Called through a chain of symlinks (relative, then absolute), it still finds the repo it lives in.
+# Git Bash copies on a plain `ln -s`: ask for a native link, and skip the case where there can be none.
 mkdir -p "$SANDBOX/bin"
-ln -s "$PARTS" "$SANDBOX/bin/parts-abs"
-ln -s parts-abs "$SANDBOX/bin/parts"
-same "$(cd "$SANDBOX" && bin/parts groups | cut -f1 | head -1)" "core" "through a symlink: did not find its repo"
+if MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$PARTS" "$SANDBOX/bin/parts-abs" 2>/dev/null \
+  && MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s parts-abs "$SANDBOX/bin/parts" 2>/dev/null \
+  && [ -L "$SANDBOX/bin/parts-abs" ] && [ -L "$SANDBOX/bin/parts" ]; then
+  same "$(cd "$SANDBOX" && bin/parts groups | cut -f1 | head -1)" "core" "through a symlink: did not find its repo"
+else
+  echo "parts.test.sh: no native symlinks here, the through a symlink check skipped"
+fi
 # Every file a part runs is shipped: the files of every group's closure hold core and the telemetry extractor.
 shipped="$(for g in $("$PARTS" groups | cut -f1); do "$PARTS" closure "$g"; done | sort -u \
   | while read -r p; do "$PARTS" files "$p"; done)"
