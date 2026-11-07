@@ -163,10 +163,13 @@ while read -r p; do
   fail "$p is in only one of .review-gate.yml (high tier) and CODEOWNERS"
 done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
 
-# Remote subagents say to give the human the transcript path and to leave remote-agent's stderr unredirected.
+# Remote subagents say to give the human the transcript path, to leave remote-agent's stderr unredirected, and to read
+# the outcome from result.json through remote-agent result.
 remote="$(awk '/^## Remote subagents/ {on=1; next} on && /^## / {exit} on' skills/_shared/conventions.md)"
 grep -q 'transcript' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not mention the transcript"
 grep -qi 'not redirect' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not say to leave stderr unredirected"
+grep -q 'result\.json' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not name result.json"
+grep -q 'remote-agent result' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not name remote-agent result"
 
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
