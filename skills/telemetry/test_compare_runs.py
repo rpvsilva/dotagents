@@ -11,6 +11,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "compare_runs.py"
 GH35 = HERE / "fixtures" / "gh-35"
 RUN_METRICS = HERE / "fixtures" / "run-folder" / "expected.json"
+TARGETS = HERE / "targets.json"
 # gh-35's role names, as spec Q14 maps them; the others kept their name.
 OLD_ROLES = {"task-review": "review", "tuner-review": "review", "conflict-resolver": "resolve",
              "security-review": "security"}
@@ -29,12 +30,22 @@ def gh35_args(**override):
     return [arg for key, value in files.items() if value is not None for arg in (f"--{key}", str(value))]
 
 
+COMMITTED = {}  # compare_runs.py's output per args naming only committed files: those runs repeat across cases
+
+
 def compare(args):
-    res = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
-                         stdin=subprocess.DEVNULL)
-    if res.returncode != 0:
-        raise AssertionError(f"exit {res.returncode}: {res.stderr}")
-    return json.loads(res.stdout)
+    """compare_runs.py's output for `args`, a fresh copy each call."""
+    key = tuple(args)
+    committed = all(a.startswith("--") or not Path(a).is_absolute() or HERE in Path(a).parents for a in args)
+    if not committed or key not in COMMITTED:
+        res = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True,
+                             encoding="utf-8", stdin=subprocess.DEVNULL)
+        if res.returncode != 0:
+            raise AssertionError(f"exit {res.returncode}: {res.stderr}")
+        if not committed:
+            return json.loads(res.stdout)
+        COMMITTED[key] = res.stdout
+    return json.loads(COMMITTED[key])
 
 
 def first_difference(actual, expected, path="$"):
@@ -212,6 +223,135 @@ class Runs(unittest.TestCase):
                              capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
         self.assertEqual(res.returncode, 2)
         self.assertIn("differ", res.stderr)
+
+
+class Targets(unittest.TestCase):
+    """`--targets`: the judged run (`--b`) against each #181 target."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def write(self, name, data):
+        path = self.tmp / name
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def metrics(self, **change):
+        met = json.loads(RUN_METRICS.read_text(encoding="utf-8"))
+        met.update(change)
+        return self.write("metrics.json", met)
+
+    def test_without_targets_the_comparison_has_no_targets(self):
+        self.assertNotIn("targets", compare(gh35_args())["comparison"])
+
+    def test_every_target_on_gh35_has_a_status_threshold_op_and_value(self):
+        targets = compare(gh35_args() + ["--targets", str(TARGETS)])["comparison"]["targets"]
+        want = json.loads(TARGETS.read_text(encoding="utf-8"))["targets"]
+        self.assertEqual(sorted(targets), sorted(t["id"] for t in want))
+        for t in want:
+            got = targets[t["id"]]
+            self.assertIn(got["status"], ("met", "missed", "unknown"), t["id"])
+            self.assertEqual((got["threshold"], got["op"], got["run"]), (t["threshold"], t["op"], "local"), t["id"])
+            self.assertIn("value", got)
+            self.assertEqual(got["status"] == "unknown", got["value"] is None, t["id"])
+
+    def test_gh35_metrics_lack_the_new_inputs_so_those_targets_are_unknown(self):
+        targets = compare(gh35_args() + ["--targets", str(TARGETS)])["comparison"]["targets"]
+        for key in ("hand-written-scripts", "human-round-trips", "suites-per-merge"):
+            self.assertEqual((targets[key]["value"], targets[key]["status"]), (None, "unknown"), key)
+        # The local run started no remote run: none killed, none without cost.
+        self.assertEqual(targets["remote-memory-kills"]["status"], "met")
+        self.assertEqual(targets["remote-cost-measured"]["status"], "met")
+
+    def test_null_round_trips_and_scripts_are_unknown_never_missed(self):
+        args = gh35_args(**{"b-metrics": self.metrics(human_round_trips=None, hand_written_scripts=None)})
+        targets = compare(args + ["--targets", str(TARGETS)])["comparison"]["targets"]
+        self.assertEqual(targets["human-round-trips"]["status"], "unknown")
+        self.assertEqual(targets["hand-written-scripts"]["status"], "unknown")
+
+    def test_round_trips_and_scripts_are_judged_from_the_new_fields(self):
+        missed = compare(gh35_args(**{"b-metrics": RUN_METRICS}) + ["--targets", str(TARGETS)])
+        met = compare(gh35_args(**{"b-metrics": self.metrics(human_round_trips=0, hand_written_scripts=0)})
+                      + ["--targets", str(TARGETS)])
+        for key in ("human-round-trips", "hand-written-scripts"):
+            self.assertEqual(missed["comparison"]["targets"][key]["value"], 2)
+            self.assertEqual(missed["comparison"]["targets"][key]["status"], "missed", key)
+            self.assertEqual(met["comparison"]["targets"][key]["status"], "met", key)
+
+    def test_remote_kills_cost_measured_and_suites_per_merge_come_from_run_metrics(self):
+        args = gh35_args(**{"b-metrics": RUN_METRICS}) + ["--targets", str(TARGETS)]
+        targets = compare(args)["comparison"]["targets"]
+        # 1 run killed by memory then by timeout, 1 run without cost, 3 merged task PRs with 3 saved suite files.
+        self.assertEqual((targets["remote-memory-kills"]["value"], targets["remote-memory-kills"]["status"]),
+                         (1, "missed"))
+        self.assertEqual((targets["remote-cost-measured"]["value"], targets["remote-cost-measured"]["status"]),
+                         (False, "missed"))
+        self.assertEqual((targets["suites-per-merge"]["value"], targets["suites-per-merge"]["status"]), (1.0, "met"))
+
+    def test_ratios_are_per_ticket_of_the_judged_run(self):
+        out = compare(gh35_args() + ["--targets", str(TARGETS)])
+        run, targets = out["runs"]["local"], out["comparison"]["targets"]
+        tickets = run["outcomes"]["tickets"]["count"]
+        opus = sum(1 for s in run["subagentList"] if s["role"] in ("review", "ticket-review", "re-review", "security")
+                   and any("opus" in m for m in s["models"]))
+        self.assertGreater(opus, 0)
+        self.assertEqual(targets["opus-reviewer-runs-per-ticket"]["value"], round(opus / tickets, 2))
+        self.assertEqual(targets["orchestrator-turns-per-ticket"]["value"],
+                         round(run["orchestrator"]["turns"] / tickets, 2))
+        self.assertEqual(targets["conflict-resolvers"]["value"],
+                         (run["subagents"]["byRole"].get("resolve") or {}).get("count", 0))
+        self.assertEqual(targets["orchestrator-cost"]["value"], run["cost"]["orchestratorUSD"])
+
+    def test_a_threshold_is_judged_by_its_op(self):
+        out = compare(gh35_args() + ["--targets", str(TARGETS)])
+        value = out["comparison"]["targets"]["orchestrator-turns-per-ticket"]["value"]
+        cases = [("lt", value, "missed"), ("le", value, "met"), ("eq", value, "met"), ("lt", value + 1, "met"),
+                 ("eq", value + 1, "missed")]
+        path = self.write("targets.json", {"targets": [
+            {"id": f"t{i}", "metric": "orchestratorTurnsPerTicket", "op": op, "threshold": th, "unit": "turns",
+             "source": "test"} for i, (op, th, _) in enumerate(cases)]})
+        targets = compare(gh35_args() + ["--targets", str(path)])["comparison"]["targets"]
+        self.assertEqual([targets[f"t{i}"]["status"] for i in range(len(cases))], [want for *_, want in cases])
+
+    def test_an_unknown_metric_or_op_is_refused(self):
+        for bad in ({"metric": "noSuchMetric", "op": "lt"}, {"metric": "orchestratorUSD", "op": "gt"}):
+            path = self.write("targets.json", {"targets": [{"id": "x", "threshold": 1, "unit": "", "source": "",
+                                                            **bad}]})
+            res = subprocess.run([sys.executable, "-I", str(SCRIPT), *gh35_args(), "--targets", str(path)],
+                                 capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
+            self.assertEqual(res.returncode, 2, bad)
+            self.assertIn(next(iter(bad.values())), res.stderr)
+
+    def test_the_cost_target_judges_measured_cost_when_every_remote_run_has_one(self):
+        out = compare(gh35_args() + ["--targets", str(TARGETS)])
+        cost = out["comparison"]["targets"]["total-cost"]
+        self.assertEqual(cost["basis"], "measured")
+        self.assertEqual(cost["value"], out["runs"]["local"]["cost"]["recomputedSessionUSD"])
+
+    def test_the_cost_target_names_the_estimate_it_judged_when_remote_runs_lack_cost(self):
+        # Judge the remote run: 106 remote runs without cost, priced from the local run's implementers.
+        args = gh35_args(**{"a": GH35 / "local-telemetry.json", "a-metrics": GH35 / "local-metrics.json",
+                            "a-branch": GH35 / "local-branch.json", "a-name": "local",
+                            "b": GH35 / "remote-telemetry.json", "b-metrics": GH35 / "remote-metrics.json",
+                            "b-branch": GH35 / "remote-branch.json", "b-name": "remote"})
+        out = compare(args + ["--targets", str(TARGETS)])
+        cost, estimate = out["comparison"]["targets"]["total-cost"], out["runs"]["remote"]["cost"]["totalEstimateUSD"]
+        self.assertEqual(cost["basis"], "estimate-mid")
+        self.assertEqual(cost["value"], estimate["mid"])
+        self.assertEqual(cost["range"], [estimate["low"], estimate["high"]])
+        self.assertEqual(cost["run"], "remote")
+        # gh-35's metrics name no kills, and none of its remote runs has a cost.
+        kills, measured = (out["comparison"]["targets"][k] for k in ("remote-memory-kills", "remote-cost-measured"))
+        self.assertEqual((kills["value"], kills["status"]), (None, "unknown"))
+        self.assertEqual((measured["value"], measured["status"]), (False, "missed"))
+
+    def test_the_cost_target_is_unknown_when_no_estimate_can_be_made(self):
+        args = gh35_args(**{"b-metrics": RUN_METRICS}) + ["--targets", str(TARGETS)]
+        targets = compare(args)["comparison"]["targets"]
+        self.assertEqual(targets["total-cost"]["basis"], "estimate-mid")
+        self.assertEqual((targets["total-cost"]["value"], targets["total-cost"]["status"]), (None, "unknown"))
 
 
 if __name__ == "__main__":

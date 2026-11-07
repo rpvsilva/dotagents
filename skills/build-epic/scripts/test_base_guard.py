@@ -106,6 +106,7 @@ class TicketBaseGuardTest(test_ship.Base):
         self.assertEqual(self.calls("pr", "merge"), [])
 
     def test_a_ticket_pr_into_the_base_merges_and_squashes_whatever_the_task_merge_method(self):
+        self.kit.branch_from_main("int/x")  # the merge guard reads its rules from origin/<base>
         (self.kit.answers / "pr-base").write_text("int/x", encoding="utf-8")
         self.set_setting("task_merge_method", "merge")
         self.assertEqual(self.ship(), "OK 01 merged pr=20")

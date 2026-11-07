@@ -1,3 +1,4 @@
 {
-  "auto_save": { "kind": "bool", "default": true, "meaning": "Save each Claude Code session's run as JSON in ~/.agents/telemetry/ when the session ends." }
+  "auto_save": { "kind": "bool", "default": true, "meaning": "Save each Claude Code session's run as JSON in ~/.agents/telemetry/ when the session ends." },
+  "identity_command": { "kind": "string", "default": null, "meaning": "A command printing a GitHub token for the identity file_missed_targets.py files issues as, run from the repo root before every gh call, e.g. `scripts/gh-app-token.sh`; unset: the current gh login." }
 }
