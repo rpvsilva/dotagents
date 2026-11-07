@@ -13,9 +13,6 @@ Each task's local run of map.md's Checks before its merge:
   - `tests/run.sh`: passed in 28s
 - 07-03 Docs for the new body: no saved result.
 
-Not exercised here:
-- `tests/run.sh` (07-01): zsh not installed
-
 ## Risk
 
 Touches the files its tasks write:

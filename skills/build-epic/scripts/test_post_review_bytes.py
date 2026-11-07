@@ -42,13 +42,48 @@ class PostReviewBytesTest(Base):
         return header, rest[len(data):]
 
     def test_the_body_is_a_one_line_header_then_the_reports_exact_bytes(self):
-        body = self.post("12", self.report(REPORT))
+        head = self.head()[:7]
+        body = self.post("12", self.report(REPORT, f"12-{head}.md"), "--base", "origin/main")
         header, note = self.split(body, REPORT)
         self.assertEqual(note, "")
         self.assertNotIn("\n", header)
-        self.assertIn("PR #12", header)
-        self.assertIn(self.head()[:7], header)
-        self.assertIn("main", header)
+        self.assertIn(f"Review of PR #12 at `{head}`", header)
+        self.assertIn(f"`git diff origin/main...{head}`", header)
+        self.assertNotIn("posted on", header)
+
+    def test_a_hub_report_on_the_ticket_pr_names_the_hub_pr_and_head_it_reviewed(self):
+        header, _ = self.split(self.post("12", self.report("ok\n", "30-abc1234.md")), "ok\n")
+        self.assertIn("Review of PR #30 at `abc1234`, posted on PR #12", header)
+        self.assertNotIn(self.head()[:7], header)
+        self.assertNotIn("git diff", header)
+
+    def test_a_security_report_names_the_head_in_its_name(self):
+        header, _ = self.split(self.post("12", self.report("ok\n", "30-abc1234-security.md")), "ok\n")
+        self.assertIn("Review of PR #30 at `abc1234`, posted on PR #12", header)
+
+    def test_a_re_review_names_the_diff_from_the_head_reviewed_before(self):
+        head = self.head()[:7]
+        header, _ = self.split(self.post("12", self.report("ok\n", f"12-{head}.md"), "--base", "1234567"), "ok\n")
+        self.assertIn(f"read `git diff 1234567...{head}`", header)
+        self.assertNotIn("main", header)
+
+    def test_without_a_base_the_header_names_no_diff(self):
+        header, _ = self.split(self.post("12", self.report("ok\n")), "ok\n")
+        self.assertIn("Review of PR #12 at `abc1234`", header)
+        self.assertNotIn("git diff", header)
+
+    def test_a_report_name_without_a_head_says_the_reviewed_head_is_not_recorded(self):
+        header, _ = self.split(self.post("12", self.report("ok\n", "notes.md"), "--base", "origin/main"), "ok\n")
+        self.assertIn("Review of PR #12 (reviewed head not recorded)", header)
+        self.assertNotIn(self.head()[:7], header)
+        self.assertNotIn("git diff", header)
+
+    def test_a_non_utf8_report_fails_bad_report_and_calls_no_api(self):
+        report = self.reviews / "12-abc1234.md"
+        report.write_bytes(b"caf\xe9 \xff\n")
+        line = self.one_line(self.kit.step(POST_REVIEW, self.kit.run_dir, "12", report))
+        self.assertRegex(line, r"^FAIL PR12 bad-report \(log: ")
+        self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_trailing_newline_is_kept(self):
         body = self.post("12", self.report("Finding: drops keys.\n"))

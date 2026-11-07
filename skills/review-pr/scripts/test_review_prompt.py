@@ -40,14 +40,15 @@ def posix(out, args):
 
 
 def run(*args, cwd=None):
-    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, cwd=cwd)
+    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
+                          cwd=cwd)
 
 
 class ReviewPromptTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.findings = self.tmp / "findings.md"
-        self.findings.write_text("1. blocker: x.py:3 crashes on empty input\n")
+        self.findings.write_text("1. blocker: x.py:3 crashes on empty input\n", encoding="utf-8")
 
     def render(self, mode, args=None):
         args = [a.replace("@FINDINGS@", str(self.findings)) for a in (args or ARGS[mode])]
@@ -58,7 +59,7 @@ class ReviewPromptTest(unittest.TestCase):
     def test_each_mode_matches_its_golden_prompt(self):
         for mode in MODES:
             with self.subTest(mode=mode):
-                self.assertEqual(self.render(mode), (GOLDEN / f"{mode}.txt").read_text())
+                self.assertEqual(self.render(mode), (GOLDEN / f"{mode}.txt").read_text(encoding="utf-8"))
 
     def test_every_mode_diffs_against_the_merge_base_and_reads_before_testing(self):
         for mode in MODES:
@@ -132,19 +133,19 @@ class ReviewPromptTest(unittest.TestCase):
         repo = self.tmp / "a repo $(touch pwned)"
         git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        (repo / "f.txt").write_text("one\n")
+        (repo / "f.txt").write_text("one\n", encoding="utf-8")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["commit", "-qm", "one"], check=True)
-        (repo / "f.txt").write_text("two\n")
+        (repo / "f.txt").write_text("two\n", encoding="utf-8")
         subprocess.run(git + ["commit", "-qam", "two"], check=True)
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1;touch pwned2")
         self.assertEqual(got.returncode, 0, got.stderr)
         command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True, encoding="utf-8")
         self.assertFalse((self.tmp / "pwned").exists() or (self.tmp / "pwned2").exists(), command)
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1")
         command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        res = subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        res = subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("+two", res.stdout)
 
