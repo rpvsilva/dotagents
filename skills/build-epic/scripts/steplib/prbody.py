@@ -13,7 +13,8 @@ With `ci: off` it also holds `LOCAL_PROOF`, the line saying no CI runs and the l
 With no `decisions.md` the section is left out.
 
 `<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`),
-`passed` or `rc`, and optionally `seconds`.
+`passed` or `rc`, and optionally `seconds` and `skip_reasons` (a list of strings). A ticket body holds a
+`## Not exercised here` section listing, once each, the skip reasons its tasks' files saved; none, no section.
 """
 import json
 import re
@@ -43,23 +44,42 @@ def issues(ticket_path):
 
 
 def _result(run, ident):
-    path = core.resolve(run) / "reports" / f"{ident}.checks.json"
-    if not path.is_file():
-        return NO_RESULT
-    try:
-        data = json.loads(path.read_text())
-    except ValueError:
-        return NO_RESULT
-    suites = data.get("suites") if isinstance(data, dict) else data
     lines = []
-    for s in suites if isinstance(suites, list) else ():
-        if not isinstance(s, dict):
-            continue
+    for s in _suites(core.resolve(run) / "reports" / f"{ident}.checks.json"):
         name = s.get("command") or s.get("suite") or s.get("name") or "?"
         passed = s["passed"] if "passed" in s else s.get("rc") == 0
         secs = f" in {s['seconds']:g}s" if isinstance(s.get("seconds"), (int, float)) else ""
         lines.append(f"- `{name}`: {'passed' if passed else 'failed'}{secs}")
     return "\n".join(lines) or NO_RESULT
+
+
+def _suites(path):
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    suites = data.get("suites") if isinstance(data, dict) else data
+    return [s for s in suites if isinstance(s, dict)] if isinstance(suites, list) else []
+
+
+def skip_reasons(run, ticket_path):
+    """The skip reasons saved in `<run>/reports/<TT>-*.checks.json` for the ticket `TT`, in file order, once each."""
+    number = runfolder.norm(ticket_path.stem.split("-", 1)[0])
+    reasons = []
+    for f in sorted((core.resolve(run) / "reports").glob("*.checks.json")):
+        if runfolder.norm(f.name.split("-", 1)[0]) != number:
+            continue
+        for s in _suites(f):
+            listed = s.get("skip_reasons")
+            if isinstance(listed, list):
+                reasons += [r.strip() for r in listed if isinstance(r, str) and r.strip()]
+    return list(dict.fromkeys(reasons))
+
+
+def not_exercised(run, ticket_path):
+    """The `## Not exercised here` section for the ticket, or [] when its tasks saved no skip reason."""
+    reasons = skip_reasons(run, ticket_path)
+    return ["## Not exercised here", "\n".join(f"- {r}" for r in reasons)] if reasons else []
 
 
 def merge_section(run, into=None):
@@ -143,6 +163,7 @@ def ticket_body(run, ticket_path, lead=""):
         pr = clean(runfolder.get(f, "PR"))
         rows.append(f"- {title(f)}: {pr or 'no PR'}")
     parts = ([lead.strip()] if lead.strip() else []) + ["## Tasks", "\n".join(rows) or "None."]
+    parts += not_exercised(run, ticket_path)
     parts += merge_section(run)
     refs = [f"Closes #{n}" for n in issues(ticket_path)]
     if refs:
