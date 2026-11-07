@@ -8,6 +8,8 @@ import contextlib
 import datetime
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import traceback
@@ -30,9 +32,83 @@ class Fail(Exception):
         self.reason = reason
 
 
+WINDOWS = os.name == "nt"
+
+
+def home():
+    """The user's home folder: `HOME` when set, as in every POSIX shell and Git Bash. On Windows, Python's own
+    `expanduser` ignores `HOME` for the profile folder, which is not where `install.sh` linked `~/.agents`."""
+    return os.environ.get("HOME") or os.path.expanduser("~")
+
+
 def resolve(path):
     """A path with every link and `..` resolved, whatever the current folder, so all callers name one file."""
-    return Path(os.path.realpath(os.path.expanduser(str(path))))
+    path = str(path)
+    if path == "~" or path.startswith(("~/", "~" + os.sep)):
+        path = home() + path[1:]
+    else:
+        path = os.path.expanduser(path)
+    return Path(os.path.realpath(path))
+
+
+def split(command):
+    """A command line split into words as a POSIX shell would. On Windows a backslash is taken as a path separator,
+    not an escape, so a path such as `C:\\x\\tool.sh` survives."""
+    return shlex.split(command.replace("\\", "/") if WINDOWS else command)
+
+
+def _which(name, path):
+    """The file `name` names on `path` (an `os.pathsep` list), in `path`'s order: a Windows program (`PATHEXT`) or a
+    `#!` script; a path with a folder may name any file. None when there is none."""
+    exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";") if e]
+    named = os.path.splitext(name)[1].lower() in exts
+    dirs = [""] if os.path.dirname(name) else [d for d in path.split(os.pathsep) if d]
+    for d in dirs:
+        base = os.path.join(d, name)
+        for cand in [base] if named else [base + e for e in exts]:
+            if os.path.isfile(cand):
+                return cand
+        if not named and os.path.isfile(base) and (not d or _shebang(base) is not None):
+            return base
+    return None
+
+
+def _shebang(script):
+    """The words of `script`'s `#!` line, or None without one."""
+    try:
+        with open(script, "rb") as f:
+            line = f.readline(512)
+    except OSError:
+        return None
+    if not line.startswith(b"#!"):
+        return None
+    return line[2:].decode("utf-8", "replace").split()
+
+
+def command(argv, env=None, cwd=None):
+    """`argv` in a form the OS can start. Unchanged off Windows. Windows cannot start a `#!` script, and looks for a
+    bare name in its own folders before `PATH` (so `bash` is WSL's): there the program is looked up on `env`'s `PATH`
+    in order, and a script runs through the interpreter its `#!` line names (`python*` as this Python), else `bash`."""
+    argv = [str(a) for a in argv]
+    if not WINDOWS:
+        return argv
+    path = (env if env is not None else os.environ).get("PATH", "")
+    name = argv[0]
+    if os.path.dirname(name) and not os.path.isabs(name) and cwd is not None:
+        name = os.path.normpath(os.path.join(str(cwd), name))
+    prog = _which(name, path)
+    if prog is None:
+        return argv
+    if os.path.splitext(prog)[1].lower() in (".exe", ".com", ".bat", ".cmd"):
+        return [prog, *argv[1:]]
+    words = _shebang(prog) or ["bash"]
+    if os.path.basename(words[0]) == "env":
+        words = [w for w in words[1:] if w != "-S"] or ["bash"]
+    interp, args = words[0], words[1:]
+    if not os.path.isfile(interp):
+        base = os.path.basename(interp.replace("\\", "/"))
+        interp = sys.executable if base.startswith("python") else (_which(base, path) or shutil.which(base) or base)
+    return [interp, *args, prog, *argv[1:]]
 
 
 @contextlib.contextmanager
@@ -73,7 +149,7 @@ def run(argv, log, cwd=None, env=None, input=None):
     log.write(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else "") + "\n")
     log.flush()
     try:
-        p = subprocess.run(argv, cwd=None if cwd is None else str(cwd), env=env, input=input,
+        p = subprocess.run(command(argv, env, cwd), cwd=None if cwd is None else str(cwd), env=env, input=input,
                            stdin=None if input is not None else subprocess.DEVNULL,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         res = Result(p.returncode, p.stdout, p.stderr)

@@ -1,0 +1,174 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo achievements                   # the badges earned so far, and the ones still to earn
++### Achievements
++
++`todo achievements` prints one line per badge, in this order, as `[x] name: description` when earned and `[ ] name: description` when not. It takes no options and writes nothing.
++
++```
++[x] first done: finish your first item
++[ ] 10 done: finish ten items
++[ ] 7-day streak: finish something seven days in a row
++[ ] inbox zero: finish everything on your list
++```
++
++| Badge | Earned when |
++|---|---|
++| first done | at least 1 item is done |
++| 10 done | at least 10 items are done |
++| 7-day streak | the longest streak (see Streaks) is 7 days or more, so it stays earned after the streak breaks |
++| inbox zero | at least 1 item is done and every item is done |
++
++Nothing is stored: badges are worked out each time from your history, so they follow the figures if items change. The figures read the todo file and the archive, so archiving a done item keeps its credit; trashed items never count, in any badge. Done items count whatever their priority, and each completed occurrence of a recurring item counts on its own. For inbox zero, every item in the todo file and the archive must be done, so one open item (a recurring item's next occurrence included) holds it back. The 7-day streak ignores done dates after today.
++
+diff --git a/tests/cli/test_cli_achievements.py b/tests/cli/test_cli_achievements.py
++++ b/tests/cli/test_cli_achievements.py
++from datetime import date, timedelta
++
++import pytest
++
++from todo.storage import Item, JsonStore
++from todo.storage.side_files import SideFiles
++
++TODAY = date(2026, 11, 10)
++
++FIRST = "first done: finish your first item"
++TEN = "10 done: finish ten items"
++STREAK = "7-day streak: finish something seven days in a row"
++INBOX = "inbox zero: finish everything on your list"
++
++
++def done(id, ago=0, **kw):
++    return Item(id, f"t{id}", done=True, done_on=TODAY - timedelta(days=ago), **kw)
++
++
++@pytest.fixture
++def badges(cli, tmp_path):
++    path = tmp_path / "todo.json"
++
++    def put(items, archive=(), trash=()):
++        JsonStore(path).save(list(items))
++        sides = SideFiles(path)
++        if archive:
++            sides.archive.save(list(archive))
++        if trash:
++            sides.trash.save(list(trash))
++        lines = cli("achievements", today=TODAY)
++        return {line[4:]: line[:3] for line in lines}
++
++    return put
++
++
++def test_empty_list_locks_every_badge(badges):
++    assert badges([]) == {FIRST: "[ ]", TEN: "[ ]", STREAK: "[ ]", INBOX: "[ ]"}
++
++
++def test_output_is_one_plain_line_per_badge(cli):
++    lines = cli("achievements", today=TODAY)
++    assert lines == [
++        f"[ ] {FIRST}",
++        f"[ ] {TEN}",
++        f"[ ] {STREAK}",
++        f"[ ] {INBOX}",
++    ]
++
++
++def test_first_done_locked_with_only_open_items(badges):
++    assert badges([Item(1, "open")])[FIRST] == "[ ]"
++
++
++def test_first_done_unlocks_with_one_done_item(badges):
++    assert badges([Item(1, "open"), done(2)])[FIRST] == "[x]"
++
++
++def test_ten_done_locked_at_nine(badges):
++    assert badges([done(i, ago=i * 2) for i in range(1, 10)])[TEN] == "[ ]"
++
++
++def test_ten_done_unlocks_at_ten(badges):
++    assert badges([done(i, ago=i * 2) for i in range(1, 11)])[TEN] == "[x]"
++
++
++def test_ten_done_counts_archived_items(badges):
++    result = badges([done(i) for i in range(1, 6)], archive=[done(i) for i in range(6, 11)])
++    assert result[TEN] == "[x]"
++
++
++def test_streak_badge_locked_at_six_days(badges):
++    assert badges([done(i + 1, ago=i) for i in range(6)])[STREAK] == "[ ]"
++
++
++def test_streak_badge_unlocks_at_seven_days(badges):
++    assert badges([done(i + 1, ago=i) for i in range(7)])[STREAK] == "[x]"
++
++
++def test_streak_badge_stays_unlocked_after_the_streak_broke(badges):
++    assert badges([done(i + 1, ago=20 + i) for i in range(7)])[STREAK] == "[x]"
++
++
++def test_inbox_zero_locked_with_no_items_at_all(badges):
++    assert badges([])[INBOX] == "[ ]"
++
++
++def test_inbox_zero_locked_while_an_item_is_open(badges):
++    assert badges([done(1), Item(2, "open")])[INBOX] == "[ ]"
++
++
++def test_inbox_zero_unlocks_when_everything_is_done(badges):
++    assert badges([done(1)])[INBOX] == "[x]"
++
++
++def test_inbox_zero_unlocks_with_done_work_only_in_the_archive(badges):
++    assert badges([], archive=[done(1)])[INBOX] == "[x]"
++
++
++def test_trashed_items_do_not_count_as_done(badges):
++    result = badges([], trash=[done(i, ago=i) for i in range(1, 11)])
++    assert set(result.values()) == {"[ ]"}
++
++
++def test_trashed_open_item_does_not_block_inbox_zero(badges):
++    assert badges([done(1)], trash=[Item(2, "gone")])[INBOX] == "[x]"
+diff --git a/todo/cli/commands/achievements.py b/todo/cli/commands/achievements.py
++++ b/todo/cli/commands/achievements.py
++"""todo achievements: the badges earned so far."""
++from todo.insights import history_items
++from todo.insights.achievements import achievements
++
++
++def register(parser) -> None:
++    pass
++
++
++def run(args, ctx) -> None:
++    for badge in achievements(history_items(ctx), ctx.today):
++        ctx.out(f"[{'x' if badge.unlocked else ' '}] {badge.name}: {badge.description}")
+diff --git a/todo/insights/achievements.py b/todo/insights/achievements.py
++++ b/todo/insights/achievements.py
++"""Badges derived from the user's history; nothing is stored."""
++from datetime import date
++from typing import NamedTuple
++
++from todo.insights.streak import done_days, streaks
++from todo.storage import Item
++
++
++class Badge(NamedTuple):
++    name: str
++    description: str
++    unlocked: bool
++
++
++def achievements(items: list[Item], today: date) -> list[Badge]:
++    done = [i for i in items if i.done]
++    longest = streaks(done_days(items, today), today)[1]
++    return [
++        Badge("first done", "finish your first item", len(done) >= 1),
++        Badge("10 done", "finish ten items", len(done) >= 10),
++        Badge("7-day streak", "finish something seven days in a row", longest >= 7),
++        Badge(
++            "inbox zero",
++            "finish everything on your list",
++            bool(done) and len(done) == len(items),
++        ),
++    ]

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs tests/affected.sh in a throwaway repo with its own suites.txt, and checks which checks it picks.
+# Runs tests/affected.sh in a throwaway repo with its own suites.txt, and checks which checks it picks; then which
+# test folders tests/python.test.sh picks from the changed files tests/run.sh hands it.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,6 +58,35 @@ git -C "$R" update-ref -d refs/remotes/origin/main
 expect "no merge base" "$ALL"
 
 (cd "$R" && tests/affected.sh --bogus >/dev/null 2>&1) && fail "an unknown option: did not fail"
+
+# --files: the changed files instead of the checks.
+expect "--files with given paths" "docs/x.md scripts/a.sh " --files -- docs/x.md scripts/a.sh
+expect "--files --all" "--all " --files --all
+expect "--files with no merge base" "--all " --files
+git -C "$R" update-ref refs/remotes/origin/main HEAD
+echo change >>"$R/scripts/b.sh"
+expect "--files: an uncommitted change" "scripts/b.sh " --files
+
+# python.test.sh, on this repo's own test folders (PYTHON_TEST_LIST=1 prints them without running).
+unset PYTHON_TEST_FILES # CI exports the PR's own list; these cases set their own
+pydirs() { (cd "$REPO" && PYTHON_TEST_FILES="$(printf '%s\n' "$@")" PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' '); }
+pyexpect() {
+  local desc="$1" want="$2"; shift 2
+  local got; got="$(pydirs "$@")"
+  [ "$got" = "$want" ] || fail "python.test.sh, $desc: wanted '$want', got '$got'"
+}
+PYALL="$(cd "$REPO" && PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')"
+pyexpect "a file in a folder" "skills/telemetry " skills/telemetry/report.py
+pyexpect "the deepest of nested folders" "skills/build-epic/scripts " skills/build-epic/scripts/steplib/core.py
+pyexpect "the outer of nested folders" "skills/build-epic " skills/build-epic/plan_check.py
+pyexpect "two folders" "adapters/claude/telemetry skills/telemetry " skills/telemetry/a.py adapters/claude/telemetry/b.json
+pyexpect "a .py in no folder" "$PYALL" skills/telemetry/a.py scripts/x.py
+pyexpect "a file Python tests read" "$PYALL" scripts/hooks/secret-patterns.txt
+pyexpect "a file no Python test reads is ignored" "skills/telemetry " docs/x.md skills/telemetry/a.py
+pyexpect "--all" "$PYALL" --all
+[ "$(cd "$REPO" && PYTHON_TEST_FILES="" PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')" = "$PYALL" ] ||
+  fail "python.test.sh, no files given: not every folder"
+case "$PYALL" in *"skills/telemetry "*) ;; *) fail "python.test.sh: every folder is missing skills/telemetry: '$PYALL'" ;; esac
 
 [ "$fails" -eq 0 ] || { echo "affected.test.sh: $fails failure(s)"; exit 1; }
 echo "affected.test.sh: ok"

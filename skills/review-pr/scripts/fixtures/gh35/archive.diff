@@ -1,0 +1,482 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo archive                        # move done items last changed over 30 days ago to the archive, see Archive
++todo board [--overdue] [--snoozed] [--tag TAG]... [--priority P] [--project NAME] [--open|--done] [--doing] [--search TEXT] [--sort priority|due] [--archived]   # todo, doing and done side by side
++todo export --format csv|md|ics [--out FILE] [--overdue] [--snoozed] [--tag TAG]... [--priority P] [--project NAME] [--open|--done] [--doing] [--search TEXT] [--sort priority|due] [--archived]
++todo list [--overdue] [--snoozed] [--tag TAG]... [--priority P] [--project NAME] [--open|--done] [--doing] [--search TEXT] [--sort priority|due] [--archived]
++todo search TEXT [--overdue] [--snoozed] [--doing] [--project NAME] [--archived]   # same as todo list --search TEXT
++Shared filters: `--overdue` and `--snoozed` work on `todo board`, `todo list`, `todo search` and `todo export`, next to `--tag`, `--priority`, `--project`, `--open|--done`, `--doing`, `--search` and `--sort`. `--doing` shows only items marked doing (see Doing). `--overdue` shows only open items past their due date. A snoozed item is hidden by default from `todo board`, `todo list`, `todo search`, `todo export` and `todo remind`; `--snoozed` shows only the snoozed ones instead. `--project NAME` shows only items in that project, ignoring case (see Projects). `todo search TEXT` takes only `--overdue`, `--snoozed`, `--doing`, `--project` and `--archived` (the same as `todo list --search TEXT`), so `todo search TEXT --snoozed` finds a snoozed item.
++
++`--archived` is shared the same way: `todo board`, `todo list`, `todo search` and `todo export` read the archive instead of the todo file, and every other filter applies to what they find there (see Archive).
++`todo board` prints the items in three columns side by side: `todo`, `doing` and `done`. It takes the same filters as `todo list` (`--overdue`, `--snoozed`, `--tag`, `--priority`, `--project`, `--open|--done`, `--doing`, `--search`, `--sort`, `--archived`) and writes nothing. An item gets into the `doing` column with `todo start ID` (see Doing).
++- It reads only the todo file, so archived items leave the counts: after `todo archive` moves a done item out, its project shows one fewer done and one fewer total (see Archive).
++- Archived children drop out of the plain `done/total` count, since the count reads the todo file; `todo list --archived` counts the children found in the archive.
++### Archive
++
++`todo archive` moves every done item whose last change was more than 30 days ago into the archive, kept in `$TODO_FILE.archive` next to the todo file. It prints `archived N` (`archived 0` when nothing is old enough, and then it writes nothing). Open items never move, however old, and neither does a done item with no last-change stamp (one made before stamps were stored). The age is the local date of the item's last change against today, so an item done exactly 30 days ago stays and one done 31 days ago moves. Items move with every field and their last-change stamp unchanged.
++
++```
++$ todo archive
++archived 2
++$ todo list --archived
++[x] 1: file taxes
++[x] 3: call the bank
++```
++
++`todo list --archived` lists the archive instead of the todo file, with the usual `todo list` lines. The filters apply to it (`--tag`, `--priority`, `--project`, `--search`, `--sort`, `--done`, `--open`, `--overdue`, `--snoozed`, `--doing`). `todo search TEXT --archived`, `todo export --archived` and `todo board --archived` read the archive the same way. Without `--archived` nothing reads the archive for a listing: `todo list` no longer shows archived items, and a damaged archive file does not stop it.
++
++- Ids are never reused: a new item takes an id above every id in the archive too, so the number of an archived item is never given to another one.
++- History keeps its credit: streaks, XP, achievements, stats, review and burndown read the todo file and the archive, so archiving a done item changes none of their figures (see Streaks).
++- `todo show ID` finds an archived item. `todo note`, and every other command that changes items, works only on the todo file: an id found only in the archive exits 2 (`todo: error: no item 1`).
++- `todo projects` reads only the todo file, so archived items leave its counts.
++- An open subtask of an archived parent lists at top level, and an item waiting on an archived blocker stops waiting, since only an open item in the todo file blocks (see Subtasks and Dependencies). In `todo list --archived`, a parent and its archived children nest as usual, and the `done/total` count covers the children found in the archive.
++- A damaged archive file stops `todo archive` (even when nothing is old enough) and `todo list --archived` with exit 1, and nothing is written. `todo list --archived` does not read the todo file, so a damaged todo file does not stop it.
++- `todo archive` writes the archive first, then the todo file. If the second save fails, the item sits in both; the next `todo archive` replaces the archived copy and removes it from the todo file.
++- Nothing brings an item back from the archive.
++
++- Archiving does not sync: `todo sync` merges only the todo file, so an item you archived comes back from the remote, under its old id, on the next sync while any synced copy (the remote included) still holds it, and it then sits in both the todo file and the archive until `todo archive` runs again. Archiving every local copy does not stop it: a sync pushes the item to the remote file too, and any copy that still holds it sends it back. Only archiving the remote file as well (`TODO_FILE=$TODO_REMOTE todo archive`) keeps it away. The archive itself is not synced.
+diff --git a/tests/cli/test_cli_archive.py b/tests/cli/test_cli_archive.py
++++ b/tests/cli/test_cli_archive.py
++import json
++import time as clock
++from datetime import date, datetime, time, timedelta, timezone
++
++import pytest
++
++from todo.storage import Item, JsonStore
++
++TODAY = date(2026, 11, 6)
++
++
++def stamp(day):
++    """A UTC stamp whose local date is `day`."""
++    return datetime.combine(day, time(12)).astimezone(timezone.utc)
++
++
++def write(path, *items):
++    JsonStore(path).save(list(items))
++
++
++def done(item_id, days_old, title=None):
++    return Item(item_id, title or f"t{item_id}", done=True, updated_at=stamp(TODAY - timedelta(days=days_old)))
++
++
++@pytest.fixture
++def paths(tmp_path):
++    return tmp_path / "todo.json", tmp_path / "todo.json.archive"
++
++
++def titles(path):
++    return [r["title"] for r in json.loads(path.read_text())]
++
++
++def test_archive_moves_done_items_older_than_30_days_and_counts_them(cli, paths):
++    todo, archive = paths
++    write(todo, done(1, 45), done(2, 31))
++    assert cli("archive", today=TODAY) == ["archived 2"]
++    assert titles(archive) == ["t1", "t2"]
++    assert json.loads(todo.read_text()) == []
++
++
++def test_archive_keeps_a_done_item_exactly_30_days_old(cli, paths):
++    todo, archive = paths
++    write(todo, done(1, 30))
++    assert cli("archive", today=TODAY) == ["archived 0"]
++    assert titles(todo) == ["t1"]
++    assert not archive.exists()
++
++
++def test_archive_takes_a_done_item_31_days_old(cli, paths):
++    todo, archive = paths
++    write(todo, done(1, 31))
++    assert cli("archive", today=TODAY) == ["archived 1"]
++    assert titles(archive) == ["t1"]
++
++
++def test_archive_leaves_open_items_however_old(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "open", updated_at=stamp(TODAY - timedelta(days=400))), done(2, 40))
++    assert cli("archive", today=TODAY) == ["archived 1"]
++    assert titles(todo) == ["open"]
++    assert titles(archive) == ["t2"]
++
++
++def test_archive_with_nothing_to_move_prints_zero_and_writes_nothing(cli, paths):
++    todo, archive = paths
++    assert cli("archive", today=TODAY) == ["archived 0"]
++    assert not todo.exists() and not archive.exists()
++
++
++def test_archive_ages_by_local_date_against_today(cli, paths):
++    todo, _ = paths
++    write(todo, done(1, 31))
++    assert cli("archive", today=TODAY - timedelta(days=5)) == ["archived 0"]
++
++
++def test_archive_adds_to_an_existing_archive(cli, paths):
++    todo, archive = paths
++    write(archive, done(1, 90))
++    write(todo, done(2, 40))
++    assert cli("archive", today=TODAY) == ["archived 1"]
++    assert titles(archive) == ["t1", "t2"]
++
++
++def test_archive_does_not_duplicate_an_item_already_archived_by_a_crashed_run(cli, paths):
++    todo, archive = paths
++    write(archive, done(1, 40))
++    write(todo, done(1, 40))
++    assert cli("archive", today=TODAY) == ["archived 1"]
++    assert titles(archive) == ["t1"]
++    assert json.loads(todo.read_text()) == []
++
++
++def test_archive_replaces_an_archived_copy_with_the_todo_file_version(cli, paths):
++    todo, archive = paths
++    write(archive, done(1, 40, "old copy"))
++    write(todo, done(1, 40, "newer copy"))
++    cli("archive", today=TODAY)
++    assert titles(archive) == ["newer copy"]
++
++
++def test_archive_writes_the_archive_before_the_todo_file(cli, paths, monkeypatch):
++    from todo.storage import StoreError
++    from todo.storage.side_files import ItemFile
++
++    todo, archive = paths
++    write(todo, done(1, 40))
++    before = todo.read_text()
++
++    def fail(self, items):
++        raise StoreError("disk full")
++
++    monkeypatch.setattr(ItemFile, "save", fail)
++    with pytest.raises(SystemExit) as e:
++        cli("archive", today=TODAY)
++    assert e.value.code == 1
++    assert todo.read_text() == before
++
++
++def test_archive_ages_by_the_local_date_not_the_utc_date(cli, paths, monkeypatch):
++    todo, _ = paths
++    monkeypatch.setenv("TZ", "Pacific/Auckland")  # UTC+13 in October
++    clock.tzset()
++    try:
++        # 00:30 on Oct 7 in Auckland is Oct 6 in UTC: 30 days old locally, 31 by the UTC date.
++        item = Item(1, "edge", done=True, updated_at=datetime(2026, 10, 6, 11, 30, tzinfo=timezone.utc))
++        write(todo, item)
++        assert cli("archive", today=TODAY) == ["archived 0"]
++    finally:
++        monkeypatch.undo()
++        clock.tzset()
++
++
++def test_archived_ids_are_not_reused(cli, paths):
++    todo, _ = paths
++    write(todo, done(7, 40))
++    cli("archive", today=TODAY)
++    assert cli("add", "new", today=TODAY) == ["added 8: new"]
++
++
++def test_archive_keeps_the_stamp_and_fields_of_archived_items(cli, paths):
++    todo, archive = paths
++    item = done(1, 40)
++    item.tags = ["a"]
++    write(todo, item)
++    cli("archive", today=TODAY)
++    assert JsonStore(archive).load() == [item]
++
++
++def test_bad_archive_file_exits_1_and_leaves_the_todo_file_alone(cli, paths):
++    todo, archive = paths
++    write(todo, done(1, 40))
++    archive.write_text("{not json")
++    before = todo.read_text()
++    with pytest.raises(SystemExit) as e:
++        cli("archive", today=TODAY)
++    assert e.value.code == 1
++    assert todo.read_text() == before
++
++
++def test_archived_items_still_count_in_history_items(cli, paths):
++    from types import SimpleNamespace
++
++    from todo.insights import history_items
++    from todo.storage.side_files import SideFiles
++
++    todo, _ = paths
++    write(todo, done(1, 40), Item(2, "open"))
++    cli("archive", today=TODAY)
++    ctx = SimpleNamespace(store=JsonStore(todo), sides=SideFiles(todo))
++    assert sorted(i.id for i in history_items(ctx)) == [1, 2]
++
++
++# --- todo list --archived and the shared filters ---
++
++
++def test_list_archived_lists_the_archive_and_the_plain_list_does_not(cli, paths):
++    todo, archive = paths
++    write(todo, done(1, 40), Item(2, "open"))
++    cli("archive", today=TODAY)
++    assert cli("list", today=TODAY) == ["[ ] 2: open"]
++    assert cli("list", "--archived", today=TODAY) == ["[x] 1: t1"]
++
++
++def test_list_archived_with_an_empty_or_missing_archive_prints_nothing(cli, paths):
++    todo, _ = paths
++    write(todo, Item(1, "open"))
++    assert cli("list", "--archived", today=TODAY) == []
++
++
++def test_list_archived_applies_the_filters(cli, paths):
++    todo, archive = paths
++    a = done(1, 40, "alpha")
++    a.tags, a.priority, a.project = ["x"], "high", "Home"
++    b = done(2, 50, "beta")
++    b.tags = ["y"]
++    write(archive, a, b)
++    assert cli("list", "--archived", "--tag", "x", today=TODAY) == ["[x] 1: alpha !! #x"]
++    assert cli("list", "--archived", "--priority", "high", today=TODAY) == ["[x] 1: alpha !! #x"]
++    assert cli("list", "--archived", "--project", "home", today=TODAY) == ["[x] 1: alpha !! #x"]
++    assert cli("list", "--archived", "--search", "bet", today=TODAY) == ["[x] 2: beta #y"]
++    assert cli("list", "--archived", "--open", today=TODAY) == []
++    assert cli("list", "--archived", "--done", "--sort", "priority", today=TODAY) == ["[x] 1: alpha !! #x", "[x] 2: beta #y"]
++
++
++def test_list_archived_does_not_show_todo_file_items(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "live"))
++    write(archive, done(2, 40))
++    assert cli("list", "--archived", today=TODAY) == ["[x] 2: t2"]
++
++
++def test_list_archived_with_a_bad_archive_exits_1(cli, paths):
++    _, archive = paths
++    archive.write_text("{not json")
++    with pytest.raises(SystemExit) as e:
++        cli("list", "--archived", today=TODAY)
++    assert e.value.code == 1
++
++
++def test_plain_list_ignores_a_bad_archive_file(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "live"))
++    archive.write_text("{not json")
++    assert cli("list", today=TODAY) == ["[ ] 1: live"]
++
++
++def test_search_archived_finds_archived_items_only(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "milk live"))
++    write(archive, done(2, 40, "milk old"), done(3, 40, "bread"))
++    assert cli("search", "milk", "--archived", today=TODAY) == ["[x] 2: milk old"]
++    assert cli("search", "milk", today=TODAY) == ["[ ] 1: milk live"]
++
++
++def test_export_archived_exports_the_archive(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "live"))
++    write(archive, done(2, 40, "old"))
++    out = cli("export", "--format", "csv", "--archived", today=TODAY)
++    assert any("old" in line for line in out) and not any("live" in line for line in out)
++    plain = cli("export", "--format", "csv", today=TODAY)
++    assert any("live" in line for line in plain) and not any("old" in line for line in plain)
++
++
++def test_board_archived_shows_the_archive_in_the_done_column(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "live"))
++    write(archive, done(2, 40, "old"))
++    out = cli("board", "--archived", today=TODAY, width=lambda: 40)
++    assert any("2 old" in line for line in out) and not any("live" in line for line in out)
++
++
++def test_archived_children_of_an_archived_parent_list_as_a_tree_with_counts(cli, paths):
++    _, archive = paths
++    parent = done(1, 40, "parent")
++    kid = done(2, 40, "kid")
++    kid.parent = 1
++    write(archive, parent, kid)
++    assert cli("list", "--archived", today=TODAY) == ["[x] 1: parent 1/1", "  [x] 2: kid"]
++
++
++def test_an_open_child_of_an_archived_parent_lists_at_top_level(cli, paths):
++    todo, _ = paths
++    parent = done(1, 40, "parent")
++    kid = Item(2, "kid", parent=1)
++    write(todo, parent, kid)
++    cli("archive", today=TODAY)
++    assert cli("list", today=TODAY) == ["[ ] 2: kid"]
++
++
++def test_an_archived_blocker_does_not_make_an_item_wait(cli, paths):
++    todo, _ = paths
++    write(todo, done(1, 40, "blocker"), Item(2, "waits", blocked_on=[1]))
++    cli("archive", today=TODAY)
++    assert cli("list", today=TODAY) == ["[ ] 2: waits"]
++    assert cli("next", today=TODAY) == ["[ ] 2: waits"]
++
++
++def test_an_open_blocker_still_marks_an_archived_dependant_as_plain(cli, paths):
++    todo, archive = paths
++    dependant = done(2, 40, "dep")
++    dependant.blocked_on = [1]
++    write(todo, Item(1, "open blocker"))
++    write(archive, dependant)
++    assert cli("list", "--archived", today=TODAY) == ["[x] 2: dep"]
++
++
++def test_archiving_removes_items_from_the_projects_counts(cli, paths):
++    todo, _ = paths
++    write(todo, done(1, 40), Item(2, "open"))
++    todo_items = JsonStore(todo).load()
++    todo_items[0].project = todo_items[1].project = "Home"
++    write(todo, *todo_items)
++    assert cli("projects", today=TODAY) == ["Home  1/2  [#####.....]"]
++    cli("archive", today=TODAY)
++    assert cli("projects", today=TODAY) == ["Home  0/1  [..........]"]
++
++
++def test_show_finds_an_archived_item_and_note_on_it_exits_2(cli, paths):
++    todo, _ = paths
++    write(todo, done(1, 40, "old"), Item(2, "open"))
++    cli("archive", today=TODAY)
++    assert "title: old" in cli("show", "1", today=TODAY)
++    with pytest.raises(SystemExit) as e:
++        cli("note", "1", "hello", today=TODAY)
++    assert e.value.code == 2
++
++
++def test_archived_done_items_still_count_in_the_streak(cli, paths):
++    todo, _ = paths
++    item = done(1, 40, "old")
++    item.done_on = TODAY - timedelta(days=40)
++    write(todo, item)
++    before = cli("streak", today=TODAY)
++    cli("archive", today=TODAY)
++    assert cli("streak", today=TODAY) == before
++    assert cli("stats", today=TODAY)[1] == "done: 1"
++
++
++def test_ids_are_not_reused_after_the_whole_archive_is_listed(cli, paths):
++    todo, _ = paths
++    write(todo, done(5, 40), done(9, 40))
++    cli("archive", today=TODAY)
++    assert cli("add", "x", today=TODAY) == ["added 10: x"]
++    assert [l.split(":")[0] for l in cli("list", "--archived", today=TODAY)] == ["[x] 5", "[x] 9"]
++
++
++def test_sync_brings_an_archived_item_back_and_archive_again_clears_the_duplicate(cli, paths, tmp_path, monkeypatch):
++    todo, archive = paths
++    monkeypatch.setenv("TODO_REMOTE", str(tmp_path / "remote.json"))
++    write(todo, done(1, 40), Item(2, "open"))
++    cli("sync", today=TODAY)
++    cli("archive", today=TODAY)
++    assert cli("list", today=TODAY) == ["[ ] 2: open"]
++    cli("sync", today=TODAY)
++    assert cli("list", today=TODAY) == ["[x] 1: t1", "[ ] 2: open"]
++    assert titles(archive) == ["t1"]
++    assert cli("archive", today=TODAY) == ["archived 1"]
++    assert titles(archive) == ["t1"]
++
++
++def test_list_and_search_archived_do_not_read_the_todo_file(cli, paths):
++    todo, archive = paths
++    write(archive, done(1, 40, "x old"))
++    todo.write_text("{not json")
++    assert cli("list", "--archived", today=TODAY) == ["[x] 1: x old"]
++    assert cli("search", "x", "--archived", today=TODAY) == ["[x] 1: x old"]
++
++
++def test_archive_with_nothing_old_still_exits_1_on_a_damaged_archive(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "open"))
++    archive.write_text("{not json")
++    before = todo.read_text()
++    with pytest.raises(SystemExit) as e:
++        cli("archive", today=TODAY)
++    assert e.value.code == 1
++    assert todo.read_text() == before
++
++
++def test_a_done_item_with_no_stamp_is_never_archived(cli, paths):
++    todo, archive = paths
++    write(todo, Item(1, "unstamped", done=True))
++    assert cli("archive", today=TODAY) == ["archived 0"]
++    assert titles(todo) == ["unstamped"]
++
++
++def test_archiving_every_copy_does_not_stop_sync_returning_the_item_but_the_remote_does(cli, paths, tmp_path, monkeypatch):
++    todo, archive = paths
++    remote = tmp_path / "remote.json"
++    monkeypatch.setenv("TODO_REMOTE", str(remote))
++    write(todo, done(1, 40), Item(2, "open"))
++    cli("sync", today=TODAY)
++    cli("archive", today=TODAY)
++    monkeypatch.setenv("TODO_FILE", str(remote))  # archive the remote file too
++    cli("archive", today=TODAY)
++    assert titles(remote) == ["open"]
++    monkeypatch.setenv("TODO_FILE", str(todo))
++    monkeypatch.setenv("TODO_REMOTE", str(remote))
++    cli("sync", today=TODAY)
++    assert cli("list", today=TODAY) == ["[ ] 2: open"]
+diff --git a/todo/cli/commands/archive.py b/todo/cli/commands/archive.py
++++ b/todo/cli/commands/archive.py
++"""todo archive: move done items last updated over 30 days ago to the archive file."""
++from datetime import timedelta
++
++from todo.storage import local_date
++
++ARCHIVE_AFTER = timedelta(days=30)
++
++
++def register(parser) -> None:
++    pass
++
++
++def _old(item, today) -> bool:
++    return item.done and item.updated_at is not None and today - local_date(item.updated_at) > ARCHIVE_AFTER
++
++
++def run(args, ctx) -> None:
++    archived = ctx.sides.archive.load()  # a bad archive file stops here, old items or not, before anything is written
++    items = ctx.store.load()
++    old = [i for i in items if _old(i, ctx.today)]
++    if old:
++        moving = {i.id for i in old}
++        # The archive first, then the todo file: a crash between the two duplicates, never loses.
++        ctx.sides.archive.save([i for i in archived if i.id not in moving] + old)
++        ctx.store.save([i for i in items if not _old(i, ctx.today)])
++    ctx.out(f"archived {len(old)}")
+diff --git a/todo/cli/commands/board.py b/todo/cli/commands/board.py
++++ b/todo/cli/commands/board.py
++from todo.cli.select import add_filter_arguments, load_items, select_items
++    for item in select_items(load_items(args, ctx), args, ctx):
+diff --git a/todo/cli/commands/export.py b/todo/cli/commands/export.py
++++ b/todo/cli/commands/export.py
++"""todo export --format FORMAT [--out FILE] [--overdue] [--snoozed] [--tag T]... [--priority P] [--open|--done] [--doing] [--search TEXT] [--sort priority|due] [--archived]"""
++from todo.cli.select import add_filter_arguments, load_items, select_items
++    items = select_items(load_items(args, ctx), args, ctx)
+diff --git a/todo/cli/commands/list_cmd.py b/todo/cli/commands/list_cmd.py
++++ b/todo/cli/commands/list_cmd.py
++"""todo list [--overdue] [--snoozed] [--doing] [--tag T]... [--priority P] [--open|--done] [--search TEXT] [--sort priority|due] [--archived]"""
++from todo.cli.select import add_filter_arguments, load_items, select_items
++    everything = load_items(args, ctx)
+diff --git a/todo/cli/commands/search.py b/todo/cli/commands/search.py
++++ b/todo/cli/commands/search.py
++"""todo search TEXT [--overdue] [--snoozed] [--doing] [--project NAME] [--archived]: the same as `todo list --search TEXT` with those filters."""
++from todo.cli.select import add_archived_argument, default_filter_args, project_name
++    add_archived_argument(parser)
++    for name in ("search", "overdue", "snoozed", "doing", "project", "archived"):
+diff --git a/todo/cli/select.py b/todo/cli/select.py
++++ b/todo/cli/select.py
++    """Add --overdue, --snoozed, --tag, --priority, --project, --open/--done, --doing, --search, --sort and --archived to a command's parser."""
++    add_archived_argument(parser)
++
++
++def add_archived_argument(parser) -> None:
++    parser.add_argument("--archived", action="store_true", help="read the archive instead of the todo file")
++
++
++def load_items(args, ctx) -> list:
++    """The items a listing starts from: the todo file, or with --archived the archive (the todo file is not read)."""
++    return ctx.sides.archive.load() if args.archived else ctx.store.load()
