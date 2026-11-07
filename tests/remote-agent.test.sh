@@ -746,8 +746,10 @@ code=0; wait "$pid" || code=$?
 [ "$code" = 143 ] || fail "TERM: wanted exit 143, got $code: $(cat "$SANDBOX/out")"
 [ $((SECONDS - start)) -lt 10 ] || fail "TERM: waited for the sandbox run to end"
 grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "TERM: claim not deleted"
+# The kill reaches the backend at once, but a slow runner (Git Bash on Windows) can take a moment to reap it.
+for _ in $(seq 50); do alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" || break; sleep 0.1; done
 if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
-  fail "TERM: the backend's kubectl exec outlived remote-agent"
+  fail "TERM: the backend's kubectl exec outlived remote-agent by 5s"
   kill "$(cat "$SANDBOX/backend.pid")"
 fi
 jq -e '.state == "failed" and .exit_code == 143 and (.ended | type) == "number"' "$(kept)/run.json" >/dev/null 2>&1 \
