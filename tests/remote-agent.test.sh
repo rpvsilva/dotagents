@@ -85,8 +85,14 @@ case "\$args" in
   *\$'\\n'*) { printf '%s' "\$args" | tr '\\n' ' '; echo; } >>"$SANDBOX/calls" ;;
   *) printf '%s\n' "\$args" >>"$SANDBOX/calls" ;;
 esac
-mkdir -p "$POD"
-[ -e "$SANDBOX/nomain" ] || touch "$POD/main-stdout"
+# A task with its own \$SANDBOX/code.<task> (and patch.<task>) runs in its own pod, so two runs can go at once.
+pod="$POD" code="$SANDBOX/code" patch="$SANDBOX/patch"
+if [ -n "\${REMOTE_TASK:-}" ] && [ -e "$SANDBOX/code.\$REMOTE_TASK" ]; then
+  pod="$POD.\$REMOTE_TASK" code="$SANDBOX/code.\$REMOTE_TASK" patch="$SANDBOX/patch.\$REMOTE_TASK"
+fi
+# Builtins where they do: this stub runs about ten times a run.
+[ -d "\$pod" ] || mkdir -p "\$pod"
+[ -e "$SANDBOX/nomain" ] || : >>"\$pod/main-stdout"
 case " \$* " in
   *" apply "*)
     cat >"$SANDBOX/claim.yaml"
@@ -109,24 +115,27 @@ case " \$* " in
     if [ -e "$SANDBOX/real" ]; then
       while [ "\$1" != "-c" ]; do shift; done
       # A pod does not get this machine's CLAUDE_CONFIG_DIR.
-      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="$POD" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/$POD/main-stdout}" "\$3"
+      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="\$pod" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/\$pod/main-stdout}" "\$3"
       exit
     fi
     cat >"$SANDBOX/stdin"
-    cp "$POD/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
-    mkdir -p "$POD/out"; cp "$SANDBOX/patch" "$POD/out/changes.patch"; echo "did the thing" >"$POD/out/summary.md"
+    cp "\$pod/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
+    # With $SANDBOX/events, Claude's raw events on stdout (the transcript); with $SANDBOX/summary, the report.
+    [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
+    mkdir -p "\$pod/out"; cp "\$patch" "\$pod/out/changes.patch"
+    if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "\$pod/out/summary.md"; else echo "did the thing" >"\$pod/out/summary.md"; fi
     # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
     # it read the victim in as the session, and a forged run.json.
     if [ -e "$SANDBOX/evil" ]; then
-      for l in run.json.tmp run.json.first progress.log stream.jsonl.scrubbed summary.md.scrubbed session.jsonl; do ln -s "$SANDBOX/victim" "$POD/out/\$l"; done
-      echo '{"type":"result"}' >"$POD/out/stream.jsonl"
-      echo '{"run":"forged","name":"forged","state":"done","exit_code":0,"pid":1}' >"$POD/out/run.json"
+      for l in run.json.tmp run.json.first progress.log stream.jsonl.scrubbed summary.md.scrubbed session.jsonl; do ln -s "$SANDBOX/victim" "\$pod/out/\$l"; done
+      echo '{"type":"result"}' >"\$pod/out/stream.jsonl"
+      echo '{"run":"forged","name":"forged","state":"done","exit_code":0,"pid":1}' >"\$pod/out/run.json"
     fi
-    exit "\$(cat "$SANDBOX/code")" ;;
+    exit "\$(cat "\$code")" ;;
   *" exec "*)
     while [ "\$1" != "-c" ]; do shift; done
     c="\${2//--warning=no-unknown-keyword/}"
-    HOME="$POD" sh -c "\${c//\/proc\/1\/fd\/1/$POD/main-stdout}" ;;
+    HOME="\$pod" sh -c "\${c//\/proc\/1\/fd\/1/\$pod/main-stdout}" ;;
 esac
 EOF
 chmod +x "$SANDBOX/bin/kubectl"
@@ -139,7 +148,7 @@ cat >"$SANDBOX/podbin/claude" <<EOF
 # With \$SANDBOX/limit, the account is over its usage limit: Claude says so, as an API error and an error result.
 if [ -e "$SANDBOX/limit" ]; then
   echo '{"type":"assistant","error":"rate_limit","message":{"content":[{"type":"text","text":"You have hit your limit - resets 5:30pm (UTC)"}]}}'
-  echo '{"type":"result","is_error":true,"result":"You have hit your limit - resets 5:30pm (UTC)"}'
+  echo '{"type":"result","is_error":true,"total_cost_usd":0.42,"num_turns":3,"result":"You have hit your limit - resets 5:30pm (UTC)"}'
   exit 1
 fi
 if [ ! -e "$SANDBOX/nosession" ]; then
@@ -222,6 +231,16 @@ run_data() {
   grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "$1: the token is in run.json or progress.log"
   return 0
 }
+# Fails ($1 names the case) unless the last run's result.json is valid JSON matching jq condition $2, with no
+# result.json.* left beside it and no token in it.
+result_is() {
+  local k
+  k="$(kept)"
+  jq -e "$2" "$k/result.json" >/dev/null 2>&1 || fail "$1: result.json does not hold $2: $(cat "$k/result.json" 2>/dev/null)"
+  [ -z "$(find "$k" -name 'result.json.*')" ] || fail "$1: a temporary result.json left: $(find "$k" -name 'result.json.*')"
+  grep -q "sk-claude-secret" "$k/result.json" 2>/dev/null && fail "$1: the token is in result.json"
+  return 0
+}
 # The labels the claim asks for on its pod.
 pod_labels() { sed -n '/additionalPodMetadata/,$ s/^    labels: {\(.*\)}$/\1/p' "$SANDBOX/claim.yaml"; }
 patch='diff --git a/hello.txt b/hello.txt
@@ -261,25 +280,33 @@ grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not d
 run_data "success run data" "done" 0
 rm "$W/hello.txt"
 
+# result.json: what the run came to, for a caller that lost stdout, stderr or the exit code. Its figures come from
+# the transcript's last result event and the init event's model, the changed files from the patch, the report's
+# status and follow-ups from the summary. The events and the summary carry the token, which never reaches it.
+{
+  echo '{"type":"system","subtype":"init","model":"claude-test-1","session_id":"s"}'
+  echo '{"type":"result","is_error":false,"num_turns":1,"total_cost_usd":0.01,"usage":{"input_tokens":1}}'
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"key sk-claude-secret"}]}}'
+  echo '{"type":"result","is_error":false,"duration_ms":4200,"num_turns":7,"total_cost_usd":1.25,"result":"sk-claude-secret","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300}}'
+} >"$SANDBOX/events"
+printf 'status: done\nchanged: abc hello.txt\nfollow-up: document --flag\nfollow-up: token sk-claude-secret\n' >"$SANDBOX/summary"
+run 0 "$patch" --name "08-result" || fail "result on exit 0: exited non-zero: $(cat "$SANDBOX/out")"
+result_is "result on exit 0" '.exit_code == 0 and .status == "done" and .complete == true and .name == "08-result"
+  and (.run | startswith("agent-")) and .num_turns == 7 and .total_cost_usd == 1.25 and .duration_ms == 4200
+  and .usage == {"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300} and .model == "claude-test-1"
+  and .changed == ["hello.txt"] and .report_status == "done"
+  and .follow_up == ["document --flag", "token [redacted]"] and (.report_path | endswith("/summary.md"))'
+rm -f "$W/hello.txt"
+
 # No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
 [ "$code" = 3 ] || fail "no changes: wanted exit 3, got $code"
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "no changes: claim not deleted"
 run_data "no changes run data" "done" 3
+result_is "result on exit 3" '.exit_code == 3 and .status == "done" and .complete == true and .changed == []'
 
-# A failed run: non-zero, nothing applied, claim deleted.
-code=0; run 1 "$patch" || code=$?
-[ "$code" = 1 ] || fail "failed run: wanted exit 1, got $code"
-[ ! -e "$W/hello.txt" ] || fail "failed run: patch applied anyway"
-grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
-run_data "failed run data" failed 1
-# A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
-for c in 3 4 5; do
-  code=0; run "$c" "$patch" || code=$?
-  [ "$code" = 1 ] || fail "failed run exiting $c: wanted exit 1, got $code"
-done
-
-# A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched.
+# A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched. The patch is kept as it
+# came, so a file named after the token is redacted in result.json only.
 stale='diff --git a/tracked.txt b/tracked.txt
 --- a/tracked.txt
 +++ b/tracked.txt
@@ -287,10 +314,62 @@ stale='diff --git a/tracked.txt b/tracked.txt
 -not what the file says
 +two
 '
-code=0; run 0 "$stale" || code=$?
+code=0; run 0 "$stale"'diff --git a/sk-claude-secret.txt b/sk-claude-secret.txt
+new file mode 100644
+--- /dev/null
++++ b/sk-claude-secret.txt
+@@ -0,0 +1 @@
++x
+' || code=$?
 [ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
 [ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
+[ ! -e "$W/sk-claude-secret.txt" ] || fail "stale patch: partly applied"
 run_data "stale patch run data" failed 4
+result_is "result on exit 4" '.exit_code == 4 and .status == "failed" and .complete == true
+  and .changed == ["tracked.txt", "[redacted].txt"]'
+rm -f "$SANDBOX/events" "$SANDBOX/summary"
+
+# A failed run: non-zero, nothing applied, claim deleted. With no result event: every figure unknown, the time from
+# run.json, and no report status.
+code=0; run 1 "$patch" || code=$?
+[ "$code" = 1 ] || fail "failed run: wanted exit 1, got $code"
+[ ! -e "$W/hello.txt" ] || fail "failed run: patch applied anyway"
+grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
+run_data "failed run data" failed 1
+result_is "result on exit 1" '.exit_code == 1 and .status == "failed" and .complete == false and .total_cost_usd == null
+  and .num_turns == null and .usage == null and .model == null and .report_status == null and .follow_up == []
+  and (.duration_ms | type) == "number"'
+# A rename to a name of another length lists both its paths, and a non-ASCII name, which git C-quotes
+# ("b/caf\303\251.txt"), is listed as it is on disk.
+code=0; run 0 'diff --git a/tracked.txt b/tracked-renamed.txt
+similarity index 100%
+rename from tracked.txt
+rename to tracked-renamed.txt
+diff --git "a/caf\303\251.txt" "b/caf\303\251.txt"
+new file mode 100644
+index 0000000..ce01362
+--- /dev/null
++++ "b/caf\303\251.txt"
+@@ -0,0 +1 @@
++hello
+' || code=$?
+[ "$code" = 0 ] || fail "result of a rename: exited $code: $(cat "$SANDBOX/out")"
+result_is "result of a rename and a non-ASCII name" '.changed == ["tracked.txt", "tracked-renamed.txt", "café.txt"]'
+[ ! -f "$W/tracked-renamed.txt" ] || mv "$W/tracked-renamed.txt" "$W/tracked.txt"
+rm -f "$W"/caf*.txt
+# A report and a last result event each over 200 KB, more than one argument may hold, still give a result.
+big="$(head -c 210000 /dev/zero | tr '\0' x)"
+printf '{"type":"result","is_error":false,"num_turns":2,"result":"%s"}\n' "$big" >"$SANDBOX/events"
+{ printf 'status: done\nfollow-up: read it all\n'; printf '%s\n' "$big"; } >"$SANDBOX/summary"
+run 0 "$patch" --name 08-big || fail "result of a big report: exited non-zero: $(tail -c 2000 "$SANDBOX/err")"
+result_is "result of a big report" '.complete == true and .num_turns == 2 and .report_status == "done"
+  and .follow_up == ["read it all"] and .changed == ["hello.txt"]'
+rm -f "$W/hello.txt" "$SANDBOX/events" "$SANDBOX/summary"
+# A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
+for c in 3 4 5; do
+  code=0; run "$c" "$patch" || code=$?
+  [ "$code" = 1 ] || fail "failed run exiting $c: wanted exit 1, got $code"
+done
 
 # A hostile sandbox's out archive cannot write outside the run folder through links, nor replace run.json: its links
 # named after the files the host writes (run.json.tmp, progress.log, the scrub's temporaries) aim at $SANDBOX/victim.
@@ -430,6 +509,8 @@ fi
 [ ! -s "$SANDBOX/report" ] || fail "usage limit: something on stdout: $(cat "$SANDBOX/report")"
 [ ! -e "$W/hello.txt" ] || fail "usage limit: patch applied"
 run_data "usage limit run data" failed 5
+result_is "usage limit result" '.exit_code == 5 and .status == "failed" and .complete == false and .total_cost_usd == 0.42
+  and .num_turns == 3'
 rm -f "$SANDBOX/real" "$SANDBOX/limit"
 
 # --name labels the claim and its pod with the task and tags the progress; it is made a valid label value. run.json
@@ -665,12 +746,15 @@ code=0; wait "$pid" || code=$?
 [ "$code" = 143 ] || fail "TERM: wanted exit 143, got $code: $(cat "$SANDBOX/out")"
 [ $((SECONDS - start)) -lt 10 ] || fail "TERM: waited for the sandbox run to end"
 grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "TERM: claim not deleted"
+# The kill reaches the backend at once, but a slow runner (Git Bash on Windows) can take a moment to reap it.
+for _ in $(seq 50); do alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" || break; sleep 0.1; done
 if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
-  fail "TERM: the backend's kubectl exec outlived remote-agent"
+  fail "TERM: the backend's kubectl exec outlived remote-agent by 5s"
   kill "$(cat "$SANDBOX/backend.pid")"
 fi
 jq -e '.state == "failed" and .exit_code == 143 and (.ended | type) == "number"' "$(kept)/run.json" >/dev/null 2>&1 \
   || fail "TERM: run.json not failed with exit 143: $(cat "$(kept)/run.json" 2>/dev/null)"
+result_is "TERM result" '.exit_code == 143 and .status == "failed" and .complete == false and .total_cost_usd == null'
 # INT does the same, exit 130. A background job of a script starts with INT ignored, which bash cannot undo: perl
 # sets it back to the default before running remote-agent.
 if command -v perl >/dev/null 2>&1; then
@@ -749,6 +833,347 @@ refused "two attachments named notes" "$REPO/scripts/remote-agent.sh" --attach "
 head -c 2097152 /dev/urandom >"$W/big.bin"
 refused "over REMOTE_MAX_MB=1" env REMOTE_MAX_MB=1 "$REPO/scripts/remote-agent.sh" "x"
 rm -f "$W/big.bin"
+
+# Records live in the common git dir: a run in a linked worktree keeps its record there, so `git worktree remove`
+# leaves it, and `resume` places its session for any worktree of the repo afterwards.
+rm -f "$W/hello.txt"
+: >"$SANDBOX/real"
+LW="$SANDBOX/linked"
+git -C "$W" worktree add -q --detach "$LW"
+main_w="$W"
+W="$LW"
+run 0 "" || fail "linked worktree: exited non-zero: $(cat "$SANDBOX/out")"
+W="$main_w"
+rm -f "$SANDBOX/real"
+claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
+git -C "$W" worktree remove --force "$LW"
+k="$W/.git/remote-agent/$claim"
+for f in transcript.jsonl run.json progress.log changes.patch summary.md session.jsonl; do
+  [ -s "$k/$f" ] || fail "linked worktree: $f not kept in the common git dir after the worktree went: $(find "$W/.git" -path '*remote-agent*' 2>/dev/null)"
+done
+jq -e --arg run "$claim" '.run == $run and .state == "done"' "$k/run.json" >/dev/null 2>&1 \
+  || fail "linked worktree: run.json not whole: $(cat "$k/run.json" 2>/dev/null)"
+LW2="$SANDBOX/linked2"
+git -C "$W" worktree add -q --detach "$LW2"
+real_lw2="$(cd "$LW2" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then real_lw2="$(cygpath -w "$real_lw2")"; fi
+lw2_projects="$CC/projects/$(printf '%s' "$real_lw2" | sed 's/[^A-Za-z0-9]/-/g')"
+rm -rf "$CC"
+resume "$claim" "$LW2" || fail "resume after the worktree went: exited non-zero: $(cat "$SANDBOX/err")"
+[ -f "$lw2_projects/0b1e5e55-1d00-4c1a-9a7e-5e551011d000.jsonl" ] \
+  || fail "resume after the worktree went: session not placed for $LW2: $(find "$CC" -type f 2>/dev/null)"
+# A run kept before records moved, in the linked worktree's own git dir, still resumes.
+old="$(git -C "$LW2" rev-parse --absolute-git-dir)/remote-agent/agent-old"
+mkdir -p "$old"
+printf '%s\n' '{"sessionId":"01d5e55-0002","cwd":"/sandbox/work"}' >"$old/session.jsonl"
+rm -rf "$CC"
+resume agent-old "$LW2" || fail "resume from the old location: exited non-zero: $(cat "$SANDBOX/err")"
+[ -f "$lw2_projects/01d5e55-0002.jsonl" ] || fail "resume from the old location: session not placed: $(find "$CC" -type f 2>/dev/null) $(cat "$SANDBOX/err")"
+git -C "$W" worktree remove --force "$LW2"
+
+# Two runs whose first ids clash (a stub date and od give the same id twice): the second makes a new id, and both
+# records are whole.
+mkdir -p "$SANDBOX/idbin"
+real_date="$(command -v date)"
+real_od="$(command -v od)"
+cat >"$SANDBOX/idbin/date" <<STUB
+#!/usr/bin/env bash
+if [ "\$*" = "+%Y%m%d-%H%M%S" ]; then echo 20260101-000000; else exec "$real_date" "\$@"; fi
+STUB
+cat >"$SANDBOX/idbin/od" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+  *"/dev/urandom"*)
+    n=\$(( \$(cat "$SANDBOX/od-calls" 2>/dev/null || echo 0) + 1 ))
+    echo "\$n" >"$SANDBOX/od-calls"
+    if [ "\$n" -le 2 ]; then echo "    7"; else echo "    8"; fi ;;
+  *) exec "$real_od" "\$@" ;;
+esac
+STUB
+chmod +x "$SANDBOX/idbin/date" "$SANDBOX/idbin/od"
+clash_path="$PATH"
+PATH="$SANDBOX/idbin:$PATH"
+for i in 1 2; do
+  rm -f "$W/hello.txt"
+  run 0 "$patch" || fail "id clash: run $i exited non-zero: $(cat "$SANDBOX/out")"
+done
+PATH="$clash_path"
+rm -f "$W/hello.txt"
+for id in agent-20260101-000000-7 agent-20260101-000000-8; do
+  k="$W/.git/remote-agent/$id"
+  if [ ! -s "$k/changes.patch" ] || [ ! -f "$k/transcript.jsonl" ] || [ ! -s "$k/progress.log" ]; then
+    fail "id clash: record $id not whole: $(ls "$k" 2>/dev/null)"
+  fi
+  jq -e --arg run "$id" '.run == $run and .state == "done" and .exit_code == 0' "$k/run.json" >/dev/null 2>&1 \
+    || fail "id clash: run.json of $id not its own: $(cat "$k/run.json" 2>/dev/null)"
+done
+[ "$(grep -c "claimed agent-20260101-000000-7" "$W/.git/remote-agent/agent-20260101-000000-7/progress.log" 2>/dev/null)" = 1 ] \
+  || fail "id clash: the second run wrote into the first run's record: $(cat "$W/.git/remote-agent/agent-20260101-000000-7/progress.log" 2>/dev/null)"
+
+# `remote-agent result <name|run>` prints a run's result.json, so a caller that redirected stderr, or started several
+# runs at once, still reads each run's result and exit code. Two runs at once, one with stderr in a file and one
+# through `2>&1 | cat`, each in its own stub pod: each keeps its own progress.log and result.
+# Runs `remote-agent result` in $W with the arguments given; stdout to $SANDBOX/result, stderr to $SANDBOX/err.
+result() {
+  (cd "$W" && env HOME="$H" "$REPO/scripts/remote-agent.sh" result "$@") >"$SANDBOX/result" 2>"$SANDBOX/err"
+}
+# Starts remote-agent.sh in $W as task $1 with the arguments after it; the caller redirects its output.
+start() {
+  local task="$1"
+  shift
+  (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" --name "$task" "$@" "add a hello file")
+}
+rm -f "$W/hello.txt"
+echo 0 >"$SANDBOX/code.08-alone"; : >"$SANDBOX/patch.08-alone"
+echo 1 >"$SANDBOX/code.08-piped"; : >"$SANDBOX/patch.08-piped"
+start 08-alone >/dev/null 2>"$SANDBOX/err-alone" &
+alone=$!
+start 08-piped 2>&1 | cat >"$SANDBOX/err-piped" &
+piped=$!
+wait "$alone" || true
+wait "$piped" || true
+for t in 08-alone:3 08-piped:1; do
+  task="${t%:*}" rc="${t#*:}"
+  result "$task" || fail "result $task: exited non-zero: $(cat "$SANDBOX/err")"
+  jq -e --arg n "$task" --argjson rc "$rc" '.name == $n and .exit_code == $rc' "$SANDBOX/result" >/dev/null 2>&1 \
+    || fail "result $task: not its result with exit $rc: $(cat "$SANDBOX/result")"
+  k="$W/.git/remote-agent/$(jq -r .run "$SANDBOX/result" 2>/dev/null | tr -d '\r')"
+  # Its progress.log is its own stderr's lines, untagged, however that stderr was sent.
+  [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null)" = "$(tr -d '\r' <"$SANDBOX/${task/08-/err-}" | sed -n "s/^\[$task\] //p")" ] \
+    || fail "result $task: progress.log is not its own stderr: $(cat "$k/progress.log" 2>/dev/null)"
+  # By its run id too.
+  run_id="$(jq -r .run "$SANDBOX/result" | tr -d '\r')"
+  result "$run_id" || fail "result $run_id: exited non-zero: $(cat "$SANDBOX/err")"
+  jq -e --arg n "$task" '.name == $n' "$SANDBOX/result" >/dev/null 2>&1 || fail "result $run_id: not $task's result: $(cat "$SANDBOX/result")"
+done
+rm -f "$SANDBOX"/code.08-* "$SANDBOX"/patch.08-*
+# A retry: the same name twice, the newest run's result printed, whatever order the folders sort in.
+run 1 "" --name 08-retry || true
+first="$(jq -r .run "$(kept)/run.json" | tr -d '\r')"
+run 0 "" --name 08-retry || true
+result 08-retry || fail "result of a retry: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.exit_code == 3' "$SANDBOX/result" >/dev/null 2>&1 || fail "result of a retry: not the newest run's: $(cat "$SANDBOX/result")"
+# The first run made newer: its result wins, so the newest by start is what counts, not the folder name.
+jq -c '.started += 3600' "$W/.git/remote-agent/$first/run.json" >"$SANDBOX/run.json" && mv "$SANDBOX/run.json" "$W/.git/remote-agent/$first/run.json"
+result 08-retry || fail "result of a retry, first newer: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e --arg r "$first" '.exit_code == 1 and .run == $r' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result of a retry, first newer: not the newest by start: $(cat "$SANDBOX/result")"
+# A name matches as --name writes it.
+result 08-Retry || fail "result 08-Retry: the name not matched as --name writes it: $(cat "$SANDBOX/err")"
+# From outside the repo, given its dir; a run kept before records moved, in a linked worktree's own git dir, is found
+# there by name.
+old="$W/.git/worktrees/wt/remote-agent/agent-oldres"
+mkdir -p "$old"
+printf '{"run":"agent-oldres","name":"08-old","started":1}\n' >"$old/run.json"
+printf '{"run":"agent-oldres","exit_code":0}\n' >"$old/result.json"
+code=0; (cd "$SANDBOX" && env HOME="$H" "$REPO/scripts/remote-agent.sh" result 08-old "$W") >"$SANDBOX/result" 2>"$SANDBOX/err" || code=$?
+[ "$code" = 0 ] || fail "result with a dir: exited $code: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-oldres"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result with a dir: not the old location's run: $(cat "$SANDBOX/result")"
+rm -rf "$W/.git/worktrees/wt"
+code=0; result 08-retry "$W" extra || code=$?
+[ "$code" = 1 ] || fail "result with three arguments: exited $code, not 1"
+grep -q "usage: remote-agent result" "$SANDBOX/err" || fail "result with three arguments: no usage: $(cat "$SANDBOX/err")"
+# Unknown names, and names that are no run name, exit non-zero with one line.
+for q in 08-nothing ../x ""; do
+  code=0; result "$q" || code=$?
+  [ "$code" != 0 ] || fail "result '$q': exited 0"
+  [ ! -s "$SANDBOX/result" ] || fail "result '$q': printed on stdout: $(cat "$SANDBOX/result")"
+  [ "$(grep -c . "$SANDBOX/err")" = 1 ] || fail "result '$q': not one line: $(cat "$SANDBOX/err")"
+done
+code=0; result || code=$?
+[ "$code" != 0 ] || fail "result with no argument: exited 0"
+# A run still going has no result.json yet: say so rather than print an older run's.
+mkdir -p "$W/.git/remote-agent/agent-going"
+printf '{"run":"agent-going","name":"08-retry","started":%s,"state":"running"}\n' "$(( $(date +%s) + 7200 ))" \
+  >"$W/.git/remote-agent/agent-going/run.json"
+code=0; result 08-retry || code=$?
+[ "$code" != 0 ] || fail "result of a run still going: exited 0 with $(cat "$SANDBOX/result")"
+grep -q "agent-going has no result yet" "$SANDBOX/err" || fail "result of a run still going: does not name it: $(cat "$SANDBOX/err")"
+rm -rf "$W/.git/remote-agent/agent-going"
+# Every worktree of the repo shares the records: a run made from the caller's worktree wins over a newer one made
+# from another under the same name, which counts only when none was made here.
+W2="$SANDBOX/w2"
+git -C "$W" worktree add -q --detach "$W2"
+# Makes a finished run $1 named 08-shared, from worktree $2, started at $3.
+shared() {
+  mkdir -p "$W/.git/remote-agent/$1"
+  jq -cn --arg r "$1" --arg w "$2" --argjson s "$3" '{run: $r, name: "08-shared", worktree: $w, started: $s,
+    state: "done"}' >"$W/.git/remote-agent/$1/run.json"
+  jq -cn --arg r "$1" '{run: $r, name: "08-shared", exit_code: 0}' >"$W/.git/remote-agent/$1/result.json"
+}
+now="$(date +%s)"
+shared agent-shared-here "$(git -C "$W" rev-parse --show-toplevel)" "$now"
+shared agent-shared-there "$(git -C "$W2" rev-parse --show-toplevel)" "$((now + 60))"
+result 08-shared || fail "result in a shared repo: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-here"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result in a shared repo: not this worktree's run: $(cat "$SANDBOX/result")"
+(cd "$W2" && env HOME="$H" "$REPO/scripts/remote-agent.sh" result 08-shared) >"$SANDBOX/result" 2>"$SANDBOX/err" \
+  || fail "result from the other worktree: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-there"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result from the other worktree: not its run: $(cat "$SANDBOX/result")"
+result 08-shared "$W2" || fail "result for the other worktree's dir: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-there"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result for the other worktree's dir: not its run: $(cat "$SANDBOX/result")"
+rm -rf "$W/.git/remote-agent/agent-shared-here"
+result 08-shared || fail "result made only from another worktree: exited non-zero: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-shared-there"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result made only from another worktree: not found: $(cat "$SANDBOX/result")"
+rm -rf "$W/.git/remote-agent/agent-shared-there"
+git -C "$W" worktree remove --force "$W2"
+# A run just begun is found by its name from its first write of run.json: never the previous run's result. A stub ps
+# holds the run between that write and the next while $SANDBOX/ps-hold is there.
+run 0 "" --name 08-started || true
+# Then it runs the real ps, or fails as a missing one would.
+real_ps="$(command -v ps || true)"
+cat >"$SANDBOX/bin/ps" <<EOF
+#!/bin/sh
+if [ -e "$SANDBOX/ps-hold" ]; then
+  : >"$SANDBOX/ps-held"
+  while [ -e "$SANDBOX/ps-hold" ]; do sleep 0.1; done
+fi
+[ -z "$real_ps" ] || exec "$real_ps" "\$@"
+exit 127
+EOF
+chmod +x "$SANDBOX/bin/ps"
+: >"$SANDBOX/ps-hold"
+start 08-started >/dev/null 2>&1 &
+begun=$!
+i=0
+while [ ! -e "$SANDBOX/ps-held" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+code=0; result 08-started || code=$?
+[ "$code" != 0 ] || fail "result of a run just begun: exited 0 with the previous run's $(cat "$SANDBOX/result")"
+grep -q "has no result yet" "$SANDBOX/err" || fail "result of a run just begun: does not say so: $(cat "$SANDBOX/err")"
+rm -f "$SANDBOX/ps-hold"
+wait "$begun" || true
+rm -f "$SANDBOX/bin/ps" "$SANDBOX/ps-held"
+(cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "result <name|run>" || fail "--help does not list result"
+grep -q "remote-agent result <name|run>" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list result"
+
+# `remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]` removes the records older than the age, by run.json's
+# ended, else started, else the folder's mtime, in the common git dir and the old per-worktree locations; never a
+# live run. Records made by hand in a repo of their own.
+P="$SANDBOX/prune"
+git init -q "$P"
+# As prune prints it, from git: physical on macOS (mktemp gives /var/..., a link to /private/var/...), C:/... in Git Bash.
+P="$(git -C "$P" rev-parse --path-format=absolute --show-toplevel)"
+now="$(date +%s)"
+# Makes record folder $1 (under $P/.git) with run.json $2 (none when empty), its mtime in 2020.
+rec() {
+  mkdir -p "$P/.git/$1"
+  [ -z "$2" ] || printf '%s\n' "$2" >"$P/.git/$1/run.json"
+  printf 'x\n' >"$P/.git/$1/progress.log"
+  touch -t 202001010000 "$P/.git/$1"
+}
+# A pid surely not alive: a finished child's.
+sh -c 'exit 0' &
+dead=$!
+wait "$dead" || true
+# A ps (as `ps -o lstart= -p <pid>`) that says this test's shell started at $me_start, $dead is not alive, and any
+# other pid started at another time; $SANDBOX/psbin-none holds one with no -o lstart (Git Bash's), where only
+# `kill -0` tells a live pid.
+me_start="Mon Jan  5 10:00:00 2026"
+mkdir -p "$SANDBOX/psbin" "$SANDBOX/psbin-none"
+# shellcheck disable=SC2016 # $4 is for the stub ps, not this shell
+printf '#!/bin/sh\ncase "$4" in %s) echo " %s" ;; %s) exit 1 ;; *) echo " Sat Jan  3 09:00:00 2026" ;; esac\n' \
+  "$$" "$me_start" "$dead" >"$SANDBOX/psbin/ps"
+printf '#!/bin/sh\necho "ps: unknown option -- o" >&2\nexit 1\n' >"$SANDBOX/psbin-none/ps"
+chmod +x "$SANDBOX/psbin/ps" "$SANDBOX/psbin-none/ps"
+psbin="$SANDBOX/psbin"
+# Runs `remote-agent prune` in $P with the arguments given; stdout to $SANDBOX/prune.out, stderr to $SANDBOX/prune.err.
+prune() {
+  (cd "$P" && env HOME="$H" PATH="$psbin:$PATH" "$REPO/scripts/remote-agent.sh" prune "$@") >"$SANDBOX/prune.out" 2>"$SANDBOX/prune.err"
+}
+old=$((now - 3 * 86400))
+make_records() {
+  rm -rf "$P/.git/remote-agent" "$P/.git/worktrees"
+  rec remote-agent/agent-done "{\"state\":\"done\",\"started\":$((old - 60)),\"ended\":$old,\"pid\":$dead}"
+  rec remote-agent/agent-stopped "{\"state\":\"running\",\"started\":$old,\"ended\":null,\"pid\":$dead,\"pid_start\":\"x\"}"
+  rec remote-agent/agent-reused "{\"state\":\"running\",\"started\":$old,\"ended\":null,\"pid\":$$,\"pid_start\":\"Thu Jan  1 00:00:00 1970\"}"
+  rec remote-agent/agent-young "{\"state\":\"done\",\"started\":$old,\"ended\":$((now - 3600)),\"pid\":$dead}"
+  rec remote-agent/agent-live "{\"state\":\"running\",\"started\":$old,\"ended\":null,\"pid\":$$,\"pid_start\":\"$me_start\"}"
+  rec remote-agent/agent-nojson ""
+  rec worktrees/wt/remote-agent/agent-oldplace "{\"state\":\"failed\",\"started\":$old,\"ended\":$old}"
+  # Not a run name, and a link out of the folder: neither is followed nor removed.
+  rec remote-agent/-x "{\"state\":\"done\",\"started\":$old,\"ended\":$old}"
+  mkdir -p "$SANDBOX/outside/agent-out"
+  printf '{"state":"done","started":%s,"ended":%s}\n' "$old" "$old" >"$SANDBOX/outside/agent-out/run.json"
+  # Git Bash copies on a plain `ln -s`: ask for a native link, and skip the link cases where there can be none.
+  haslink=1
+  MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$SANDBOX/outside/agent-out" "$P/.git/remote-agent/agent-link" 2>/dev/null || haslink=
+  MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$SANDBOX/outside" "$P/.git/remote-agent/agent-done/inside-link" 2>/dev/null || haslink=
+  touch -t 202001010000 "$P/.git/remote-agent/agent-done"
+}
+gone="agent-done agent-stopped agent-reused agent-nojson"
+kept="agent-young agent-live -x"
+make_records
+prune --older-than 1d --dry-run || fail "prune --dry-run: exited non-zero: $(cat "$SANDBOX/prune.err")"
+for r in $gone $kept agent-oldplace; do
+  [ -d "$P/.git/remote-agent/$r" ] || [ -d "$P/.git/worktrees/wt/remote-agent/$r" ] || fail "prune --dry-run: removed $r"
+done
+[ "$(grep -c '^would remove .*/' "$SANDBOX/prune.out")" = 5 ] || fail "prune --dry-run: not one line per run that would go: $(cat "$SANDBOX/prune.out")"
+tail -1 "$SANDBOX/prune.out" | grep -q '^would remove 5 runs$' || fail "prune --dry-run: no count last: $(cat "$SANDBOX/prune.out")"
+prune --older-than 1d || fail "prune: exited non-zero: $(cat "$SANDBOX/prune.err")"
+for r in $gone; do
+  [ ! -e "$P/.git/remote-agent/$r" ] || fail "prune: kept old $r"
+  grep -qx "removed $P/.git/remote-agent/$r" "$SANDBOX/prune.out" || fail "prune: no line for $r: $(cat "$SANDBOX/prune.out")"
+done
+[ ! -e "$P/.git/worktrees/wt/remote-agent/agent-oldplace" ] || fail "prune: kept an old run in the old per-worktree location"
+for r in $kept; do [ -d "$P/.git/remote-agent/$r" ] || fail "prune: removed $r"; done
+[ "$(tail -1 "$SANDBOX/prune.out")" = "removed 5 runs" ] || fail "prune: no count last: $(cat "$SANDBOX/prune.out")"
+grep -q -- '-x' "$SANDBOX/prune.err" || fail "prune: a folder that is no run name not named on stderr: $(cat "$SANDBOX/prune.err")"
+if [ -n "$haslink" ] && { [ ! -L "$P/.git/remote-agent/agent-link" ] || [ ! -f "$SANDBOX/outside/agent-out/run.json" ]; }; then
+  fail "prune: followed or removed a link out of the folder"
+fi
+# Hours: a run that ended an hour ago stays under 2h, and goes once it ended 3 hours ago.
+prune --older-than 2h || fail "prune --older-than 2h: exited non-zero: $(cat "$SANDBOX/prune.err")"
+[ -d "$P/.git/remote-agent/agent-young" ] || fail "prune --older-than 2h: removed a run that ended an hour ago"
+[ "$(cat "$SANDBOX/prune.out")" = "removed 0 runs" ] || fail "prune with nothing to remove: $(cat "$SANDBOX/prune.out")"
+jq -c ".ended = $((now - 3 * 3600))" "$P/.git/remote-agent/agent-young/run.json" >"$SANDBOX/run.json" \
+  && mv "$SANDBOX/run.json" "$P/.git/remote-agent/agent-young/run.json"
+prune --older-than 2h || fail "prune --older-than 2h: exited non-zero: $(cat "$SANDBOX/prune.err")"
+[ ! -e "$P/.git/remote-agent/agent-young" ] || fail "prune --older-than 2h: kept a run that ended 3 hours ago"
+[ -d "$P/.git/remote-agent/agent-live" ] || fail "prune --older-than 2h: removed the live run"
+# Bad ages and arguments are refused with the usage, and nothing goes.
+make_records
+for a in "--older-than x" "--older-than 1" "--older-than 1w" "--older-than -1d" "--older-than" "" "--older-than 1d --what"; do
+  code=0
+  # shellcheck disable=SC2086 # each case is its words
+  prune $a || code=$?
+  [ "$code" = 1 ] || fail "prune $a: exited $code, not 1"
+  grep -q 'usage: remote-agent prune' "$SANDBOX/prune.err" || fail "prune $a: no usage: $(cat "$SANDBOX/prune.err")"
+  [ -d "$P/.git/remote-agent/agent-done" ] || fail "prune $a: removed a run"
+done
+# A huge age removes nothing: the number is capped, never overflowing into a negative age.
+for a in 9999999999999999d 99999999999999999999h; do
+  prune --older-than "$a" || fail "prune --older-than $a: exited non-zero: $(cat "$SANDBOX/prune.err")"
+  [ "$(cat "$SANDBOX/prune.out")" = "removed 0 runs" ] || fail "prune --older-than $a: $(cat "$SANDBOX/prune.out")"
+done
+# Without a ps that prints start times, a pid that is alive keeps its run.
+psbin="$SANDBOX/psbin-none"
+prune --older-than 1d || fail "prune, no ps: exited non-zero: $(cat "$SANDBOX/prune.err")"
+[ -d "$P/.git/remote-agent/agent-live" ] || fail "prune, no ps: removed the live run"
+[ ! -e "$P/.git/remote-agent/agent-stopped" ] || fail "prune, no ps: kept the stopped run"
+psbin="$SANDBOX/psbin"
+# From outside the repo, given its dir; two dirs are refused with the usage, and a dir outside any repo by name.
+make_records
+code=0; (cd "$SANDBOX" && env HOME="$H" PATH="$psbin:$PATH" "$REPO/scripts/remote-agent.sh" prune --older-than 1d "$P") \
+  >"$SANDBOX/prune.out" 2>"$SANDBOX/prune.err" || code=$?
+[ "$code" = 0 ] || fail "prune with a dir: exited $code: $(cat "$SANDBOX/prune.err")"
+for r in $gone; do [ ! -e "$P/.git/remote-agent/$r" ] || fail "prune with a dir: kept old $r"; done
+for r in $kept; do [ -d "$P/.git/remote-agent/$r" ] || fail "prune with a dir: removed $r"; done
+make_records
+code=0; prune --older-than 1d "$P" "$P" || code=$?
+[ "$code" = 1 ] || fail "prune with two dirs: exited $code, not 1"
+grep -q 'usage: remote-agent prune' "$SANDBOX/prune.err" || fail "prune with two dirs: no usage: $(cat "$SANDBOX/prune.err")"
+[ -d "$P/.git/remote-agent/agent-done" ] || fail "prune with two dirs: removed a run"
+mkdir -p "$SANDBOX/nogit"
+code=0; prune --older-than 1d "$SANDBOX/nogit" || code=$?
+[ "$code" = 1 ] || fail "prune outside a repo: exited $code, not 1"
+grep -q "not in a git worktree: $SANDBOX/nogit" "$SANDBOX/prune.err" || fail "prune outside a repo: not said: $(cat "$SANDBOX/prune.err")"
+(cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "prune --older-than" || fail "--help does not list prune"
+grep -q "remote-agent prune --older-than" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list prune"
 
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"
