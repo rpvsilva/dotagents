@@ -22,8 +22,15 @@ cwd="${cwd:-$PWD}"
 [ "$("$HOME/.agents/bin/settings" --dir "$cwd" get telemetry auto_save 2>/dev/null)" != false ] || exit 0
 
 command -v python3 >/dev/null 2>&1 || exit 0
-# ~/.agents/hooks links to the repo's scripts/hooks; the extractor sits in the repo beside it.
-here="$(CDPATH='' cd "$(dirname "$0")" 2>/dev/null && pwd -P)" || exit 0
+# install.sh links this file into ~/.agents/hooks (older installs linked the whole folder); the extractor sits in the
+# repo beside scripts/hooks. One readlink finds the repo file (readlink -f is missing on older macOS); pwd -P then
+# resolves a folder link.
+self="$0"
+if [ -L "$self" ]; then
+  link="$(readlink "$self")" || exit 0
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+fi
+here="$(CDPATH='' cd "$(dirname "$self")" 2>/dev/null && pwd -P)" || exit 0
 extract="${TELEMETRY_EXTRACT:-$here/../../adapters/claude/telemetry/extract.py}"
 [ -f "$extract" ] || exit 0
 

@@ -1,6 +1,9 @@
-"""Tests for `finish_task.py` copying each of the task's remote runs' `result.json` into `<run>/remote/<task>-<run>.json`."""
+"""Tests for `finish_task.py` copying each of the task's remote runs' `result.json` into `<run>/remote/<task>-<run>.json`,
+and committing a remote resolver's patch, applied over the merge it left in progress, as the merge commit."""
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -99,6 +102,60 @@ class FinishRemoteTest(StepCase):
         self.assertEqual(self.finish(), "OK 01-02 committed files=1")
         self.assertEqual(self.copies(), [])
         self.assertIn("no remote result found for 01-02", self.log())
+
+
+class RemoteResolverTest(StepCase):
+    """`FAIL TT-NN conflict` leaves the merge in the worktree; a remote resolver edits a snapshot of its files and its
+    patch is applied with `git apply` (working tree only, as `scripts/remote-agent.sh` does)."""
+
+    def conflict(self):
+        self.advance_ticket("a.txt", "theirs\n")
+        self.write(self.wt, "a.txt", "ours\n")
+        self.write(self.wt, "b.txt", "b\n")
+        self.assertIn("FAIL 01-02 conflict a.txt", self.kit.step(FINISH, self.kit.run_dir, "01-02").stdout)
+        self.kit.git("rev-parse", "--verify", "MERGE_HEAD", cwd=self.wt)
+
+    def remote_patch(self, resolved):
+        """The patch a sandbox returns: its snapshot is the worktree's files as plain commits (no MERGE_HEAD), and the
+        patch is `git diff --cached --binary <snapshot>` after the resolver writes `resolved` into each named file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            box = Path(tmp)
+            self.kit.git("init", "-q", cwd=box)
+            for name in self.kit.git("ls-files", "-co", "--exclude-standard", cwd=self.wt).splitlines():
+                self.write(box, name, (self.wt / name).read_text(encoding="utf-8"))
+            self.kit.git("add", "-A", cwd=box)
+            self.kit.git("commit", "-qm", "snapshot", cwd=box)
+            for name, text in resolved.items():
+                self.write(box, name, text)
+            self.kit.git("add", "-A", cwd=box)
+            patch = subprocess.run(["git", "-C", str(box), "diff", "--cached", "--binary", "HEAD"], env=self.kit.env,
+                                   capture_output=True, check=True).stdout
+        path = self.kit.tmp / "changes.patch"
+        path.write_bytes(patch)
+        return path
+
+    def apply(self, patch):
+        self.kit.git("apply", "--whitespace=nowarn", str(patch), cwd=self.wt)
+
+    def test_a_marker_free_patch_applied_mid_merge_is_committed_as_the_merge_commit(self):
+        self.conflict()
+        task_tip = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
+        ticket_tip = self.kit.git("rev-parse", "origin/feat/alpha", cwd=self.wt)
+        self.apply(self.remote_patch({"a.txt": "both\n"}))
+        self.kit.git("rev-parse", "--verify", "MERGE_HEAD", cwd=self.wt)
+        p = self.kit.step(FINISH, self.kit.run_dir, "01-02")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.one_line(p), "OK 01-02 committed files=2")
+        self.assertEqual(self.kit.git("rev-parse", "HEAD^1", "HEAD^2", cwd=self.wt).split(), [task_tip, ticket_tip])
+        self.assertEqual(self.kit.git("show", "HEAD:a.txt", cwd=self.wt), "both")
+        self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "")
+
+    def test_a_patch_that_leaves_markers_fails_conflict_again(self):
+        self.conflict()
+        marked = (self.wt / "a.txt").read_text(encoding="utf-8").replace("ours", "ours, edited")
+        self.apply(self.remote_patch({"a.txt": marked}))
+        self.assert_fail(self.kit.step(FINISH, self.kit.run_dir, "01-02"), "FAIL 01-02 conflict a.txt (log: ")
+        self.kit.git("rev-parse", "--verify", "MERGE_HEAD", cwd=self.wt)
 
 
 if __name__ == "__main__":

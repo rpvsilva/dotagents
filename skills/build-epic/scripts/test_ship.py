@@ -363,6 +363,15 @@ class ShipGuardTest(Base):
         self.assertFalse(ran.exists())
         self.assertEqual(self.calls("pr", "merge"), [])
 
+    def test_an_unreadable_rule_on_the_default_branch_fails_bad_rule_and_merges_nothing(self):
+        clone = self.kit.clone
+        (clone / "AGENTS.md").write_text("# Rules\n\n```agent-merge-guard\nconftest path\n```\n", encoding="utf-8")
+        self.kit.git("commit", "-qam", "break a rule", cwd=clone)
+        self.kit.git("push", "-q", "origin", "main", cwd=clone)
+        self.assertRegex(self.ship(), r"^FAIL 01 bad-rule: line 4: conftest path \(log: ")
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+
     def test_a_ticket_into_an_integration_branch_that_lost_the_block_is_judged_by_the_default_branch(self):
         # An earlier ticket merged into `integ` with its block deletion waived; this ticket forks from there.
         clone = self.kit.clone
