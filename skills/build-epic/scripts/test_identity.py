@@ -21,7 +21,7 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     def decide(self, mode, human="rui", setting=None):
         """`decisions.md` recording `mode` (and `human:`); the `merge_identity` Setting is `setting`, else `mode`."""
         text = f"# Decisions\nmerge_identity: {mode}\n" + (f"human: {human}\n" if human else "")
-        (self.kit.run_dir / "decisions.md").write_text(text)
+        (self.kit.run_dir / "decisions.md").write_text(text, encoding="utf-8")
         if setting or mode == "human":
             self.setting("merge_identity", setting or mode)
 
@@ -91,7 +91,7 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     # decisions.md only records the Setting
 
     def test_decisions_saying_human_while_the_setting_is_unset_merges_nothing_as_the_human(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n", encoding="utf-8")
         self.kit.answer("api-user", out="rui\n")
         self.kit.answer("api-installation_repositories", out='{"total_count": 1}\n')
         self.assert_wrong_identity(self.merge())
@@ -151,14 +151,14 @@ class ModeTest(unittest.TestCase):
 
     def test_with_nothing_recorded_or_set_it_is_the_app(self):
         self.assertEqual(identity.mode(self.kit.run_dir, lambda: None), "app")
-        self.file.write_text("# Decisions\nmerge_identity:\n")
+        self.file.write_text("# Decisions\nmerge_identity:\n", encoding="utf-8")
         self.assertEqual(identity.mode(self.kit.run_dir, lambda: "human"), "human")
 
     def test_any_other_setting_fails_bad_value(self):
         with self.assertRaises(core.Fail) as caught:
             identity.mode(self.kit.run_dir, lambda: "bot")
         self.assertEqual(caught.exception.reason, "bad-value: merge_identity is one of app|human")
-        self.file.write_text("# Decisions\nmerge_identity: rui\n")  # decisions.md never decides the mode
+        self.file.write_text("# Decisions\nmerge_identity: rui\n", encoding="utf-8")  # decisions.md never decides the mode
         self.assertEqual(identity.mode(self.kit.run_dir, lambda: "app"), "app")
 
 

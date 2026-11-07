@@ -12,7 +12,7 @@ PRs only; a ticket PR: `review_before_agent_merge` and `ci`), and each Authoriza
 With no `decisions.md` the section is left out.
 
 `<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`),
-`passed` or `rc`, and optionally `seconds`.
+`rc` (or, in older files, a boolean `passed`), and optionally `seconds`.
 """
 import json
 import re
@@ -45,7 +45,7 @@ def _result(run, ident):
     if not path.is_file():
         return NO_RESULT
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except ValueError:
         return NO_RESULT
     suites = data.get("suites") if isinstance(data, dict) else data
@@ -54,7 +54,7 @@ def _result(run, ident):
         if not isinstance(s, dict):
             continue
         name = s.get("command") or s.get("suite") or s.get("name") or "?"
-        passed = s["passed"] if "passed" in s else s.get("rc") == 0
+        passed = s["rc"] == 0 if "rc" in s else s.get("passed") is True
         secs = f" in {s['seconds']:g}s" if isinstance(s.get("seconds"), (int, float)) else ""
         lines.append(f"- `{name}`: {'passed' if passed else 'failed'}{secs}")
     return "\n".join(lines) or NO_RESULT
@@ -86,7 +86,7 @@ def merge_section(run, into=None):
 
 
 def task_body(run, ident, task_path, ticket_path):
-    text = task_path.read_text()
+    text = task_path.read_text(encoding="utf-8")
     parts = [
         "## What it builds", section(text, "What to build") or title(task_path),
         "## Check", section(text, "Check") or "None written in the task.",
@@ -115,7 +115,7 @@ def template(root):
     for name in TEMPLATES:
         path = core.resolve(root) / name
         if path.is_file():
-            return path.read_text()
+            return path.read_text(encoding="utf-8")
     return None
 
 

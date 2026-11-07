@@ -67,7 +67,7 @@ def unquote(text):
 def report_entries(path):
     """The report's values by key: `{"mutations": [...], "moved": [...], ...}`."""
     entries, key = {}, None
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("```"):
             continue
         m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", line)
