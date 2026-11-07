@@ -11,7 +11,8 @@ Prints, per run (`runs.<name>`), its time, cost (by model, token kind, the orche
 remote runs: measured from the metrics' `remote.cost_usd`, and estimated for runs without cost from the other run's
 implementers), tokens, orchestrator figures, subagents by type, role and model, steps and outcomes; then
 `comparison`: each figure side by side, with `<b>Minus<A>`, `<b>Vs<A>Pct` and which run did `better`. Roles are a
-subagent's saved `role`, else read from its type and description (spec Q14 names). Nothing reads git or writes prose.
+subagent's saved `role`, else `report.py`'s rule on its type and description (spec Q14 names). A cost that needs a
+model missing from the pricing is null. Nothing reads git or writes prose.
 """
 import argparse
 import json
@@ -21,13 +22,15 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from report import role_of as role  # noqa: E402
+
 SCHEMA = "build-epic-run-comparison/v1"
 TOKEN_KINDS = ["input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h"]
 ROLES = ("implement", "review", "re-review", "ticket-review", "security", "fix", "resolve", "tune", "plan", "explore",
          "other")
 REVIEW_ROLES = ("review", "ticket-review", "re-review", "security")
-TYPE_ROLES = {"security-reviewer": "security", "epic-implementer": "implement", "epic-planner": "plan",
-              "epic-explorer": "explore"}
 
 
 def load(path):
@@ -41,6 +44,11 @@ def dig(value, *keys):
             return None
         value = value.get(key)
     return value
+
+
+def plus(*xs):
+    """The sum, or None when any term is None (a cost with an unpriced model)."""
+    return None if any(x is None for x in xs) else sum(xs)
 
 
 def r(x, n=2):
@@ -69,13 +77,23 @@ class Prices:
     def __init__(self, pricing):
         self.pricing = pricing
 
+    def unpriced(self, tbm):
+        """Whether a model with tokens has no price."""
+        return any(m not in self.pricing["models"] and any(v.values()) for m, v in tbm.items())
+
     def cost(self, tbm):
-        return sum(x * self.pricing["models"][m][k] / 1e6 for m, v in tbm.items() for k, x in v.items())
+        """USD at the table's prices; None when a model with tokens has no price."""
+        if self.unpriced(tbm):
+            return None
+        return sum(x * self.pricing["models"][m][k] / 1e6 for m, v in tbm.items() if m in self.pricing["models"]
+                   for k, x in v.items())
 
     def by_kind(self, tbm):
+        if self.unpriced(tbm):
+            return dict.fromkeys(TOKEN_KINDS)
         out = Counter()
         for m, v in tbm.items():
-            for k, x in v.items():
+            for k, x in v.items() if m in self.pricing["models"] else ():
                 out[k] += x * self.pricing["models"][m][k] / 1e6
         return {k: r(out[k]) for k in TOKEN_KINDS}
 
@@ -96,24 +114,6 @@ def plain(tbm):
 
 def total_tokens(tbm):
     return {k: int(sum(v.get(k, 0) for v in tbm.values())) for k in TOKEN_KINDS}
-
-
-def role(agent):
-    """The saved role; before schema 4, gh-35's rules on type and description, under spec Q14's names."""
-    if isinstance(agent.get("role"), str):
-        return agent["role"]
-    t, d = agent["type"], agent["description"].lower()
-    if "resolve" in d:
-        return "resolve"
-    if t == "pr-reviewer":
-        if "re-review" in d:
-            return "re-review"
-        if "tuner" in d:
-            return "review"
-        if "ticket" in d:
-            return "ticket-review"
-        return "review"
-    return TYPE_ROLES.get(t, "other")
 
 
 def remote_counts(met):
@@ -153,11 +153,11 @@ def analyse(name, tel, met, branch, prices):
         for s in subs:
             g[keyf(s)].append(s)
         out = {}
-        for k, items in sorted(g.items(), key=lambda kv: -sum(x["costUSD"] for x in kv[1])):
+        for k, items in sorted(g.items(), key=lambda kv: -sum(x["costUSD"] or 0 for x in kv[1])):
             tok = defaultdict(Counter)
             for x in items:
                 add_tokens(tok, x["tokensByModel"])
-            out[k] = {"count": len(items), "costUSD": r(sum(x["costUSD"] for x in items)),
+            out[k] = {"count": len(items), "costUSD": r(plus(*(x["costUSD"] for x in items))),
                       "costPerRunUSD": stats([x["costUSD"] for x in items], 3),
                       "turns": stats([x["turns"] for x in items], 1),
                       "toolCalls": sum(x["toolCalls"] for x in items),
@@ -167,8 +167,8 @@ def analyse(name, tel, met, branch, prices):
 
     orch_turns = span["turns"] - sum(a["turns"] for a in span["subagents"])
     orch_cost = prices.cost(orch_tokens)
-    subs_cost = sum(s["costUSD"] for s in subs)
-    other_cost = sum(prices.cost(s["tokensByModel"]) for s in other_spans)
+    subs_cost = plus(*(s["costUSD"] for s in subs))
+    other_cost = plus(*(prices.cost(s["tokensByModel"]) for s in other_spans))
     session_cost = prices.cost(session_tokens)
     orch_cache_read = sum(v["cacheRead"] for v in orch_tokens.values())
 
@@ -210,10 +210,10 @@ def analyse(name, tel, met, branch, prices):
             "cost": {
                 "telemetryReportedUSD": tel.get("cost"), "pricingAsOf": tel.get("pricingAsOf"),
                 "recomputedSessionUSD": r(session_cost),
-                "buildEpicSpanUSD": r(orch_cost + subs_cost),
+                "buildEpicSpanUSD": r(plus(orch_cost, subs_cost)),
                 "otherSpansUSD": r(other_cost),
-                "orchestratorUSD": r(orch_cost), "orchestratorShare": r(orch_cost / session_cost, 3),
-                "subagentsUSD": r(subs_cost), "subagentsShare": r(subs_cost / session_cost, 3),
+                "orchestratorUSD": r(orch_cost), "orchestratorShare": ratio(orch_cost, session_cost, 3),
+                "subagentsUSD": r(subs_cost), "subagentsShare": ratio(subs_cost, session_cost, 3),
                 "byModelUSD": {m: r(prices.cost({m: v})) for m, v in session_tokens.items()},
                 "byTokenKindUSD": prices.by_kind(session_tokens),
                 "orchestratorByTokenKindUSD": prices.by_kind(orch_tokens),
@@ -246,7 +246,7 @@ def analyse(name, tel, met, branch, prices):
                 "byModel": group(lambda s: "+".join(s["models"])),
                 "costliest": sorted(({k: s[k] for k in ("type", "role", "description", "turns", "costUSD",
                                                          "avgContextTokens", "models")} for s in subs),
-                                    key=lambda s: -s["costUSD"])[:15],
+                                    key=lambda s: -(s["costUSD"] or 0))[:15],
             },
             "steps": {
                 "total": len(steps), "failed": sum(1 for s in steps if s["failed"]),
@@ -272,10 +272,11 @@ def analyse(name, tel, met, branch, prices):
 def estimate_remote(X, other_subs, met):
     """Fill X's remote cost: runs without cost priced at the other run's implementer cost per run."""
     runs, unmeasured, measured = remote_counts(met)
-    base = X["cost"]["recomputedSessionUSD"] + (measured or 0)
+    base = plus(X["cost"]["recomputedSessionUSD"], measured or 0)
     st = stats([s["costUSD"] for s in other_subs if s["role"] == "implement"], 4)
     if not unmeasured:
-        X["cost"]["totalEstimateUSD"] = {k: r(base) for k in ("low", "mid", "meanBased", "high")}
+        X["cost"]["totalEstimateUSD"] = (None if base is None else
+                                         {k: r(base) for k in ("low", "mid", "meanBased", "high")})
         return
     est = {"runs": unmeasured, "tasks": dig(met, "remote_runs", "tasks"),
            "minutesKnown": dig(met, "remote_runs", "minutes_total_known"),
@@ -285,7 +286,7 @@ def estimate_remote(X, other_subs, met):
            if st else None}
     X["cost"]["unmeasuredRemoteRuns"] = est
     X["cost"]["totalEstimateUSD"] = ({k: r(base + v) for k, v in est["estimateUSD"].items()}
-                                     if est["estimateUSD"] else None)
+                                     if est["estimateUSD"] and base is not None else None)
 
 
 def compare(names, outs, metrics):
@@ -412,7 +413,7 @@ def main(argv=None):
         "runs": dict(zip(names, outs)),
         "pricing": {"asOf": prices.pricing.get("asOf"), "unit": prices.pricing.get("unit"),
                     "source": prices.pricing.get("source"),
-                    "models": {m: prices.pricing["models"][m] for m in models}},
+                    "models": {m: prices.pricing["models"].get(m) for m in models}},
     }
     sys.stdout.reconfigure(encoding="utf-8")
     json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
