@@ -47,7 +47,7 @@ uninstall "$home" all >"$SANDBOX/all.out" || fail "uninstall all exited non-zero
 
 left="$(ours "$home")"
 [ -z "$left" ] || fail "links left behind: $left"
-[ ! -e "$home/.agents/hooks" ] || fail "~/.agents/hooks left behind"
+[ ! -e "$home/.agents/hooks" ] || fail "$home/.agents/hooks left behind"
 [ "$(cat "$home/.claude/CLAUDE.md")" = "old instructions" ] || fail "original CLAUDE.md not restored"
 [ -L "$home/.agents/skills/foreign" ] || fail "foreign skill link removed"
 jq -e '. == {"model": "opus", "permissions": {"deny": ["Bash(rm:*)"]}}' "$home/.claude/settings.json" >/dev/null ||
