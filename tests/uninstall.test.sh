@@ -47,6 +47,7 @@ uninstall "$home" all >"$SANDBOX/all.out" || fail "uninstall all exited non-zero
 
 left="$(ours "$home")"
 [ -z "$left" ] || fail "links left behind: $left"
+[ ! -e "$home/.agents/hooks" ] || fail "$home/.agents/hooks left behind"
 [ "$(cat "$home/.claude/CLAUDE.md")" = "old instructions" ] || fail "original CLAUDE.md not restored"
 [ -L "$home/.agents/skills/foreign" ] || fail "foreign skill link removed"
 jq -e '. == {"model": "opus", "permissions": {"deny": ["Bash(rm:*)"]}}' "$home/.claude/settings.json" >/dev/null ||
@@ -78,7 +79,15 @@ mkdir -p "$home/.claude"
 install "$home" claude
 uninstall "$home" claude >/dev/null
 [ -z "$(ours "$home/.claude")" ] || fail "uninstall claude left Claude links"
-[ -L "$home/.agents/hooks" ] || fail "uninstall claude removed the shared links"
+[ -L "$home/.agents/hooks/lib.sh" ] || fail "uninstall claude removed the shared links"
+
+# A home from before per-file hook links: its ~/.agents/hooks folder link is removed too, and nothing in the repo.
+home="$SANDBOX/old"
+mkdir -p "$home/.agents"
+ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+uninstall "$home" all >/dev/null
+[ ! -e "$home/.agents/hooks" ] && [ ! -L "$home/.agents/hooks" ] || fail "old ~/.agents/hooks folder link left behind"
+[ -f "$REPO/scripts/hooks/lib.sh" ] || fail "uninstall removed a file in the repo through the old folder link"
 
 # Unknown target exits non-zero.
 if uninstall "$home" nope >/dev/null 2>&1; then fail "unknown target exited 0"; fi

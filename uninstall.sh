@@ -8,7 +8,8 @@
 #     entries and any hook calling ~/.agents/hooks/; everything else stays.
 #   - MCP servers in mcp/servers.json and Claude plugins in adapters/claude/plugins.txt are removed (their
 #     marketplaces stay). DOTAGENTS_SKIP_PLUGINS=1 skips both for Claude, as in install.sh.
-#   - all also removes the shared ~/.agents links; a single tool leaves them for the others.
+#   - all also removes the shared ~/.agents links (the per-file links in ~/.agents/hooks, or an older install's one
+#     link to the folder); a single tool leaves them for the others.
 #   - --purge also deletes dotagents' own data: ~/.config/dotagents (secrets, Settings), ~/.agents/telemetry and
 #     ~/.agents/runs. ~/.dotagents-backup is always kept: it holds your original files.
 #   - --dry-run prints what would change and changes nothing.
@@ -180,7 +181,8 @@ uninstall_cursor() {
 uninstall_shared() {
   echo "shared"
   unlink_in "$SHARED_SKILLS"
-  unlink_ours "$HOME/.agents/hooks"
+  # ~/.agents/hooks holds one link per file; older installs made it one link to the repo folder.
+  if [ -L "$HOME/.agents/hooks" ]; then unlink_ours "$HOME/.agents/hooks"; else unlink_in "$HOME/.agents/hooks"; fi
   unlink_in "$HOME/.agents/bin"
   if [ "$purge" -eq 1 ]; then
     local d
@@ -192,7 +194,7 @@ uninstall_shared() {
     done
   fi
   # Folders install.sh created, once nothing else is in them.
-  [ "$dry" -eq 1 ] || rmdir "$SHARED_SKILLS" "$HOME/.agents/bin" "$HOME/.agents" 2>/dev/null || true
+  [ "$dry" -eq 1 ] || rmdir "$SHARED_SKILLS" "$HOME/.agents/hooks" "$HOME/.agents/bin" "$HOME/.agents" 2>/dev/null || true
 }
 
 case "$target" in
