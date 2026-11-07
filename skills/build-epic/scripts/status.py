@@ -11,7 +11,11 @@ no PR or no blocker. The one step that prints several stdout lines. Exits 0, or 
 `<TT> <status> <PR> <title>  next: <what it waits on>` (`FAIL TT no-ticket` when there is none).
 `--write` writes `<run>/state.md`, the one-screen summary the orchestrator continues from: every ticket's status line,
 the tasks in flight, what needs a human (every `blocked` task, or one whose report says `blocked` or `plan-wrong`, with
-its `why`; every `in-review` or `blocked` ticket) and the next actions. Prints `OK run state <path>`.
+its `why`; every `in-review` or `blocked` ticket; past MAX_HUMAN lines, the rest as `- +N more`) and the next actions.
+Prints `OK run state <path>`.
+A report counts only when it is not older than its task file, which `start_task.py` and a re-plan rewrite: a report
+from before the task's last dispatch or re-plan is stale. A `blocked` tuning task (`TT-tests`) counts as done for
+shipping: the ticket ships without it.
 """
 import os
 import re
@@ -63,6 +67,12 @@ def table(run):
 
 
 MAX_LINE = 160
+# Lines of `state.md`'s "Needs a human", the `+N more` line included: keeps a 10-ticket run within 40 lines.
+MAX_HUMAN = 10
+
+
+def tuning(ident):
+    return ident.endswith("-tests")
 
 
 class Run:
@@ -74,10 +84,12 @@ class Run:
         for f in sorted((run / "tickets").glob("*.md")):
             tt = f.stem.split("-", 1)[0]
             self.tickets[runfolder.norm(tt)] = (tt, f, f.read_text())
+        self.paths = {}
         for f in sorted((run / "tasks").glob("*.md")):
             ident = task_id(f)
             tt, _, nn = ident.partition("-")
             self.tasks.setdefault(runfolder.norm(tt), {})[runfolder.norm(nn)] = (ident, f, f.read_text())
+            self.paths[ident] = f
 
     def status(self, text):
         return runfolder.header(text, "Status") or "?"
@@ -86,20 +98,25 @@ class Run:
         return self.status(self.tickets[tt][2]) if tt in self.tickets else "missing"
 
     def why(self, ident):
-        """The (status, why) of the task's stored report, or (None, None) without one."""
+        """The (status, why, fresh) of the task's stored report, or (None, None, False) without one. `fresh`: the
+        report is not older than the task file, so it comes from the task's last dispatch."""
         report = self.dir / "reports" / f"{ident}.md"
         if not report.is_file():
-            return None, None
+            return None, None, False
         text = report.read_text()
-        return runfolder.header(text, "status"), runfolder.header(text, "why") or ""
+        task = self.paths.get(ident)
+        fresh = task is None or report.stat().st_mtime_ns >= task.stat().st_mtime_ns
+        return runfolder.header(text, "status"), runfolder.header(text, "why") or "", fresh
 
     def stuck(self, tt):
         """[(id, state, why)] for each task of ticket `tt` that waits on a human: `blocked`, or not `done` with a
-        `blocked` or `plan-wrong` report."""
+        fresh `blocked` or `plan-wrong` report."""
         out = []
         for ident, _, text in self.tasks.get(tt, {}).values():
             status = self.status(text)
-            reported, why = self.why(ident)
+            reported, why, fresh = self.why(ident)
+            if not fresh and status != "blocked":
+                reported = None
             if status == "blocked" or (status != "done" and reported in ("blocked", "plan-wrong")):
                 out.append((ident, reported if reported in ("blocked", "plan-wrong") else status, why or "no report"))
         return out
@@ -139,7 +156,10 @@ class Run:
             return f"human approval of #{pr}" if pr else "human approval"
         if status == "claimed":
             return f"{runfolder.header(text, 'Claimed by') or 'another developer'} (claimed)"
-        stuck = self.stuck(tt)
+        tasks = self.tasks.get(tt, {}).values()
+        # A blocked tuning task counts as done: the human was told, and the ticket ships without it.
+        done = {i for i, _, t in tasks if self.status(t) == "done" or (tuning(i) and self.status(t) == "blocked")}
+        stuck = [(i, s, w) for i, s, w in self.stuck(tt) if i not in done]
         if stuck:
             return "human: " + ", ".join(f"task {i} {s}" for i, s, _ in stuck)
         if status == "blocked":
@@ -147,8 +167,7 @@ class Run:
         if status == "ready":
             waits = self.waits_on(tt)
             return ", ".join(f"ticket {n} ({self.ticket_status(runfolder.norm(n))})" for n in waits) or "start"
-        tasks = self.tasks.get(tt, {}).values()
-        if tasks and all(self.status(t) == "done" for _, _, t in tasks):
+        if tasks and len(done) == len(tasks):
             return "ship"
         red = runfolder.header(text, "CI red")
         running = [i for i, _, t in tasks if self.status(t) == "in-progress"]
@@ -200,7 +219,8 @@ class Run:
                  "",
                  "## Tickets"] + [self.line(tt) for tt in order]
                 + ["", "## Tasks", f"In flight: {', '.join(self.in_flight()) or 'none'}",
-                   "", "## Needs a human"] + (human or ["- nothing"])
+                   "", "## Needs a human"] + (human[:MAX_HUMAN - 1] + [f"- +{len(human) - MAX_HUMAN + 1} more"]
+                                              if len(human) > MAX_HUMAN else human or ["- nothing"])
                 + ["", "## Next"] + (nexts or ["- nothing"]))
 
 

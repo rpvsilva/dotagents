@@ -2,6 +2,11 @@
 """Checks a subagent's final message, read on stdin: the 4-line block, at most 400 characters, and its full report.
 
 Usage: python3 -I report_check.py <run> <id> < message
+       python3 -I report_check.py <run> <id> --from-report
+
+`--from-report` checks the block ending `<run>/reports/<id>.md` instead (a remote subagent's stdout): from its last
+`status:` line to the end, blank lines and one closing code fence after it allowed; a report with no `status:` line is
+a `shape` violation.
 
 The block is the lines `status:`, `changed:`, `why:` and `follow-up:`, in that order and nothing else; `status:` holds
 one word. Blank lines around it and one code fence wrapping it are allowed. The length counts the message without
@@ -32,8 +37,26 @@ def block_lines(message):
     return lines
 
 
+def last_block(text):
+    """The report's last block: from its last `status:` line on, without the closing fence and blank lines after it."""
+    lines = text.rstrip().splitlines()
+    if lines and lines[-1].strip() == "```":
+        lines.pop()
+    starts = [i for i, line in enumerate(lines) if line.startswith("status:")]
+    return "\n".join(lines[starts[-1]:]) if starts else None
+
+
 def step(ctx):
-    message = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    if ctx.args not in ([], ["--from-report"]):
+        raise core.Fail("usage: report_check.py <run> <id> [--from-report]")
+    report = ctx.run_dir / "reports" / f"{ctx.id}.md"
+    if ctx.args:
+        message = last_block(report.read_text(errors="replace")) if report.is_file() else None
+        if message is None:
+            ctx.note(f"no block at the end of {report}")
+            raise core.Fail("brief-violation shape" + ("" if report.is_file() and report.stat().st_size else " no-report"))
+    else:
+        message = sys.stdin.buffer.read().decode("utf-8", errors="replace")
     ctx.note(f"message ({len(message.strip())} characters):\n{message}")
     problems = []
     length = len(message.strip())
@@ -49,7 +72,6 @@ def step(ctx):
         status = lines[0][len("status:"):].strip()
         if len(status.split()) != 1:
             problems.append("shape")
-    report = ctx.run_dir / "reports" / f"{ctx.id}.md"
     if not report.is_file() or report.stat().st_size == 0:
         ctx.note(f"no report at {report}")
         problems.append("no-report")

@@ -1,4 +1,5 @@
 """Tests for `status.py --line` (one status line per ticket) and `status.py --write` (the run's `state.md`)."""
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -124,6 +125,42 @@ class StateTest(unittest.TestCase):
         write(self.run_dir / "tasks" / "07-02-x.md", task("07-02", "blocked"))
         _, text = self.state()
         self.assertIn("- task 07-02 blocked: no report", text.splitlines())
+
+    def test_a_blocked_tuning_task_counts_as_done_so_the_ticket_ships(self):
+        write(self.run_dir / "tasks" / "05-tests.md", task("05-tests", "blocked"))
+        self.assertRegex(self.line("05"), r"next: ship$")
+        _, text = self.state()
+        self.assertIn("- ship: 05", text.splitlines())
+
+    def test_a_blocked_tuning_task_does_not_ship_a_ticket_with_open_tasks(self):
+        write(self.run_dir / "tasks" / "09-tests.md", task("09-tests", "blocked"))
+        self.assertNotRegex(self.line("09"), r"next: ship$")
+
+    def test_a_stale_report_on_a_re_planned_task_is_not_stuck(self):
+        # 09-01's plan-wrong report predates the re-plan that set the task back to ready.
+        report = self.run_dir / "reports" / "09-01.md"
+        path = write(self.run_dir / "tasks" / "09-01-x.md", task("09-01", "ready"))
+        old = report.stat().st_mtime - 60
+        os.utime(report, (old, old))
+        self.assertNotIn("human", self.line("09"))
+        _, text = self.state()
+        self.assertNotIn("09-01", text.split("## Needs a human")[1].split("##")[0])
+        # Dispatched again and reporting plan-wrong again: stuck once more.
+        write(path, task("09-01", "in-progress"))
+        os.utime(path, (old - 60, old - 60))
+        self.assertIn("next: human: task 09-01 plan-wrong", self.line("09"))
+
+    def test_state_stays_within_40_lines_with_25_stuck_tasks(self):
+        for n in range(10, 35):
+            write(self.run_dir / "tasks" / f"07-{n}-x.md", task(f"07-{n}", "blocked"))
+        _, text = self.state()
+        lines = text.splitlines()
+        self.assertLessEqual(len(lines), 40, text)
+        human = text.split("## Needs a human\n")[1].split("\n\n")[0].splitlines()
+        self.assertRegex(human[-1], r"^- \+\d+ more$")
+        shown = len(human) - 1
+        self.assertEqual(int(human[-1][3:].split()[0]), 25 + 2 + 1 - shown, human)
+        self.assertIn("- ship: 05", lines)
 
     def test_state_names_every_ticket_waiting_on_a_human(self):
         write(self.run_dir / "tickets" / "10-t.md", ticket("10", "Kappa", "blocked", blocked="09"))
