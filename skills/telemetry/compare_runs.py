@@ -3,7 +3,7 @@
 
 Usage: python3 -I compare_runs.py --a <run.json> --a-metrics <metrics.json> [--a-branch <branch.json>] [--a-name A]
                                   --b <run.json> --b-metrics <metrics.json> [--b-branch <branch.json>] [--b-name B]
-                                  --pricing <pricing.json>
+                                  --pricing <pricing.json> [--targets <targets.json>]
 
 Each run is its saved telemetry (the extractor's output), its outcome metrics (`run_metrics.py`'s output, or the
 gh-35 runs' older shape) and optionally its final branch's measurements (`sourceLines`, `testLines`, `suite`, ...).
@@ -12,10 +12,14 @@ remote runs: measured from the metrics' `remote.cost_usd`, and estimated for run
 implementers), tokens, orchestrator figures, subagents by type, role and model, steps and outcomes; then
 `comparison`: each figure side by side, with `<b>Minus<A>`, `<b>Vs<A>Pct` and which run did `better`. Roles are a
 subagent's saved `role`, else `report.py`'s rule on its type and description (spec Q14 names). A cost that needs a
-model missing from the pricing is null. Nothing reads git or writes prose.
+model missing from the pricing is null. With `--targets`, `comparison.targets` judges run b against each target:
+its threshold and op, run b's value and `met`, `missed` or `unknown` (an input is missing). The total-cost target's
+`basis` says whether it judged the measured cost or, with remote runs lacking cost, the mid estimate (`range` holds
+low and high). Nothing reads git or writes prose.
 """
 import argparse
 import json
+import re
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -382,6 +386,74 @@ def compare(names, outs, metrics):
     }
 
 
+OPS = {"lt": lambda v, t: v < t, "le": lambda v, t: v <= t, "eq": lambda v, t: v == t}
+TASK_ID = re.compile(r"^\d+-\d+$")
+METRICS = ("totalCostUSD", "orchestratorAvgContextTokens", "orchestratorTurnsPerTicket", "orchestratorUSD",
+           "reviewerRunsPerTicket", "opusReviewerRunsPerTicket", "conflictResolverAgents", "handWrittenScripts",
+           "remoteKilledByMemory", "remoteCostMeasured", "suitesPerMergedTask", "humanRoundTrips")
+
+
+def cost_basis(X):
+    """What the total cost is: `measured` when every remote run has a cost, else the mid estimate."""
+    return "measured" if X["cost"]["unmeasuredRemoteRuns"] is None else "estimate-mid"
+
+
+def remote_judged(met):
+    """(runs killed by memory, every remote run's cost measured), or None each when the metrics cannot tell."""
+    remote = met.get("remote")
+    if isinstance(remote, dict):
+        return (remote.get("killed") or {}).get("memory", 0), not remote.get("runs_without_cost")
+    count = dig(met, "remote_runs", "count")  # gh-35's shape: no kills, and no remote run has a cost
+    return (0, True) if count == 0 else (None, False if count else None)
+
+
+def suites_per_merged_task(met):
+    """Saved suite results per merged task PR (`run_metrics.py`'s shape only)."""
+    merged = [p for p in dig(met, "prs", "list") or []
+              if TASK_ID.match(str(p.get("id"))) and p.get("state") == "MERGED"]
+    merges = dig(met, "suites", "merges")
+    return ratio(merges, len(merged)) if isinstance(merges, int) else None
+
+
+def derived(X, met):
+    """The figures the targets judge, for one run; None when an input is missing."""
+    tickets = dig(X, "outcomes", "tickets", "count")
+    subs = X["subagentList"]
+    opus = sum(1 for s in subs if s["role"] in REVIEW_ROLES and any("opus" in m for m in s["models"]))
+    killed, measured = remote_judged(met)
+    return {
+        "totalCostUSD": dig(X, "cost", "totalEstimateUSD", "mid"),
+        "orchestratorAvgContextTokens": X["orchestrator"]["avgContextTokensPerTurn"],
+        "orchestratorTurnsPerTicket": ratio(X["orchestrator"]["turns"], tickets),
+        "orchestratorUSD": X["cost"]["orchestratorUSD"],
+        "reviewerRunsPerTicket": X["outcomes"]["reviewerRunsPerTicket"],
+        "opusReviewerRunsPerTicket": ratio(opus, tickets),
+        "conflictResolverAgents": (X["subagents"]["byRole"].get("resolve") or {}).get("count", 0),
+        "handWrittenScripts": met.get("hand_written_scripts"),
+        "remoteKilledByMemory": killed,
+        "remoteCostMeasured": measured,
+        "suitesPerMergedTask": suites_per_merged_task(met),
+        "humanRoundTrips": met.get("human_round_trips"),
+    }
+
+
+def judge(targets, name, X, met):
+    """Per target: its threshold and op, the run's value and `met`, `missed` or `unknown` (no value)."""
+    values = derived(X, met)
+    out = {}
+    for t in targets:
+        value = values[t["metric"]]
+        d = {"run": name, "metric": t["metric"], "op": t["op"], "threshold": t["threshold"], "unit": t["unit"],
+             "source": t["source"], "value": value,
+             "status": "unknown" if value is None else "met" if OPS[t["op"]](value, t["threshold"]) else "missed"}
+        if t["metric"] == "totalCostUSD":
+            d["basis"] = cost_basis(X)
+            if d["basis"] != "measured":
+                d["range"] = [dig(X, "cost", "totalEstimateUSD", k) for k in ("low", "high")]
+        out[t["id"]] = d
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Compare two build-epic runs of the same epic, as JSON.")
     for side in ("a", "b"):
@@ -390,10 +462,16 @@ def main(argv=None):
         parser.add_argument(f"--{side}-branch", type=Path, help=f"run {side}'s final branch measurements JSON")
         parser.add_argument(f"--{side}-name", default=side, help=f"run {side}'s key in the output (default: {side})")
     parser.add_argument("--pricing", required=True, type=Path, help="the price table (skills/telemetry/pricing.json)")
+    parser.add_argument("--targets", type=Path,
+                        help="judge run b against these targets (skills/telemetry/targets.json)")
     args = parser.parse_args(argv)
     names = (args.a_name, args.b_name)
     if not all(names) or names[0] == names[1]:
         parser.error("--a-name and --b-name must differ and not be empty")
+    targets = load(args.targets)["targets"] if args.targets else None
+    for t in targets or []:
+        if t.get("metric") not in METRICS or t.get("op") not in OPS:
+            parser.error(f"target {t.get('id')}: unknown metric {t.get('metric')!r} or op {t.get('op')!r}")
 
     prices = Prices(load(args.pricing))
     metrics = (load(args.a_metrics), load(args.b_metrics))
@@ -406,6 +484,8 @@ def main(argv=None):
     for run in runs:
         run["out"]["subagentList"] = run["subs"]
         run["out"]["otherSpans"] = run["otherSpans"]
+    if targets is not None:
+        comparison["targets"] = judge(targets, names[1], outs[1], metrics[1])
     models = sorted({m for X in outs for m in X["tokens"]["sessionByModel"]})
     out = {
         "schema": SCHEMA,
