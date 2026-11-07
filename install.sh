@@ -121,6 +121,21 @@ install_shared() {
     [ "${f##*/}" != lib.sh ] || continue
     if [ -n "$old" ]; then link "$f" "$HOME/.agents/hooks/${f##*/}"; else link_each "$HOME/.agents/hooks" "$f"; fi
   done
+  # The tools' configs call hooks merged by any earlier install, maybe from another checkout or through a folder link
+  # backed up above. A called hook left unlinked exits 127, which blocks nothing: each one this checkout has is linked
+  # to it, selected or not, and each it lacks is named.
+  local c n
+  for c in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" "$HOME/.cursor/hooks.json"; do
+    [ -f "$c" ] || continue
+    { grep -o '\.agents/hooks/[A-Za-z0-9_.-]*\.sh' "$c" || true; } | while read -r n; do echo "${n##*/} $c"; done
+  done | sort -u -k1,1 | while read -r n c; do
+    f="$REPO/scripts/hooks/$n"
+    if [ ! -f "$f" ]; then
+      echo "  hook $n: called by $c, not in this checkout, skipped"
+    elif [ "$(readlink "$HOME/.agents/hooks/$n" 2>/dev/null)" != "$f" ]; then
+      link "$f" "$HOME/.agents/hooks/$n"
+    fi
+  done
   if has remote; then link "$REPO/scripts/remote-agent.sh" "$HOME/.agents/bin/remote-agent"; fi
   link "$REPO/scripts/settings.sh" "$HOME/.agents/bin/settings"
   link "$REPO/scripts/capped" "$HOME/.agents/bin/capped"

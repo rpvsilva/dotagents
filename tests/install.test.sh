@@ -109,6 +109,23 @@ single=$!
   mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
   HOME="$home" DOTAGENTS_SKIP_PLUGINS=1 "$SANDBOX/sp pr/repo/install.sh" all >"$SANDBOX/space.out"
   portable "$home" "$SANDBOX/sp pr/repo" >"$SANDBOX/space.links"
+  # Two checkouts: A (this repo) installed everything, then B (the copy) installs small-tools, which names no
+  # safety hook. otherfold: A's ~/.agents/hooks is the old folder link into A. otherfile: per-file links into A, and
+  # Claude's config also calls a hook no checkout has.
+  for h in otherfold otherfile; do
+    home="$SANDBOX/$h"
+    mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+    run "$home" all >/dev/null
+    if [ "$h" = otherfold ]; then
+      rm -rf "$home/.agents/hooks"
+      ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+    else
+      jq '.hooks.Stop += [{"hooks": [{"type": "command", "command": "~/.agents/hooks/gone.sh"}]}]' \
+        "$home/.claude/settings.json" >"$SANDBOX/gone.json"
+      mv "$SANDBOX/gone.json" "$home/.claude/settings.json"
+    fi
+    HOME="$home" DOTAGENTS_SKIP_PLUGINS=1 "$SANDBOX/sp pr/repo/install.sh" all small-tools >"$SANDBOX/$h.out"
+  done
 ) &
 migrations=$!
 
@@ -258,6 +275,27 @@ assert_hooks "$home"
 [ "$(ls "$SANDBOX/elsewhere")" = mine.sh ] || fail "install.sh linked into a foreign ~/.agents/hooks folder: $(ls "$SANDBOX/elsewhere")"
 grep -q "backed up $home/.agents/hooks" "$SANDBOX/foreign.out" || fail "a foreign ~/.agents/hooks link was not backed up: $(cat "$SANDBOX/foreign.out")"
 find "$home/.dotagents-backup" -type l -name '*hooks' 2>/dev/null | grep -q . || fail "the foreign ~/.agents/hooks link is not in the backup"
+
+# otherfold, otherfile: install from checkout B relinks every hook a config calls to B's script, and each runs.
+for h in otherfold otherfile; do
+  home="$SANDBOX/$h"
+  b="$SANDBOX/sp pr/repo/scripts/hooks"
+  called="$(cat "$home/.claude/settings.json" "$home/.codex/hooks.json" "$home/.cursor/hooks.json" |
+    grep -o '\.agents/hooks/[A-Za-z0-9_-]*\.sh' | sed 's|.*/||' | grep -vx gone.sh | sort -u)"
+  for g in guard-merge guard-secrets allow-task-cleanup; do grep -qx "$g.sh" <<<"$called" || fail "$h: no config calls $g"; done
+  for g in $called; do
+    assert_link "$home/.agents/hooks/$g" "$b/$g"
+    [ -x "$home/.agents/hooks/$g" ] || fail "$h: called hook $g does not run"
+  done
+  code=0
+  "$home/.agents/hooks/guard-secrets.sh" 'cat .env' 2>/dev/null || code=$?
+  [ "$code" -eq 2 ] || fail "$h: guard-secrets after B's install: wanted exit 2 on cat .env, got $code"
+done
+grep -q "backed up $SANDBOX/otherfold/.agents/hooks" "$SANDBOX/otherfold.out" ||
+  fail "otherfold: A's ~/.agents/hooks folder link was not backed up: $(cat "$SANDBOX/otherfold.out")"
+grep -q "gone\.sh.*skipped" "$SANDBOX/otherfile.out" ||
+  fail "otherfile: a called hook the checkout lacks was not named: $(cat "$SANDBOX/otherfile.out")"
+[ ! -e "$SANDBOX/otherfile/.agents/hooks/gone.sh" ] || fail "otherfile: linked a hook the checkout lacks"
 
 # space: a checkout path with a space links the same as one without.
 [ "$(cat "$SANDBOX/space.links")" = "$(cat "$SANDBOX/all.links")" ] ||
