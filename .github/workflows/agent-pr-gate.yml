@@ -6,12 +6,16 @@
 # its own status, but the status decides nothing. PR events run from the default branch.
 # Never check out or run PR code in this workflow.
 # PRs into main only: merge-pr.sh judges only those, so other PRs would spend runners for nothing.
+# Billing rounds each job up to a minute, so this runs as rarely as possible: when a PR into main becomes
+# ready (opened ready, reopened, or marked ready) and on a review, never on a push or an edit, and never for a
+# draft. It judges at once instead of waiting for CI on a billed runner, so between those events the status
+# can lag CI; the review that approves a PR, after CI, brings it up to date.
 name: agent-pr-gate
 
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, synchronize, edited, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -31,16 +35,15 @@ concurrency:
 jobs:
   # Keep this job ID: the gate recognises its own checks by it, also from merge-pr.sh (the CLI's default --gate-job).
   agent-pr-gate-job:
-    # pull_request_review has no branches filter.
-    if: github.event.pull_request.base.ref == 'main'
+    # pull_request_review has no branches filter. A skipped job gets no runner, so a draft bills nothing.
+    if: github.event.pull_request.base.ref == 'main' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # main after v1.0.2: adds the check CLI (0xgui/agent-pr-gate#9). Bump together with GATE_REF in scripts/merge-pr.sh.
       - uses: 0xgui/agent-pr-gate@2da570e75f377b413e19bdfc338dab7c9e881538
         with:
-          # Every run waits for CI to finish (up to 15 min; at once when it already has), since nothing
-          # re-runs the gate when CI finishes. So each push and each review ends with a status that
-          # reflects CI, and a push never leaves the PR without a gate status.
-          ci-wait-seconds: '900'
+          # Judge at once: waiting for CI would bill a runner for nothing.
+          ci-wait-seconds: '0'
           # The comment is for the human; the job only fails when the gate could not run.
           fail-on-block: 'false'
