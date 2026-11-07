@@ -173,6 +173,12 @@ class ClaimsTest(RunCase):
         self.assertEqual(runfolder.get(t2, "Claimed by"), "alice")
         self.assertEqual([c for c in self.updates() if c[:2] != ["issue", "view"]], [])
 
+    def test_the_human_assigned_in_another_case_is_not_a_claim(self):
+        self.kit.answer("api-user", out="RPVSilva\n")
+        self.kit.answer("issue-view", out="rpvsilva\n")
+        line = self.ok(self.kit.step(TRACKER, self.kit.run_dir, "claims"))
+        self.assertEqual(line, "OK claims claimed 0 tickets")
+
     def test_no_claims_leaves_every_ticket(self):
         self.kit.answer("api-user", out="rpvsilva\n")
         line = self.ok(self.kit.step(TRACKER, self.kit.run_dir, "claims"))

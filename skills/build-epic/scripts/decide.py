@@ -13,8 +13,10 @@ Authorizations row for `<clause>`, or updates it, keeping the quote byte for byt
 `OK decisions clause waived=<yes|no|ask>`. `quote` appends `<verbatim>` unchanged under Decisions, dated today, and
 prints `OK decisions quote <date>`. A missing file is created.
 
-Every merge reads its identity from `merge_identity:` here, falling back to the `merge_identity` Setting (default
-`app`); see `steplib/identity.py`.
+`merge_identity:` and `human:` only record: every merge takes its identity from the `merge_identity` Setting (default
+`app`), and a recorded `merge_identity:` other than the Setting refuses the merge (`wrong-identity`), never widens it.
+The human's login comes from `gh api user` with the tokens unset; a recorded `human:` only narrows it. See
+`steplib/identity.py`.
 """
 import datetime
 import sys

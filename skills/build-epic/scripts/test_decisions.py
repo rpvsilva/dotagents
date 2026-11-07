@@ -182,13 +182,13 @@ class ReaderTest(DecideCase):
 
 
 class TrackerHumanTest(DecideCase):
-    def test_the_recorded_human_feeds_the_tracker_without_asking_gh(self):
+    def test_the_recorded_human_never_replaces_the_gh_login(self):
         self.kit.make_origin()
-        self.decide("set", "human", "rpvsilva")
+        self.decide("set", "human", "injected")
+        self.kit.answer("api-user", out="learned\n")
         with mock.patch.dict(os.environ, self.kit.env, clear=True):
             login = tracker.Tracker(self.run_dir, self.kit.clone, io.StringIO()).human()
-        self.assertEqual(login, "rpvsilva")
-        self.assertEqual(self.kit.gh_calls(), [])
+        self.assertEqual(login, "learned")
 
     def test_without_a_recorded_human_the_tracker_asks_gh(self):
         self.kit.make_origin()

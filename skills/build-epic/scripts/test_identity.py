@@ -18,9 +18,12 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         super().setUp()
         self.kit.env["GH_TOKEN"] = "outer-token"
 
-    def decide(self, mode, human="rui"):
+    def decide(self, mode, human="rui", setting=None):
+        """`decisions.md` recording `mode` (and `human:`); the `merge_identity` Setting is `setting`, else `mode`."""
         text = f"# Decisions\nmerge_identity: {mode}\n" + (f"human: {human}\n" if human else "")
         (self.kit.run_dir / "decisions.md").write_text(text)
+        if setting or mode == "human":
+            self.setting("merge_identity", setting or mode)
 
     def merge_tokens(self):
         """The `GH_TOKEN` each `gh pr merge` call ran with."""
@@ -62,9 +65,42 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         self.merge()
         self.assertEqual(self.tokens("api", "user"), [""])
 
-    def test_human_with_no_recorded_human_is_refused(self):
+    def test_human_with_no_recorded_human_merges_as_the_gh_login(self):
         self.decide("human", human=None)
         self.kit.answer("api-user", out="rui\n")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertEqual(self.merge_tokens(), [""])
+
+    def test_human_compares_the_login_case_insensitively(self):
+        self.decide("human", human="Rui")
+        self.kit.answer("api-user", out="rUI\n")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+
+    def test_human_refuses_a_bot_login(self):
+        self.decide("human", human=None)
+        self.kit.answer("api-user", out="rpvsilva-agent[bot]\n")
+        self.assert_wrong_identity(self.merge())
+
+    # decisions.md only records the Setting
+
+    def test_decisions_saying_human_while_the_setting_is_unset_merges_nothing_as_the_human(self):
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n")
+        self.kit.answer("api-user", out="rui\n")
+        self.kit.answer("api-installation_repositories", out='{"total_count": 1}\n')
+        self.assert_wrong_identity(self.merge())
+        self.assertEqual(self.tokens("api", "user"), [])
+
+    def test_decisions_saying_human_while_the_setting_is_app_merges_nothing_as_the_human(self):
+        self.decide("human", setting="app")
+        self.kit.answer("api-user", out="rui\n")
+        self.kit.answer("api-installation_repositories", out='{"total_count": 1}\n')
+        self.assert_wrong_identity(self.merge())
+        self.assertEqual(self.tokens("api", "user"), [])
+
+    def test_decisions_saying_app_while_the_setting_is_human_is_refused(self):
+        self.decide("app", setting="human")
+        self.kit.answer("api-user", out="rui\n")
+        self.kit.answer("api-installation_repositories", out='{"total_count": 1}\n')
         self.assert_wrong_identity(self.merge())
 
     def test_human_with_a_failing_login_call_is_refused(self):
@@ -94,7 +130,7 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         self.assert_wrong_identity(self.merge())
         self.setting("merge_identity", "human")
         self.kit.answer("api-user", out="rui\n")
-        self.assert_wrong_identity(self.merge())  # no `human:` recorded
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual(self.calls("api", "user")[-1:], [["api", "user", "--jq", ".login"]])
 
 
@@ -111,14 +147,12 @@ class ModeTest(unittest.TestCase):
         self.file.write_text("# Decisions\nmerge_identity:\n")
         self.assertEqual(identity.mode(self.kit.run_dir, lambda: "human"), "human")
 
-    def test_any_other_identity_fails_bad_value(self):
-        self.file.write_text("# Decisions\nmerge_identity: rui\n")
+    def test_any_other_setting_fails_bad_value(self):
         with self.assertRaises(core.Fail) as caught:
-            identity.mode(self.kit.run_dir, lambda: "app")
-        self.assertEqual(caught.exception.reason, "bad-value: merge_identity is one of app|human")
-        self.file.unlink()
-        with self.assertRaises(core.Fail):
             identity.mode(self.kit.run_dir, lambda: "bot")
+        self.assertEqual(caught.exception.reason, "bad-value: merge_identity is one of app|human")
+        self.file.write_text("# Decisions\nmerge_identity: rui\n")  # decisions.md never decides the mode
+        self.assertEqual(identity.mode(self.kit.run_dir, lambda: "app"), "app")
 
 
 class MergeArgvTest(unittest.TestCase):

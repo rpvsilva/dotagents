@@ -1,4 +1,6 @@
 """Tests for `permissions.py`: the permission rules a run needs, listed for the approval message."""
+import fnmatch
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -10,7 +12,7 @@ from testkit import SCRIPTS, Kit  # noqa: E402
 
 PERMISSIONS = SCRIPTS / "permissions.py"
 INSTALLED = "~/.agents/skills/build-epic/scripts"
-FORCE_PUSH = "Bash(git push --force-with-lease *)"
+FORCE_PUSH = "git push --force-with-lease"
 
 
 class PermissionsTest(unittest.TestCase):
@@ -40,14 +42,33 @@ class PermissionsTest(unittest.TestCase):
             self.assertEqual(lines.count(rule), 1, lines)
         self.assertEqual(lines.count("Bash(capped stop *)"), 1, lines)
 
-    def test_the_default_base_needs_no_force_push_rule(self):
-        self.assertNotIn(FORCE_PUSH, self.permissions())
-        self.decide("base", "main")
-        self.assertNotIn(FORCE_PUSH, self.permissions())
+    def force_push_rules(self):
+        return [line for line in self.permissions() if FORCE_PUSH in line]
 
-    def test_a_non_default_base_adds_the_force_push_rule(self):
+    def test_the_default_base_needs_no_force_push_rule(self):
+        self.assertEqual(self.force_push_rules(), [])
+        self.decide("base", "main")
+        self.assertEqual(self.force_push_rules(), [])
+
+    def test_a_non_default_base_adds_a_force_push_rule_naming_only_that_base(self):
         self.decide("base", "feat/integration")
-        self.assertEqual(self.permissions().count(FORCE_PUSH), 1)
+        self.assertEqual(self.force_push_rules(), [f"Bash({FORCE_PUSH} origin feat/integration)"])
+
+    def test_no_rule_matches_a_push_to_the_default_branch(self):
+        self.decide("base", "feat/integration")
+        pushes = [f"git push {flags}origin {ref}" for flags in ("", "--force ", "--force-with-lease ", "-f ")
+                  for ref in ("main", "HEAD:main", "feat/integration:main", "+HEAD:refs/heads/main")]
+        for line in self.permissions():
+            m = re.fullmatch(r"Bash\((.*)\)", line)
+            if not m:
+                continue
+            for push in pushes:
+                self.assertFalse(fnmatch.fnmatchcase(push, m.group(1)), f"{line} allows {push}")
+
+    def test_a_base_with_a_wildcard_or_space_fails(self):
+        for base in ("feat/*", "feat/x main"):
+            self.decide("base", base)
+            self.assertTrue(self.permissions(ok=False)[0].startswith("FAIL run bad-value"), base)
 
     def test_merging_as_the_human_adds_a_line_saying_so(self):
         self.decide("merge_identity", "human")

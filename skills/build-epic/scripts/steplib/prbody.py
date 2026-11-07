@@ -7,7 +7,8 @@ leaves them open. A ticket body is the orchestrator's text (filling the repo's P
 
 Both bodies hold a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the
 human's own login), into which branch (a task PR into its ticket's `Branch:`, a ticket PR into `base:` or the run's
-default branch), on what proof (`review_before_agent_merge`, `ci`), and each Authorizations row quoted as recorded.
+default branch), on what proof (a task PR: a green local run of `map.md`'s Checks, since CI and reviews run on ticket
+PRs only; a ticket PR: `review_before_agent_merge` and `ci`), and each Authorizations row quoted as recorded.
 With no `decisions.md` the section is left out.
 
 `<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`),
@@ -65,14 +66,19 @@ def merge_section(run, into=None):
     d = decisions.load(run)
     if d is None:
         return []
-    into = into or d.get("base") or runfolder.run_info(run)["Default"]
+    base = d.get("base") or runfolder.run_info(run)["Default"]
+    task = bool(into) and into != base
+    into = into or base
     if d.get("merge_identity") == "human":
         who = d.get("human")
         who = (f"`{who}`, " if who else "") + "the human's own login, with `GH_TOKEN` unset"
     else:
         who = "the App, with its installation token"
-    review = "a review and " if d.get("review_before_agent_merge") == "yes" else ""
-    proof = "a green local run (CI is off for this run)" if d.get("ci") == "off" else "green CI"
+    if task:
+        review, proof = "", "a green local run of map.md's Checks"
+    else:
+        review = "a review and " if d.get("review_before_agent_merge") == "yes" else ""
+        proof = "a green local run (CI is off for this run)" if d.get("ci") == "off" else "green CI"
     rows = [f"- {a.clause} (waived: {a.waived}): {a.quote}" for a in d.authorizations]
     lines = [f"Merges as {who}, into `{into}`, after {review}{proof}.", "",
              "Authorizations:\n" + "\n".join(rows) if rows else "Authorizations: none recorded."]
