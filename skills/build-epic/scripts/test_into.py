@@ -81,7 +81,7 @@ class HubTaskIntoTest(IntoCase):
         (self.kit.run_dir / "tasks" / "01-02-hub.md").write_text(
             "# 01-02: Hub\nStatus: ready\nTicket: 01\nBlocked by: ticket 02\n", encoding="utf-8")
         line = self.step("start_task.py", "01-02")
-        self.assertTrue(line.endswith(f" synced={self.base_tip[:7]}"), line)
+        self.assertTrue(line.endswith(f" synced={self.base_tip[:7]} carried=0"), line)
         wt = self.kit.run_dir / "worktrees" / "01-02"
         head = self.kit.git("rev-parse", "HEAD", cwd=wt)
         self.kit.git("merge-base", "--is-ancestor", self.base_tip, head, cwd=wt)
