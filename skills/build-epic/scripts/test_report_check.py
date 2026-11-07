@@ -28,7 +28,7 @@ class ReportCheckTest(unittest.TestCase):
         self.addCleanup(self.kit.close)
         self.reports = self.kit.run_dir / "reports"
         self.reports.mkdir()
-        (self.reports / "04-02.md").write_text("# 04-02 report\n\nAll of it.\n")
+        (self.reports / "04-02.md").write_text("# 04-02 report\n\nAll of it.\n", encoding="utf-8")
 
     def check(self, message, ident="04-02", run=None):
         p = subprocess.run([sys.executable, "-I", str(REPORT_CHECK), str(run or self.kit.run_dir), ident],
@@ -60,7 +60,7 @@ class ReportCheckTest(unittest.TestCase):
         self.assertViolation(BLOCK, "no-report")
 
     def test_empty_report_file_is_a_no_report_violation(self):
-        (self.reports / "04-02.md").write_text("")
+        (self.reports / "04-02.md").write_text("", encoding="utf-8")
         self.assertViolation(BLOCK, "no-report")
 
     def test_long_message_without_a_report_names_both(self):
@@ -97,7 +97,7 @@ class ReportCheckTest(unittest.TestCase):
         self.assertEqual(self.check("\n```\n" + BLOCK + "```\n\n"), (0, "OK 04-02 done"))
 
     def from_report(self, report, ident="04-02"):
-        (self.reports / f"{ident}.md").write_text(report)
+        (self.reports / f"{ident}.md").write_text(report, encoding="utf-8")
         p = subprocess.run([sys.executable, "-I", str(REPORT_CHECK), str(self.kit.run_dir), ident, "--from-report"],
                            cwd="/", env=self.kit.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)

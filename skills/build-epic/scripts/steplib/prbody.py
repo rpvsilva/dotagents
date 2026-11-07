@@ -45,7 +45,7 @@ def _result(run, ident):
     if not path.is_file():
         return NO_RESULT
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except ValueError:
         return NO_RESULT
     suites = data.get("suites") if isinstance(data, dict) else data
@@ -86,7 +86,7 @@ def merge_section(run, into=None):
 
 
 def task_body(run, ident, task_path, ticket_path):
-    text = task_path.read_text()
+    text = task_path.read_text(encoding="utf-8")
     parts = [
         "## What it builds", section(text, "What to build") or title(task_path),
         "## Check", section(text, "Check") or "None written in the task.",
@@ -115,7 +115,7 @@ def template(root):
     for name in TEMPLATES:
         path = core.resolve(root) / name
         if path.is_file():
-            return path.read_text()
+            return path.read_text(encoding="utf-8")
     return None
 
 

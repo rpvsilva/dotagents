@@ -24,7 +24,7 @@ class FinishRemoteTest(StepCase):
         folder = git_dir / "remote-agent" / run
         folder.mkdir(parents=True)
         info = {"run": run, "name": name, "worktree": str(worktree or self.wt), "started": started, "state": "done"}
-        (folder / "run.json").write_text(json.dumps(info))
+        (folder / "run.json").write_text(json.dumps(info), encoding="utf-8")
         (folder / "result.json").write_bytes(result)
         return result
 
@@ -41,7 +41,7 @@ class FinishRemoteTest(StepCase):
         return self.one_line(p)
 
     def log(self):
-        return (self.kit.run_dir / "logs" / "01-02-finish_task.log").read_text()
+        return (self.kit.run_dir / "logs" / "01-02-finish_task.log").read_text(encoding="utf-8")
 
     def test_copies_the_result_from_the_common_git_dir_byte_for_byte(self):
         want = self.record(self.common_dir(), "agent-20261106-100000-1", NAME, 1000,

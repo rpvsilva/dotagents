@@ -25,7 +25,7 @@ def slug(label):
 
 def saved_runs_dir():
     """.agents/telemetry at the root of the repo containing the current folder, else under it."""
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, encoding="utf-8")
     return Path(top.stdout.strip() if top.returncode == 0 else ".") / ".agents" / "telemetry"
 
 

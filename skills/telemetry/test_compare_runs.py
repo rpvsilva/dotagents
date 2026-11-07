@@ -30,7 +30,7 @@ def gh35_args(**override):
 
 
 def compare(args):
-    res = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True,
+    res = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
                          stdin=subprocess.DEVNULL)
     if res.returncode != 0:
         raise AssertionError(f"exit {res.returncode}: {res.stderr}")
@@ -209,7 +209,7 @@ class Runs(unittest.TestCase):
 
     def test_the_same_name_twice_is_refused(self):
         res = subprocess.run([sys.executable, "-I", str(SCRIPT), *gh35_args(**{"b-name": "remote"})],
-                             capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                             capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
         self.assertEqual(res.returncode, 2)
         self.assertIn("differ", res.stderr)
 

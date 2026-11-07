@@ -25,9 +25,9 @@ class SaveTest(unittest.TestCase):
     """`checks.run_all` then `checks.save`, as a merge runs them, read back from the saved file."""
 
     def saved(self, *cmds):
-        with Kit() as kit, open(kit.tmp / "log", "w") as log:
+        with Kit() as kit, open(kit.tmp / "log", "w", encoding="utf-8") as log:
             checks.save(kit.run_dir, "01-01", checks.run_all(list(cmds), kit.tmp, log))
-            return json.loads((kit.run_dir / "reports" / "01-01.checks.json").read_text())
+            return json.loads((kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
 
     def test_pytest_skip_lines_save_the_skip_count_and_both_reasons(self):
         out = "\n".join([
@@ -122,7 +122,7 @@ class MergeSavesTest(unittest.TestCase):
     merge = tm.MergeTaskTest.merge
 
     def saved(self):
-        return json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text())
+        return json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
 
     def test_a_merge_writes_the_file_and_a_later_merge_overwrites_it(self):
         self.checks(shell_echo("==== 2 passed, 1 skipped in 0.1s ====\nSKIPPED [1] t.py:3: no docker") + "; exit 1")

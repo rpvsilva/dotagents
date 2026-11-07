@@ -41,7 +41,7 @@ class KitCase(unittest.TestCase):
         self.kit = Kit()
         self.addCleanup(self.kit.close)
         self.probe = self.kit.tmp / "probe.py"
-        self.probe.write_text(PROBE)
+        self.probe.write_text(PROBE, encoding="utf-8")
 
     def one_line(self, p):
         self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)
@@ -59,7 +59,7 @@ class MainTest(KitCase):
         p = self.kit.step(self.probe, self.kit.run_dir, "01-02")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(self.one_line(p), "OK 01-02 done rc=3")
-        log = (self.kit.run_dir / "logs" / "01-02-probe.log").read_text()
+        log = (self.kit.run_dir / "logs" / "01-02-probe.log").read_text(encoding="utf-8")
         for text in ("out-text", "err-text", "noise from the step", "[rc 3]"):
             self.assertIn(text, log)
         self.assertNotIn("text", p.stderr)
@@ -70,7 +70,7 @@ class MainTest(KitCase):
         line = self.one_line(p)
         self.assertTrue(line.startswith("FAIL 01 error (log: "), line)
         self.assertEqual(self.log_of(line), self.kit.run_dir / "logs" / "01-probe.log")
-        self.assertIn("RuntimeError: kaboom", self.log_of(line).read_text())
+        self.assertIn("RuntimeError: kaboom", self.log_of(line).read_text(encoding="utf-8"))
 
     def test_fail_prints_its_reason_and_the_log_and_exits_1(self):
         p = self.kit.step(self.probe, self.kit.run_dir, "01", "fail")
@@ -114,7 +114,7 @@ class WindowsCommandTest(KitCase):
 
     def script(self, path, text):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         path.chmod(0o755)
         return path
 
@@ -170,7 +170,7 @@ class KitSandboxTest(unittest.TestCase):
             b.make_origin()
             for kit in (a, b):
                 self.assertEqual(Path(kit.git("remote", "get-url", "origin", cwd=kit.clone)), kit.origin)
-            (a.clone / "x").write_text("x\n")
+            (a.clone / "x").write_text("x\n", encoding="utf-8")
             a.git("add", "x", cwd=a.clone)
             a.git("commit", "-qm", "x", cwd=a.clone)
             a.git("push", "-q", "origin", "HEAD:main", cwd=a.clone)
@@ -181,10 +181,10 @@ class KitSandboxTest(unittest.TestCase):
         with Kit() as kit:
             template = mock.Mock(tmp=Path(r"C:\t\old-template"))
             config = kit.tmp / "config"
-            config.write_text('[remote "origin"]\n\turl = C:\\\\t\\\\old-template\\\\origin.git\n')
+            config.write_text('[remote "origin"]\n\turl = C:\\\\t\\\\old-template\\\\origin.git\n', encoding="utf-8")
             kit._rehome(template, config)
-            self.assertNotIn("old-template", config.read_text())  # a name no mkdtemp folder can contain
-            self.assertIn(str(kit.tmp).replace("\\", "\\\\"), config.read_text())  # git config doubles backslashes
+            self.assertNotIn("old-template", config.read_text(encoding="utf-8"))  # a name no mkdtemp folder can contain
+            self.assertIn(str(kit.tmp).replace("\\", "\\\\"), config.read_text(encoding="utf-8"))  # git config doubles backslashes
 
 
 class RunFolderPathTest(KitCase):
@@ -331,24 +331,24 @@ class GhRetryTest(KitCase):
         self.kit.make_origin()
         fake = self.kit.tmp / "fakebin"
         fake.mkdir()
-        real_git = subprocess.run(["sh", "-c", "command -v git"], text=True, stdout=subprocess.PIPE).stdout.strip()
+        real_git = subprocess.run(["sh", "-c", "command -v git"], text=True, encoding="utf-8", stdout=subprocess.PIPE).stdout.strip()
         (fake / "git").write_text(
             "#!/bin/sh\n"
             f'n=$(cat "{fake}/n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "{fake}/n"\n'
             f'if [ "$n" -le "$(cat "{fake}/fails")" ]; then\n'
             f'  echo "fatal: unable to access \'x\': The requested URL returned error: $(cat "{fake}/code")" >&2\n'
             "  exit 128\nfi\n"
-            f'exec "{real_git}" "$@"\n')
+            f'exec "{real_git}" "$@"\n', encoding="utf-8")
         (fake / "git").chmod(0o755)
         env = dict(self.kit.env, PATH=f"{fake}{os.pathsep}{self.kit.env['PATH']}")
         for code, fails, want_rc, want_calls in (("502", "2", 0, 3), ("403", "1", 128, 1)):
             with self.subTest(code):
-                (fake / "n").write_text("0")
-                (fake / "fails").write_text(fails)
-                (fake / "code").write_text(code)
+                (fake / "n").write_text("0", encoding="utf-8")
+                (fake / "fails").write_text(fails, encoding="utf-8")
+                (fake / "code").write_text(code, encoding="utf-8")
                 res = gh.push(["origin", "HEAD:refs/heads/x"], self.log, cwd=self.kit.clone, env=env)
                 self.assertEqual(res.rc, want_rc, res.err)
-                self.assertEqual((fake / "n").read_text().strip(), str(want_calls))
+                self.assertEqual((fake / "n").read_text(encoding="utf-8").strip(), str(want_calls))
 
 
 class RunFolderFilesTest(KitCase):
@@ -357,12 +357,12 @@ class RunFolderFilesTest(KitCase):
         run = self.kit.run_dir
         (run / "tickets").mkdir()
         (run / "tasks").mkdir()
-        (run / "tickets" / "01-core.md").write_text("# 01: Core\nStatus: ready\nBranch: feat/core\n\nBody.\n")
-        (run / "tickets" / "02-more.md").write_text("# 02: More\nStatus: ready\n")
+        (run / "tickets" / "01-core.md").write_text("# 01: Core\nStatus: ready\nBranch: feat/core\n\nBody.\n", encoding="utf-8")
+        (run / "tickets" / "02-more.md").write_text("# 02: More\nStatus: ready\n", encoding="utf-8")
         (run / "tasks" / "01-01-lib.md").write_text(
-            "# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: 03, ticket 02\n\n## What\nStatus: not a header\n")
-        (run / "tasks" / "01-10-other.md").write_text("# 01-10\nStatus: ready\n")
-        (run / "tasks" / "01-tests.md").write_text("# 01-tests\nStatus: ready\n")
+            "# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: 03, ticket 02\n\n## What\nStatus: not a header\n", encoding="utf-8")
+        (run / "tasks" / "01-10-other.md").write_text("# 01-10\nStatus: ready\n", encoding="utf-8")
+        (run / "tasks" / "01-tests.md").write_text("# 01-tests\nStatus: ready\n", encoding="utf-8")
 
     def test_finds_tickets_and_tasks_by_number(self):
         run = self.kit.run_dir
@@ -385,17 +385,17 @@ class RunFolderFilesTest(KitCase):
 
     def test_set_replaces_the_header_line_in_a_new_file(self):
         task = runfolder.task_file(self.kit.run_dir, "01-01")
-        before = task.read_text()
+        before = task.read_text(encoding="utf-8")
         inode = task.stat().st_ino
         runfolder.set_header(task, "Status", "in-progress")
-        self.assertEqual(task.read_text(), before.replace("Status: ready", "Status: in-progress", 1))
+        self.assertEqual(task.read_text(encoding="utf-8"), before.replace("Status: ready", "Status: in-progress", 1))
         self.assertNotEqual(task.stat().st_ino, inode)  # renamed into place, never written in place
         self.assertEqual([f.name for f in task.parent.iterdir() if f.name.startswith(".") and "tmp" in f.name], [])
 
     def test_set_adds_a_missing_header_after_the_others(self):
         ticket = runfolder.ticket_file(self.kit.run_dir, "01")
         runfolder.set_header(ticket, "PR", "12")
-        self.assertEqual(ticket.read_text(), "# 01: Core\nStatus: ready\nBranch: feat/core\nPR: 12\n\nBody.\n")
+        self.assertEqual(ticket.read_text(encoding="utf-8"), "# 01: Core\nStatus: ready\nBranch: feat/core\nPR: 12\n\nBody.\n")
 
     def test_concurrent_writers_keep_every_change(self):
         ticket = runfolder.ticket_file(self.kit.run_dir, "02")
@@ -403,7 +403,7 @@ class RunFolderFilesTest(KitCase):
                 "for i in range(15): runfolder.set_header(%r, 'K' + sys.argv[1] + str(i), i)" % (str(SCRIPTS), str(ticket)))
         procs = [subprocess.Popen([sys.executable, "-c", code, w]) for w in "ab"]
         self.assertEqual([p.wait() for p in procs], [0, 0])
-        text = ticket.read_text()
+        text = ticket.read_text(encoding="utf-8")
         for w in "ab":
             for i in range(15):
                 self.assertIn(f"K{w}{i}: {i}\n", text)
@@ -423,15 +423,15 @@ class RunFolderFilesTest(KitCase):
         self.assert_fail("bad-task-id: 01", runfolder.task_file, run, "01")
         self.assert_fail("no-task", runfolder.task_file, run, "01-02")
         self.assert_fail("no-ticket", runfolder.ticket_file, run, "9")
-        (run / "tasks" / "01-1-dup.md").write_text("# 01-01\n")
-        (run / "tickets" / "2-dup.md").write_text("# 02\n")
+        (run / "tasks" / "01-1-dup.md").write_text("# 01-01\n", encoding="utf-8")
+        (run / "tickets" / "2-dup.md").write_text("# 02\n", encoding="utf-8")
         self.assert_fail("ambiguous-task: 01-01-lib.md 01-1-dup.md", runfolder.task_file, run, "1-01")
         self.assert_fail("ambiguous-ticket: 02-more.md 2-dup.md", runfolder.ticket_file, run, "2")
 
     def test_run_info_names_a_missing_run_md_or_its_missing_lines(self):
         run = self.kit.run_dir
         self.assert_fail("no-run-md: run init_run.py first", runfolder.run_info, run)
-        (run / "run.md").write_text("Repo: /r\nDefault: main\n")
+        (run / "run.md").write_text("Repo: /r\nDefault: main\n", encoding="utf-8")
         self.assert_fail("run-md-missing: Remote", runfolder.run_info, run)
 
 
@@ -442,7 +442,7 @@ class ChecksCommandsTest(unittest.TestCase):
         self.map = Path(tmp) / "map.md"
 
     def commands(self, text):
-        self.map.write_text(text)
+        self.map.write_text(text, encoding="utf-8")
         return checks.commands(self.map)
 
     def test_every_command_in_the_checks_code_blocks_in_order(self):
@@ -506,7 +506,7 @@ class GitOpsTest(KitCase):
         self.assertEqual(g.tip("origin/main"), base)
         wt = kit.tmp / "wt"
         g.worktree_add(wt, "origin/main", branch="task/x")
-        (wt / "f").write_text("x\n")
+        (wt / "f").write_text("x\n", encoding="utf-8")
         kit.git("add", "f", cwd=wt)
         kit.git("commit", "-qm", "x", cwd=wt)
         self.assertTrue(g.is_ancestor(base, "task/x"))
@@ -533,7 +533,7 @@ class GitOpsTest(KitCase):
                 "print(tip, os.path.exists(%r))" % (str(SCRIPTS), str(wt), str(released)))
         with gitops.lock(self.kit.clone):  # the main checkout's lock also covers its worktrees
             p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 text=True)
+                                 text=True, encoding="utf-8")
             self.assertEqual(p.stdout.readline().strip(), "ready")
             time.sleep(0.2)  # time for the child to reach the lock and wait on it
             self.assertIsNone(p.poll(), "git ran while the lock was held")

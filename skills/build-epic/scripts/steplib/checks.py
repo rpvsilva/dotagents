@@ -34,7 +34,7 @@ def commands(map_md):
     path = core.resolve(map_md)
     if not path.is_file():
         raise core.Fail(f"no-map: {path}")
-    m = re.search(r"^## Checks[ \t]*\n(.*?)(?=^## |\Z)", path.read_text(), re.MULTILINE | re.DOTALL)
+    m = re.search(r"^## Checks[ \t]*\n(.*?)(?=^## |\Z)", path.read_text(encoding="utf-8"), re.MULTILINE | re.DOTALL)
     found = []
     for block in re.findall(r"^```[^\n]*\n(.*?)^```", m.group(1) if m else "", re.MULTILINE | re.DOTALL):
         found += [line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith("#")]
@@ -145,4 +145,4 @@ def save(run, ident, suites):
         passed, failed, skipped, reasons = counts(s.out)
         rows.append({"command": s.command, "rc": s.rc, "passed": passed, "failed": failed, "skipped": skipped,
                      "seconds": round(s.seconds, 1), "skip_reasons": reasons})
-    path.write_text(json.dumps(rows, indent=1) + "\n")
+    path.write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")

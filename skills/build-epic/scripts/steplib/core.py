@@ -120,7 +120,7 @@ def file_lock(path):
         import fcntl
     except ImportError:  # Windows
         fcntl = None
-    with open(path, "a+") as f:
+    with open(path, "a+", encoding="utf-8") as f:
         if fcntl:
             fcntl.flock(f, fcntl.LOCK_EX)
         else:
@@ -151,7 +151,7 @@ def run(argv, log, cwd=None, env=None, input=None):
     try:
         p = subprocess.run(command(argv, env, cwd), cwd=None if cwd is None else str(cwd), env=env, input=input,
                            stdin=None if input is not None else subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
         res = Result(p.returncode, p.stdout, p.stderr)
     except OSError as e:
         res = Result(127, "", f"{argv[0]}: {e}\n")
@@ -184,6 +184,8 @@ def main(step, fn, takes_id=True, usage="", argv=None):
     """
     argv = sys.argv[1:] if argv is None else argv
     out = sys.stdout
+    if hasattr(out, "reconfigure"):  # Windows would end the line `\r\n` and encode it in the ANSI code page
+        out.reconfigure(encoding="utf-8", newline="\n")
     need = 2 if takes_id else 1
     if len(argv) < need:
         ident = argv[1] if len(argv) > 1 and takes_id else "run"
@@ -203,7 +205,7 @@ def main(step, fn, takes_id=True, usage="", argv=None):
         sys.exit(1)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log = open(log_path, "a")
+        log = open(log_path, "a", encoding="utf-8")
     except OSError as e:
         out.write(f"FAIL {ident} no-run-folder: {run_dir}: {e.strerror}\n")
         sys.exit(1)

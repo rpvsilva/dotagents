@@ -58,12 +58,12 @@ class Table(unittest.TestCase):
         self.assertTrue(self.out.startswith(expected + "\n"), self.out)
 
     def test_a_single_span_has_no_total_row(self):
-        out = report("-", stdin=one_span(Path(RUN).read_text()))
+        out = report("-", stdin=one_span(Path(RUN).read_text(encoding="utf-8")))
         self.assertIn("│ grill-with-docs │", out)
         self.assertNotIn("Total", out)
 
     def test_cost_is_unknown_when_a_model_has_no_price(self):
-        out = report("-", stdin=unpriced(Path(RUN).read_text()))
+        out = report("-", stdin=unpriced(Path(RUN).read_text(encoding="utf-8")))
         self.assertIn("│ unknown │", out)
 
 
@@ -91,7 +91,7 @@ class Save(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             out = report(RUN, "--save", "Before paging", "--dir", folder)
             saved = Path(folder) / "before-paging.json"
-            run = json.loads(saved.read_text())
+            run = json.loads(saved.read_text(encoding="utf-8"))
             self.assertEqual(run["label"], "Before paging")
             self.assertEqual([s["name"] for s in run["spans"]], ["grill-with-docs", "renovate-prs"])
             self.assertEqual(run["cost"], 1.94)
@@ -117,9 +117,9 @@ class Save(unittest.TestCase):
 
     def test_an_existing_gitignore_in_the_folder_is_kept(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / ".gitignore").write_text("mine\n")
+            (Path(folder) / ".gitignore").write_text("mine\n", encoding="utf-8")
             report(RUN, "--save", "base", "--dir", folder)
-            self.assertEqual((Path(folder) / ".gitignore").read_text(), "mine\n")
+            self.assertEqual((Path(folder) / ".gitignore").read_text(encoding="utf-8"), "mine\n")
 
 
 RUN_STEPS = str(FIXTURES / "run-steps.json")
@@ -140,7 +140,7 @@ class RunWithSteps(unittest.TestCase):
 
     def test_fixture_has_steps_in_the_extractor_shape(self):
         # Tied to the extractor's real output, so a field it adds, drops or renames fails here.
-        run, real = json.loads(Path(RUN_STEPS).read_text()), extracted_run()
+        run, real = json.loads(Path(RUN_STEPS).read_text(encoding="utf-8")), extracted_run()
         self.assertEqual(run["schemaVersion"], real["schemaVersion"])
         self.assertLessEqual(set(real), set(run))
         span_keys = {k for s in real["spans"] for k in s}
@@ -164,10 +164,10 @@ class RunWithSteps(unittest.TestCase):
         self.assertIn("│ Total           │ 3m 00s │ 11    │ 8     │ 110k │ 50k │ 1.4M    │ 150k    │ 1      │ $1.05 │", out)
 
     def test_save_keeps_steps_repo_date_and_whole(self):
-        source = json.loads(Path(RUN_STEPS).read_text())
+        source = json.loads(Path(RUN_STEPS).read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as folder:
             report(RUN_STEPS, "--save", "x", "--dir", folder)
-            run = json.loads((Path(folder) / "x.json").read_text())
+            run = json.loads((Path(folder) / "x.json").read_text(encoding="utf-8"))
         for key in ("steps", "repo", "date", "whole", "schemaVersion"):
             self.assertEqual(run[key], source[key], key)
 
@@ -236,15 +236,15 @@ class ByRole(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             remote = Path(folder) / "remote"
             remote.mkdir()
-            (remote / "01-01.json").write_text("{not json")
-            (remote / "01-02.json").write_text('["a list"]')
-            (remote / "01-03.json").write_text('{"num_turns": 3, "total_cost_usd": 0.5}')
+            (remote / "01-01.json").write_text("{not json", encoding="utf-8")
+            (remote / "01-02.json").write_text('["a list"]', encoding="utf-8")
+            (remote / "01-03.json").write_text('{"num_turns": 3, "total_cost_usd": 0.5}', encoding="utf-8")
             out = report(RUN_ROLES, "--by-role", "--run-folder", folder)
         self.assertEqual(role_rows(out)["remote"], ["3", "3", "$0.50", ""])
         self.assertIn("\n2 remote runs without cost\n", out)
 
     def test_a_schema_3_run_without_roles_falls_back_to_type_and_keywords(self):
-        run = schema_3(Path(RUN_ROLES).read_text(),
+        run = schema_3(Path(RUN_ROLES).read_text(encoding="utf-8"),
                        ["Implement 01-01", "Implement 01-02", "Re-review PR 12", "Look around", "Fix PR 12"])
         rows = role_rows(report("-", "--by-role", stdin=run))
         self.assertEqual(rows["implement"], ["2", "50", "$0.90", ""])
@@ -255,7 +255,7 @@ class ByRole(unittest.TestCase):
 
     def test_old_names_map_onto_todays_roles(self):
         # Ticket and tuner reviews, conflict resolvers and security reviews, as gh-35 described them.
-        run = schema_3(Path(RUN_ROLES).read_text(),
+        run = schema_3(Path(RUN_ROLES).read_text(encoding="utf-8"),
                        ["Ticket review 01", "Review tuner PR 9", "Resolve conflicts in PR 3", "Security review PR 4", "x"])
         run = run.replace('"Explore"', '"security-reviewer"').replace('"pr-fixer"', '"epic-planner"')
         run = run.replace('"epic-implementer"', '"pr-reviewer"')
@@ -265,7 +265,7 @@ class ByRole(unittest.TestCase):
 
     def test_a_schema_3_agent_type_wins_over_description_keywords(self):
         # gh-35 named its security reviews "Ticket NN security review": the type says security, not ticket-review.
-        run = schema_3(Path(RUN_ROLES).read_text(), ["Implement 01-01", "Implement 01-02", "Ticket 03 security review",
+        run = schema_3(Path(RUN_ROLES).read_text(encoding="utf-8"), ["Implement 01-01", "Implement 01-02", "Ticket 03 security review",
                                                      "Look around", "Fix PR 12"])
         run = run.replace('"pr-reviewer"', '"security-reviewer"')
         rows = role_rows(report("-", "--by-role", stdin=run))
@@ -273,14 +273,14 @@ class ByRole(unittest.TestCase):
         self.assertNotIn("ticket-review", rows)
 
     def test_a_role_written_by_the_extractor_is_kept_over_the_fallback(self):
-        run = json.loads(Path(RUN_ROLES).read_text())
+        run = json.loads(Path(RUN_ROLES).read_text(encoding="utf-8"))
         run["spans"][0]["subagents"][0]["role"] = "other"
         rows = role_rows(report("-", "--by-role", stdin=json.dumps(run)))
         self.assertEqual(rows["implement"][:2], ["1", "20"])
         self.assertEqual(rows["other"][:2], ["2", "35"])
 
     def test_cost_is_unknown_when_a_model_has_no_price(self):
-        rows = role_rows(report("-", "--by-role", stdin=unpriced(Path(RUN_ROLES).read_text())))
+        rows = role_rows(report("-", "--by-role", stdin=unpriced(Path(RUN_ROLES).read_text(encoding="utf-8"))))
         self.assertEqual(rows["implement"][2], "unknown")
         self.assertEqual(rows["Total"][2], "unknown")
 
@@ -310,16 +310,16 @@ class PriceCheckHint(unittest.TestCase):
         self.assertNotIn("update_pricing.py", report(RUN, "--today", "2026-01-15"))
 
     def test_offers_a_check_when_prices_have_no_date(self):
-        undated = json.loads(Path(PRICING).read_text())
+        undated = json.loads(Path(PRICING).read_text(encoding="utf-8"))
         del undated["asOf"]
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "pricing.json"
-            path.write_text(json.dumps(undated))
+            path.write_text(json.dumps(undated), encoding="utf-8")
             out = report(RUN, "--today", "2026-01-15", "--pricing", str(path))
         self.assertIn("Prices have no date; check with: update_pricing.py model-a", out)
 
     def test_offers_a_check_for_a_model_with_no_price(self):
-        out = report("-", "--today", "2026-01-15", stdin=unpriced(Path(RUN).read_text()))
+        out = report("-", "--today", "2026-01-15", stdin=unpriced(Path(RUN).read_text(encoding="utf-8")))
         self.assertIn("No price for model-z; check with: update_pricing.py model-z", out)
 
 

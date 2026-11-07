@@ -219,7 +219,7 @@ def when(stamp):
 def pr_view(gh, pr, cwd, gaps):
     """`gh pr view <pr> --json ...` as a dict, or None (named in `gaps`) when the command fails or answers no JSON."""
     try:
-        res = subprocess.run(gh + ["pr", "view", pr, "--json", PR_FIELDS], cwd=cwd, capture_output=True, text=True,
+        res = subprocess.run(gh + ["pr", "view", pr, "--json", PR_FIELDS], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
                              stdin=subprocess.DEVNULL, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as e:
         gaps.append(f"github: {pr}: {e}")

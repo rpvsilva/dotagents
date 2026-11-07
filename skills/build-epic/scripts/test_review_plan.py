@@ -12,7 +12,7 @@ REVIEW_PLAN = SCRIPTS / "review_plan.py"
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return path
 
 

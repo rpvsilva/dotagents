@@ -14,7 +14,7 @@ LONG = "A very long ticket title that keeps going " * 6
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -71,7 +71,7 @@ class StateTest(unittest.TestCase):
     def state(self):
         p = self.status("--write")
         self.assertEqual(p.returncode, 0, p.stdout)
-        return p, (self.run_dir / "state.md").read_text()
+        return p, (self.run_dir / "state.md").read_text(encoding="utf-8")
 
     # --line
 

@@ -52,7 +52,7 @@ def read_report(ctx, given):
             shutil.copyfile(str(src), str(stored))
     if not stored.is_file():
         return "", ""
-    text = stored.read_text()
+    text = stored.read_text(encoding="utf-8")
     status = re.search(r"^status:[ \t]*(\S+)", text, re.MULTILINE)
     why = re.search(r"^why:[ \t]*(.*)$", text, re.MULTILINE)
     return (status.group(1) if status else ""), (why.group(1).strip() if why else "")
@@ -78,7 +78,7 @@ def copy_remote_result(ctx, task):
     found = []
     for folder in remote_records(ctx, task):
         try:
-            info = json.loads((folder / "run.json").read_text())
+            info = json.loads((folder / "run.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if not isinstance(info, dict) or info.get("name") != task.path.stem:

@@ -43,7 +43,7 @@ def title(text):
 
 
 def row(ident, path):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     pr = ci.pr_number(runfolder.header(text, "PR"))
     blocked = (runfolder.header(text, "Blocked by") or "").strip()
     if not blocked or blocked.lower().startswith("none"):
@@ -83,12 +83,12 @@ class Run:
         self.tickets, self.tasks = {}, {}
         for f in sorted((run / "tickets").glob("*.md")):
             tt = f.stem.split("-", 1)[0]
-            self.tickets[runfolder.norm(tt)] = (tt, f, f.read_text())
+            self.tickets[runfolder.norm(tt)] = (tt, f, f.read_text(encoding="utf-8"))
         self.paths = {}
         for f in sorted((run / "tasks").glob("*.md")):
             ident = task_id(f)
             tt, _, nn = ident.partition("-")
-            self.tasks.setdefault(runfolder.norm(tt), {})[runfolder.norm(nn)] = (ident, f, f.read_text())
+            self.tasks.setdefault(runfolder.norm(tt), {})[runfolder.norm(nn)] = (ident, f, f.read_text(encoding="utf-8"))
             self.paths[ident] = f
 
     def status(self, text):
@@ -103,7 +103,7 @@ class Run:
         report = self.dir / "reports" / f"{ident}.md"
         if not report.is_file():
             return None, None, False
-        text = report.read_text()
+        text = report.read_text(encoding="utf-8")
         task = self.paths.get(ident)
         fresh = task is None or report.stat().st_mtime_ns >= task.stat().st_mtime_ns
         return runfolder.header(text, "status"), runfolder.header(text, "why") or "", fresh
