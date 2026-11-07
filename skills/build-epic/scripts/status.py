@@ -1,16 +1,29 @@
 #!/usr/bin/env python3
 """Shows a run at a glance: one line per ticket, each followed by its tasks, read from the run folder only.
 
-Usage: python3 -I status.py <run> [--report]
+Usage: python3 -I status.py <run> [--report | --line <TT> | --write]
 
 Each line is `<id> <status> <PR> <blocked by> <title>`, columns aligned, tasks indented under their ticket; `-` marks
 no PR or no blocker. `--report` adds, for the final report, a `## Not exercised here` section listing each ticket's
 saved skip reasons under `<id> <title>`, as its ticket PR body does; a run with none prints no such section. The one
 step that prints several stdout lines. Exits 0, or prints
 `FAIL run no-run-folder: <path>` and exits 1.
+
+`--line <TT>` prints the ticket's one status line for the human, at most 160 characters:
+`<TT> <status> <PR> <title>  next: <what it waits on>` (`FAIL TT no-ticket` when there is none).
+`--write` writes `<run>/state.md`, the one-screen summary the orchestrator continues from: every ticket's status line,
+the tasks in flight, what needs a human (every `blocked` task, or one whose report says `blocked` or `plan-wrong`, with
+its `why`; every `in-review` or `blocked` ticket; past MAX_HUMAN lines, the rest as `- +N more`) and the next actions.
+Prints `OK run state <path>`.
+A report counts only when it is not older than its task file, which `start_task.py` and a re-plan rewrite: a report
+from before the task's last dispatch or re-plan is stale. A `blocked` tuning task (`TT-tests`) counts as done for
+shipping: the ticket ships without it.
 """
+import os
 import re
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,7 +45,7 @@ def title(text):
 
 
 def row(ident, path):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     pr = ci.pr_number(runfolder.header(text, "PR"))
     blocked = (runfolder.header(text, "Blocked by") or "").strip()
     if not blocked or blocked.lower().startswith("none"):
@@ -61,22 +74,205 @@ def not_exercised(run):
     for f in sorted((run / "tickets").glob("*.md")):
         reasons = prbody.skip_reasons(run, f)
         if reasons:
-            lines += ["", f"{f.stem.split('-', 1)[0]} {title(f.read_text())}"] + [f"- {r}" for r in reasons]
+            name = f"{f.stem.split('-', 1)[0]} {title(f.read_text(encoding='utf-8'))}"
+            lines += ["", name] + [f"- {r}" for r in reasons]
     return ["", "## Not exercised here"] + lines if lines else []
 
 
+MAX_LINE = 160
+# Lines of `state.md`'s "Needs a human", the `+N more` line included: keeps a 10-ticket run within 40 lines.
+MAX_HUMAN = 10
+
+
+def tuning(ident):
+    return ident.endswith("-tests")
+
+
+class Run:
+    """The run folder's tickets and tasks, read once: `tickets[TT]` and `tasks[TT][NN]` hold (id, path, text)."""
+
+    def __init__(self, run):
+        self.dir = run
+        self.tickets, self.tasks = {}, {}
+        for f in sorted((run / "tickets").glob("*.md")):
+            tt = f.stem.split("-", 1)[0]
+            self.tickets[runfolder.norm(tt)] = (tt, f, f.read_text(encoding="utf-8"))
+        self.paths = {}
+        for f in sorted((run / "tasks").glob("*.md")):
+            ident = task_id(f)
+            tt, _, nn = ident.partition("-")
+            self.tasks.setdefault(runfolder.norm(tt), {})[runfolder.norm(nn)] = (ident, f, f.read_text(encoding="utf-8"))
+            self.paths[ident] = f
+
+    def status(self, text):
+        return runfolder.header(text, "Status") or "?"
+
+    def ticket_status(self, tt):
+        return self.status(self.tickets[tt][2]) if tt in self.tickets else "missing"
+
+    def why(self, ident):
+        """The (status, why, fresh) of the task's stored report, or (None, None, False) without one. `fresh`: the
+        report is not older than the task file, so it comes from the task's last dispatch."""
+        report = self.dir / "reports" / f"{ident}.md"
+        if not report.is_file():
+            return None, None, False
+        text = report.read_text(encoding="utf-8")
+        task = self.paths.get(ident)
+        fresh = task is None or report.stat().st_mtime_ns >= task.stat().st_mtime_ns
+        return runfolder.header(text, "status"), runfolder.header(text, "why") or "", fresh
+
+    def stuck(self, tt):
+        """[(id, state, why)] for each task of ticket `tt` that waits on a human: `blocked`, or not `done` with a
+        fresh `blocked` or `plan-wrong` report."""
+        out = []
+        for ident, _, text in self.tasks.get(tt, {}).values():
+            status = self.status(text)
+            reported, why, fresh = self.why(ident)
+            if not fresh and status != "blocked":
+                reported = None
+            if status == "blocked" or (status != "done" and reported in ("blocked", "plan-wrong")):
+                out.append((ident, reported if reported in ("blocked", "plan-wrong") else status, why or "no report"))
+        return out
+
+    def waits_on(self, tt):
+        """The ticket numbers (as written) in `tt`'s `Blocked by` that are not `merged`."""
+        tasks, tickets = runfolder.blockers(runfolder.header(self.tickets[tt][2], "Blocked by"))
+        return [self.tickets[n][0] if n in self.tickets else n
+                for n in sorted(tasks | tickets, key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
+                if self.ticket_status(n) != "merged"]
+
+    def dispatchable(self, tt):
+        """The `ready` tasks of ticket `tt` whose task blockers are `done` and ticket blockers `merged`."""
+        tasks = self.tasks.get(tt, {})
+        out = []
+        for ident, _, text in tasks.values():
+            if self.status(text) != "ready":
+                continue
+            on_tasks, on_tickets = runfolder.blockers(runfolder.header(text, "Blocked by"))
+            if (all(n in tasks and self.status(tasks[n][2]) == "done" for n in on_tasks)
+                    and all(self.ticket_status(n) == "merged" for n in on_tickets)):
+                out.append(ident)
+        return out
+
+    def in_flight(self):
+        return [ident for tasks in self.tasks.values() for ident, _, text in tasks.values()
+                if self.status(text) == "in-progress"]
+
+    def next(self, tt):
+        """What ticket `tt` waits on next, in a few words."""
+        text = self.tickets[tt][2]
+        status = self.status(text)
+        pr = ci.pr_number(runfolder.header(text, "PR"))
+        if status == "merged":
+            return "none"
+        if status == "in-review":
+            return f"human approval of #{pr}" if pr else "human approval"
+        if status == "claimed":
+            return f"{runfolder.header(text, 'Claimed by') or 'another developer'} (claimed)"
+        tasks = self.tasks.get(tt, {}).values()
+        # A blocked tuning task counts as done: the human was told, and the ticket ships without it.
+        done = {i for i, _, t in tasks if self.status(t) == "done" or (tuning(i) and self.status(t) == "blocked")}
+        stuck = [(i, s, w) for i, s, w in self.stuck(tt) if i not in done]
+        if stuck:
+            return "human: " + ", ".join(f"task {i} {s}" for i, s, _ in stuck)
+        if status == "blocked":
+            return "human: ticket blocked"
+        if status == "ready":
+            waits = self.waits_on(tt)
+            return ", ".join(f"ticket {n} ({self.ticket_status(runfolder.norm(n))})" for n in waits) or "start"
+        if tasks and len(done) == len(tasks):
+            return "ship"
+        red = runfolder.header(text, "CI red")
+        running = [i for i, _, t in tasks if self.status(t) == "in-progress"]
+        ready = self.dispatchable(tt)
+        parts = ([f"fix ticket CI red {red}"] if red else []) + (["tasks " + ", ".join(running)] if running else []) \
+            + (["dispatch " + ", ".join(ready)] if ready else [])
+        return "; ".join(parts) or "tasks"
+
+    def line(self, tt):
+        """The ticket's one status line, at most MAX_LINE characters: the title is cut first."""
+        ident, _, text = self.tickets[tt]
+        pr = ci.pr_number(runfolder.header(text, "PR"))
+        head = f"{ident} {self.status(text)} {'#' + str(pr) if pr else '-'} "
+        tail = f"  next: {self.next(tt)}"
+        name = title(text)
+        room = MAX_LINE - len(head) - len(tail)
+        if len(name) > room:
+            name = name[:max(room - 3, 0)].rstrip() + "..." if room > 3 else ""
+        out = re.sub(r"\s+", " ", head + name).rstrip() + tail
+        return out if len(out) <= MAX_LINE else out[:MAX_LINE - 3] + "..."
+
+    def state(self):
+        """The lines of `state.md`."""
+        order = sorted(self.tickets, key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
+        human, start, ship, wait, dispatch = [], [], [], [], []
+        for tt in order:
+            ident, _, text = self.tickets[tt]
+            status = self.status(text)
+            human += [f"- task {i} {s}: {why}" for i, s, why in self.stuck(tt)]
+            if status == "in-review":
+                pr = ci.pr_number(runfolder.header(text, "PR"))
+                human.append(f"- ticket {ident} in-review{' #' + str(pr) if pr else ''}: human approval")
+            elif status == "blocked":
+                human.append(f"- ticket {ident} blocked")
+            elif status == "ready":
+                waits = self.waits_on(tt)
+                if waits:
+                    wait.append(f"{ident} on {'+'.join(waits)}")
+                else:
+                    start.append(ident)
+            elif status == "building":
+                if self.next(tt) == "ship":
+                    ship.append(ident)
+                dispatch += self.dispatchable(tt)
+        nexts = [f"- {what}: {', '.join(ids)}" for what, ids in
+                 (("start", start), ("dispatch", dispatch), ("ship", ship), ("wait", wait)) if ids]
+        return ([f"# Run state: {self.dir.name}",
+                 f"Updated: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                 "",
+                 "## Tickets"] + [self.line(tt) for tt in order]
+                + ["", "## Tasks", f"In flight: {', '.join(self.in_flight()) or 'none'}",
+                   "", "## Needs a human"] + (human[:MAX_HUMAN - 1] + [f"- +{len(human) - MAX_HUMAN + 1} more"]
+                                              if len(human) > MAX_HUMAN else human or ["- nothing"])
+                + ["", "## Next"] + (nexts or ["- nothing"]))
+
+
+def write_state(run):
+    """Writes `<run>/state.md` atomically and returns its path."""
+    path = run / "state.md"
+    fd, tmp = tempfile.mkstemp(dir=str(run), prefix=".state.md.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(Run(run).state()) + "\n")
+        os.replace(tmp, str(path))
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    return path
+
+
 def main(argv):
-    report = "--report" in argv
-    argv = [a for a in argv if a != "--report"]
-    if len(argv) != 1:
-        print("FAIL run usage: status.py <run> [--report]")
+    if not (len(argv) == 1 or (len(argv) == 2 and argv[1] in ("--write", "--report"))
+            or (len(argv) == 3 and argv[1] == "--line")):
+        print("FAIL run usage: status.py <run> [--report | --line <TT> | --write]")
         return 2
     run = core.resolve(argv[0])
     if not run.is_dir():
         print(f"FAIL run no-run-folder: {run}")
         return 1
-    for line in table(run) + (not_exercised(run) if report else []):
-        print(line.rstrip())
+    if len(argv) == 3:
+        state = Run(run)
+        tt = runfolder.norm(argv[2])
+        if tt not in state.tickets:
+            print(f"FAIL {argv[2]} no-ticket")
+            return 1
+        print(state.line(tt))
+    elif len(argv) == 2 and argv[1] == "--write":
+        print(f"OK run state {write_state(run)}")
+    else:
+        for line in table(run) + (not_exercised(run) if len(argv) == 2 else []):
+            print(line.rstrip())
     return 0
 
 

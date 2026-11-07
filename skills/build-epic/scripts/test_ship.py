@@ -26,16 +26,16 @@ if args[:2] != ["pr", "view"]:
         sys.exit(subprocess.run([sys.executable, "-IS", {kit_gh!r}, *args]).returncode)
     os.execv(sys.executable, [sys.executable, "-IS", {kit_gh!r}, *args])
 import json, subprocess
-with open(os.path.join(d, "gh.log"), "a") as f:
+with open(os.path.join(d, "gh.log"), "a", encoding="utf-8") as f:
     f.write(json.dumps(args) + "\n")
-with open(os.path.join(d, "gh-tokens.log"), "a") as f:
+with open(os.path.join(d, "gh-tokens.log"), "a", encoding="utf-8") as f:
     f.write(os.environ.get("GH_TOKEN", "") + "\n")
 
 def answer(name, default):
     p = os.path.join(d, "answers", name)
-    return open(p).read().strip() if os.path.exists(p) else default
+    return open(p, encoding="utf-8").read().strip() if os.path.exists(p) else default
 
-head = subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "feat/t"], capture_output=True, text=True)
+head = subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "feat/t"], capture_output=True, text=True, encoding="utf-8")
 print(json.dumps({{"state": answer("pr-state", "MERGED"), "headRefOid": head.stdout.strip(),
                   "baseRefName": answer("pr-base", "main")}}))
 '''
@@ -79,7 +79,7 @@ class Base(unittest.TestCase):
         clone = kit.make_origin()
         (kit.bin / "gh").rename(kit.bin / "gh-kit")
         (kit.bin / "gh").write_text(PR_VIEW.format(python=sys.executable, kit_gh=str(kit.bin / "gh-kit"),
-                                                   origin=str(kit.origin)))
+                                                   origin=str(kit.origin)), encoding="utf-8")
         (kit.bin / "gh").chmod(0o755)
         (kit.home / ".agents" / "bin").mkdir(parents=True)
         (kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
@@ -88,9 +88,9 @@ class Base(unittest.TestCase):
         for d in ("tickets", "tasks", "worktrees"):
             (kit.run_dir / d).mkdir()
         self.ticket = kit.run_dir / "tickets" / "01-t.md"
-        self.ticket.write_text(TICKET)
-        (kit.run_dir / "tasks" / "01-01-a.md").write_text(TASK.format(nn="01", pr=5))
-        (kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", pr=6))
+        self.ticket.write_text(TICKET, encoding="utf-8")
+        (kit.run_dir / "tasks" / "01-01-a.md").write_text(TASK.format(nn="01", pr=5), encoding="utf-8")
+        (kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", pr=6), encoding="utf-8")
 
     def one_line(self, p):
         self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)
@@ -111,7 +111,7 @@ class Base(unittest.TestCase):
         """Commits `path` on `main` and moves `feat/t` along, as a file the repo had before the ticket started."""
         clone = self.kit.clone
         (clone / path).parent.mkdir(parents=True, exist_ok=True)
-        (clone / path).write_text(text)
+        (clone / path).write_text(text, encoding="utf-8")
         self.kit.git("add", path, cwd=clone)
         self.kit.git("commit", "-qm", f"add {path}", cwd=clone)
         self.kit.git("push", "-q", "origin", "main", "main:feat/t", cwd=clone)
@@ -128,12 +128,12 @@ class PostReviewTest(Base):
 
     def payload(self):
         call = self.calls("api")[-1]
-        return json.loads(Path(call[call.index("--input") + 1]).read_text())
+        return json.loads(Path(call[call.index("--input") + 1]).read_text(encoding="utf-8"))
 
     def test_a_relative_report_path_posts_the_files_text(self):
         work = self.kit.tmp / "work"
         work.mkdir()
-        (work / "report.md").write_text("Finding: the JSON parser drops keys.\n")
+        (work / "report.md").write_text("Finding: the JSON parser drops keys.\n", encoding="utf-8")
         self.kit.answer(REVIEWS.format(n=12), out=json.dumps({"html_url": "https://github.com/o/r/pull/12#r1"}))
         line = self.post("12", "report.md", cwd=work)
         self.assertEqual(line, "OK PR12 review https://github.com/o/r/pull/12#r1")
@@ -141,9 +141,9 @@ class PostReviewTest(Base):
 
     def test_the_payload_is_a_comment_on_the_prs_head_and_never_an_approval(self):
         report = self.kit.tmp / "r.md"
-        report.write_text("ok\n")
+        report.write_text("ok\n", encoding="utf-8")
         comments = self.kit.tmp / "c.json"
-        comments.write_text(json.dumps([{"path": "a.py", "line": 3, "body": "nit"}]))
+        comments.write_text(json.dumps([{"path": "a.py", "line": 3, "body": "nit"}]), encoding="utf-8")
         self.post("https://github.com/o/r/pull/12", report, "--comments", comments)
         payload = self.payload()
         self.assertEqual(payload["event"], "COMMENT")
@@ -155,7 +155,7 @@ class PostReviewTest(Base):
 
     def test_an_empty_report_is_refused_and_nothing_posts(self):
         report = self.kit.tmp / "r.md"
-        report.write_text(" \n\n")
+        report.write_text(" \n\n", encoding="utf-8")
         line = self.post("#12", report)
         self.assertRegex(line, r"^FAIL PR12 empty-review \(log: ")
         self.assertEqual(self.calls("api"), [])
@@ -167,21 +167,37 @@ class PostReviewTest(Base):
 
     def test_a_value_naming_no_pr_is_refused(self):
         report = self.kit.tmp / "r.md"
-        report.write_text("ok\n")
+        report.write_text("ok\n", encoding="utf-8")
         self.assertRegex(self.post("latest", report), r"^FAIL latest bad-pr: latest \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_comments_that_are_not_a_json_array_of_objects_are_refused(self):
         report = self.kit.tmp / "r.md"
-        report.write_text("ok\n")
+        report.write_text("ok\n", encoding="utf-8")
         for comments in ("not json", '{"path": "a.py"}', '["nit"]'):
             with self.subTest(comments):
                 self.assertRegex(self.post("12", report, "--comments", comments), r"^FAIL PR12 bad-comments \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
+    def test_inline_comments_given_with_an_equals_sign_are_posted(self):
+        report = self.kit.tmp / "r.md"
+        report.write_text("ok\n", encoding="utf-8")
+        self.post("PR12", report, '--comments=[{"path": "a.py", "line": 3, "body": "nit"}]')
+        self.assertEqual(self.payload()["comments"], [{"path": "a.py", "line": 3, "body": "nit"}])
+
+    def test_a_pr_view_without_a_head_fails_and_nothing_posts(self):
+        report = self.kit.tmp / "r.md"
+        report.write_text("ok\n", encoding="utf-8")
+        (self.kit.bin / "gh-kit").replace(self.kit.bin / "gh")  # the plain stub, so `pr view` answers what is set
+        for out, rc in (("", 1), ("not json", 0), ("{}", 0)):
+            with self.subTest(out=out, rc=rc):
+                self.kit.answer("pr-view", out=out, rc=rc)
+                self.assertRegex(self.post("12", report), r"^FAIL PR12 pr-view \(log: ")
+        self.assertEqual(self.calls("api"), [])
+
     def test_a_failed_post_fails(self):
         report = self.kit.tmp / "r.md"
-        report.write_text("ok\n")
+        report.write_text("ok\n", encoding="utf-8")
         self.kit.answer(REVIEWS.format(n=12), err="HTTP 422: Unprocessable", rc=1)
         self.assertRegex(self.post("12", report), r"^FAIL PR12 post \(log: ")
 
@@ -198,7 +214,7 @@ class ShipOpenTest(Base):
         create = self.calls("pr", "create")[0]
         self.assertEqual(create[create.index("--base") + 1], "main")
         self.assertEqual(create[create.index("--title") + 1], "feat: Ship JSON things")
-        body = Path(create[create.index("--body-file") + 1]).read_text()
+        body = Path(create[create.index("--body-file") + 1]).read_text(encoding="utf-8")
         self.assertIn("task 01: https://github.com/o/r/pull/5", body)
         self.assertIn("Closes #7\nCloses #8", body)
         self.assertTrue((self.kit.run_dir / "worktrees" / "01").is_dir())
@@ -208,7 +224,7 @@ class ShipOpenTest(Base):
         self.assertEqual(self.ship("open"), "OK 01 open pr=20")
         edit = self.calls("pr", "edit")[0]
         self.assertEqual(edit[:3], ["pr", "edit", "20"])
-        self.assertIn("Closes #7", Path(edit[edit.index("--body-file") + 1]).read_text())
+        self.assertIn("Closes #7", Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8"))
         self.assertEqual(self.calls("pr", "ready"), [["pr", "ready", "20"]])
         self.assertEqual(self.calls("pr", "create"), [])
         self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/20")
@@ -228,7 +244,7 @@ class ShipOpenTest(Base):
 
     def body_file(self, text):
         path = self.kit.tmp / "body.md"
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         return path
 
     def test_the_orchestrators_body_fills_the_template_and_the_script_adds_tasks_and_closes(self):
@@ -238,7 +254,7 @@ class ShipOpenTest(Base):
         line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open", "--body-file", body))
         self.assertEqual(line, "OK 01 open pr=20")
         edit = self.calls("pr", "edit")[0]
-        sent = Path(edit[edit.index("--body-file") + 1]).read_text()
+        sent = Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8")
         self.assertTrue(sent.startswith(FILLED), sent)
         self.assertIn("task 01: https://github.com/o/r/pull/5", sent)
         self.assertIn("Closes #7\nCloses #8", sent)
@@ -246,12 +262,12 @@ class ShipOpenTest(Base):
     def test_a_relative_body_file_is_read_from_the_callers_folder(self):
         work = self.kit.tmp / "work"
         work.mkdir()
-        (work / "body.md").write_text(FILLED)
+        (work / "body.md").write_text(FILLED, encoding="utf-8")
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open", "--body-file", "body.md", cwd=work))
         self.assertEqual(line, "OK 01 open pr=20")
         edit = self.calls("pr", "edit")[0]
-        self.assertIn("Cuts the JSON step", Path(edit[edit.index("--body-file") + 1]).read_text())
+        self.assertIn("Cuts the JSON step", Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8"))
 
     def test_a_template_section_left_empty_todo_or_na_is_refused_and_nothing_is_sent(self):
         self.commit_to_base(".github/pull_request_template.md", TEMPLATE)
@@ -287,7 +303,7 @@ class ShipMergeTest(Base):
     def rule(self, script):
         """Sets the merge rule to a script printing and exiting as `script` says."""
         path = self.kit.tmp / "merge-rule.sh"
-        path.write_text(f"#!/usr/bin/env bash\n{script}\n")
+        path.write_text(f"#!/usr/bin/env bash\n{script}\n", encoding="utf-8")
         path.chmod(0o755)
         p = self.kit.tool(self.kit.home / ".agents/bin/settings", "set", "build-epic", "merge_command",
                             f"{path} {{pr}}", "--machine")
@@ -303,12 +319,12 @@ class ShipMergeTest(Base):
         self.assertEqual(self.kit.git("branch", "--list", "feat/t", cwd=self.kit.clone), "")
 
     def test_a_pr_into_another_base_leaves_the_issues_open_whatever_decisions_md_says(self):
-        (self.kit.answers / "pr-base").write_text("integ")
+        (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.calls("issue", "close"), [])
 
     def test_a_pr_into_the_default_branch_closes_the_issues_whatever_decisions_md_says(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual([c[:3] for c in self.calls("issue", "close")], [["issue", "close", "7"], ["issue", "close", "8"]])
 
@@ -321,19 +337,19 @@ class ShipMergeTest(Base):
 
     def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
-        (self.kit.answers / "pr-base").write_text("integ")
+        (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(len(self.calls("pr", "merge")), 1)
 
     def test_a_gh_merge_naming_a_required_review_fails_and_is_never_in_review(self):
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.kit.answer("pr-merge", err="X Pull request #20 is not mergeable: At least 1 approving review is required.\n",
                         rc=1)
         self.assertRegex(self.ship("merge"), r"^FAIL 01 merge \(log: ")
         self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
 
     def test_a_rule_waiting_on_a_human_approval_leaves_it_in_review(self):
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.rule('echo "PR #$1: agent-pr-gate says blocked (exit 1), not merging"\n'
                   'echo "  - High-tier path needs an approval from a code owner."\nexit 1')
         self.assertEqual(self.ship("merge"), "OK 01 in-review pr=20")
@@ -342,7 +358,7 @@ class ShipMergeTest(Base):
         self.assertFalse(self.wt.exists())
 
     def test_any_other_refusal_fails(self):
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.rule('echo "PR #$1: agent-pr-gate says blocked (exit 1), not merging"\necho "  - CI failed."\nexit 1')
         self.assertRegex(self.ship("merge"), r"^FAIL 01 merge \(log: ")
         self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
@@ -350,7 +366,7 @@ class ShipMergeTest(Base):
         self.assertTrue(self.wt.is_dir())
 
     def test_without_a_pr_it_fails(self):
-        (self.kit.run_dir / "tickets" / "01-t.md").write_text(TICKET)
+        (self.kit.run_dir / "tickets" / "01-t.md").write_text(TICKET, encoding="utf-8")
         self.assertRegex(self.ship("merge"), r"^FAIL 01 no-pr \(log: ")
 
 
@@ -362,7 +378,7 @@ class IdentityTest(Base):
         path = self.kit.tmp / "token.sh"
         count = self.kit.tmp / "tokens.count"
         path.write_text(f'#!/usr/bin/env bash\nn=$(( $(cat "{count}" 2>/dev/null || echo 0) + 1 ))\n'
-                        f'echo "$n" >"{count}"\necho "tok$n"\n')
+                        f'echo "$n" >"{count}"\necho "tok$n"\n', encoding="utf-8")
         path.chmod(0o755)
         return path
 
@@ -383,7 +399,7 @@ class IdentityTest(Base):
         self.assertEqual(len(tokens), 3)
         self.assertEqual(len(set(tokens)), 3, tokens)
         self.assertTrue(all(t.startswith("tok") for t in tokens), tokens)
-        log = (self.kit.run_dir / "logs" / "01-ship_ticket.log").read_text()
+        log = (self.kit.run_dir / "logs" / "01-ship_ticket.log").read_text(encoding="utf-8")
         self.assertNotIn("tok1", log)
 
     def test_the_merge_rule_runs_as_the_identity(self):
@@ -392,15 +408,15 @@ class IdentityTest(Base):
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         seen = self.kit.tmp / "rule-token"
         rule = self.kit.tmp / "merge-rule.sh"
-        rule.write_text(f'#!/usr/bin/env bash\necho "$GH_TOKEN" >"{seen}"\n')
+        rule.write_text(f'#!/usr/bin/env bash\necho "$GH_TOKEN" >"{seen}"\n', encoding="utf-8")
         rule.chmod(0o755)
         self.set_setting("merge_command", f"{rule} {{pr}}")
         self.assertEqual(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "merge")), "OK 01 merged pr=20")
-        self.assertRegex(seen.read_text().strip(), r"^tok\d+$")
+        self.assertRegex(seen.read_text(encoding="utf-8").strip(), r"^tok\d+$")
 
     def test_a_failing_identity_command_fails_the_step_and_calls_no_gh(self):
         bad = self.kit.tmp / "bad.sh"
-        bad.write_text("#!/usr/bin/env bash\necho 'no key' >&2\nexit 1\n")
+        bad.write_text("#!/usr/bin/env bash\necho 'no key' >&2\nexit 1\n", encoding="utf-8")
         bad.chmod(0o755)
         self.set_setting("identity_command", str(bad))
         self.init()
@@ -423,10 +439,10 @@ class ChecksReportTest(unittest.TestCase):
             (kit.run_dir / "tickets").mkdir()
             (kit.run_dir / "tasks").mkdir()
             ticket = kit.run_dir / "tickets" / "01-t.md"
-            ticket.write_text(TICKET)
+            ticket.write_text(TICKET, encoding="utf-8")
             task = kit.run_dir / "tasks" / "01-01-a.md"
-            task.write_text(TASK.format(nn="01", pr=5))
-            with open(kit.tmp / "log", "w") as log:
+            task.write_text(TASK.format(nn="01", pr=5), encoding="utf-8")
+            with open(kit.tmp / "log", "w", encoding="utf-8") as log:
                 suites = checks.run_all(["true", "exit 3"], kit.tmp, log)
             checks.save(kit.run_dir, "01-01", suites)
             body = prbody.task_body(kit.run_dir, "01-01", task, ticket)

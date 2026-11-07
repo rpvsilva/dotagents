@@ -1,0 +1,10 @@
+{
+  "run": "01-03-20261101T100500",
+  "name": "01-03",
+  "exit_code": 0,
+  "status": "done",
+  "complete": true,
+  "num_turns": 40,
+  "total_cost_usd": 1.25,
+  "model": "model-a"
+}

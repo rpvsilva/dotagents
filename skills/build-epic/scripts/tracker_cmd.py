@@ -33,7 +33,7 @@ BLOCKED = "blocked"
 
 def title(path):
     """The text after `# <id>:` on the file's first line."""
-    first = Path(path).read_text().split("\n", 1)[0]
+    first = Path(path).read_text(encoding="utf-8").split("\n", 1)[0]
     return first.split(":", 1)[1].strip() if ":" in first else first.lstrip("# ").strip()
 
 
@@ -68,7 +68,7 @@ def plan_body(run_dir, ticket):
     lines = [tracker.MARKER, f"## Plan for ticket {tt}: {title(ticket)}", ""]
     notes = run_dir / "plan" / f"{tt}.md"
     if notes.exists():
-        lines += [notes.read_text().strip(), ""]
+        lines += [notes.read_text(encoding="utf-8").strip(), ""]
     lines.append("Tasks:")
     for task in sorted((run_dir / "tasks").glob(f"{tt}-*.md")):
         tid = task.stem.split("-", 2)

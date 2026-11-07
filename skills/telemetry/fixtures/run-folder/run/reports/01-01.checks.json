@@ -1,0 +1,4 @@
+[
+ {"command": "tests/run.sh", "rc": 0, "passed": 12, "failed": 0, "skipped": 1, "seconds": 30.25, "skip_reasons": ["mod.test.sh: no node"]},
+ {"command": "python3 -m unittest", "rc": 0, "passed": 40, "failed": 0, "skipped": 0, "seconds": 2.5, "skip_reasons": []}
+]
