@@ -183,6 +183,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | ☁️ [Remote subagents](docs/remote.md) | Running subagents on a cluster, Docker or an SSH host, with diagrams |
 | 💬 [Agent communication](docs/agent-communication.md) | Why subagents don't talk to each other |
 | ⚖️ [Compared with Claude features](docs/claude-features.md) | How this setup differs from Claude Code's self-hosted environments and Claude Cowork |
+| 👤 [Personal values](docs/personal.md) | Every value that is mine, how a public install leaves it out, and how I keep my setup |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
 
 ## 🗂️ Layout
