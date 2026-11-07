@@ -7,7 +7,10 @@ Reads <run>/tasks/*.md and <run>/tickets/*.md. Two tasks whose `Writes:` lines s
 `Blocked by`: within a ticket through a chain of tasks; across tickets through a chain of tickets, or through a task
 blocked by the other ticket (`Blocked by: 02, ticket 01`: that ticket merged). Every task the planner wrote needs a
 `Writes:` line; tasks the orchestrator writes itself (`*-tests.md`, `*-review-fixes.md`, `*-fix-ci.md`) are skipped.
-Prints one line per problem and exits 1, or prints `plan ok: <n> tasks, <m> lanes` and exits 0. A lane is a group of
+A hub task (one with a `ticket NN` blocker) needs a non-empty `## Interactions` section unless it is `Status: done`.
+When <run>/map.md exists (security-audit plans have none), every name in a task's `Env:` line (env vars, side files,
+globals it adds) must appear in a line of map.md's `## Test isolation`, and every `## Field matrix` table cell must be
+`keep`, `drop`, `reset` or `?`. Prints one line per problem and exits 1, or prints `plan ok: <n> tasks, <m> lanes` and exits 0. A lane is a group of
 tickets chained by ticket `Blocked by`; tickets ordered only through a hub task stay in separate lanes.
 """
 import re
@@ -15,11 +18,23 @@ import sys
 from pathlib import Path
 
 ORCHESTRATOR_TASKS = ("-tests.md", "-review-fixes.md", "-fix-ci.md")
+MATRIX_CELLS = ("keep", "drop", "reset", "?")
 
 
 def header(text, key):
     m = re.search(rf"^{key}:[ \t]*(.*)$", text, re.MULTILINE)
     return m.group(1).strip() if m else None
+
+
+def section(text, name):
+    """The body of a `## <name>` section up to the next `## ` heading, or None when the section is absent."""
+    m = re.search(rf"^## {re.escape(name)}[ \t]*\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    return m.group(1) if m else None
+
+
+def names(value):
+    """A comma-separated header value as a set of names, backticks stripped; `none` or no value is empty."""
+    return {p.strip().strip("`") for p in (value or "").split(",") if p.strip() and p.strip().lower() != "none"}
 
 
 def norm(n):
@@ -68,17 +83,54 @@ def load(run):
             problems.append(f"{f.name}: no Writes line")
             writes = ""
         task_blocks, ticket_blocks = blockers(header(text, "Blocked by"))
+        done = (header(text, "Status") or "").lower().startswith("done")
+        if ticket_blocks and not done and not (section(text, "Interactions") or "").strip():
+            problems.append(f"{f.name}: hub task has no ## Interactions section")
         tasks[(ticket, norm(num))] = {
             "file": f.name,
-            "writes": {p.strip().strip("`") for p in writes.split(",") if p.strip() and p.strip().lower() != "none"},
+            "writes": names(writes),
             "blocked": task_blocks,
             "tickets": ticket_blocks,
+            "env": sorted(names(header(text, "Env"))),
         }
     return tickets, tasks, problems
 
 
+def matrix_cells(body):
+    """Each (field, command, value) of the first Markdown table in a `## Field matrix` body."""
+    rows = [[c.strip().strip("`").strip() for c in line.strip().strip("|").split("|")]
+            for line in body.splitlines() if line.strip().startswith("|")]
+    rows = [r for r in rows if not all(re.fullmatch(r":?-+:?", c) for c in r)]
+    if not rows:
+        return
+    commands = rows[0][1:]
+    for row in rows[1:]:
+        for command, value in zip(commands, row[1:]):
+            yield row[0], command, value
+
+
+def check_map(run, tasks):
+    """Problems in <run>/map.md's Field matrix and Test isolation; none when the plan has no map.md."""
+    path = run / "map.md"
+    if not path.is_file():
+        return []
+    text = path.read_text()
+    problems = [f"map.md: Field matrix cell {field} x {command} is {value}"
+                for field, command, value in matrix_cells(section(text, "Field matrix") or "")
+                if value.lower() not in MATRIX_CELLS]
+    isolation = (section(text, "Test isolation") or "").splitlines()
+    for key in sorted(tasks):
+        for name in tasks[key]["env"]:
+            word = re.compile(rf"(?<![\w]){re.escape(name)}(?![\w])")
+            if not any(word.search(line) for line in isolation):
+                problems.append(f"{tasks[key]['file']}: Env {name} has no Test isolation line")
+    return problems
+
+
 def check(run):
-    tickets, tasks, problems = load(Path(run))
+    run = Path(run)
+    tickets, tasks, problems = load(run)
+    problems += check_map(run, tasks)
     task_reach = closure({k: {(k[0], b) for b in v["blocked"]} for k, v in tasks.items()})
     ticket_reach = closure(tickets)
     for key, reach in task_reach.items():
