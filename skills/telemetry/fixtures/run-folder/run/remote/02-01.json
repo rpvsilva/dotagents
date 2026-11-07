@@ -1,0 +1,14 @@
+{
+  "run": "02-01-20261101T102000",
+  "name": "02-01",
+  "exit_code": 4,
+  "status": null,
+  "complete": false,
+  "duration_ms": 120000,
+  "num_turns": null,
+  "total_cost_usd": null,
+  "usage": null,
+  "model": null,
+  "killed": "memory",
+  "lost": false
+}
