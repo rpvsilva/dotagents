@@ -111,9 +111,11 @@ def _cells(line):
 
 
 def parse(text):
-    """A `Decisions` from the text of a `decisions.md`. Lines it does not know are ignored."""
+    """A `Decisions` from the text of a `decisions.md`, its lines ending LF or CRLF (a Windows checkout or editor).
+    Lines it does not know are ignored."""
     d, section = Decisions(), None
     for line in text.split("\n"):
+        line = line[:-1] if line.endswith("\r") else line
         if line == AUTHORIZATIONS:
             section = "auth"
         elif line == DECISIONS:

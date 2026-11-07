@@ -40,14 +40,16 @@ def posix(out, args):
 
 
 def run(*args, cwd=None):
-    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, cwd=cwd)
+    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
+                          cwd=cwd)
 
 
 class ReviewPromptTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        # Resolved, as the child's cwd is: macOS tmp is under a /var symlink, Windows tmp under an 8.3 short name.
+        self.tmp = Path(os.path.realpath(tempfile.mkdtemp()))
         self.findings = self.tmp / "findings.md"
-        self.findings.write_text("1. blocker: x.py:3 crashes on empty input\n")
+        self.findings.write_text("1. blocker: x.py:3 crashes on empty input\n", encoding="utf-8")
 
     def render(self, mode, args=None):
         args = [a.replace("@FINDINGS@", str(self.findings)) for a in (args or ARGS[mode])]
@@ -58,7 +60,7 @@ class ReviewPromptTest(unittest.TestCase):
     def test_each_mode_matches_its_golden_prompt(self):
         for mode in MODES:
             with self.subTest(mode=mode):
-                self.assertEqual(self.render(mode), (GOLDEN / f"{mode}.txt").read_text())
+                self.assertEqual(self.render(mode), (GOLDEN / f"{mode}.txt").read_text(encoding="utf-8"))
 
     def test_every_mode_diffs_against_the_merge_base_and_reads_before_testing(self):
         for mode in MODES:
@@ -106,6 +108,23 @@ class ReviewPromptTest(unittest.TestCase):
         self.assertNotIn("/runs/r1/decisions.md", out)
         self.assertIn("/runs/r1/map.md", out)
 
+    def test_a_decisions_file_names_its_test_command_as_the_command_to_run(self):
+        self.assertIn("- its `test_command:` line: the exact command to run the tests with", self.render("task"))
+        args = [a for a in ARGS["task"] if a not in RUN]
+        self.assertNotIn("test_command", self.render("task", args))
+
+    def test_a_report_file_is_the_one_file_the_reviewer_may_write(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                args = [a.replace("@FINDINGS@", str(self.findings)) for a in ARGS[mode]]
+                got = run(mode, *args, "--report", "reviews/42-abc1234.md", cwd=self.tmp)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                report = str(self.tmp / "reviews" / "42-abc1234.md")
+                self.assertTrue(got.stdout.endswith(
+                    f"\nWrite your report to {report}, the only file you may write, then return the block alone, "
+                    "as the brief's Report says.\n"), got.stdout)
+                self.assertNotIn("the only file you may write", self.render(mode))
+
     def test_relative_paths_are_made_absolute(self):
         got = run("task", "--pr", "1", "--worktree", "wt", "--head", "h", "--base", "b", cwd=self.tmp)
         self.assertEqual(got.returncode, 0, got.stderr)
@@ -115,19 +134,19 @@ class ReviewPromptTest(unittest.TestCase):
         repo = self.tmp / "a repo $(touch pwned)"
         git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        (repo / "f.txt").write_text("one\n")
+        (repo / "f.txt").write_text("one\n", encoding="utf-8")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["commit", "-qm", "one"], check=True)
-        (repo / "f.txt").write_text("two\n")
+        (repo / "f.txt").write_text("two\n", encoding="utf-8")
         subprocess.run(git + ["commit", "-qam", "two"], check=True)
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1;touch pwned2")
         self.assertEqual(got.returncode, 0, got.stderr)
         command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True, encoding="utf-8")
         self.assertFalse((self.tmp / "pwned").exists() or (self.tmp / "pwned2").exists(), command)
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1")
         command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        res = subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        res = subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("+two", res.stdout)
 

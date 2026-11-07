@@ -41,7 +41,7 @@ class SkipsTest(unittest.TestCase):
                 "skip_reasons": list(reasons)}
 
     def not_exercised(self, ticket):
-        return prbody.section(prbody.ticket_body(self.run, ticket, "## Testing\nRan it."), "Not exercised here")
+        return prbody.section(prbody.ticket_body(self.run, ticket), "Not exercised here")
 
     def report(self):
         p = self.kit.step(STATUS, self.run, "--report")

@@ -274,7 +274,8 @@ class PrBodyTest(StepCase):
     def test_task_body_has_what_it_builds_its_check_result_and_part_of(self):
         reports = self.kit.run_dir / "reports"
         reports.mkdir()
-        (reports / "01-02.checks.json").write_text(json.dumps([{"command": "tests/run.sh", "rc": 0, "seconds": 3}]), encoding="utf-8")
+        (reports / "01-02.checks.json").write_text(json.dumps([{"command": "tests/run.sh", "rc": 0, "seconds": 3}]),
+                                                   encoding="utf-8")
         ticket = self.kit.run_dir / "tickets" / "01-alpha.md"
         body = prbody.task_body(self.kit.run_dir, "01-02", self.task, ticket)
         self.assertIn("Exports the list as JSON.", body)
@@ -301,7 +302,8 @@ class PrBodyTest(StepCase):
 
     def test_ticket_body_lists_tasks_with_pr_links_and_closes_the_issue(self):
         runfolder.set_header(self.task, "PR", URL)
-        (self.kit.run_dir / "tasks" / "01-03-csv.md").write_text("# 01-03: CSV import\nStatus: ready\n", encoding="utf-8")
+        (self.kit.run_dir / "tasks" / "01-03-csv.md").write_text("# 01-03: CSV import\nStatus: ready\n",
+                                                                 encoding="utf-8")
         (self.kit.run_dir / "tasks" / "02-01-other.md").write_text("# 02-01: Other\nStatus: ready\n", encoding="utf-8")
         body = prbody.ticket_body(self.kit.run_dir, self.kit.run_dir / "tickets" / "01-alpha.md")
         self.assertIn(f"- JSON export: {URL}\n- CSV import: no PR", body)
