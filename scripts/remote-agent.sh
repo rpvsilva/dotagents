@@ -47,7 +47,8 @@
 # model, complete, capped_off, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the token's value
 # redacted; and capped.log, the sandbox's own list of the commands its caps killed.
 # Each command the caps killed prints one line on stderr, whatever the exit: [<task>] killed: memory|timeout <command>
-# (from progress.log's `capped: killed:` lines, which the sandbox sends as they happen, else from capped.log). A kill
+# (from progress.log's `== capped: killed:` lines, which the sandbox sends as they happen and Claude's text, indented
+# there, cannot pass for; else from capped.log). A kill
 # changes no exit code; result.json's lost tells a sandbox that vanished with no kill line before it.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5 when
 # the run failed because the Claude account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
@@ -492,11 +493,12 @@ for f in changes.patch stream.jsonl session.jsonl summary.md capped.log; do
   # The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
   if [ "$f" = changes.patch ]; then cp "$stage/out/$f" "$keep/$f"; else scrub "$stage/out/$f" "$keep/$f"; fi
 done
-# Each command the caps killed in the sandbox: its kill lines in progress.log, which came live, so a lost sandbox
-# keeps them; else in the capped.log that came back. remote-agent-result.sh reads them the same way.
-cap_kills() { tr -d '\r' 2>/dev/null <"$1" | sed -nE 's/^capped: killed: (memory|timeout)( |$)/\1\2/p'; }
-kills="$(cap_kills "$keep/progress.log")" || kills=""
-[ -n "$kills" ] || kills="$(cap_kills "$keep/capped.log")" || kills=""
+# Each command the caps killed in the sandbox: its `== capped: killed:` lines in progress.log, which came live, so a
+# lost sandbox keeps them; else the `capped: killed:` lines of the capped.log that came back. remote-agent-result.sh
+# reads them the same way.
+cap_kills() { tr -d '\r' 2>/dev/null <"$2" | sed -nE "s/^$1capped: killed: (memory|timeout)( |\$)/\\1\\2/p"; }
+kills="$(cap_kills "== " "$keep/progress.log")" || kills=""
+[ -n "$kills" ] || kills="$(cap_kills "" "$keep/capped.log")" || kills=""
 # shellcheck disable=SC2001 # a prefix on every line of a multi-line value
 [ -z "$kills" ] || sed 's/^/killed: /' <<<"$kills" | progress
 # The session stays here: the sandbox wrote it, so placing it for /resume is the human's call (remote-agent resume).

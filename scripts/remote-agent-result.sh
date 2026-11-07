@@ -9,9 +9,10 @@
 # usage (from the last result event of transcript.jsonl; duration_ms from run.json's started and ended without one);
 # model (the init event's, else the first of the result's modelUsage); complete (true only on exit 0, 3 or 4 with a
 # result event that is not an error); capped_off (null, or what the sandbox lacked to run the caps: they were off and commands ran uncapped); capped_kills (each command the sandbox's caps killed, [{kind, cmd}], kind memory
-# or timeout and cmd null when the line names none: from progress.log's `capped: killed: <kind> <cmd>` lines, which
-# came live, else from the capped.log that came back); killed (the last kill's kind, else null); lost (true when the
-# run failed with an exit other than 3, 4 or 5, no kill line, and a progress line saying its container or pod was gone).
+# or timeout and cmd null when the line names none: from progress.log's `== capped: killed: <kind> <cmd>` lines, which
+# came live, else from the `capped: killed:` lines of the capped.log that came back); killed (the last kill's kind,
+# else null); lost (true when the run failed with an exit other than 3, 4 or 5, no kill line, and an error line of
+# remote-agent or its backend's client saying its container or pod was gone).
 # Anything unknown is null, never 0.
 set -euo pipefail
 
@@ -111,13 +112,17 @@ fi
 : >"$tmp/progress"
 [ ! -f "$keep/progress.log" ] || tr -d '\r' <"$keep/progress.log" >"$tmp/progress"
 : >"$tmp/kills"
-grep -E '^capped: killed: (memory|timeout)( |$)' "$tmp/progress" >"$tmp/kills" 2>/dev/null \
-  || { [ ! -f "$keep/capped.log" ] || tr -d '\r' <"$keep/capped.log" | grep -E '^capped: killed: (memory|timeout)( |$)' >"$tmp/kills"; } \
-  || true
+# The sandbox tags the kills it relays with `== `, which Claude's text (indented there) cannot start with.
+sed -nE 's/^== (capped: killed: (memory|timeout)( |$))/\1/p' "$tmp/progress" >"$tmp/kills" 2>/dev/null || true
+[ -s "$tmp/kills" ] || [ ! -f "$keep/capped.log" ] \
+  || tr -d '\r' <"$keep/capped.log" | grep -E '^capped: killed: (memory|timeout)( |$)' >"$tmp/kills" || true
 # The sandbox's own line when the caps could not run there: what was missing, else null.
 capoff="$(sed -nE 's/^== capped: unavailable \(missing: ([^)]*)\).*/\1/p' "$tmp/progress" | head -1)"
 gone=false
-if grep -qE 'No such container|container not found|pods? "[^"]*" not found' "$tmp/progress"; then gone=true; fi
+# Only remote-agent's own lines and its backend client's errors (kubectl's, docker's), never the sandbox's or Claude's.
+if grep -qE '^(remote-agent: )?[Ee]rror[^:]*:.*(No such container|container not found|pods? "[^"]*" not found)' "$tmp/progress"; then
+  gone=true
+fi
 
 # The transcript's last result event and init model, read one event at a time; a partial last line (a killed run) is
 # skipped.
