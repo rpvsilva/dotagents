@@ -155,6 +155,22 @@ class TierTest(unittest.TestCase):
         self.assertEqual(res.stdout.splitlines()[0], "high")
         self.assertIn("sink: open( in app.py", res.stdout.splitlines())
 
+    def test_git_mode_with_a_bad_merge_base_fails_and_prints_no_tier(self):
+        repo = self.tmp / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=self.env())
+        res = self.run_tier("--git", str(repo), "no-such-ref")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(res.stdout, "")
+        self.assertIn("tier.py: git diff failed", res.stderr)
+
+    def test_wrong_arguments_fail_with_the_usage_and_print_no_tier(self):
+        for args in ([], ["--git", "repo"], ["--trim"], ["--other"], ["a.diff", "b.diff"]):
+            with self.subTest(args=args):
+                res = self.run_tier(*args)
+                self.assertNotEqual(res.returncode, 0)
+                self.assertEqual(res.stdout, "")
+                self.assertIn("Usage: tier.py <diff file>", res.stderr)
+
     def test_added_line_that_looks_like_a_header_still_counts(self):
         got, signals = self.tier(diff([("app/mod.py", ["++ count; save(x)"])]))
         self.assertEqual(got, "high")
