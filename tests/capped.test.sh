@@ -155,7 +155,9 @@ cases() {
     start="$(now_ms)"
     for i in 1 2 3; do "$CAPPED" --mb 500 --secs 5 -- sleep 0.05 || fail "quick exit: run $i failed"; done
     ms=$(($(now_ms) - start))
-    [ "$ms" -lt 600 ] || fail "quick exit: three runs took ${ms} ms, want under 600"
+    # Under ps each poll runs ps, slower on macOS; the old stall (a full poll per run) still adds ~600 ms over either bound.
+    limit=600; [ "$how" != ps ] || limit=1200
+    [ "$ms" -lt "$limit" ] || fail "quick exit: three runs took ${ms} ms, want under $limit"
   fi
 
   if [ "$gitbash" -eq 1 ]; then
