@@ -135,9 +135,16 @@ for args in "closure nope" "closure alpha nope" "needs nope" "owner alpha" "file
   [ -z "$out" ] || fail "$args: printed to stdout: $out"
   grep -q nope "$SANDBOX/err" || grep -q alpha "$SANDBOX/err" || fail "$args: stderr does not name it"
 done
-status=0
-parts bogus >/dev/null 2>&1 || status=$?
-[ "$status" -eq 2 ] || fail "unknown subcommand: exit $status, expected 2"
+# Wrong arguments: the usage on stderr, exit 2, nothing on stdout. A word starting with - is never passed to jq.
+for args in "bogus" "" "list extra" "groups extra" "needs" "needs alpha beta" "owner" "closure" "closure --optional" \
+  "files" "files alpha beta" "closure -x" "closure --optional --bogus"; do
+  status=0
+  # shellcheck disable=SC2086 # split the subcommand from its arguments
+  out="$(parts $args 2>"$SANDBOX/err")" || status=$?
+  [ "$status" -eq 2 ] || fail "'$args': exit $status, expected 2"
+  [ -z "$out" ] || fail "'$args': printed to stdout: $out"
+  grep -qE '^(usage|parts): ' "$SANDBOX/err" || fail "'$args': no usage or error on stderr"
+done
 
 # files: the repo paths each part ships.
 same "$(parts files alpha)" "skills/alpha/SKILL.md
@@ -170,6 +177,11 @@ same "$(echo '{"group": "core"}' | PARTS_REPO="$SANDBOX/empty" "$PARTS" list)" "
 # Without PARTS_REPO the script reads the repo it lives in: the real groups.json names the eight groups.
 same "$("$PARTS" groups | cut -f1 | tr '\n' ' ')" "core remote pr-loop epics security safety-hooks small-tools personal " \
   "real repo: groups.json does not name the eight groups"
+# Called through a chain of symlinks (relative, then absolute), it still finds the repo it lives in.
+mkdir -p "$SANDBOX/bin"
+ln -s "$PARTS" "$SANDBOX/bin/parts-abs"
+ln -s parts-abs "$SANDBOX/bin/parts"
+same "$(cd "$SANDBOX" && bin/parts groups | cut -f1 | head -1)" "core" "through a symlink: did not find its repo"
 "$PARTS" groups | awk -F'\t' 'NF != 2 || $2 == "" { bad = 1 } END { exit bad || NR != 8 }' || fail "real repo: a group has no about line"
 
 [ "$fails" -eq 0 ] || { echo "parts.test.sh: $fails failure(s)"; exit 1; }
