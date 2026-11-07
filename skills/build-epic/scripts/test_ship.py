@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, prbody, runfolder  # noqa: E402
+from steplib import checks, decisions, prbody, runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
 POST_REVIEW = SCRIPTS / "post_review.py"
@@ -43,6 +43,7 @@ print(json.dumps({{"state": answer("pr-state", "MERGED"), "headRefOid": head.std
 
 TICKET = "# 01: Ship JSON things\nStatus: building\nIssue: #7, #8\nBranch: feat/t\nBlocked by: none\n"
 TASK = "# 01-{nn}: task {nn}\nStatus: done\nTicket: 01\nBlocked by: none\nWrites: x\nPR: https://github.com/o/r/pull/{pr}\n"
+GATE = ".review-gate.yml"
 REVIEWS = "api-repos__owner___repo__pulls_{n}_reviews"
 
 
@@ -275,6 +276,7 @@ class ShipMergeTest(Base):
     def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
         self.set_setting("task_merge_method", "merge")  # no ancestry step: test_ancestry.py covers it
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
+        self.kit.branch_from_main("integ")
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
         (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
@@ -307,6 +309,59 @@ class ShipMergeTest(Base):
     def test_without_a_pr_it_fails(self):
         (self.kit.run_dir / "tickets" / "01-t.md").write_text(TICKET, encoding="utf-8")
         self.assertRegex(self.ship("merge"), r"^FAIL 01 no-pr \(log: ")
+
+
+GUARD = "# Rules\n\n```agent-merge-guard\ntests path tests/**\nconftest path **/conftest.py\n```\n"
+
+
+class ShipGuardTest(Base):
+    """The base's merge guard (`steplib/guard.py`) checks the ticket's diff before anything is pushed or merged: a
+    ticket adding `tests/conftest.py` with only `tests` waived."""
+
+    def setUp(self):
+        super().setUp()
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
+        self.commit_to_base("AGENTS.md", GUARD)
+        self.commit_to_base(GATE, "default_tier: medium\n")
+        self.kit.branch_from_main("integ")
+        clone = self.kit.clone
+        (clone / "tests").mkdir()
+        (clone / "tests" / "conftest.py").write_text("import os\n", encoding="utf-8")
+        self.kit.git("add", "tests/conftest.py", cwd=clone)
+        self.kit.git("commit", "-qm", "conftest", cwd=clone)
+        self.kit.git("push", "-q", "origin", "HEAD:feat/t", cwd=clone)
+        self.kit.git("reset", "-q", "--hard", "origin/main", cwd=clone)
+        self.waive("tests")
+
+    def waive(self, clause, base=None):
+        d = decisions.load(self.kit.run_dir) or decisions.Decisions()
+        d.authorizations.append(decisions.Authorization(clause, "yes", "Rui: sure"))
+        if base:
+            d.headers["base"] = base
+        decisions.save(self.kit.run_dir, d)
+
+    def ship(self, *args):
+        return self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "merge", *args))
+
+    def test_a_guarded_ticket_into_the_default_branch_fails_guarded_before_no_merge_rule(self):
+        self.assertRegex(self.ship(), r"^FAIL 01 guarded tests/conftest.py:1 conftest \(log: ")
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
+        self.waive("conftest")
+        self.assertRegex(self.ship(), r"^FAIL 01 no-merge-rule \(log: ")
+        self.set_setting("merge_command", "true {pr}")
+        self.assertEqual(self.ship(), "OK 01 merged pr=20")
+
+    def test_a_guarded_ticket_into_another_base_runs_no_checks_and_pushes_nothing(self):
+        self.waive("tests", base="integ")
+        (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
+        ran = self.kit.tmp / "checks-ran"
+        (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\ntouch {ran}\n```\n", encoding="utf-8")
+        before = self.head()
+        self.assertRegex(self.ship("--reviewed", before), r"^FAIL 01 guarded tests/conftest.py:1 conftest \(log: ")
+        self.assertEqual(self.head(), before)
+        self.assertFalse(ran.exists())
+        self.assertEqual(self.calls("pr", "merge"), [])
 
 
 class IdentityTest(Base):
