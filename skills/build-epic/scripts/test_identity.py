@@ -76,6 +76,13 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         self.kit.answer("api-user", out="rUI\n")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
 
+    def test_human_matches_the_recorded_human_in_a_decisions_file_with_crlf_line_ends(self):
+        # A text file written on Windows ends its lines with \r\n.
+        (self.kit.run_dir / "decisions.md").write_bytes(b"# Decisions\r\nmerge_identity: human\r\nhuman: rui\r\n")
+        self.setting("merge_identity", "human")
+        self.kit.answer("api-user", out="rui\n")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+
     def test_human_refuses_a_bot_login(self):
         self.decide("human", human=None)
         self.kit.answer("api-user", out="rpvsilva-agent[bot]\n")

@@ -23,6 +23,7 @@ cannot lower its own tier; from the current folder otherwise. Read-only: it neve
 import fnmatch
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -222,7 +223,8 @@ def max_lines(folder, base_settings=None):
     """The `tier_max_lines` Setting, or the default when `~/.agents/bin/settings` is missing. With `base_settings`
     (the merge base's `.agents/settings.json` text, or "" when it has none), the repo Level is that file, not
     `folder`'s."""
-    tool = os.path.expanduser("~/.agents/bin/settings")
+    # `HOME` first, as in Git Bash: on Windows `expanduser` reads the profile folder, not where install.sh linked.
+    tool = os.path.join(os.environ.get("HOME") or os.path.expanduser("~"), ".agents", "bin", "settings")
     if not os.path.exists(tool):
         return DEFAULT_MAX_LINES
     with tempfile.TemporaryDirectory() as scratch:
@@ -232,10 +234,12 @@ def max_lines(folder, base_settings=None):
             subprocess.run(["git", "init", "-q", scratch], capture_output=True, stdin=subprocess.DEVNULL, check=True)
             if base_settings:
                 os.mkdir(os.path.join(scratch, ".agents"))
-                with open(os.path.join(scratch, SETTINGS_FILE), "w") as f:
+                with open(os.path.join(scratch, SETTINGS_FILE), "w", encoding="utf-8") as f:
                     f.write(base_settings)
-        res = subprocess.run([tool, "--dir", folder, "get", "review-pr", "tier_max_lines"], capture_output=True,
-                             text=True, stdin=subprocess.DEVNULL)
+        argv = [tool, "--dir", folder, "get", "review-pr", "tier_max_lines"]
+        if os.name == "nt":  # Windows starts no `#!` script, and a bare `bash` there is WSL's: take Git Bash's
+            argv = [shutil.which("bash") or "bash", *argv]
+        res = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
     if res.returncode != 0:
         sys.exit(f"tier.py: settings failed: {res.stderr.strip()}")
     value = res.stdout.strip()
@@ -274,34 +278,37 @@ def tier(files, limit, gate=()):
 def git_show(worktree, rev, path):
     """`path`'s text at `rev`, or None when it has none."""
     res = subprocess.run(["git", "-C", worktree, "show", f"{rev}:{path}"], capture_output=True, text=True,
-                         errors="replace", stdin=subprocess.DEVNULL)
+                         encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     return res.stdout if res.returncode == 0 else None
 
 
 def read_file(path):
     try:
-        with open(path, errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError:
         return None
 
 
 def main(argv):
+    if hasattr(sys.stdout, "reconfigure"):  # UTF-8, not the Windows locale codec, which cannot print every diff
+        sys.stdout.reconfigure(encoding="utf-8")
     if len(argv) == 2 and argv[0] == "--trim":
-        with open(argv[1], errors="replace") as f:
+        with open(argv[1], encoding="utf-8", errors="replace") as f:
             sys.stdout.write(trim(f.read()))
         return 0
     if len(argv) == 3 and argv[0] == "--git":
         worktree, base = argv[1], argv[2]
         res = subprocess.run(["git", "-C", worktree, "diff", "--no-color", "--no-ext-diff", f"{base}..HEAD"],
-                             capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             stdin=subprocess.DEVNULL)
         if res.returncode != 0:
             sys.exit(f"tier.py: git diff failed: {res.stderr.strip()}")
         text = res.stdout
         gate = gate_patterns(lambda name: git_show(worktree, base, name))
         limit = max_lines(worktree, git_show(worktree, base, SETTINGS_FILE) or "")
     elif len(argv) == 1 and not argv[0].startswith("--"):
-        with open(argv[0], errors="replace") as f:
+        with open(argv[0], encoding="utf-8", errors="replace") as f:
             text = f.read()
         gate = gate_patterns(read_file)
         limit = max_lines(os.getcwd())

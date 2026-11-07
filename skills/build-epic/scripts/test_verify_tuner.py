@@ -200,6 +200,9 @@ class VerifyTunerTest(unittest.TestCase):
         log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text()
         self.assertIn("timeout after 1s", log)
 
+    # Windows delivers neither signal to a handler: `send_signal(SIGTERM)` ends the process outright, and SIGINT is
+    # refused. Nothing there can restore the file.
+    @unittest.skipIf(os.name == "nt", "Windows sends no SIGTERM or SIGINT a process can catch")
     def test_an_interrupted_mutation_restores_the_worktree(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
             with self.subTest(sig=sig):

@@ -1,6 +1,7 @@
 """Tests for `tier.py`: the risk tier of a diff, on the trimmed gh-35 fixtures and on hand-written diffs."""
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,11 +48,11 @@ class TierTest(unittest.TestCase):
 
     def run_tier(self, *args):
         return subprocess.run([sys.executable, "-I", str(TIER), *args], cwd=self.cwd, env=self.env(),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8")
 
     def tier(self, text):
         path = self.tmp / "change.diff"
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         res = self.run_tier(str(path))
         self.assertEqual(res.returncode, 0, res.stderr)
         lines = res.stdout.splitlines()
@@ -70,7 +71,7 @@ class TierTest(unittest.TestCase):
                 path = FIXTURES / "gh35" / f"{name}.diff"
                 if not path.exists():
                     self.skipTest(f"fixture {path.relative_to(HERE)} missing: trim the gh-35 diff with tier.py --trim")
-                got, signals = self.tier(path.read_text())
+                got, signals = self.tier(path.read_text(encoding="utf-8"))
                 self.assertEqual(got, want, signals)
 
     def test_docs_only_change_is_low(self):
@@ -133,7 +134,9 @@ class TierTest(unittest.TestCase):
 
     def test_tier_max_lines_is_read_through_settings(self):
         tool = self.install_settings()
-        res = subprocess.run([str(tool), "set", "review-pr", "tier_max_lines", "5", "--machine"],
+        # Through Git Bash's `bash`: Windows starts no `#!` script, and its bare `bash` is WSL's.
+        res = subprocess.run([shutil.which("bash") or "bash", str(tool), "set", "review-pr", "tier_max_lines", "5",
+                              "--machine"],
                              cwd=self.cwd, env=self.env(), capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
         got, signals = self.tier(diff([("app/mod.py", ["x = 1"] * 6)]))
@@ -144,11 +147,11 @@ class TierTest(unittest.TestCase):
         repo = self.tmp / "repo"
         git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run(["git", "init", "-q", str(repo)], check=True, env=self.env())
-        (repo / "app.py").write_text("x = 1\n")
+        (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
         subprocess.run(git + ["add", "-A"], check=True, env=self.env())
         subprocess.run(git + ["commit", "-qm", "base"], check=True, env=self.env())
         base = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        (repo / "app.py").write_text("x = 1\nopen('f').write('y')\n")
+        (repo / "app.py").write_text("x = 1\nopen('f').write('y')\n", encoding="utf-8")
         subprocess.run(git + ["commit", "-qam", "write"], check=True, env=self.env())
         res = self.run_tier("--git", str(repo), base)
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -182,7 +185,7 @@ class TierTest(unittest.TestCase):
                 "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n"
                 "@@ -1 +0,0 @@\n-x\n")
         path = self.tmp / "full.diff"
-        path.write_text(full)
+        path.write_text(full, encoding="utf-8")
         res = self.run_tier("--trim", str(path))
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertNotIn("context", res.stdout)
@@ -229,8 +232,10 @@ class TierTest(unittest.TestCase):
 
     def test_paths_the_gate_marks_high_are_high(self):
         (self.cwd / ".review-gate.yml").write_text("default_tier: medium\ntiers:\n  high:\n    - /mcp/\n"
-                                                   "    - /global/\n  low:\n    - /docs/\nrouting: {}\n")
-        (self.cwd / "CODEOWNERS").write_text("# owners\n/adapters/claude/plugins.txt @r\n*.lock @r\n")
+                                                   "    - /global/\n  low:\n    - /docs/\nrouting: {}\n",
+                                                   encoding="utf-8")
+        (self.cwd / "CODEOWNERS").write_text("# owners\n/adapters/claude/plugins.txt @r\n*.lock @r\n",
+                                             encoding="utf-8")
         for path in ["mcp/servers.json", "global/AGENTS.md", "adapters/claude/plugins.txt", "deps/a.lock"]:
             with self.subTest(path):
                 got, signals = self.tier(diff([(path, ["x"])]))
@@ -319,7 +324,7 @@ class TierTest(unittest.TestCase):
         git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
         for name, text in files.items():
             (repo / name).parent.mkdir(parents=True, exist_ok=True)
-            (repo / name).write_text(text)
+            (repo / name).write_text(text, encoding="utf-8")
         subprocess.run(git + ["add", "-A"], check=True, env=self.env())
         subprocess.run(git + ["commit", "-qm", "c"], check=True, env=self.env())
         return subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
@@ -328,7 +333,7 @@ class TierTest(unittest.TestCase):
         for path in FIXTURES.rglob("*.diff"):  # the trimmed PR diffs; review_prompt/ fixtures quote ~/.agents brief paths on purpose
             if path.is_file():
                 with self.subTest(str(path.relative_to(HERE))):
-                    self.assertIsNone(re.search(r"/Users/|/home/|~/", path.read_text()))
+                    self.assertIsNone(re.search(r"/Users/|/home/|~/", path.read_text(encoding="utf-8")))
 
 
 if __name__ == "__main__":
