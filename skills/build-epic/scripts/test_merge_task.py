@@ -199,6 +199,61 @@ class MergeTaskTest(unittest.TestCase):
         self.assertEqual(self.calls("pr", "merge"), [])
         self.assert_not_done()
 
+    # The merge guard (behaviours 9, 10)
+
+    def guard_on_main(self):
+        """`AGENTS.md` on the default branch, and on the ticket branch forked from it, refuses process exits under
+        `pkg/`."""
+        clone = self.kit.clone
+        self.commit(clone, "AGENTS.md", "# Rules\n\n```agent-merge-guard\nprocess-exit added \\bsys\\.exit\\( in pkg/**\n"
+                                        "```\n", "docs: rules")
+        self.kit.git("push", "-q", "origin", "main", "main:feat/t", cwd=clone)
+        self.kit.git("fetch", "-q", "origin", cwd=clone)
+
+    def guard_on_ticket(self):
+        """The default branch's rules refuse process exits under `pkg/`; the task adds one."""
+        self.guard_on_main()
+        (self.wt / "pkg").mkdir()
+        self.commit(self.wt, "pkg/run.py", "import sys\n\nsys.exit(1)\n", "feat: exit")
+
+    def test_a_task_deleting_the_rules_is_refused_and_a_waived_deletion_leaves_them_for_the_next_task(self):
+        self.guard_on_main()
+        self.kit.git("merge", "-q", "origin/feat/t", cwd=self.wt)
+        self.commit(self.wt, "AGENTS.md", "# Rules\n", "docs: drop the rules")
+        self.assertRegex(self.merge(), r"^FAIL 01-01 guarded AGENTS.md:1 merge-guard \(log: ")
+        self.assertEqual(self.calls("pr", "merge"), [])
+        p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "clause", "merge-guard", "yes", "Rui: fine")
+        self.assertTrue(p.stdout.startswith("OK decisions clause waived=yes"), p.stdout + p.stderr)
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertNotIn("agent-merge-guard", self.kit.git("--git-dir", str(self.kit.origin), "show",
+                                                             "task/t/01:AGENTS.md"))
+        # The task PR's squash merge, as gh would leave it: the ticket branch without the block.
+        self.push_to_ticket("AGENTS.md", "# Rules\n")
+        self.ticket.write_text(TICKET, encoding="utf-8")
+        self.task.write_text(TASK.format(nn="01", status="in-progress") + "PR: https://github.com/o/r/pull/5\n",
+                             encoding="utf-8")
+        self.kit.git("worktree", "add", "-q", "-b", "task/t/01", str(self.wt), "origin/feat/t", cwd=self.kit.clone)
+        (self.wt / "pkg").mkdir()
+        self.commit(self.wt, "pkg/run.py", "import sys\n\nsys.exit(1)\n", "feat: exit")
+        self.assertRegex(self.merge(), r"^FAIL 01-01 guarded pkg/run.py:3 process-exit \(log: ")
+
+    def test_a_guarded_diff_is_refused_before_checks_and_nothing_merges(self):
+        self.guard_on_ticket()
+        self.checks("echo suite ran")
+        line = self.merge()
+        self.assertTrue(line.startswith("FAIL 01-01 guarded pkg/run.py:3 process-exit (log: "), line)
+        self.assertNotIn("suite ran", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "branch", "--list", "task/t/01"), "")
+        self.assert_not_done()
+
+    def test_a_guarded_diff_whose_rule_is_waived_yes_merges(self):
+        self.guard_on_ticket()
+        p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "clause", "process-exit", "yes", "Rui: fine here")
+        self.assertTrue(p.stdout.startswith("OK decisions clause waived=yes"), p.stdout + p.stderr)
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertEqual(len(self.calls("pr", "merge")), 1)
+
     # Merge failures (bug 10)
 
     def test_a_failed_gh_merge_is_a_fail_merge(self):
