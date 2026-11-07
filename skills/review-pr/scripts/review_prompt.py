@@ -3,6 +3,7 @@
 
 Usage: python3 -I review_prompt.py <mode> --pr <n> --worktree <path> --head <sha> --base <ref>
          [--run <run>] [--decisions <file>] [--task <file>] [--findings <file>] [--ticket <file>] [--task-base <ref>]
+         [--report <file>]
 
 Modes: `task` (one task PR), `hub` (section A: the hub task PR against `--task-base`, the ticket branch; section B:
 the whole ticket against `--base`; needs `--ticket` and `--task-base`), `ticket` (`--task` is the ticket file),
@@ -10,7 +11,9 @@ the whole ticket against `--base`; needs `--ticket` and `--task-base`), `ticket`
 Every mode diffs against `git merge-base <base> <head>` and runs tests only after the whole diff is read. With
 `--run`, the prompt points at `<run>/decisions.md`, its `ci:` line and `<run>/map.md`'s Checks; without it, at none
 of them, so standalone `review-pr` works. `--decisions` names the decisions file instead of `<run>/decisions.md`,
-with or without `--run`. The text comes from `templates/<mode>.md`.
+with or without `--run`; the prompt names its `test_command:` line as the command to run the tests with. `--report`
+names the file the reviewer writes its report to (a `build-epic` run's `<run>/reviews/<PR>-<sha7>.md`), the only file
+it may write; the prompt then ends by saying so. The text comes from `templates/<mode>.md`.
 
 Exits 2 with a usage line on an unknown mode, a missing option, or a `--findings` file that does not exist.
 """
@@ -46,6 +49,7 @@ def parse(argv):
     p.add_argument("--findings", type=absolute)
     p.add_argument("--ticket", type=absolute)
     p.add_argument("--task-base")
+    p.add_argument("--report", type=absolute)
     args = p.parse_args(argv)
     if args.mode == "re-review" and not args.findings:
         p.error("re-review needs --findings")
@@ -70,7 +74,8 @@ def run_reads(run, decisions=None):
     reads = []
     if decisions:
         reads += [f"- {decisions}: a rule it waives is never a finding",
-                  "- its `ci:` line: with `ci: off`, missing CI checks are not a finding"]
+                  "- its `ci:` line: with `ci: off`, missing CI checks are not a finding",
+                  "- its `test_command:` line: the exact command to run the tests with"]
     if run:
         reads.append(f"- {run}/map.md, its `Checks` section: the commands to run tests with")
     else:
@@ -97,7 +102,11 @@ def render(args):
     }
     if args.mode == "hub" and not args.task:
         values["task"] = f"the PR description (`gh pr view {args.pr}`)"
-    return Template((TEMPLATES / f"{args.mode}.md").read_text()).substitute(values)
+    prompt = Template((TEMPLATES / f"{args.mode}.md").read_text(encoding="utf-8")).substitute(values)
+    if args.report:
+        prompt += (f"\nWrite your report to {args.report}, the only file you may write, then return the block alone, "
+                   "as the brief's Report says.\n")
+    return prompt
 
 
 def main(argv):

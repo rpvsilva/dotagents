@@ -1,8 +1,7 @@
 ---
 name: pr-reviewer
-description: Read-only PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR and returns them as findings.
+description: PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR; never edits the repo, writes only its report file.
 model: inherit
-readonly: true
 ---
 
-Read and follow `~/.agents/skills/review-pr/reviewer-brief.md`. The orchestrator's message holds the PR number, the worktree path and the repo's rule files.
+Read and follow `~/.agents/skills/review-pr/reviewer-brief.md`. The orchestrator's message is the prompt `review_prompt.py` printed: the PR, the worktree, the diff to review, the files to read and the report file, the one file you may write.
