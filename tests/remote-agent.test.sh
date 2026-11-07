@@ -533,9 +533,8 @@ rm -f "$SANDBOX/real" "$SANDBOX/limit"
 : >"$SANDBOX/real"
 : >"$SANDBOX/loop"
 rm -f "$SANDBOX/loop-rc" "$SANDBOX/prefix"
-# capped refuses to run without ps; where this machine has none, the pod gets one listing nothing (no memory cap,
-# which tests/capped.test.sh covers), so the time cap still runs here.
-if ! command -v ps >/dev/null; then printf '#!/bin/sh\nexit 0\n' >"$SANDBOX/podbin/ps"; chmod +x "$SANDBOX/podbin/ps"; fi
+# Where this machine has no ps, capped reads the groups from /proc, so the caps still run (tests/capped.test.sh
+# covers both).
 t=$SECONDS
 code=0; REMOTE_CAP_SECS=1 run 0 "" --name caps-loop || code=$?
 [ "$code" = 0 ] || fail "caps loop: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
@@ -569,7 +568,8 @@ grep -qx "\[caps-time\] killed: timeout" "$SANDBOX/err" || fail "caps timeout: n
 result_is "caps timeout result" '.killed == "timeout" and .lost == false and .capped_kills == [{"kind": "timeout", "cmd": null}]'
 rm -f "$W/hello.txt" "$SANDBOX/killmsg"
 
-# Without capped, or without a python3 to run it, the run goes on uncapped and says so.
+# Without capped, or without a python3 to run it, the run goes on uncapped and says so, naming only what is missing
+# (on Linux a missing ps is not: capped reads /proc).
 : >"$SANDBOX/nocapped"
 run 0 "" || fail "caps no capped: exited non-zero: $(cat "$SANDBOX/out")"
 grep -q "== capped: unavailable (missing: capped)" "$SANDBOX/err" || fail "caps no capped: not reported: $(cat "$SANDBOX/err")"
@@ -584,7 +584,7 @@ grep -q "== capped: unavailable (missing: python3)" "$SANDBOX/err" || fail "caps
 [ ! -s "$SANDBOX/prefix" ] || fail "caps no python3: a shell prefix set anyway: $(cat "$SANDBOX/prefix")"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps no python3: patch not applied"
 result_is "caps no python3 result" '.capped_off == "python3" and .capped_kills == []'
-rm -f "$W/hello.txt" "$SANDBOX/podbin/python3" "$SANDBOX/podbin/ps" "$SANDBOX/real"
+rm -f "$W/hello.txt" "$SANDBOX/podbin/python3" "$SANDBOX/real"
 
 # A sandbox that went away mid-run with no kill line before it is lost; one killed first reads as the kill.
 echo "Error from server: error executing command in container: No such container: claude-runner-abc" >"$SANDBOX/vanish"

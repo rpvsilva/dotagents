@@ -5,11 +5,12 @@
   capped stop <worktree>
 
 The command runs in its own process group with stdin from /dev/null. Every 0.2 s the runner sums the group's RSS from
-`ps -A -o pgid=,rss=` (the same call on macOS and Linux). Over --mb it kills the group, prints `capped: killed: memory`
-on stderr and exits 137; over --secs it prints `capped: killed: timeout` and exits 124. A cap left out is not enforced.
-Otherwise it exits with the command's code (128+N for signal N). When the command exits, what is left of its group is
-killed too, and SIGTERM, SIGINT or SIGHUP to the runner kills the group before the runner exits. Without `ps` it refuses
-to run (exit 125) rather than run uncapped. A process that leaves the group (setsid, a daemon) escapes the caps and stop.
+`ps -A -o pgid=,rss=` (the same call on macOS and Linux), or from /proc/<pid>/stat and statm on Linux without ps. Over
+--mb it kills the group, prints `capped: killed: memory` on stderr and exits 137; over --secs it prints
+`capped: killed: timeout` and exits 124. A cap left out is not enforced. Otherwise it exits with the command's code
+(128+N for signal N). When the command exits, what is left of its group is killed too, and SIGTERM, SIGINT or SIGHUP to
+the runner kills the group before the runner exits. Without `ps` or /proc it refuses to run (exit 125) rather than run
+uncapped. A process that leaves the group (setsid, a daemon) escapes the caps and stop.
 
 Inside a git worktree, each group is registered as <git common dir>/capped/<sha1 of the worktree's real path>/<pgid>
 until it ends. `capped stop <worktree>` kills only those groups: TERM, then KILL after 3 s. It refuses /, $HOME and a
@@ -61,15 +62,52 @@ def registry(common, worktree):
     return os.path.join(common, "capped", hashlib.sha1(worktree.encode()).hexdigest())
 
 
+def use_proc():
+    """True on Linux without ps, where the groups and their RSS come from /proc instead."""
+    return sys.platform.startswith("linux") and shutil.which("ps") is None and os.path.isdir("/proc/self")
+
+
+def proc_stat(pid):
+    """The fields of /proc/<pid>/stat after the command name (state first, pgid third), or None when it is gone."""
+    try:
+        with open("/proc/%s/stat" % pid) as f:
+            return f.read().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+
+
 def started(pid):
-    """The start time ps gives for pid, or "" when it is gone."""
+    """The start time ps gives for pid (/proc's start in clock ticks without ps), or "" when it is gone."""
+    if use_proc():
+        fields = proc_stat(pid)
+        return "proc %s" % fields[19] if fields and len(fields) > 19 else ""
     out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, universal_newlines=True)
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
+def group_kb_proc(pgid):
+    """Summed RSS in KB of the processes in group pgid, from /proc/<pid>/stat and statm."""
+    page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
+    total = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        fields = proc_stat(pid)
+        if not fields or len(fields) < 3 or fields[2] != str(pgid):
+            continue
+        try:
+            with open("/proc/%s/statm" % pid) as f:
+                total += int(f.read().split()[1]) * page_kb
+        except (OSError, IndexError, ValueError):
+            pass  # gone since the listing
+    return total
+
+
 def group_kb(pgid):
     """Summed RSS in KB of the processes in group pgid, or None when ps fails."""
+    if use_proc():
+        return group_kb_proc(pgid)
     out = subprocess.run(["ps", "-A", "-o", "pgid=,rss="], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, universal_newlines=True)
     if out.returncode != 0:
@@ -119,8 +157,8 @@ def run(args):
     if WINDOWS and mb is not None:
         say("--mb needs ps process groups, which Windows lacks; refusing to run uncapped")
         return EXIT_REFUSED
-    if not WINDOWS and shutil.which("ps") is None:
-        say("no ps on PATH, so no memory cap; refusing to run uncapped")
+    if not WINDOWS and shutil.which("ps") is None and not use_proc():
+        say("no ps on PATH and no /proc, so no memory cap; refusing to run uncapped")
         return EXIT_REFUSED
 
     # A signal is only noted here and acted on in the loop below, so one arriving while the command starts still
