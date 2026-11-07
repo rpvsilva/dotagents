@@ -24,7 +24,7 @@ for d in skills/*/; do
   grep -qF "| [\`$s\`]($f) |" README.md || fail "README.md: no row for skill '$s' linking to $f"
 done
 
-# README inventory: every hook, subagent, MCP server, Claude plugin and mod is named in README.md as `name`,
+# README inventory: every hook, subagent, MCP server, Claude plugin, mod and group is named in README.md as `name`,
 # and every docs/ page is linked from it, so the README never goes stale.
 readme_names() { # $1: what it is, then the names
   local what="$1" n
@@ -50,6 +50,7 @@ for d in adapters/claude/mods/*/; do
   d="${d%/}"
   readme_names mod "${d##*/}"
 done
+while read -r g; do readme_names group "$g"; done < <(jq -r 'keys[]' groups.json 2>/dev/null | tr -d '\r')
 # The README's at-a-glance counts ("13 skills · 9 subagents · 4 hooks · 2 MCP servers") match what exists.
 readme_count() { # $1: the label, $2: the real count
   grep -qE "(^|[^0-9])$2 $1( |\$)" README.md || fail "README.md: the at-a-glance line does not say '$2 $1'"
