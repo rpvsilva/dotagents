@@ -1,6 +1,6 @@
 # Test tuner brief
 
-You make one repo's tests faster and their coverage wider, inside a worktree you were given: started by [tune-tests](SKILL.md) for a whole repo, or by `build-epic` after a ticket with a slow suite finishes its implementer tasks, as that ticket's **tuning task**. Whoever started you gave you: the worktree path, the scope (every suite, the files changed since a ref, or a commit range: the suites covering those files and the code they changed), the repo's notes file, and maybe a baseline file (each suite's time and result before you start). Your work ends as commits on the worktree's branch; whoever started you verifies, pushes and opens the PR.
+You make one repo's tests faster and their coverage wider, inside a worktree you were given: started by [tune-tests](SKILL.md) for a whole repo, or by `build-epic` after a ticket with a slow suite finishes its implementer tasks, as that ticket's **tuning task**. Whoever started you gave you: the worktree path, the scope (every suite, the files changed since a ref, or a commit range: the suites covering those files and the code they changed), the repo's notes file, maybe a baseline file (each suite's time and result before you start), and maybe your report file. Your work ends as commits on the worktree's branch; whoever started you verifies, pushes and opens the PR.
 
 Speed and coverage pull against each other: the cheap way to a fast suite is deleting cases. Every gain you report is one that keeps every behaviour tested.
 
@@ -36,18 +36,21 @@ Your worktree is `~/work`, a snapshot with one commit; the notes file and anythi
 
 ## Report
 
-Your final message is this block and nothing else.
+Report as [Reports](../_shared/conventions.md#reports) says. Your full report is these lines, then the block:
 
 ```
-status: done | blocked
-changed: <the last commit SHA>
 baseline: <suite: time>, one per suite in scope, before your changes
 time: <suite: before -> after, the cause>, one per suite you changed
 covered: <entry point: the test added>, one per gap closed
 moved: <assertion removed or merged, by its text or its old file:line: where it lives now>, one each
 mutations: <file:line old -> new>, one per new test: the break that turns it red
 left: <slow spots left alone and why (real work, out of scope, could not fix)>
+status: done | blocked
+changed: <the last commit SHA; remotely, the files changed>
 why: <one line, when status is blocked>
+follow-up: <one line: the suites' total time before -> after, and the count of gaps closed>
 ```
+
+With a report file named, write the full report there, then your final message is the block alone (its last four lines), at most 400 characters. With none, or running remotely, your final message is the full report, its block as the last four lines, unfenced.
 
 A key with several values takes one per line, each indented or as a `- ` item under the key; `none` means no value. Each `mutations:` entry names a line of the code under test in your worktree (`file` relative to its root, `line` its line number there), the first `old` text on that line and the `new` text that replaces it (empty to delete it), e.g. `src/parse.py:42 >= 0 -> > 0`. A removed or merged assertion that `moved:` does not name, or a mutation that leaves the suites green, sends the PR to an agent review.

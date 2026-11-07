@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Find every real security hole in a repo in one run, prove each one, and close the ones the human picks. A clean repo is a valid result: report only what you can prove. Divide and conquer, with nothing but subagents: a mapper splits the repo into **areas** and cross-area **flows**, one fresh reviewer takes each piece, **sweeps** hunt the gaps the coverage tables leave, you **verify** each finding, and every fix lands through a PR. For one PR, use [review-pr](../review-pr/SKILL.md): it runs the same reviewer.
 
-You are the **orchestrator**: keep your context **thin**. You read the run folder's short files (`map.md`'s tables, `findings.md`, one-line reports), not the code; the one exception is verifying findings. Every heavy read happens in a subagent that writes a file and returns one line.
+You are the **orchestrator**: keep your context **thin**. You read the run folder's short files (`map.md`'s tables, `findings.md`, the reports' 4-line blocks), not the code; the one exception is verifying findings. Every heavy read happens in a subagent that writes a file and returns its 4-line block.
 
 Input: nothing for the current repo, or `owner/name` for another. Optional: `--parallel N`.
 
@@ -34,7 +34,7 @@ The `epic-implementer` is **remote-capable** ([Remote subagents](../_shared/conv
 
 3. **Map.** Start a `security-mapper` with the worktree path, the rule files, the path `<run>/map.md` and the area budget. Done when `map.md` exists and places every file in an area, the repo-wide lane, or not reviewed.
 
-4. **Hunt.** Start one `security-reviewer` per area, per flow, and one for the repo-wide lane, while a slot is free. Give each: the worktree path, the rule files, its scope and the `map.md` path, `findings.md` as known findings, and the report path `reports/<scope>-r1.md`. Done when every reviewer has returned its line and its report has a complete coverage table; start a fresh one for a scope whose table is not.
+4. **Hunt.** Start one `security-reviewer` per area, per flow, and one for the repo-wide lane, while a slot is free. Give each: the worktree path, the rule files, its scope and the `map.md` path, `findings.md` as known findings, and the report path `reports/<scope>-r1.md`. Done when every reviewer has returned its block and its report has a complete coverage table; start a fresh one for a scope whose table is not.
 
 5. **Verify.** Read each new report. Merge the findings into `findings.md`, keeping one per file:line and claim. For each new one, open the code it cites and confirm the attack really works: trace the input from source to sink, or run it in the worktree. Then hold its **gain** against the attacker's **baseline** in `map.md`'s threat model, by the reporting rule in [security-brief.md](security-brief.md) step 3. Mark it `confirmed`, `plausible` (could not settle) or `dropped`: drop it when the path breaks anywhere or the gain fails that rule. Move a finding whose only effect is a bug with no gain to **Other bugs**. With more than 10 new findings, split them into batches and start subagents that verify by this same rule and return a status per finding. Done when no row lacks a status.
 
