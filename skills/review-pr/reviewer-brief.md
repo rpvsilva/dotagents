@@ -18,6 +18,15 @@ You review one PR and never edit it: your one output is the findings report belo
 
    Done when every changed hunk has been checked on all four axes.
 
+## When you run remotely
+
+Your prompt says so. Your worktree is `~/work`: a snapshot of the PR head, one commit with no history, no other branches and no GitHub access. Your inputs are under `~/attached`, read-only: the diff (both diffs in `hub` mode), the PR facts, and the decisions file, `map.md`, `spec.md`, the task or ticket file and the findings when the prompt names them. So:
+
+- Step 1 reads the PR facts file the prompt names (title, description, base branch, changed files) in place of `gh pr view`; never call `gh`.
+- Step 2 reads the attached diff in place of the merge-base command; there is no merge base to diff against.
+- The sandbox is yours: run the tests whenever they help, before the whole diff is read too. That order guards this machine, so a local run still reads the whole diff first. Skip the slow-suite comparison on the merge base, which the snapshot lacks.
+- Change no file, and write no report file: your final message is your whole report, ending with the block below, unfenced.
+
 ## Report
 
 A list of findings, most severe first, or "no findings" with what you checked, then any `process:` lines, one sentence each. Each finding:
