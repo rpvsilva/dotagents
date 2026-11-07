@@ -50,13 +50,14 @@ skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {}
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
 # Hook scripts go to ~/.agents/hooks, the one path every adapter's hook config calls.
-# Commands skills run from any project go to ~/.agents/bin (remote-agent: subagents on a cluster, Docker or an SSH host, remote/README.md; settings: reads and writes Settings).
+# Commands skills run from any project go to ~/.agents/bin (remote-agent: subagents on a cluster, Docker or an SSH host, remote/README.md; settings: reads and writes Settings; capped: runs a command under a memory and time cap).
 install_shared() {
   echo "shared"
   for s in $(skills); do link "$REPO/skills/$s" "$SHARED_SKILLS/$s"; done
   link "$REPO/scripts/hooks" "$HOME/.agents/hooks"
   link "$REPO/scripts/remote-agent.sh" "$HOME/.agents/bin/remote-agent"
   link "$REPO/scripts/settings.sh" "$HOME/.agents/bin/settings"
+  link "$REPO/scripts/capped" "$HOME/.agents/bin/capped"
 }
 
 install_claude() {

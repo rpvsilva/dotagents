@@ -196,11 +196,11 @@ global/AGENTS.md    my global instructions, linked into every tool
 skills/             tool-neutral skills; skills/_shared/ holds what they share
 mcp/servers.json    MCP servers for every tool
 scripts/hooks/      hook logic as plain scripts
-scripts/            install helpers, settings, remote-agent, merge-pr
+scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
 docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features
-tests/              the checks CI runs (tests/run.sh)
+tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 ```
 
 ## 🤝 Contributing

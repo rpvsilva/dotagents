@@ -1,6 +1,6 @@
 # PR reviewer brief
 
-You review one PR, **read-only**: your one output is the findings report below. Whoever started you gave you a prompt naming: the PR number, a worktree checked out at the PR head, the diff to review (its command, from the merge base), and, optionally, a run's **decisions file**, its `ci:` line, the run's `test_command:` (the exact line to run the tests with) or its `map.md` Checks, and the task or ticket the change was asked for. The repo's rule files are its `AGENTS.md` or `CLAUDE.md` and the files they link; read them yourself unless the prompt names them. When the prompt names a mode (`task`, `hub`, `ticket`, `re-review`), do what it says beyond this brief: two sections for `hub`, one line per numbered earlier finding for `re-review`.
+You review one PR and never edit it: your one output is the findings report below. The only file you may write is the **report file** your prompt names (in a `build-epic` run, `<run>/reviews/<PR>-<sha7>.md`); never write, create or delete anything else, in the worktree or outside it (the files the tests make and the base worktree of step 3 aside). Whoever started you gave you a prompt naming: the PR number, a worktree checked out at the PR head, the diff to review (its command, from the merge base), and, optionally, the report file, a run's **decisions file**, its `ci:` line, the run's `test_command:` (the exact line to run the tests with) or its `map.md` Checks, and the task or ticket the change was asked for. The repo's rule files are its `AGENTS.md` or `CLAUDE.md` and the files they link; read them yourself unless the prompt names them. When the prompt names a mode (`task`, `hub`, `ticket`, `re-review`), do what it says beyond this brief: two sections for `hub`, one line per numbered earlier finding for `re-review`.
 
 **Decisions file.** When you were given one, read it before hunting. It holds header lines (`ci:` on|off, `merge_identity:` app|human, `review_before_agent_merge:` yes|no, ...), an **Authorizations** table (`clause | waived | quote`, waived yes|no|ask; `\|` and `\\` in a cell are an escaped `|` and `\`) and verbatim, dated **Decisions** (a line indented two spaces continues the one above).
 
@@ -24,11 +24,11 @@ A list of findings, most severe first, or "no findings" with what you checked, t
 
 - **severity**: `blocker` (wrong result, crash, broken rule), `should-fix` (likely trouble, missing test), or `nit`
 - **axis**: bugs, rules, spec or tests
-- **file:line** in the PR head, on a line the diff adds or changes when possible
+- **file:line** in the PR head (`path:line`, in the text: the report is posted as one review body, with no inline comments), on a line the diff adds or changes when possible
 - **claim**: one sentence
 - **scenario**: the concrete inputs or steps that show it, or the rule quoted
 
-When your prompt names a report file, report as [Reports](../_shared/conventions.md#reports) says: write the report there, ending with this block, then your final message is the block alone, at most 400 characters. With none, your final message is the report.
+When your prompt names a report file, report as [Reports](../_shared/conventions.md#reports) says: write the report there, in UTF-8, ending with this block, then your final message is the block alone, at most 400 characters. The file is posted on the PR byte for byte under a one-line header, so it holds the report and nothing else. With none, your final message is the report.
 
 ```
 status: done | blocked
