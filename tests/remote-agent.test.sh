@@ -535,35 +535,41 @@ rm -f "$SANDBOX/real" "$SANDBOX/limit"
 # Caps: the sandbox runs the agent's shell commands under scripts/capped, with remote.cap_mb and remote.cap_secs as
 # arguments after the script. A red test that loops forever is killed at the time cap, the agent carries on, and
 # the run ends done with its patch; the kill shows as one line on stderr and in result.json, apart from a lost sandbox.
+# The sandbox runs on Linux. On Git Bash, capped is Windows Python, which refuses --mb (no process groups), so the
+# probe fails and the run goes uncapped: the case is skipped there.
 : >"$SANDBOX/real"
-: >"$SANDBOX/loop"
-rm -f "$SANDBOX/loop-rc" "$SANDBOX/prefix"
-# Where this machine has no ps, capped reads the groups from /proc, so the caps still run (tests/capped.test.sh
-# covers both).
-t=$SECONDS
-code=0; REMOTE_CAP_SECS=1 run 0 "" --name caps-loop || code=$?
-[ "$code" = 0 ] || fail "caps loop: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
-[ $((SECONDS - t)) -lt 60 ] || fail "caps loop: took $((SECONDS - t))s"
-[ "$(cat "$SANDBOX/loop-rc" 2>/dev/null)" = 124 ] || fail "caps loop: the looping test was not killed at the time cap: $(cat "$SANDBOX/loop-rc" 2>/dev/null)"
-grep -q "remote-agent-sandbox 2000 1\$" "$SANDBOX/calls" || fail "caps loop: the caps are not the arguments after the script: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
-case "$(cat "$SANDBOX/prefix" 2>/dev/null)" in /*) ;; *) fail "caps loop: no absolute CLAUDE_CODE_SHELL_PREFIX: $(cat "$SANDBOX/prefix" 2>/dev/null)" ;; esac
-[ -f "$POD/.agents/bin/capped" ] || fail "caps loop: capped not sent with the setup"
-grep -q "^\[caps-loop\] == capped: shell prefix set" "$SANDBOX/err" || fail "caps loop: shell prefix not reported: $(cat "$SANDBOX/err")"
-grep -qxF "[caps-loop] killed: timeout while [ \$SECONDS -lt 60 ]; do :; done" "$SANDBOX/err" || fail "caps loop: no kill line: $(cat "$SANDBOX/err")"
-grep -q "capped: killed: timeout" "$POD/out/capped.log" 2>/dev/null || fail "caps loop: the kill not in ~/out/capped.log"
-[ -f "$(kept)/capped.log" ] || fail "caps loop: capped.log not kept"
-grep -q "^== capped: killed: timeout while" "$(kept)/progress.log" || fail "caps loop: the kill did not come live on the sandbox's stderr"
-[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps loop: patch not applied"
-# shellcheck disable=SC2016 # jq, with a literal $SECONDS in the expected command
-result_is "caps loop result" '.status == "done" and .killed == "timeout" and .lost == false
-  and .capped_kills == [{"kind": "timeout", "cmd": "while [ $SECONDS -lt 60 ]; do :; done"}]'
-# The prefix the run left: a Bash-tool command runs under capped, stdin closed; anything else (a hook, an MCP server)
-# runs as it is, with its stdin and arguments.
-pre="$POD/.agents/bin/capped-shell"
-[ "$(echo in | "$pre" "cat && pwd -P >| /dev/null" 2>/dev/null)" = "" ] || fail "prefix: a Bash-tool command read the caller's stdin"
-[ "$(echo in | "$pre" "cat" 2>/dev/null)" = in ] || fail "prefix: a hook command lost its stdin"
-[ "$(echo in | "$pre" printf '%s-%s' a 'b c' 2>/dev/null)" = "a-b c" ] || fail "prefix: several arguments not run as a command"
-rm -f "$W/hello.txt" "$SANDBOX/loop"
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then
+  echo "remote-agent.test.sh: caps loop and prefix cases skipped on Git Bash (capped refuses --mb on Windows)"
+else
+  : >"$SANDBOX/loop"
+  rm -f "$SANDBOX/loop-rc" "$SANDBOX/prefix"
+  # Where this machine has no ps, capped reads the groups from /proc, so the caps still run (tests/capped.test.sh
+  # covers both).
+  t=$SECONDS
+  code=0; REMOTE_CAP_SECS=1 run 0 "" --name caps-loop || code=$?
+  [ "$code" = 0 ] || fail "caps loop: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
+  [ $((SECONDS - t)) -lt 60 ] || fail "caps loop: took $((SECONDS - t))s"
+  [ "$(cat "$SANDBOX/loop-rc" 2>/dev/null)" = 124 ] || fail "caps loop: the looping test was not killed at the time cap: $(cat "$SANDBOX/loop-rc" 2>/dev/null)"
+  grep -q "remote-agent-sandbox 2000 1\$" "$SANDBOX/calls" || fail "caps loop: the caps are not the arguments after the script: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
+  case "$(cat "$SANDBOX/prefix" 2>/dev/null)" in /*) ;; *) fail "caps loop: no absolute CLAUDE_CODE_SHELL_PREFIX: $(cat "$SANDBOX/prefix" 2>/dev/null)" ;; esac
+  [ -f "$POD/.agents/bin/capped" ] || fail "caps loop: capped not sent with the setup"
+  grep -q "^\[caps-loop\] == capped: shell prefix set" "$SANDBOX/err" || fail "caps loop: shell prefix not reported: $(cat "$SANDBOX/err")"
+  grep -qxF "[caps-loop] killed: timeout while [ \$SECONDS -lt 60 ]; do :; done" "$SANDBOX/err" || fail "caps loop: no kill line: $(cat "$SANDBOX/err")"
+  grep -q "capped: killed: timeout" "$POD/out/capped.log" 2>/dev/null || fail "caps loop: the kill not in ~/out/capped.log"
+  [ -f "$(kept)/capped.log" ] || fail "caps loop: capped.log not kept"
+  grep -q "^== capped: killed: timeout while" "$(kept)/progress.log" || fail "caps loop: the kill did not come live on the sandbox's stderr"
+  [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps loop: patch not applied"
+  # shellcheck disable=SC2016 # jq, with a literal $SECONDS in the expected command
+  result_is "caps loop result" '.status == "done" and .killed == "timeout" and .lost == false
+    and .capped_kills == [{"kind": "timeout", "cmd": "while [ $SECONDS -lt 60 ]; do :; done"}]'
+  # The prefix the run left: a Bash-tool command runs under capped, stdin closed; anything else (a hook, an MCP server)
+  # runs as it is, with its stdin and arguments.
+  pre="$POD/.agents/bin/capped-shell"
+  [ "$(echo in | "$pre" "cat && pwd -P >| /dev/null" 2>/dev/null)" = "" ] || fail "prefix: a Bash-tool command read the caller's stdin"
+  [ "$(echo in | "$pre" "cat" 2>/dev/null)" = in ] || fail "prefix: a hook command lost its stdin"
+  [ "$(echo in | "$pre" printf '%s-%s' a 'b c' 2>/dev/null)" = "a-b c" ] || fail "prefix: several arguments not run as a command"
+  rm -f "$W/hello.txt" "$SANDBOX/loop"
+fi
 # Caps that are not whole numbers never reach the backend; the sandbox script refuses them too.
 code=0; REMOTE_CAP_SECS=abc run 0 "" || code=$?
 if [ "$code" = 0 ] || [ -e "$SANDBOX/calls" ]; then fail "bad cap: not refused before the backend: $code $(cat "$SANDBOX/err")"; fi
