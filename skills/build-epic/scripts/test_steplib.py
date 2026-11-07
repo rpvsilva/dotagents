@@ -184,7 +184,7 @@ class KitSandboxTest(unittest.TestCase):
             config.write_text('[remote "origin"]\n\turl = C:\\\\t\\\\steplib-a\\\\origin.git\n')
             kit._rehome(template, config)
             self.assertNotIn("steplib-a", config.read_text())
-            self.assertIn(str(kit.tmp), config.read_text())
+            self.assertIn(str(kit.tmp).replace("\\", "\\\\"), config.read_text())  # git config doubles backslashes
 
 
 class RunFolderPathTest(KitCase):
