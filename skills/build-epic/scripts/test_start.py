@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, runfolder, tracker  # noqa: E402
+from steplib import core, followups, runfolder, tracker  # noqa: E402
 from testkit import SCRIPTS, Kit, skip_without_zsh, zsh  # noqa: E402
 
 START_TICKET = SCRIPTS / "start_ticket.py"
@@ -286,7 +286,7 @@ class StartTaskTest(StartCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         wt = self.kit.run_dir / "worktrees" / "01-02"
         head = self.kit.git("rev-parse", "HEAD", cwd=wt)
-        self.assertEqual(self.one_line(p), f"OK 01-02 in-progress wt={wt} tip={head[:7]} synced={main[:7]}")
+        self.assertEqual(self.one_line(p), f"OK 01-02 in-progress wt={wt} tip={head[:7]} synced={main[:7]} carried=0")
         self.kit.git("merge-base", "--is-ancestor", main, head, cwd=wt)
         self.kit.git("merge-base", "--is-ancestor", self.remote_tip(BRANCH), head, cwd=wt)
         self.assertEqual((wt / "hub.md").read_text(encoding="utf-8"), "merged ticket\n")
@@ -303,6 +303,75 @@ class StartTaskTest(StartCase):
         self.assertNotIn("01-02", self.worktrees())
         self.assertEqual(self.kit.git("branch", "--list", "task/*", cwd=self.kit.clone), "")
         self.assertEqual(self.status(self.task("01-02-hub.md")), "ready")
+
+    def interactions(self):
+        """Records two interaction rows of ticket 01 and three rows it must leave alone."""
+        def row(ticket, kind, path, line, claim):
+            return {"ticket": ticket, "pr": 7, "severity": "should-fix", "kind": kind, "file": path, "line": line,
+                    "claim": claim, "source": "reviews/01-01.md"}
+        followups.add(self.kit.run_dir, [
+            row("01", "interaction", "app/cli.py", 12, "copy keeps due_time"),
+            row("01", "follow-up", "app/cli.py", None, "a follow-up, not an interaction"),
+            row("02", "interaction", "app/sync.py", None, "another ticket's interaction"),
+            row("1", "interaction", "app/undo.py", None, "undo restores parent"),
+        ])
+        hub = self.task("01-02-hub.md")
+        hub.write_text(hub.read_text(encoding="utf-8") + "\n## Acceptance criteria\n- [ ] Hub works.\n\n## Check\nx\n",
+                       encoding="utf-8")
+        return hub
+
+    def carried(self):
+        return {r["claim"]: r.get("carried") for r in followups.load(self.kit.run_dir)}
+
+    def test_a_hub_task_start_copies_its_tickets_interactions_into_its_criteria_once(self):
+        hub = self.interactions()
+        line = self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-02"))
+        self.assertTrue(line.startswith("OK 01-02 in-progress ") and line.endswith(" carried=2"), line)
+        criteria = runfolder.section(hub.read_text(encoding="utf-8"), "Acceptance criteria")
+        self.assertEqual(criteria, "- [ ] Hub works.\n"
+                                   "- [ ] app/cli.py:12: copy keeps due_time (from reviews/01-01.md)\n"
+                                   "- [ ] app/undo.py: undo restores parent (from reviews/01-01.md)\n\n")
+        self.assertEqual(self.carried(), {"copy keeps due_time": "01-02", "a follow-up, not an interaction": None,
+                                          "another ticket's interaction": None, "undo restores parent": "01-02"})
+        after = hub.read_text(encoding="utf-8")
+        wt = self.kit.run_dir / "worktrees" / "01-02"
+        self.kit.git("worktree", "remove", "--force", str(wt), cwd=self.kit.clone)
+        self.kit.git("branch", "-D", "task/gh-1-v1.2-json/02", cwd=self.kit.clone)
+        runfolder.set_header(hub, "Status", "ready")
+        line = self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-02"))
+        self.assertTrue(line.endswith(" carried=0"), line)
+        self.assertEqual(hub.read_text(encoding="utf-8"), after.replace("Status: ready", "Status: in-progress"))
+
+    def test_a_failed_hub_sync_carries_nothing(self):
+        hub = self.interactions()
+        before = hub.read_text(encoding="utf-8")
+        self.commit(BRANCH, "README.md", "ticket side\n", "ticket edit")
+        self.commit("main", "README.md", "main side\n", "main edit")
+        line = self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-02"))
+        self.assertTrue(line.startswith("FAIL 01-02 sync-conflict "), line)
+        self.assertEqual(hub.read_text(encoding="utf-8"), before)
+        self.assertEqual(set(self.carried().values()), {None})
+
+    def test_a_task_that_is_not_a_hub_task_never_gets_carried_lines(self):
+        self.interactions()
+        lib = self.task("01-01-lib.md")
+        before = lib.read_text(encoding="utf-8")
+        line = self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-01"))
+        self.assertNotIn("carried=", line)
+        self.assertEqual(lib.read_text(encoding="utf-8"), before.replace("Status: ready", "Status: in-progress"))
+        self.assertEqual(set(self.carried().values()), {None})
+
+    def test_append_criteria_adds_missing_lines_at_the_end_of_the_section_or_a_new_one(self):
+        task = self.task("01-01-lib.md")
+        self.assertEqual(runfolder.append_criteria(task, ["- [ ] a", "- [ ] b"]), 2)
+        self.assertEqual(runfolder.section(task.read_text(encoding="utf-8"), "Acceptance criteria"),
+                         "- [ ] a\n- [ ] b\n")
+        task.write_text(task.read_text(encoding="utf-8") + "\n## Check\nrun it\n", encoding="utf-8")
+        self.assertEqual(runfolder.append_criteria(task, ["- [ ] b", "- [ ] c", "- [ ] c"]), 1)
+        text = task.read_text(encoding="utf-8")
+        self.assertEqual(runfolder.section(text, "Acceptance criteria"), "- [ ] a\n- [ ] b\n- [ ] c\n\n")
+        self.assertEqual(runfolder.section(text, "Check"), "run it\n")
+        self.assertEqual(runfolder.get(task, "Status"), "ready")
 
     def test_a_started_task_is_refused_without_a_second_worktree(self):
         self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-01"))
