@@ -1,4 +1,5 @@
 """Tests for `catch_up.py` and the `merged-to-<base>` label `ship_ticket.py merge` leaves, against a stub `gh`."""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -112,10 +113,40 @@ class CatchUpTest(CatchUpCase):
         self.assertEqual(self.remote("feat/e"), self.new_tip)
         self.assertEqual(self.catch_up(NEW), "OK run catch-up 2 unstarted 0 started unstarted=02,03 started=none")
 
+    def pr(self, base, state="OPEN", n=None):
+        """The stub's answer to the n-th (or every) `gh pr view`."""
+        self.kit.answer("pr-view", out=json.dumps({"state": state, "headRefOid": "x", "baseRefName": base}), n=n)
+
+    def edits(self):
+        return [c for c in self.kit.gh_calls() if c[:2] == ["pr", "edit"]]
+
     def test_with_apply_a_started_tickets_open_pr_moves_to_the_new_base(self):
         self.ticket("01", "building", "feat/a", "PR: https://github.com/o/r/pull/20\n")
+        self.pr("main")
         self.catch_up(NEW, "--apply")
-        self.assertEqual(self.kit.gh_calls(), [["pr", "edit", "20", "--base", NEW]])
+        self.assertEqual(self.edits(), [["pr", "edit", "20", "--base", NEW]])
+
+    def test_with_apply_a_ticket_already_holding_the_new_base_still_gets_its_pr_moved(self):
+        self.ticket("05", "building", "feat/e", "PR: https://github.com/o/r/pull/21\n")
+        self.pr("main")
+        self.catch_up(NEW, "--apply")
+        self.assertEqual(self.edits(), [["pr", "edit", "21", "--base", NEW]])
+
+    def test_a_pr_already_on_the_new_base_or_closed_is_left_alone(self):
+        self.ticket("01", "building", "feat/a", "PR: https://github.com/o/r/pull/20\n")
+        self.ticket("05", "building", "feat/e", "PR: https://github.com/o/r/pull/21\n")
+        self.pr(NEW, n=1)
+        self.pr("main", state="CLOSED", n=2)
+        self.assertTrue(self.catch_up(NEW, "--apply").startswith("OK run caught-up "))
+        self.assertEqual(self.edits(), [])
+
+    def test_a_rerun_after_a_failed_pr_edit_retries_it(self):
+        self.ticket("01", "building", "feat/a", "PR: https://github.com/o/r/pull/20\n")
+        self.pr("main")
+        self.kit.answer("pr-edit", rc=1, n=1)
+        self.assertRegex(self.catch_up(NEW, "--apply"), r"^FAIL run pr-edit 01 \(log: ")
+        self.assertTrue(self.catch_up(NEW, "--apply").startswith("OK run caught-up "))
+        self.assertEqual(self.edits(), [["pr", "edit", "20", "--base", NEW]] * 2)
 
     def test_a_conflict_fails_naming_the_ticket_and_files_and_leaves_its_branch(self):
         self.commit("feat/a", "x.txt", "other\n")

@@ -66,6 +66,8 @@ class Base(unittest.TestCase):
         self.ticket.write_text(TICKET, encoding="utf-8")
         (kit.run_dir / "tasks" / "01-01-a.md").write_text(TASK.format(nn="01", pr=5), encoding="utf-8")
         (kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", pr=6), encoding="utf-8")
+        # The Checks `ship_ticket.py merge` runs on the ticket head before a merge into a non-default base.
+        (kit.run_dir / "map.md").write_text("# Map\n\n## Checks\n\n```\ntrue\n```\n", encoding="utf-8")
 
     def one_line(self, p):
         self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)

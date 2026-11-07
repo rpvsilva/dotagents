@@ -11,7 +11,7 @@ draft ticket PR when the ticket has none, and, when this was the ticket's last i
 least `tune_min_seconds`, writes the tuning task `tasks/TT-tests.md`.
 
 Prints `OK <task> done suites=<n> <secs>s`, or `FAIL <task> <reason> (log: ...)`: `red <suite>`, `conflict <files>`,
-`ticket-ci-red <run-id>`, `wrong-base <branch>`, `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task `in-progress`.
+`ticket-ci-red <run-id>`, `wrong-base <branch>` (a PR into anything but the task's own ticket branch), `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task `in-progress`.
 """
 import sys
 from pathlib import Path
@@ -101,7 +101,7 @@ def step(ctx):
     git = gitops.Git(wt, ctx.log)
     if git.push("origin", f"HEAD:refs/heads/{branch}").rc != 0:
         raise core.Fail("push")
-    merge.merge(pr, git.tip(), repo, ctx.log, command)
+    merge.merge(pr, git.tip(), repo, ctx.log, ticket_branch, command)
 
     runfolder.set_header(task, "Status", "done")
     root = gitops.Git(repo, ctx.log)

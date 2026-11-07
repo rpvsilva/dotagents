@@ -21,16 +21,20 @@ its worktree and local branch, and, when the PR's base is the default branch, cl
 base they stay open). When the `merge_command` rule refuses for want of a human approval (its own output names an
 approval, a required review or a code owner), it sets the ticket `in-review` and removes the worktree instead.
 
-Into any other base, with the `task_merge_method` Setting `squash` (the default), it first records the integration
-ancestry the squash merges dropped (`steplib/ancestry.py`): a `git merge -s ours origin/<base>` commit on the ticket
-branch, pushed, and the merge is pinned to it. It merges only when the reviewed head contains the base tip
-(`reviewed-head-lacks-base`) and the ticket's tree is the reviewed tree (`tree-mismatch`); either refusal merges and
-pushes nothing. The reviewed head is `--reviewed <sha>` (the reviewed commit holding the base tip, e.g. the hub task's
-head), else the commit the ticket PR's review was posted on (`<run>/logs/PR<n>-review.json`), else it fails
-`no-review`. With `merge`, no ancestry step runs. A ticket merged into such a base labels its issues `merged-to-<base>`.
+A PR whose base is not the run's base fails `wrong-base <branch>` before anything else, so nothing is pushed.
+
+Into any other base than the default branch, which the repo's gate does not judge, it first runs `map.md`'s Checks on
+the ticket head in a scratch worktree (`red <suite>` stops it). Then, with the `task_merge_method` Setting `squash`
+(the default), it records the integration ancestry the squash merges dropped (`steplib/ancestry.py`): a
+`git merge -s ours origin/<base>` commit on the ticket branch, pushed, and the merge is pinned to it. It merges only
+when the ticket's tree is the reviewed tree (`tree-mismatch`) and that tree already holds the base's content
+(`reviewed-head-lacks-base`: merging the base into it would change it); either refusal merges and pushes nothing. The
+reviewed head is the commit the ticket PR's review was posted on (`<run>/logs/PR<n>-review.json`), else
+`--reviewed <sha>`, which overrides it, else it fails `no-review`. With `merge`, no ancestry step runs. A ticket merged
+into such a base labels its issues `merged-to-<base>`.
 
 Prints `OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `wrong-base <branch>` (a PR
-into neither the run's base nor a ticket branch), `merge`, `head-moved`,
+into anything but the run's base), `red <suite>`, `merge`, `head-moved`,
 `no-pr`, `no-merge-rule`, `no-review`, `reviewed-unknown`, `reviewed-head-lacks-base`, `tree-mismatch`, `pr-view`,
 `pr-edit`, `pr-ready`, `pr-create`, `empty-template-section <sections>`.
 """
@@ -41,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ancestry, ci, core, gh, gitops, merge, prbody, runfolder, tracker  # noqa: E402
+from steplib import ancestry, checks, ci, core, gh, gitops, merge, prbody, runfolder, tracker  # noqa: E402
 
 USAGE = "ship_ticket.py <run> <TT> open | merge [--reviewed <sha>]"
 GATE = ".review-gate.yml"
@@ -134,6 +138,19 @@ class Ship:
             raise core.Fail("no-review")
         return commit
 
+    def run_checks(self, sha):
+        """Runs `map.md`'s Checks on `sha` in a scratch worktree: the proof a PR into a non-default base merges on, since
+        the repo's gate judges only PRs into the default branch. Fails `red <suite>`."""
+        scratch = self.run / "worktrees" / f"{self.ctx.id}-checks"
+        self.git.worktree_remove(scratch)
+        self.git.worktree_add(scratch, ref=sha, detach=True)
+        try:
+            suites = checks.run_all(checks.commands(self.run / "map.md"), scratch, self.ctx.log)
+        finally:
+            self.git.worktree_remove(scratch)
+        if suites[-1].rc != 0:
+            raise core.Fail(f"red {suites[-1].command}")
+
     def merge(self, reviewed=None):
         line = runfolder.get(self.ticket, "PR")
         number = ci.pr_number(line)
@@ -145,13 +162,16 @@ class Ship:
         into = merge.view(number, self.ctx.log, self.repo).get("baseRefName")
         if not into:
             raise core.Fail("pr-view")
+        merge.check_base(number, into, self.base, self.ctx.log)  # before anything is pushed
         if not command and into == self.default and self.gated():
             self.ctx.note(f"{GATE} gates {into}, and the merge_command Setting is unset: set it to the repo's merge rule")
             raise core.Fail("no-merge-rule")
-        if into != self.default and (merge.setting(self.repo, "task_merge_method", self.ctx.log) or "squash") == "squash":
-            sha = ancestry.record(self.git, self.branch, into, self.reviewed(number, reviewed))
+        if into != self.default:
+            self.run_checks(sha)
+            if (merge.setting(self.repo, "task_merge_method", self.ctx.log) or "squash") == "squash":
+                sha = ancestry.record(self.git, self.branch, self.base, self.reviewed(number, reviewed))
         try:
-            merge.merge(number, sha, self.repo, self.ctx.log, command)
+            merge.merge(number, sha, self.repo, self.ctx.log, self.base, command)
         except core.Fail as e:
             # Only the repo's own rule answers "waits on a human"; a bare gh merge's refusal is a failure.
             if not command or e.reason != "merge" or not WAITS_ON_HUMAN.search(getattr(e, "said", "")):
