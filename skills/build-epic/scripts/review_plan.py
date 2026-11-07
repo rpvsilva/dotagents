@@ -57,11 +57,11 @@ def review_before_merge(run):
 def plan(run):
     """`[(ticket, title, {mode: runs}, high)]` in ticket order."""
     required = review_before_merge(run)
-    tickets = {ticket_num(f): title(f.read_text()) for f in sorted((run / "tickets").glob("*.md"))}
+    tickets = {ticket_num(f): title(f.read_text(encoding="utf-8")) for f in sorted((run / "tickets").glob("*.md"))}
     tasks = {}
     for f in sorted((run / "tasks").glob("*.md")):
         if not f.stem.endswith(ORCHESTRATOR_TASKS):
-            tasks.setdefault(ticket_num(f), []).append(f.read_text())
+            tasks.setdefault(ticket_num(f), []).append(f.read_text(encoding="utf-8"))
     out = []
     for tt in sorted(set(tickets) | set(tasks), key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n)):
         runs, hub, high = {}, False, False

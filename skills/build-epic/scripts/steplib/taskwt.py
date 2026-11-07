@@ -11,7 +11,7 @@ from . import core, gitops, runfolder
 
 def title(path):
     """The task's title: its first `# ` line without the `TT-NN:` prefix, never re-cased."""
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("# "):
             return re.sub(r"^\d+-[A-Za-z0-9-]+:\s*", "", line[2:].strip())
     return path.stem

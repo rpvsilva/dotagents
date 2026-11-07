@@ -1,11 +1,12 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "tool": "claude-code",
   "sessionId": "5678efgh-0000-0000-0000-000000000000",
   "skill": null,
   "start": "2026-10-24T09:00:00.000Z",
   "end": "2026-10-24T09:03:00.000Z",
   "wallClockSeconds": 180,
+  "pricingAsOf": "2026-01-01",
   "repo": "/home/dev/projects/shop",
   "date": "2026-10-24",
   "whole": true,
@@ -59,6 +60,7 @@
         {
           "type": "Explore",
           "description": "Find lock files",
+          "role": "other",
           "turns": 2,
           "toolCalls": 2,
           "tools": {
@@ -73,7 +75,8 @@
               "cacheWrite5m": 0,
               "cacheWrite1h": 0
             }
-          }
+          },
+          "cost": 0.1
         }
       ]
     }

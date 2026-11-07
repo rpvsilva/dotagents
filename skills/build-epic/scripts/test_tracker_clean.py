@@ -44,14 +44,14 @@ class RunCase(unittest.TestCase):
     def ticket(self, tt, slug, status, issue):
         path = self.kit.run_dir / "tickets" / f"{tt}-{slug}.md"
         path.write_text(f"# {tt}: {slug.upper()}\nStatus: {status}\nIssue: {issue}\n"
-                        f"Branch: feat/gh-{int(tt)}-{slug}\nBlocked by: none\n")
+                        f"Branch: feat/gh-{int(tt)}-{slug}\nBlocked by: none\n", encoding="utf-8")
         return path
 
     def task(self, name, title, status, blocked):
         path = self.kit.run_dir / "tasks" / name
         tt = name.split("-", 1)[0]
         path.write_text(f"# {name[:5]}: {title}\nStatus: {status}\nTicket: {tt}\nBlocked by: {blocked}\n"
-                        "Writes: a.py\n")
+                        "Writes: a.py\n", encoding="utf-8")
         return path
 
     def one_line(self, p):
@@ -104,7 +104,7 @@ class PlannedTest(RunCase):
         self.kit.answer("api-user", out="agent-bot\n")
         self.ticket("02", "csv", "ready", "none")
         (self.kit.run_dir / "plan").mkdir()
-        (self.kit.run_dir / "plan" / "01.md").write_text("Open question 2: decided JSON lines.\n")
+        (self.kit.run_dir / "plan" / "01.md").write_text("Open question 2: decided JSON lines.\n", encoding="utf-8")
         self.ok(self.kit.step(TRACKER, self.kit.run_dir, "planned"))
         body = [c[3] for c in self.updates() if "--paginate" not in c][0]
         self.assertIn("Open question 2: decided JSON lines.", body)
@@ -116,7 +116,7 @@ class PlannedTest(RunCase):
         self.assertEqual(p.returncode, 1)
         line = self.one_line(p)
         self.assertTrue(line.startswith("FAIL plan gh-comment (log: "), line)
-        self.assertIn("HTTP 404", self.log_of(line).read_text())
+        self.assertIn("HTTP 404", self.log_of(line).read_text(encoding="utf-8"))
 
     def test_flush_applies_the_updates_held_while_the_identity_was_away(self):
         self.kit.answer("api-user", out="agent-bot\n", n=1)
@@ -265,7 +265,7 @@ class PinDispatcherTest(RunCase):
         super().setUp()
         script = self.kit.clone / "scripts" / "remote-agent.sh"
         script.parent.mkdir()
-        script.write_text("#!/bin/sh\n")
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
         self.kit.git("add", "scripts", cwd=self.kit.clone)
         self.kit.git("commit", "-qm", "dispatcher", cwd=self.kit.clone)
         self.kit.git("push", "-q", "origin", "HEAD:main", cwd=self.kit.clone)
@@ -277,7 +277,7 @@ class PinDispatcherTest(RunCase):
         return self.kit.git("ls-remote", str(self.kit.origin), "refs/heads/main").split()[0]
 
     def push_main(self, name):
-        (self.kit.clone / name).write_text(name)
+        (self.kit.clone / name).write_text(name, encoding="utf-8")
         self.kit.git("add", name, cwd=self.kit.clone)
         self.kit.git("commit", "-qm", name, cwd=self.kit.clone)
         self.kit.git("push", "-q", "origin", "HEAD:main", cwd=self.kit.clone)
@@ -289,7 +289,7 @@ class PinDispatcherTest(RunCase):
         self.kit.git("update-ref", "refs/remotes/origin/main", old, cwd=self.kit.clone)  # a stale last fetch
         tip = self.main_tip()
         self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), f"OK dispatcher pinned {tip[:7]}")
-        self.assertEqual((self.kit.run_dir / "dispatcher.sha").read_text().strip(), tip)
+        self.assertEqual((self.kit.run_dir / "dispatcher.sha").read_text(encoding="utf-8").strip(), tip)
         self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), tip)
         self.assertTrue((self.wt / "scripts" / "remote-agent.sh").is_file())
 
@@ -317,14 +317,14 @@ class PinDispatcherTest(RunCase):
                         line)
         self.assertNotEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), pin)  # reported, never moved back
         sha_file = self.kit.run_dir / "dispatcher.sha"
-        sha_file.write_text("main\n")
+        sha_file.write_text("main\n", encoding="utf-8")
         line = self.one_line(self.kit.step(PIN, self.kit.run_dir))
         self.assertTrue(line.startswith(f"FAIL dispatcher bad-dispatcher-sha: {sha_file} (log: "), line)
 
     def test_a_link_into_another_checkout_needs_no_pin(self):
         other = self.kit.tmp / "other" / "scripts" / "remote-agent.sh"
         other.parent.mkdir(parents=True)
-        other.write_text("#!/bin/sh\n")
+        other.write_text("#!/bin/sh\n", encoding="utf-8")
         self.link.symlink_to(other)
         self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), "OK dispatcher installed")
         self.assertFalse((self.kit.run_dir / "dispatcher.sha").exists())

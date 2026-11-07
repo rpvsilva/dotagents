@@ -26,13 +26,13 @@ if args[:2] != ["pr", "view"]:
         sys.exit(subprocess.run([sys.executable, "-IS", {kit_gh!r}, *args]).returncode)
     os.execv(sys.executable, [sys.executable, "-IS", {kit_gh!r}, *args])
 import json, subprocess
-with open(os.path.join(d, "gh.log"), "a") as f:
+with open(os.path.join(d, "gh.log"), "a", encoding="utf-8") as f:
     f.write(json.dumps(args) + "\n")
 def read(name, default):
     p = os.path.join(d, "answers", name)
-    return open(p).read().strip() if os.path.exists(p) else default
+    return open(p, encoding="utf-8").read().strip() if os.path.exists(p) else default
 head = read("pr-head", "") or subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "task/t/01"],
-                                             capture_output=True, text=True).stdout.strip()
+                                             capture_output=True, text=True, encoding="utf-8").stdout.strip()
 print(json.dumps({{"state": read("pr-state", "MERGED"), "headRefOid": head}}))
 '''
 
@@ -48,7 +48,7 @@ class MergeTaskTest(unittest.TestCase):
         clone = kit.make_origin()
         (kit.bin / "gh").rename(kit.bin / "gh-kit")
         (kit.bin / "gh").write_text(PR_VIEW.format(python=sys.executable, kit_gh=str(kit.bin / "gh-kit"),
-                                                   origin=str(kit.origin)))
+                                                   origin=str(kit.origin)), encoding="utf-8")
         (kit.bin / "gh").chmod(0o755)
         (kit.home / ".agents" / "bin").mkdir(parents=True)
         (kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
@@ -57,9 +57,9 @@ class MergeTaskTest(unittest.TestCase):
         for d in ("tickets", "tasks", "worktrees"):
             (kit.run_dir / d).mkdir()
         self.ticket = kit.run_dir / "tickets" / "01-t.md"
-        self.ticket.write_text(TICKET)
+        self.ticket.write_text(TICKET, encoding="utf-8")
         self.task = kit.run_dir / "tasks" / "01-01-a.md"
-        self.task.write_text(TASK.format(nn="01", status="in-progress") + "PR: https://github.com/o/r/pull/5\n")
+        self.task.write_text(TASK.format(nn="01", status="in-progress") + "PR: https://github.com/o/r/pull/5\n", encoding="utf-8")
         self.checks("# a comment, not a suite", "true", "echo suite two")
         kit.answer("pr-list", out="[]")
         kit.answer("pr-create", out="https://github.com/o/r/pull/9\n")
@@ -72,10 +72,10 @@ class MergeTaskTest(unittest.TestCase):
     def checks(self, *commands):
         body = "\n".join(commands)
         (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\nLocal:\n\n```\n{body}\n```\n\n## Gaps\n\n"
-                                                 "```\nfalse\n```\n")
+                                                 "```\nfalse\n```\n", encoding="utf-8")
 
     def commit(self, where, name, text, message):
-        (Path(where) / name).write_text(text)
+        (Path(where) / name).write_text(text, encoding="utf-8")
         self.kit.git("add", name, cwd=where)
         self.kit.git("commit", "-qm", message, cwd=where)
         return self.kit.git("rev-parse", "HEAD", cwd=where)
@@ -126,11 +126,11 @@ class MergeTaskTest(unittest.TestCase):
         self.assertEqual(self.origin_tip("task/t/01"), head)
         self.assertEqual(self.calls("pr", "merge"),
                          [["pr", "merge", "5", "--squash", "--delete-branch", "--match-head-commit", head]])
-        log = (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text()
+        log = (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8")
         self.assertIn("suite two", log)
         self.assertIn("suite 'true': rc 0", log)
-        saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text())
-        self.assertEqual([(s["command"], s["passed"]) for s in saved], [("true", True), ("echo suite two", True)])
+        saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
+        self.assertEqual([(s["command"], s["rc"]) for s in saved], [("true", 0), ("echo suite two", 0)])
 
     def test_works_through_a_linked_run_path(self):
         self.assertRegex(self.merge(self.kit.link(self.kit.run_dir, "run-link")), r"^OK 01-01 done ")
@@ -145,12 +145,12 @@ class MergeTaskTest(unittest.TestCase):
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
 
     def test_uncommitted_changes_are_refused_and_kept(self):
-        (self.wt / "task.txt").write_text("changed\n")
+        (self.wt / "task.txt").write_text("changed\n", encoding="utf-8")
         self.assert_refused("uncommitted-changes")
-        self.assertEqual((self.wt / "task.txt").read_text(), "changed\n")
+        self.assertEqual((self.wt / "task.txt").read_text(encoding="utf-8"), "changed\n")
 
     def test_an_untracked_file_is_not_an_uncommitted_change(self):
-        (self.wt / "scratch.txt").write_text("x\n")
+        (self.wt / "scratch.txt").write_text("x\n", encoding="utf-8")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
 
     def test_a_detached_head_is_refused(self):
@@ -162,18 +162,18 @@ class MergeTaskTest(unittest.TestCase):
         self.assert_refused(f"no-worktree: {self.wt}")
 
     def test_a_ticket_without_a_branch_is_refused(self):
-        self.ticket.write_text(TICKET.replace("Branch: feat/t\n", ""))
+        self.ticket.write_text(TICKET.replace("Branch: feat/t\n", ""), encoding="utf-8")
         self.assert_refused("ticket-no-branch")
 
     def test_a_task_without_a_pr_is_refused(self):
-        self.task.write_text(TASK.format(nn="01", status="in-progress"))
+        self.task.write_text(TASK.format(nn="01", status="in-progress"), encoding="utf-8")
         self.assert_refused("no-pr")
 
     def test_a_missing_or_failing_settings_tool_is_refused(self):
         tool = self.kit.home / ".agents" / "bin" / "settings"
         tool.unlink()
         self.assert_refused(f"no-settings: {tool} is missing; run install.sh")
-        tool.write_text("#!/bin/sh\necho 'settings: bad value' >&2\nexit 1\n")
+        tool.write_text("#!/bin/sh\necho 'settings: bad value' >&2\nexit 1\n", encoding="utf-8")
         tool.chmod(0o755)
         self.assert_refused("setting-merge_command")
 
@@ -183,7 +183,7 @@ class MergeTaskTest(unittest.TestCase):
         self.checks("true", "exit 3", "echo never")
         line = self.merge()
         self.assertTrue(line.startswith("FAIL 01-01 red exit 3 (log: "), line)
-        self.assertNotIn("never", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text())
+        self.assertNotIn("never", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
         self.assertEqual(self.calls("pr", "merge"), [])
         self.assert_not_done()
 
@@ -191,23 +191,23 @@ class MergeTaskTest(unittest.TestCase):
 
     def test_a_failed_gh_merge_is_a_fail_merge(self):
         self.kit.answer("pr-merge", err="GraphQL: Pull request is not mergeable\n", rc=1)
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.assertTrue(self.merge().startswith("FAIL 01-01 merge (log: "))
         self.assert_not_done()
 
     def test_a_merge_that_exits_0_but_reads_back_open_is_a_fail_merge(self):
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.assertTrue(self.merge().startswith("FAIL 01-01 merge (log: "))
         self.assert_not_done()
 
     def test_a_merge_command_that_refuses_is_a_fail_merge(self):
         rule = self.kit.tmp / "refuse.sh"
-        rule.write_text("#!/bin/sh\necho 'gate: refused' >&2\nexit 1\n")
+        rule.write_text("#!/bin/sh\necho 'gate: refused' >&2\nexit 1\n", encoding="utf-8")
         rule.chmod(0o755)
         self.setting("merge_command", f"{rule} {{pr}}")
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.assertTrue(self.merge().startswith("FAIL 01-01 merge (log: "))
-        self.assertIn("gate: refused", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text())
+        self.assertIn("gate: refused", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
         self.assert_not_done()
 
     def test_merged_after_a_nonzero_exit_counts_as_merged(self):
@@ -216,14 +216,14 @@ class MergeTaskTest(unittest.TestCase):
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
 
     def test_a_head_that_moved_fails_head_moved_and_nothing_merges(self):
-        (self.kit.answers / "pr-head").write_text("0" * 40)
+        (self.kit.answers / "pr-head").write_text("0" * 40, encoding="utf-8")
         self.assertTrue(self.merge().startswith("FAIL 01-01 head-moved (log: "))
         self.assertEqual(self.calls("pr", "merge"), [])
         self.assert_not_done()
 
     def test_a_match_head_commit_refusal_fails_head_moved(self):
         self.kit.answer("pr-merge", err="GraphQL: Head branch was modified. Review and try the merge again.\n", rc=1)
-        (self.kit.answers / "pr-state").write_text("OPEN")
+        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
         self.assertTrue(self.merge().startswith("FAIL 01-01 head-moved (log: "))
 
     # The merge_command Setting
@@ -231,13 +231,13 @@ class MergeTaskTest(unittest.TestCase):
     def test_merge_command_setting_runs_instead_of_gh_pr_merge(self):
         rule = self.kit.tmp / "merge-rule.sh"
         out = self.kit.tmp.as_posix()  # a Windows path's backslashes would be escapes in sh
-        rule.write_text(f"#!/bin/sh\n{{ pwd -W 2>/dev/null || pwd; }} > {out}/rule.cwd\necho \"$@\" > {out}/rule.args\n")
+        rule.write_text(f"#!/bin/sh\n{{ pwd -W 2>/dev/null || pwd; }} > {out}/rule.cwd\necho \"$@\" > {out}/rule.args\n", encoding="utf-8")
         rule.chmod(0o755)
         self.setting("merge_command", f"{rule} {{pr}} --head {{sha}}")
         head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual((self.kit.tmp / "rule.args").read_text(), f"5 --head {head}\n")
-        self.assertEqual(Path((self.kit.tmp / "rule.cwd").read_text().strip()).resolve(), Path(self.kit.clone).resolve())
+        self.assertEqual((self.kit.tmp / "rule.args").read_text(encoding="utf-8"), f"5 --head {head}\n")
+        self.assertEqual(Path((self.kit.tmp / "rule.cwd").read_text(encoding="utf-8").strip()).resolve(), Path(self.kit.clone).resolve())
         self.assertEqual(self.calls("pr", "merge"), [])
 
     # Catching up with the ticket (bug 4)
@@ -247,7 +247,7 @@ class MergeTaskTest(unittest.TestCase):
         self.commit(self.wt, "README.md", "task side\n", "feat: task readme")
         self.kit.git("fetch", "-q", "origin", cwd=self.wt)
         subprocess.run(["git", "merge", "origin/feat/t"], cwd=self.wt, env=self.kit.env, capture_output=True)
-        (self.wt / "README.md").write_text("resolved\n")
+        (self.wt / "README.md").write_text("resolved\n", encoding="utf-8")
         self.kit.git("commit", "-qam", "Merge ticket, resolved", cwd=self.wt)
         resolved = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
@@ -259,7 +259,7 @@ class MergeTaskTest(unittest.TestCase):
         self.commit(self.wt, "README.md", "task side\n", "feat: task readme")
         self.kit.git("fetch", "-q", "origin", cwd=self.wt)
         subprocess.run(["git", "merge", "origin/feat/t"], cwd=self.wt, env=self.kit.env, capture_output=True)
-        (self.wt / "README.md").write_text("resolved\n")
+        (self.wt / "README.md").write_text("resolved\n", encoding="utf-8")
         self.kit.git("commit", "-qam", "Merge ticket, resolved", cwd=self.wt)
         resolved = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         later = self.push_to_ticket("later.txt", "later\n")
@@ -318,7 +318,7 @@ class MergeTaskTest(unittest.TestCase):
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
 
     def test_ci_off_in_decisions_skips_ticket_ci(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nci: off\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nci: off\n", encoding="utf-8")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual(self.calls("pr", "create") + self.calls("pr", "list"), [])
 
@@ -329,7 +329,7 @@ class MergeTaskTest(unittest.TestCase):
         main = self.kit.git("rev-parse", "origin/main", cwd=self.kit.clone)
         tip = self.push_to_ticket("merged.txt", "as the squash merge left it\n")
         self.merge()
-        text = (self.kit.run_dir / "tasks" / "01-tests.md").read_text()
+        text = (self.kit.run_dir / "tasks" / "01-tests.md").read_text(encoding="utf-8")
         self.assertTrue(text.startswith("# 01-tests: tune Merge JSON things\n"), text)
         self.assertEqual(runfolder.get(self.kit.run_dir / "tasks" / "01-tests.md", "Status"), "ready")
         self.assertEqual(runfolder.get(self.kit.run_dir / "tasks" / "01-tests.md", "Range"), f"{main}..{tip}")
@@ -341,7 +341,7 @@ class MergeTaskTest(unittest.TestCase):
 
     def test_no_tuning_task_while_another_implementer_task_is_open(self):
         self.setting("tune_min_seconds", "0")
-        (self.kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", status="ready"))
+        (self.kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", status="ready"), encoding="utf-8")
         self.push_to_ticket("merged.txt", "x\n")
         self.merge()
         self.assertFalse((self.kit.run_dir / "tasks" / "01-tests.md").exists())

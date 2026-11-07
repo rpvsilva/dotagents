@@ -74,7 +74,7 @@ def load(run):
     p = path(run)
     if not p.exists():
         return None
-    with open(p, newline="") as f:
+    with open(p, newline="", encoding="utf-8") as f:
         return parse(f.read())
 
 

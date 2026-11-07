@@ -51,7 +51,7 @@ def step(ctx):
         raise core.Fail("usage: report_check.py <run> <id> [--from-report]")
     report = ctx.run_dir / "reports" / f"{ctx.id}.md"
     if ctx.args:
-        message = last_block(report.read_text(errors="replace")) if report.is_file() else None
+        message = last_block(report.read_text(errors="replace", encoding="utf-8")) if report.is_file() else None
         if message is None:
             ctx.note(f"no block at the end of {report}")
             raise core.Fail("brief-violation shape" + ("" if report.is_file() and report.stat().st_size else " no-report"))

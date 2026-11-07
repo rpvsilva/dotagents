@@ -61,7 +61,7 @@ def identity_env(log, env=None):
     log.write(f"$ {command}  (token for the run's identity, in {repo})\n")
     try:
         p = subprocess.run(core.command(core.split(command), env, repo or None), cwd=repo or None, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE, text=True)
+                           stderr=subprocess.PIPE, text=True, encoding="utf-8")
         rc, token, err = p.returncode, p.stdout.strip(), p.stderr
     except OSError as e:
         rc, token, err = 127, "", f"{e}\n"

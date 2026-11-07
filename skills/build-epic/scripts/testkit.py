@@ -39,20 +39,20 @@ def quote(s):  # json.dumps(s), without importing json: that import is half this
             out.append(c if " " <= c <= "~" and c not in '"\\' else "\\u%04x" % o)
     return '"' + "".join(out) + '"'
 
-with open(os.path.join(d, "gh.log"), "a") as f:
+with open(os.path.join(d, "gh.log"), "a", encoding="utf-8") as f:
     f.write("[" + ", ".join(map(quote, sys.argv[1:])) + "]\n")
-with open(os.path.join(d, "gh-tokens.log"), "a") as f:
+with open(os.path.join(d, "gh-tokens.log"), "a", encoding="utf-8") as f:
     f.write(os.environ.get("GH_TOKEN", "") + "\n")
 key = "".join(c if c.isascii() and (c.isalnum() or c in "_.-") else "_" for c in "-".join(sys.argv[1:3])) or "none"
 count = os.path.join(d, "answers", key + ".count")
-n = int(open(count).read()) + 1 if os.path.exists(count) else 1
-open(count, "w").write(str(n))
+n = int(open(count, encoding="utf-8").read()) + 1 if os.path.exists(count) else 1
+open(count, "w", encoding="utf-8").write(str(n))
 
 def part(ext, default=""):
     for name in (f"{{key}}.{{n}}.{{ext}}", f"{{key}}.{{ext}}"):
         p = os.path.join(d, "answers", name)
         if os.path.exists(p):
-            return open(p).read()
+            return open(p, encoding="utf-8").read()
     return default
 
 sys.stdout.write(part("out"))
@@ -66,7 +66,7 @@ skip_without_zsh = unittest.skipUnless(zsh, "zsh is not installed")
 
 def git(*args, cwd=None, env=None):
     """Runs git and returns its stdout; raises on a non-zero exit."""
-    p = subprocess.run(["git", *args], cwd=None if cwd is None else str(cwd), env=env, text=True,
+    p = subprocess.run(["git", *args], cwd=None if cwd is None else str(cwd), env=env, text=True, encoding="utf-8",
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if p.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {p.stderr}")
@@ -102,13 +102,13 @@ class Kit:
         self.gh_log = self.stub / "gh.log"
         for d in (self.home, self.bin, self.answers):
             d.mkdir(parents=True)
-        (self.bin / "gh").write_text(STUB_GH.format(python=sys.executable))
+        (self.bin / "gh").write_text(STUB_GH.format(python=sys.executable), encoding="utf-8")
         (self.bin / "gh").chmod(0o755)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "GH_", "BUILD_EPIC_"))}
         self.env.update(HOME=str(self.home), PATH=f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
                         GH_STUB_DIR=str(self.stub), GIT_CONFIG_NOSYSTEM="1", BUILD_EPIC_RETRY_SLEEP="0")
         (self.home / ".gitconfig").write_text(
-            "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n")
+            "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n", encoding="utf-8")
         self.run_dir = self.tmp / "run"
         self.run_dir.mkdir()
         self.origin = self.clone = None
@@ -163,16 +163,16 @@ class Kit:
     def _rehome(self, template, path):
         """Points `path`'s text at this sandbox instead of the template's. git's config writes a backslash as `\\\\`,
         so on Windows a path there reads doubled; both forms are rewritten, or the copy would push to the template."""
-        text, old, new = path.read_text(), str(template.tmp), str(self.tmp)
+        text, old, new = path.read_text(encoding="utf-8"), str(template.tmp), str(self.tmp)
         text = text.replace(old.replace("\\", "\\\\"), new.replace("\\", "\\\\")).replace(old, new)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
 
     def _build_origin(self):
         self.origin = self.tmp / "origin.git"
         self.git("init", "--bare", "-b", "main", str(self.origin))
         self.clone = self.tmp / "clone"
         self.git("clone", "-q", str(self.origin), str(self.clone))
-        (self.clone / "README.md").write_text("hello\n")
+        (self.clone / "README.md").write_text("hello\n", encoding="utf-8")
         self.git("add", "README.md", cwd=self.clone)
         self.git("commit", "-qm", "first", cwd=self.clone)
         self.git("push", "-q", "origin", "main", cwd=self.clone)
@@ -182,20 +182,20 @@ class Kit:
     def answer(self, key, out="", err="", rc=0, n=None):
         """Sets the stub `gh`'s answer for calls keyed `key` (e.g. `pr-merge`): the n-th call, or every call."""
         stem = f"{key}.{n}" if n else key
-        (self.answers / f"{stem}.out").write_text(out)
-        (self.answers / f"{stem}.err").write_text(err)
-        (self.answers / f"{stem}.rc").write_text(str(rc))
+        (self.answers / f"{stem}.out").write_text(out, encoding="utf-8")
+        (self.answers / f"{stem}.err").write_text(err, encoding="utf-8")
+        (self.answers / f"{stem}.rc").write_text(str(rc), encoding="utf-8")
 
     def gh_calls(self):
         """Every argv the stub `gh` got, in order."""
         if not self.gh_log.exists():
             return []
-        return [json.loads(line) for line in self.gh_log.read_text().splitlines()]
+        return [json.loads(line) for line in self.gh_log.read_text(encoding="utf-8").splitlines()]
 
     def gh_tokens(self):
         """The `GH_TOKEN` each call of the stub `gh` ran with ("" when unset), in order."""
         path = self.stub / "gh-tokens.log"
-        return path.read_text().splitlines() if path.exists() else []
+        return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
     def link(self, target, name):
         """A symlink `<tmp>/<name>` to `target`; returns its path."""
@@ -206,16 +206,16 @@ class Kit:
     def step(self, script, *args, cwd="/", env=None):
         """Runs a step script as `python3 -I <script> <args>` from `cwd` (default `/`); returns the CompletedProcess."""
         return subprocess.run([sys.executable, "-I", str(script), *map(str, args)], cwd=str(cwd),
-                              env=env or self.env, text=True, stdin=subprocess.DEVNULL,
+                              env=env or self.env, text=True, encoding="utf-8", stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def tool(self, *argv):
         """Runs a program or `#!` script (as Windows can start it) with the sandbox's env; returns the
         CompletedProcess."""
-        return subprocess.run(core.command(argv, self.env), env=self.env, text=True, stdin=subprocess.DEVNULL,
+        return subprocess.run(core.command(argv, self.env), env=self.env, text=True, encoding="utf-8", stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def shell(self, shell, command, cwd="/"):
         """Runs `command` under `<shell> -c` (`bash` or `zsh`) from `cwd`; returns the CompletedProcess."""
-        return subprocess.run(core.command([shell, "-c", command], self.env), cwd=str(cwd), env=self.env, text=True,
+        return subprocess.run(core.command([shell, "-c", command], self.env), cwd=str(cwd), env=self.env, text=True, encoding="utf-8",
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
