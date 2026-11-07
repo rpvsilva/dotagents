@@ -7,11 +7,15 @@
 # A PR into another branch (build-epic's task PR into a ticket branch) skips the gate: CI and the gate
 # run on PRs into the default branch only, and the ticket's own PR into it is judged in full. Whoever
 # merges it runs the checks locally first.
-# Usage: scripts/merge-pr.sh <pr-number>   (needs GH_TOKEN, node and npx)
+# It squashes, or with --merge (build-epic's task_merge_method=merge) makes a merge commit.
+# Usage: scripts/merge-pr.sh [--merge] <pr-number>   (needs GH_TOKEN, node and npx)
 set -euo pipefail
 
 GATE_REF=2da570e75f377b413e19bdfc338dab7c9e881538
-pr="${1:?usage: merge-pr.sh <pr-number>}"
+method=--squash
+if [ "${1:-}" = --merge ]; then method=--merge; shift; fi
+case "${1:-}" in -*) echo "usage: merge-pr.sh [--merge] <pr-number>"; exit 2 ;; esac
+pr="${1:?usage: merge-pr.sh [--merge] <pr-number>}"
 wait="${MERGE_PR_CI_WAIT:-1800}"
 
 view="$(gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid)"
@@ -23,7 +27,7 @@ default="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
 [ -n "$default" ] || { echo "PR #$pr: could not read the default branch, not merging"; exit 1; }
 if [ "$base" != "$default" ]; then
   echo "PR #$pr: base $base is not $default, merging without the gate"
-  gh pr merge "$pr" --squash --delete-branch --match-head-commit "$(jq -r .headRefOid <<<"$view")"
+  gh pr merge "$pr" "$method" --delete-branch --match-head-commit "$(jq -r .headRefOid <<<"$view")"
   exit 0
 fi
 
@@ -40,4 +44,4 @@ fi
 
 # --match-head-commit: GitHub refuses the merge unless the head is still the commit the gate judged.
 sha="$(jq -r .head_sha <<<"$verdict")"
-gh pr merge "$pr" --squash --delete-branch --match-head-commit "$sha"
+gh pr merge "$pr" "$method" --delete-branch --match-head-commit "$sha"

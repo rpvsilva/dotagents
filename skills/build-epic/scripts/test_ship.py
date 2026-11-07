@@ -302,15 +302,11 @@ class ShipMergeTest(Base):
         self.assertFalse(self.wt.exists())
         self.assertEqual(self.kit.git("branch", "--list", "feat/t", cwd=self.kit.clone), "")
 
-    def test_a_pr_into_another_base_leaves_the_issues_open_whatever_decisions_md_says(self):
+    def test_a_pr_into_another_base_leaves_the_issues_open(self):
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
         (self.kit.answers / "pr-base").write_text("integ")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(self.calls("issue", "close"), [])
-
-    def test_a_pr_into_the_default_branch_closes_the_issues_whatever_decisions_md_says(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
-        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
-        self.assertEqual([c[:3] for c in self.calls("issue", "close")], [["issue", "close", "7"], ["issue", "close", "8"]])
 
     def test_without_a_merge_rule_a_gated_repo_refuses_to_merge_into_the_default_branch(self):
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
@@ -321,6 +317,7 @@ class ShipMergeTest(Base):
 
     def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n")
         (self.kit.answers / "pr-base").write_text("integ")
         self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
         self.assertEqual(len(self.calls("pr", "merge")), 1)

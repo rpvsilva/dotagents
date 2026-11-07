@@ -19,7 +19,8 @@ it merges the ticket PR at the ticket branch's tip on origin by the merge rule, 
 its worktree and local branch, and, when the PR's base is the default branch, closes the ticket's issues (into any other
 base they stay open). When the `merge_command` rule refuses for want of a human approval (its own output names an
 approval, a required review or a code owner), it sets the ticket `in-review` and removes the worktree instead. Prints
-`OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `merge`, `head-moved`, `no-pr`,
+`OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `wrong-base <branch>` (a PR
+into neither the run's base nor a ticket branch), `merge`, `head-moved`, `no-pr`,
 `no-merge-rule`, `pr-view`, `pr-edit`, `pr-ready`, `pr-create`, `empty-template-section <sections>`, `no-body-file`.
 """
 import json

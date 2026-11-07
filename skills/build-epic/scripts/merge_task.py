@@ -11,7 +11,7 @@ draft ticket PR when the ticket has none, and, when this was the ticket's last i
 least `tune_min_seconds`, writes the tuning task `tasks/TT-tests.md`.
 
 Prints `OK <task> done suites=<n> <secs>s`, or `FAIL <task> <reason> (log: ...)`: `red <suite>`, `conflict <files>`,
-`ticket-ci-red <run-id>`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task `in-progress`.
+`ticket-ci-red <run-id>`, `wrong-base <branch>`, `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task `in-progress`.
 """
 import sys
 from pathlib import Path
