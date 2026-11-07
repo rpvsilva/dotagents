@@ -62,14 +62,24 @@ class MergeSectionTest(unittest.TestCase):
         self.decide("set", "base", "feat/integration")
         self.assertIn("into `feat/integration`", self.merge(self.ticket_body()))
 
-    def test_proof_follows_ci_and_review_decisions(self):
+    def test_ticket_pr_proof_follows_ci_and_review_decisions(self):
         self.human_run()
-        self.assertIn("a green local run (CI is off for this run)", self.merge(self.task_body()))
+        self.assertIn("a green local run (CI is off for this run)", self.merge(self.ticket_body()))
         self.decide("set", "ci", "on")
         self.decide("set", "review_before_agent_merge", "yes")
-        merge = self.merge(self.task_body())
+        merge = self.merge(self.ticket_body())
         self.assertIn("a review and green CI", merge)
         self.assertNotIn("local run", merge)
+
+    def test_task_pr_proof_is_the_local_run_of_the_checks_whatever_ci_and_review_say(self):
+        self.human_run()
+        for ci, review in (("off", "no"), ("on", "yes"), ("on", "no")):
+            self.decide("set", "ci", ci)
+            self.decide("set", "review_before_agent_merge", review)
+            merge = self.merge(self.task_body())
+            self.assertIn("after a green local run of map.md's Checks.", merge)
+            self.assertNotIn("green CI", merge)
+            self.assertNotIn("a review", merge)
 
     def test_app_merge_says_the_app_merges(self):
         self.decide("set", "merge_identity", "app")
