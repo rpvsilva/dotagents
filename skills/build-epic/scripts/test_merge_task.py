@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import runfolder  # noqa: E402
-from testkit import SCRIPTS, Kit  # noqa: E402
+from testkit import SCRIPTS, Kit, env_tool_setup  # noqa: E402
 
 MERGE_TASK = SCRIPTS / "merge_task.py"
 REPO = SCRIPTS.parents[2]
@@ -132,6 +132,17 @@ class MergeTaskTest(unittest.TestCase):
         self.assertIn("suite 'true': rc 0", log)
         saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
         self.assertEqual([(s["command"], s["rc"]) for s in saved], [("true", 0), ("echo suite two", 0)])
+
+    def test_checks_calling_a_tool_setup_installed_in_the_env_merge_green(self):
+        (self.kit.run_dir / "map.md").write_text(
+            "# Map\n\n## Checks\n\n```\nenvtool\n```\n\n" + env_tool_setup("envtool", "from the env") + "\n## Gaps\n",
+            encoding="utf-8")
+        p = self.kit.step(SCRIPTS / "setup.py", self.kit.run_dir)
+        self.assertTrue(p.stdout.startswith("OK run set up "), p.stdout + p.stderr)
+        self.assertRegex(self.merge(), r"^OK 01-01 done suites=1 ")
+        self.assertIn("from the env", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
+        saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
+        self.assertEqual([(s["command"], s["rc"]) for s in saved], [("envtool", 0)])
 
     def test_works_through_a_linked_run_path(self):
         self.assertRegex(self.merge(self.kit.link(self.kit.run_dir, "run-link")), r"^OK 01-01 done ")

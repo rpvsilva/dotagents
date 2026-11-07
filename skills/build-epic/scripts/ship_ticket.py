@@ -145,7 +145,7 @@ class Ship:
         self.git.worktree_remove(scratch)
         self.git.worktree_add(scratch, ref=sha, detach=True)
         try:
-            suites = checks.run_all(checks.commands(self.run / "map.md"), scratch, self.ctx.log)
+            suites = checks.run_all(checks.commands(self.run / "map.md"), scratch, self.ctx.log, self.run)
         finally:
             self.git.worktree_remove(scratch)
         if suites[-1].rc != 0:

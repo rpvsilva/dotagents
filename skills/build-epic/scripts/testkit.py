@@ -13,6 +13,7 @@ for a call whose first two arguments are `pr merge`, the key is `pr-merge`; the 
 import atexit
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,17 @@ sys.stdout.write(part("out"))
 sys.stderr.write(part("err"))
 sys.exit(int(part("rc", "0").strip() or 0))
 '''
+
+def env_tool_setup(tool, output):
+    """A `map.md` `Setup:` block that installs `tool` into the run's environment, as a virtualenv would: an executable
+    `$BUILD_EPIC_ENV/bin/<tool>` printing `output`, and a `bin/activate` putting that folder first on `PATH` in bash's form. Only a
+    suite run inside that environment finds `tool`."""
+    make = (f'mkdir -p "$BUILD_EPIC_ENV/bin" && printf \'#!/bin/sh\\necho "%s"\\n\' {shlex.quote(output)} '
+            f'> "$BUILD_EPIC_ENV/bin/{tool}" && chmod +x "$BUILD_EPIC_ENV/bin/{tool}"')
+    # `pwd` names the folder as bash's `PATH` takes it: `$BUILD_EPIC_ENV` is `C:/...` on Windows, split at its `:`.
+    activate = 'echo \'PATH="$(cd "$BUILD_EPIC_ENV/bin" && pwd):$PATH"\' > "$BUILD_EPIC_ENV/bin/activate"'
+    return f"Setup:\n\n```\n{make}\n{activate}\n```\n"
+
 
 zsh = shutil.which("zsh")
 skip_without_zsh = unittest.skipUnless(zsh, "zsh is not installed")

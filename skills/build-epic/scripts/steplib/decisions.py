@@ -111,9 +111,11 @@ def _cells(line):
 
 
 def parse(text):
-    """A `Decisions` from the text of a `decisions.md`. Lines it does not know are ignored."""
+    """A `Decisions` from the text of a `decisions.md`, its lines ending LF or CRLF (a Windows checkout or editor).
+    Lines it does not know are ignored."""
     d, section = Decisions(), None
     for line in text.split("\n"):
+        line = line[:-1] if line.endswith("\r") else line
         if line == AUTHORIZATIONS:
             section = "auth"
         elif line == DECISIONS:
@@ -173,7 +175,7 @@ def save(run, d):
     p = path(run)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{NAME}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
             f.write(render(d))
         os.replace(tmp, str(p))
     except BaseException:

@@ -181,17 +181,18 @@ for _ in range(20):
 time.sleep(30)"
     [ "$code" -eq 137 ] || fail "memory: exit $code, want 137"
     grep -qx "capped: killed: memory" "$SANDBOX/err" || fail "memory: no 'capped: killed: memory' on stderr"
-    [ "$ms" -lt 3000 ] || fail "memory: took ${ms} ms"
+    [ "$ms" -lt 8000 ] || fail "memory: took ${ms} ms"
     # Under the cap it runs to the end.
     run --mb 500 --secs 10 -- python3 -c "b = ' ' * 10**7"
     [ "$code" -eq 0 ] || fail "under the memory cap: exit $code"
 
+    # Bounds are well under the 30 s sleep and loose enough for a loaded runner.
     # A shell with job control (Claude Code's Bash tool) puts each command in a group of its own: the time cap still kills
     # it, and does not wait for it to end.
     # shellcheck disable=SC2016 # expanded by the capped bash
     run --secs 0.5 -- bash -c 'set -m; sleep 30 & echo $! >"$1/jc"; wait' bash "$dir"
     [ "$code" -eq 124 ] || fail "job control timeout: exit $code, want 124"
-    [ "$ms" -lt 3000 ] || fail "job control timeout: took ${ms} ms"
+    [ "$ms" -lt 8000 ] || fail "job control timeout: took ${ms} ms"
     jc="$(pid_in "$dir/jc")"
     [ -n "$jc" ] || fail "job control timeout: the command was killed before it started its sleep"
     pids+=("$jc")

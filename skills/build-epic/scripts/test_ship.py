@@ -146,6 +146,12 @@ class PostReviewTest(Base):
                 self.assertRegex(self.post("12", report), r"^FAIL PR12 pr-view \(log: ")
         self.assertEqual(self.calls("api"), [])
 
+    def test_a_report_that_is_not_utf8_is_refused_and_nothing_posts(self):
+        report = self.kit.tmp / "r.md"
+        report.write_bytes(b"caf\xe9\n")
+        self.assertRegex(self.post("12", report), r"^FAIL PR12 bad-report \(log: ")
+        self.assertEqual(self.kit.gh_calls(), [])
+
     def test_a_failed_post_fails(self):
         report = self.kit.tmp / "r.md"
         report.write_text("ok\n", encoding="utf-8")
@@ -186,6 +192,37 @@ class ShipOpenTest(Base):
         self.assertEqual(self.ship("open"), "OK 01 open pr=20")
         self.kit.answer("pr-ready", err="GraphQL: Resource not accessible by integration\n", rc=1, n=2)
         self.assertRegex(self.ship("open"), r"^FAIL 01 pr-ready \(log: ")
+
+    def test_edits_the_open_pr_from_the_ticket_branch_and_records_it(self):
+        self.kit.answer("pr-list", out=json.dumps([{"number": 21, "url": "https://github.com/o/r/pull/21"}]))
+        self.assertEqual(self.ship("open"), "OK 01 open pr=21")
+        self.assertEqual(self.calls("pr", "list")[0][:6], ["pr", "list", "--head", "feat/t", "--base", "main"])
+        self.assertEqual(self.calls("pr", "edit")[0][:3], ["pr", "edit", "21"])
+        self.assertEqual(self.calls("pr", "ready"), [["pr", "ready", "21"]])
+        self.assertEqual(self.calls("pr", "create"), [])
+        self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/21")
+
+    def test_opens_against_the_base_decisions_md_names(self):
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: `integ`\n", encoding="utf-8")
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
+        self.assertEqual(self.ship("open"), "OK 01 open pr=30")
+        self.assertEqual(self.calls("pr", "list")[0][4:6], ["--base", "integ"])
+        create = self.calls("pr", "create")[0]
+        self.assertEqual(create[create.index("--base") + 1], "integ")
+
+    def test_an_unreadable_pr_list_or_a_failed_edit_fails(self):
+        self.kit.answer("pr-list", out="not json")
+        self.assertRegex(self.ship("open"), r"^FAIL 01 pr-list \(log: ")
+        self.kit.answer("pr-list", out=json.dumps([{"number": 21}]))
+        self.kit.answer("pr-edit", err="HTTP 422", rc=1)
+        self.assertRegex(self.ship("open"), r"^FAIL 01 pr-edit \(log: ")
+        self.assertEqual(self.calls("pr", "ready"), [])
+        self.assertIsNone(runfolder.get(self.ticket, "PR"))
+
+    def test_an_unknown_action_is_a_usage_failure(self):
+        self.assertRegex(self.ship("land"), r"^FAIL 01 usage: ship_ticket.py ")
+        self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_failed_create_fails(self):
         self.kit.answer("pr-list", out="[]")

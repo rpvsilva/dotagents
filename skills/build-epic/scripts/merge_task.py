@@ -5,7 +5,8 @@ Usage: python3 -I merge_task.py <run> <task>
 
 In the task's worktree `<run>/worktrees/<task>`: reads the ticket PR's checks (waiting on pending ones), fetches and
 merges the ticket branch's tip forward when the branch lacks it (never a reset or a checkout, so an earlier conflict
-resolution is kept), runs `map.md`'s `Checks` timing each suite, pushes, and merges the task's `PR:` by the merge rule
+resolution is kept), runs `map.md`'s `Checks` timing each suite, inside the run's environment as `test_command:` runs
+them (`<run>/env`, `steplib/checks.py`'s `in_env`), pushes, and merges the task's `PR:` by the merge rule
 (`merge_command` Setting), reading the PR back. Then sets the task `done`, removes its worktree and branch, opens the
 draft ticket PR when the ticket has none, and, when this was the ticket's last implementer task and a suite ran at
 least `tune_min_seconds`, writes the tuning task `tasks/TT-tests.md`.
@@ -94,7 +95,7 @@ def step(ctx):
     ci.gate(run, ticket, ctx.log, repo)
     gitops.Git(wt, ctx.log).fetch()
     catch_up(ctx, wt, f"origin/{ticket_branch}")
-    suites = checks.run_all(checks.commands(run / "map.md"), wt, ctx.log)
+    suites = checks.run_all(checks.commands(run / "map.md"), wt, ctx.log, run)
     checks.save(run, ctx.id, suites)
     if suites[-1].rc != 0:
         raise core.Fail(f"red {suites[-1].command}")
