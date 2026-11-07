@@ -1,0 +1,289 @@
+diff --git a/AGENTS.md b/AGENTS.md
++++ b/AGENTS.md
++- `todo/storage/`: the `Item` model (with a UTC `updated_at` stamp) and date rules (`model.py`), the `Store` interface (`base.py`), the JSON backend `JsonStore` (`json_store.py`).
++- `todo/sync/`: last-write-wins merge by item `id` and `updated_at` (`merge.py`), the remote store from `$TODO_REMOTE`, a JSON file path (`remote.py`), pull-then-push (`sync.py`). Command: `todo sync`.
+diff --git a/tests/storage/test_storage.py b/tests/storage/test_storage.py
++++ b/tests/storage/test_storage.py
++from datetime import date, datetime, timezone
++
++
++def fixed_clock(*stamps):
++    it = iter(stamps)
++    return lambda: next(it)
++
++
++def test_add_and_complete_stamp_updated_at(tmp_path):
++    t1 = datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)
++    t2 = datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)
++    store = JsonStore(tmp_path / "t.json", clock=fixed_clock(t1, t2))
++    store.add("a")
++    assert store.load()[0].updated_at == t1
++    store.complete(1)
++    assert store.load()[0].updated_at == t2
++    assert '"updated_at": "2026-11-02T09:00:00+00:00"' in (tmp_path / "t.json").read_text()
++
++
++def test_naive_updated_at_loads_as_utc(tmp_path):
++    path = tmp_path / "t.json"
++    path.write_text('[{"id": 1, "title": "a", "updated_at": "2026-11-01T09:00:00"}]')
++    assert JsonStore(path).load()[0].updated_at == datetime(2026, 11, 1, 9, tzinfo=timezone.utc)
++
++
++def test_invalid_updated_at_raises_store_error(tmp_path):
++    path = tmp_path / "t.json"
++    path.write_text('[{"id": 3, "title": "a", "updated_at": "yesterday"}]')
++    with pytest.raises(StoreError, match="item 3.*'yesterday'"):
++        JsonStore(path).load()
+diff --git a/tests/sync/test_sync.py b/tests/sync/test_sync.py
++++ b/tests/sync/test_sync.py
++from datetime import datetime, timezone
++
++import pytest
++
++from todo.storage import Item, JsonStore, StoreError
++from todo.sync import merge, sync
++
++
++def at(day):
++    return datetime(2026, 11, day, 12, tzinfo=timezone.utc)
++
++
++def test_merge_union_of_new_items():
++    result = merge([Item(1, "a", updated_at=at(1))], [Item(2, "b", updated_at=at(1))])
++    assert [i.title for i in result.items] == ["a", "b"]
++    assert result.pulled == [2] and result.pushed == [1]
++
++
++def test_merge_later_write_wins_each_way():
++    local = [Item(1, "a", done=True, updated_at=at(3)), Item(2, "b", updated_at=at(1))]
++    remote = [Item(1, "a", updated_at=at(2)), Item(2, "b2", updated_at=at(4))]
++    result = merge(local, remote)
++    assert [(i.title, i.done) for i in result.items] == [("a", True), ("b2", False)]
++    assert result.pulled == [2] and result.pushed == [1]
++
++
++def test_merge_tie_keeps_local():
++    result = merge([Item(1, "mine", updated_at=at(1))], [Item(1, "theirs", updated_at=at(1))])
++    assert result.items[0].title == "mine"
++    assert result.pushed == [1] and result.pulled == []
++
++
++def test_merge_unstamped_loses():
++    result = merge([Item(1, "old")], [Item(1, "new", updated_at=at(1))])
++    assert result.items[0].title == "new"
++
++
++def test_merge_identical_is_noop():
++    items = [Item(1, "a", updated_at=at(1))]
++    result = merge(items, list(items))
++    assert result.pulled == [] and result.pushed == []
++
++
++def test_sync_writes_both_sides(tmp_path):
++    local = JsonStore(tmp_path / "local.json", clock=lambda: at(1))
++    remote = JsonStore(tmp_path / "remote.json", clock=lambda: at(2))
++    local.add("milk")
++    remote.add("milk")
++    remote.complete(1)
++    local_only = Item(2, "eggs", updated_at=at(3))
++    local.save(local.load() + [local_only])
++
++    sync(local, remote)
++
++    assert local.load() == remote.load()
++    assert [(i.title, i.done) for i in local.load()] == [("milk", True), ("eggs", False)]
++
++
++def test_sync_creates_missing_remote(tmp_path):
++    local = JsonStore(tmp_path / "local.json")
++    local.add("milk")
++    result = sync(local, JsonStore(tmp_path / "remote.json"))
++    assert result.pushed == [1]
++    assert [i.title for i in JsonStore(tmp_path / "remote.json").load()] == ["milk"]
++
++
++def test_sync_bad_remote_touches_nothing(tmp_path):
++    local = JsonStore(tmp_path / "local.json")
++    local.add("milk")
++    before = (tmp_path / "local.json").read_text()
++    (tmp_path / "remote.json").write_text('[{"id": 1, "title": "x", "due": "soon"}]')
++    with pytest.raises(StoreError):
++        sync(local, JsonStore(tmp_path / "remote.json"))
++    assert (tmp_path / "local.json").read_text() == before
++
++
++def test_cli_sync(cli, tmp_path, monkeypatch):
++    monkeypatch.setenv("TODO_REMOTE", str(tmp_path / "remote.json"))
++    cli("add", "milk")
++    assert cli("sync") == ["pulled 0, pushed 1"]
++    assert cli("sync") == ["pulled 0, pushed 0"]
++    later = datetime(2100, 1, 1, tzinfo=timezone.utc)
++    JsonStore(tmp_path / "remote.json", clock=lambda: later).complete(1)
++    assert cli("sync") == ["pulled 1, pushed 0"]
++    assert cli("list") == ["[x] 1: milk"]
++
++
++def test_cli_sync_without_remote(cli, monkeypatch):
++    monkeypatch.delenv("TODO_REMOTE", raising=False)
++    with pytest.raises(SystemExit) as exc:
++        cli("sync")
++    assert "TODO_REMOTE" in str(exc.value.code)
+diff --git a/todo/cli/__init__.py b/todo/cli/__init__.py
++++ b/todo/cli/__init__.py
++"""Command line: todo add|list|done|remind|export|sync."""
+diff --git a/todo/cli/commands/__init__.py b/todo/cli/commands/__init__.py
++++ b/todo/cli/commands/__init__.py
++from todo.cli.commands import add, done, export, list_cmd, remind, sync_cmd
++    "sync": sync_cmd,
+diff --git a/todo/cli/commands/sync_cmd.py b/todo/cli/commands/sync_cmd.py
++++ b/todo/cli/commands/sync_cmd.py
++"""todo sync: pull from $TODO_REMOTE, then push to it."""
++from todo.sync import remote_store, sync
++from todo.sync.remote import RemoteNotConfigured
++
++
++def register(parser) -> None:
++    pass
++
++
++def run(args, ctx) -> None:
++    try:
++        remote = remote_store()
++    except RemoteNotConfigured as e:
++        raise SystemExit(f"todo: error: {e}") from None
++    result = sync(ctx.store, remote)
++    ctx.out(f"pulled {len(result.pulled)}, pushed {len(result.pushed)}")
+diff --git a/todo/storage/__init__.py b/todo/storage/__init__.py
++++ b/todo/storage/__init__.py
++    utc_now,
++    "utc_now",
+diff --git a/todo/storage/base.py b/todo/storage/base.py
++++ b/todo/storage/base.py
++from datetime import date, datetime
++from typing import Callable
++from todo.storage.model import Item, utc_now
++    # Clock for updated_at stamps; tests replace it.
++    clock: Callable[[], datetime] = staticmethod(utc_now)
++
++        item = Item(
++            id=max((i.id for i in items), default=0) + 1,
++            title=title,
++            due=due,
++            updated_at=self.clock(),
++        )
++                i.updated_at = self.clock()
+diff --git a/todo/storage/json_store.py b/todo/storage/json_store.py
++++ b/todo/storage/json_store.py
++from datetime import datetime, timezone
++    if row.get("updated_at") is not None:
++        try:
++            stamp = datetime.fromisoformat(row["updated_at"])
++        except (TypeError, ValueError):
++            raise StoreError(
++                f"item {row.get('id')}: invalid updated_at {row['updated_at']!r}"
++                f" in {source}, expected an ISO 8601 timestamp"
++            ) from None
++        # A stamp without a zone is taken as UTC so stamps always compare.
++        row["updated_at"] = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
++    row["updated_at"] = item.updated_at.isoformat() if item.updated_at else None
++    def __init__(self, path: Path, clock=None):
++        if clock is not None:
++            self.clock = clock
+diff --git a/todo/storage/model.py b/todo/storage/model.py
++++ b/todo/storage/model.py
++from datetime import date, datetime, timedelta, timezone
++    # Last change, in UTC; sync uses it for last-write-wins. None = never stamped.
++    updated_at: datetime | None = None
++
++
++def utc_now() -> datetime:
++    return datetime.now(timezone.utc)
+diff --git a/todo/sync/__init__.py b/todo/sync/__init__.py
++++ b/todo/sync/__init__.py
++"""Sync: merge the local store with a remote store, last write wins per item."""
++from todo.sync.merge import SyncResult, merge
++from todo.sync.remote import remote_store
++from todo.sync.sync import sync
++
++__all__ = ["SyncResult", "merge", "remote_store", "sync"]
+diff --git a/todo/sync/merge.py b/todo/sync/merge.py
++++ b/todo/sync/merge.py
++"""Last-write-wins merge of two item lists.
++
++Items are matched by `id`. When both sides hold an item, the one with the
++later `updated_at` wins; an unstamped item (None) loses to any stamp, and a
++tie keeps the local copy. Known limit: two sides that each add a new item
++offline both get the next free id, so one overwrites the other.
++"""
++from dataclasses import dataclass, field
++from datetime import datetime, timezone
++
++from todo.storage import Item
++
++NEVER = datetime.min.replace(tzinfo=timezone.utc)
++
++
++def stamp(item: Item) -> datetime:
++    return item.updated_at or NEVER
++
++
++@dataclass
++class SyncResult:
++    items: list[Item]
++    pulled: list[int] = field(default_factory=list)  # ids changed locally
++    pushed: list[int] = field(default_factory=list)  # ids changed on the remote
++
++
++def merge(local: list[Item], remote: list[Item]) -> SyncResult:
++    local_by_id = {i.id: i for i in local}
++    remote_by_id = {i.id: i for i in remote}
++    result = SyncResult(items=[])
++    for item_id in sorted(local_by_id.keys() | remote_by_id.keys()):
++        mine, theirs = local_by_id.get(item_id), remote_by_id.get(item_id)
++        if theirs is None:
++            winner = mine
++        elif mine is None:
++            winner = theirs
++        else:
++            winner = theirs if stamp(theirs) > stamp(mine) else mine
++        if winner != mine:
++            result.pulled.append(item_id)
++        if winner != theirs:
++            result.pushed.append(item_id)
++        result.items.append(winner)
++    return result
+diff --git a/todo/sync/remote.py b/todo/sync/remote.py
++++ b/todo/sync/remote.py
++"""Where the remote lives: for now, another JSON file named by TODO_REMOTE."""
++import os
++from pathlib import Path
++
++from todo.storage import JsonStore, Store
++
++
++class RemoteNotConfigured(Exception):
++    """TODO_REMOTE is not set."""
++
++
++def remote_store(env=os.environ) -> Store:
++    path = env.get("TODO_REMOTE")
++    if not path:
++        raise RemoteNotConfigured("TODO_REMOTE is not set; point it at the remote todo file")
++    return JsonStore(Path(path))
+diff --git a/todo/sync/sync.py b/todo/sync/sync.py
++++ b/todo/sync/sync.py
++"""todo sync: pull remote changes into the local store, then push the result."""
++from todo.storage import Store
++from todo.sync.merge import SyncResult, merge
++
++
++def sync(local: Store, remote: Store) -> SyncResult:
++    # Load both before writing anything, so a bad file on either side
++    # (StoreError) leaves both untouched.
++    local_items, remote_items = local.load(), remote.load()
++    result = merge(local_items, remote_items)
++    if result.pulled:
++        local.save(result.items)
++    if result.pushed:
++        remote.save(result.items)
++    return result

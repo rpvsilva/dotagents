@@ -1,0 +1,1 @@
+{"type": "assistant", "timestamp": "2026-10-25T10:00:05.000Z", "requestId": "p1", "message": {"id": "msg_p1", "model": "model-with-no-price", "role": "assistant", "content": [{"type": "text", "text": "plan"}], "usage": {"input_tokens": 10, "output_tokens": 100}}, "isSidechain": true}

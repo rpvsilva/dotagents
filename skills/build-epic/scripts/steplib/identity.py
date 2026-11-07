@@ -52,7 +52,7 @@ def prove(run, who, repo, log):
         log.write(f"merge_identity: the Setting is {who}, decisions.md records {recorded}\n")
         raise core.Fail("wrong-identity")
     if who == HUMAN:
-        want = decisions.get(run, "human")
+        want = (decisions.get(run, "human") or "").strip() or None  # a file saved on Windows ends lines with \r
         login = human_login(repo, log)
         if not login or login.endswith("[bot]") or (want and not same_login(login, want)):
             log.write(f"merge_identity human: gh's login is {login or 'unknown'}, decisions.md's human: is "

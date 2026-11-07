@@ -1,0 +1,25 @@
+{
+ "branch": "origin/local-agents-feature",
+ "headSha": "932a62bb5e3ed68d9bf66526002b550f1829f694",
+ "mergeBaseWithMain": "46b4cb8c6a9414382314bb0a822f42719f4122de",
+ "commitsSinceMergeBase": 32,
+ "diffVsMergeBase": "121 files changed, 13405 insertions(+), 332 deletions(-)",
+ "sourceFiles": 80,
+ "sourceLines": 4531,
+ "testFiles": 52,
+ "testLines": 11596,
+ "testToSourceLineRatio": 2.56,
+ "readmeLines": 832,
+ "suite": {
+  "command": "python -I -m pytest -q -c pyproject.toml -p no:cacheprovider",
+  "exitCode": 0,
+  "summary": "1745 passed, 2 skipped in 41.39s",
+  "passed": 1745,
+  "failed": 0,
+  "skipped": 2,
+  "errors": 0,
+  "wallSeconds": 41.7,
+  "measuredAt": "2026-11-06T18:49:48+00:00",
+  "python": "Python 3.15.2"
+ }
+}

@@ -33,11 +33,11 @@ class FixtureRun(unittest.TestCase):
 
 class TicketBodyTest(FixtureRun):
     def test_the_fixture_run_folder_renders_the_expected_body(self):
-        body = self.body((FIXTURE / "template.md").read_text())
-        self.assertEqual(body, (FIXTURE / "expected.md").read_text())
+        body = self.body((FIXTURE / "template.md").read_text(encoding="utf-8"))
+        self.assertEqual(body, (FIXTURE / "expected.md").read_text(encoding="utf-8"))
 
     def test_each_heading_of_the_repos_template_is_filled_and_testing_holds_the_saved_suite_results(self):
-        template = REPO_TEMPLATE.read_text()
+        template = REPO_TEMPLATE.read_text(encoding="utf-8")
         body = self.body(template)
         self.assertEqual(prbody.empty_sections(template, body), [])
         testing = prbody.section(body, "Testing")
@@ -47,12 +47,12 @@ class TicketBodyTest(FixtureRun):
         self.assertNotIn("never-shown", body)
 
     def test_a_template_heading_the_run_cannot_fill_is_left_empty(self):
-        template = REPO_TEMPLATE.read_text() + "\n## Screenshots\n"
+        template = REPO_TEMPLATE.read_text(encoding="utf-8") + "\n## Screenshots\n"
         self.assertEqual(prbody.empty_sections(template, self.body(template)), ["Screenshots"])
 
     def test_with_no_saved_suite_results_testing_is_left_empty(self):
         shutil.rmtree(self.run_dir / "reports")
-        template = REPO_TEMPLATE.read_text()
+        template = REPO_TEMPLATE.read_text(encoding="utf-8")
         self.assertEqual(prbody.empty_sections(template, self.body(template)), ["Testing"])
 
     def test_without_a_template_the_body_has_a_summary_and_testing(self):
@@ -81,7 +81,7 @@ class EmptySectionsTest(unittest.TestCase):
               "## Risk\n\nLow: scripts only.\n\n## How to revert\n\nRevert the squash commit.\n")
 
     def test_a_section_missing_blank_todo_na_a_comment_or_an_unchecked_box_counts_as_empty(self):
-        template = REPO_TEMPLATE.read_text()
+        template = REPO_TEMPLATE.read_text(encoding="utf-8")
         self.assertEqual(prbody.empty_sections(template, self.FILLED), [])
         cases = {
             "missing": (self.FILLED.split("## How to revert")[0], "How to revert"),
@@ -98,7 +98,7 @@ class EmptySectionsTest(unittest.TestCase):
 
 class SuiteResultTest(FixtureRun):
     def save(self, ident, suites):
-        (self.run_dir / "reports" / f"{ident}.checks.json").write_text(json.dumps(suites))
+        (self.run_dir / "reports" / f"{ident}.checks.json").write_text(json.dumps(suites), encoding="utf-8")
 
     def testing_section(self):
         return prbody.section(self.body(None), "Testing")
@@ -129,26 +129,27 @@ class ShipOpenBodyTest(Base):
 
     def test_ship_ticket_accepts_no_summary_or_body_argument(self):
         body = self.kit.tmp / "body.md"
-        body.write_text("## Summary\n\nWritten by hand.\n")
+        body.write_text("## Summary\n\nWritten by hand.\n", encoding="utf-8")
         for args in (["--body-file", str(body)], ["--body", "x"], ["--summary", "x"], [str(body)]):
             with self.subTest(args):
                 self.assertRegex(self.open(*args), r"^FAIL 01 usage: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_open_sends_the_generated_body_filling_the_repos_template(self):
-        self.commit_to_base(".github/pull_request_template.md", REPO_TEMPLATE.read_text())
+        self.commit_to_base(".github/pull_request_template.md", REPO_TEMPLATE.read_text(encoding="utf-8"))
         (self.kit.run_dir / "reports").mkdir()
         (self.kit.run_dir / "reports" / "01-01.checks.json").write_text(
-            json.dumps([{"command": "tests/run.sh", "rc": 0, "passed": 4, "failed": 0, "seconds": 2}]))
+            json.dumps([{"command": "tests/run.sh", "rc": 0, "passed": 4, "failed": 0, "seconds": 2}]),
+encoding="utf-8")
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         self.assertEqual(self.open(), "OK 01 open pr=20")
         edit = self.calls("pr", "edit")[0]
-        sent = Path(edit[edit.index("--body-file") + 1]).read_text()
-        self.assertEqual(prbody.empty_sections(REPO_TEMPLATE.read_text(), sent), [])
+        sent = Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8")
+        self.assertEqual(prbody.empty_sections(REPO_TEMPLATE.read_text(encoding="utf-8"), sent), [])
         self.assertIn("- `tests/run.sh`: passed in 2s (4 passed, 0 failed)", prbody.section(sent, "Testing"))
 
     def test_open_with_no_saved_suite_results_refuses_an_empty_testing_and_sends_nothing(self):
-        self.commit_to_base(".github/pull_request_template.md", REPO_TEMPLATE.read_text())
+        self.commit_to_base(".github/pull_request_template.md", REPO_TEMPLATE.read_text(encoding="utf-8"))
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         self.assertRegex(self.open(), r"^FAIL 01 empty-template-section Testing \(log: ")
         self.assertEqual(self.calls("pr", "edit"), [])

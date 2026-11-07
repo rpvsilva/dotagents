@@ -44,9 +44,9 @@ class StepCase(unittest.TestCase):
         run = self.kit.run_dir
         (run / "tickets").mkdir()
         (run / "tasks").mkdir()
-        (run / "tickets" / "01-alpha.md").write_text(TICKET)
+        (run / "tickets" / "01-alpha.md").write_text(TICKET, encoding="utf-8")
         self.task = run / "tasks" / "01-02-json-export.md"
-        self.task.write_text(TASK)
+        self.task.write_text(TASK, encoding="utf-8")
         self.wt = run / "worktrees" / "01-02"
         self.kit.git("worktree", "add", "-q", "-b", "task/alpha/02", str(self.wt), "origin/feat/alpha", cwd=self.clone)
 
@@ -64,7 +64,7 @@ class StepCase(unittest.TestCase):
     def write(self, root, name, text):
         path = Path(root) / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
 
     def advance_ticket(self, name, text, subject="ticket change"):
         """Adds a commit to `feat/alpha` on origin, from the main clone."""
@@ -108,9 +108,9 @@ class FinishTaskTest(StepCase):
         self.advance_ticket("a.txt", "theirs\n")
         self.write(self.wt, "a.txt", "ours\n")
         line = self.assert_fail(self.kit.step(FINISH, self.kit.run_dir, "01-02"), "FAIL 01-02 conflict a.txt (log: ")
-        self.assertIn("<<<<<<<", (self.wt / "a.txt").read_text())
+        self.assertIn("<<<<<<<", (self.wt / "a.txt").read_text(encoding="utf-8"))
         self.assert_fail(self.kit.step(FINISH, self.kit.run_dir, "01-02"), "FAIL 01-02 conflict a.txt (log: ")
-        (self.wt / "a.txt").write_text("both\n")
+        (self.wt / "a.txt").write_text("both\n", encoding="utf-8")
         p = self.kit.step(FINISH, self.kit.run_dir, "01-02")
         self.assertEqual(self.one_line(p), "OK 01-02 committed files=1", line)
         self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "")
@@ -138,12 +138,20 @@ class FinishTaskTest(StepCase):
 
     def test_a_blocked_report_keeps_the_work_and_never_marks_done(self):
         report = self.kit.tmp / "report.md"
-        report.write_text("status: blocked\nchanged: none\nwhy: the API is missing\nfollow-up:\n")
+        report.write_text("status: blocked\nchanged: none\nwhy: the API is missing\nfollow-up:\n", encoding="utf-8")
         p = self.kit.step(FINISH, "../run", "01-02", "--report", "../report.md", cwd=self.kit.home)
         line = self.assert_fail(p, "FAIL 01-02 blocked the API is missing (log: ")
         self.assertTrue(self.wt.exists(), line)
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
-        self.assertEqual((self.kit.run_dir / "reports" / "01-02.md").read_text(), report.read_text())
+        self.assertEqual((self.kit.run_dir / "reports" / "01-02.md").read_text(encoding="utf-8"), report.read_text(encoding="utf-8"))
+
+    def test_an_unknown_flag_or_a_missing_report_fails_before_touching_the_task(self):
+        self.write(self.wt, "a.txt", "a\n")
+        for args, prefix in ((["--force", "x"], "FAIL 01-02 usage: finish_task.py "), (["--title"], "FAIL 01-02 usage: "),
+                             (["--report", "nowhere.md"], f"FAIL 01-02 no-report: {self.kit.tmp / 'nowhere.md'} ")):
+            self.assert_fail(self.kit.step(FINISH, self.kit.run_dir, "01-02", *args, cwd=self.kit.tmp), prefix)
+        self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "?? a.txt")
+        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
 
 
 class OpenPrTest(StepCase):
@@ -165,7 +173,7 @@ class OpenPrTest(StepCase):
         self.assertEqual(len(create), 1)
         args = dict(zip(create[0][2::2], create[0][3::2]))
         self.assertEqual((args["--base"], args["--head"], args["--title"]), ("feat/alpha", "task/alpha/02", "JSON export"))
-        body = Path(args["--body-file"]).read_text()
+        body = Path(args["--body-file"]).read_text(encoding="utf-8")
         self.assertIn("Exports the list as JSON.", body)
         self.assertIn("Part of #42", body)
 
@@ -266,7 +274,8 @@ class PrBodyTest(StepCase):
     def test_task_body_has_what_it_builds_its_check_result_and_part_of(self):
         reports = self.kit.run_dir / "reports"
         reports.mkdir()
-        (reports / "01-02.checks.json").write_text(json.dumps([{"command": "tests/run.sh", "rc": 0, "seconds": 3}]))
+        (reports / "01-02.checks.json").write_text(json.dumps([{"command": "tests/run.sh", "rc": 0, "seconds": 3}]),
+                                                   encoding="utf-8")
         ticket = self.kit.run_dir / "tickets" / "01-alpha.md"
         body = prbody.task_body(self.kit.run_dir, "01-02", self.task, ticket)
         self.assertIn("Exports the list as JSON.", body)
@@ -280,10 +289,22 @@ class PrBodyTest(StepCase):
         body = prbody.task_body(self.kit.run_dir, "01-02", self.task, self.kit.run_dir / "tickets" / "01-alpha.md")
         self.assertIn(prbody.NO_RESULT, body)
 
+    def test_task_body_reads_older_results_and_says_when_none_is_readable(self):
+        reports = self.kit.run_dir / "reports"
+        reports.mkdir()
+        ticket = self.kit.run_dir / "tickets" / "01-alpha.md"
+        for text, want in (("{not json", prbody.NO_RESULT), ('{"suites": "x"}', prbody.NO_RESULT),
+                           ('{"suites": ["x", {"suite": "make", "passed": false}, {"name": "lint", "passed": true}]}',
+                            "- `make`: failed\n- `lint`: passed\n")):
+            (reports / "01-02.checks.json").write_text(text, encoding="utf-8")
+            body = prbody.task_body(self.kit.run_dir, "01-02", self.task, ticket)
+            self.assertIn(f"## Result\n\n{want}", body, text)
+
     def test_ticket_body_lists_tasks_with_pr_links_and_closes_the_issue(self):
         runfolder.set_header(self.task, "PR", URL)
-        (self.kit.run_dir / "tasks" / "01-03-csv.md").write_text("# 01-03: CSV import\nStatus: ready\n")
-        (self.kit.run_dir / "tasks" / "02-01-other.md").write_text("# 02-01: Other\nStatus: ready\n")
+        (self.kit.run_dir / "tasks" / "01-03-csv.md").write_text("# 01-03: CSV import\nStatus: ready\n",
+                                                                 encoding="utf-8")
+        (self.kit.run_dir / "tasks" / "02-01-other.md").write_text("# 02-01: Other\nStatus: ready\n", encoding="utf-8")
         body = prbody.ticket_body(self.kit.run_dir, self.kit.run_dir / "tickets" / "01-alpha.md")
         self.assertIn(f"- JSON export: {URL}\n- CSV import: no PR", body)
         self.assertNotIn("Other", body)

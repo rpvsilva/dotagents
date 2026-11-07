@@ -82,7 +82,7 @@ class Ship:
         template = prbody.template(self.worktree)
         body = prbody.ticket_body(self.run, self.ticket, template=template)
         body_file = self.run / "logs" / f"{self.ctx.id}-pr-body.md"
-        body_file.write_text(body)
+        body_file.write_text(body, encoding="utf-8")
         empty = prbody.empty_sections(template, body) if template is not None else []
         if empty:
             self.ctx.note(f"the PR template's sections left empty: {', '.join(empty)}; body in {body_file}")

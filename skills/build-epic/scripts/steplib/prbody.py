@@ -52,7 +52,7 @@ def _load(path):
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except ValueError:
         return None
     suites = data.get("suites") if isinstance(data, dict) else data
@@ -127,7 +127,7 @@ def merge_section(run, into=None):
 
 
 def task_body(run, ident, task_path, ticket_path):
-    text = task_path.read_text()
+    text = task_path.read_text(encoding="utf-8")
     parts = [
         "## What it builds", section(text, "What to build") or title(task_path),
         "## Check", section(text, "Check") or "None written in the task.",
@@ -156,7 +156,7 @@ def template(root):
     for name in TEMPLATES:
         path = core.resolve(root) / name
         if path.is_file():
-            return path.read_text()
+            return path.read_text(encoding="utf-8")
     return None
 
 
@@ -219,7 +219,7 @@ def _writes(tasks):
 
 
 def _ticket_title(ticket_path):
-    for line in ticket_path.read_text().splitlines():
+    for line in ticket_path.read_text(encoding="utf-8").splitlines():
         if line.startswith("# "):
             return re.sub(r"^\d+:\s*", "", line[2:].strip())
     return ticket_path.stem
@@ -240,14 +240,14 @@ def _fill(name, run, ticket_path, tasks):
         count = f"{len(tasks)} task{'s' if len(tasks) != 1 else ''}"
         return f"{_ticket_title(ticket_path)}: delivers {refs} in {count}." if refs else \
             f"{_ticket_title(ticket_path)}, in {count}."
-    return section(ticket_path.read_text(), name)
+    return section(ticket_path.read_text(encoding="utf-8"), name)
 
 
 def _criteria(tasks):
     out = []
     for f in tasks:
         lines = [re.sub(r"^(\s*[-*+]\s*)\[[ xX]\]\s*", r"\1", line)
-                 for line in section(f.read_text(), "Acceptance criteria").splitlines() if line.strip()]
+                 for line in section(f.read_text(encoding="utf-8"), "Acceptance criteria").splitlines() if line.strip()]
         if lines:
             out.append(f"### {_ident(f)} {title(f)}\n\n" + "\n".join(lines))
     return "\n\n".join(out)

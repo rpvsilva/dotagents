@@ -74,7 +74,7 @@ def step(ctx):
     if gitops.Git(task.worktree, ctx.log).push("origin", f"HEAD:refs/heads/{branch}").rc != 0:
         raise core.Fail("git-push")
     body_file = ctx.run_dir / "logs" / f"{ctx.id}-pr-body.md"
-    body_file.write_text(prbody.task_body(ctx.run_dir, ctx.id, task.path, task.ticket_path))
+    body_file.write_text(prbody.task_body(ctx.run_dir, ctx.id, task.path, task.ticket_path), encoding="utf-8")
     number, url = create(ctx, task, branch, title, body_file)
     runfolder.set_header(task.path, "PR", url)
     return f"pr={number}", url

@@ -93,7 +93,7 @@ def step(ctx):
         f.write(body)
     payload = {"commit_id": head, "event": "COMMENT", "body": body}
     payload_file = ctx.run_dir / "logs" / f"{ctx.id}-review.json"
-    payload_file.write_text(json.dumps(payload, indent=1) + "\n")
+    payload_file.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
     ctx.note(f"report {report} ({len(data)} bytes) on {head}")
     res = gh.gh(["api", f"repos/{{owner}}/{{repo}}/pulls/{number}/reviews", "--method", "POST",
                  "--input", payload_file], ctx.log, cwd=repo)

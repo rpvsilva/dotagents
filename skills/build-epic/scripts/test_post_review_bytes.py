@@ -28,7 +28,7 @@ class PostReviewBytesTest(Base):
         line = self.one_line(self.kit.step(POST_REVIEW, self.kit.run_dir, *args, cwd=cwd))
         self.assertEqual(line, "OK PR12 review https://github.com/o/r/pull/12#r1")
         call = self.calls("api")[-1]
-        payload = json.loads(Path(call[call.index("--input") + 1]).read_text())
+        payload = json.loads(Path(call[call.index("--input") + 1]).read_text(encoding="utf-8"))
         self.assertEqual(payload["event"], "COMMENT")
         self.assertEqual(payload["commit_id"], self.head())
         self.assertNotIn("comments", payload)
@@ -56,7 +56,7 @@ class PostReviewBytesTest(Base):
 
     def test_the_header_names_the_runs_test_command(self):
         p = subprocess.run([sys.executable, "-I", str(SCRIPTS / "decide.py"), self.kit.run_dir, "set", "test_command",
-                            "tests/run.sh"], env=self.kit.env, text=True, capture_output=True)
+                            "tests/run.sh"], env=self.kit.env, text=True, capture_output=True, encoding="utf-8")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         header, _ = self.split(self.post("12", self.report("ok\n")), "ok\n")
         self.assertIn("`tests/run.sh`", header)

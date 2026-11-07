@@ -23,17 +23,17 @@ if args[:2] != ["pr", "view"]:
         sys.exit(subprocess.run([sys.executable, "-IS", {kit_gh!r}, *args]).returncode)
     os.execv(sys.executable, [sys.executable, "-IS", {kit_gh!r}, *args])
 import json
-with open(os.path.join(d, "gh.log"), "a") as f:
+with open(os.path.join(d, "gh.log"), "a", encoding="utf-8") as f:
     f.write(json.dumps(args) + "\n")
 p = os.path.join(d, "answers", "pr-" + args[2] + ".state")
-state = open(p).read().strip() if os.path.exists(p) else "OPEN"
+state = open(p, encoding="utf-8").read().strip() if os.path.exists(p) else "OPEN"
 print(json.dumps({{"state": state, "headRefOid": ""}}))
 '''
 
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -239,7 +239,7 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual(self.resume(), "OK run resumed 1 actions")
         wt = self.run_dir / "worktrees" / "dispatcher"
         self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=wt), sha)
-        self.assertEqual((self.run_dir / "dispatcher.sha").read_text().strip(), sha)
+        self.assertEqual((self.run_dir / "dispatcher.sha").read_text(encoding="utf-8").strip(), sha)
 
     def test_a_pinned_sha_the_clone_has_not_fetched_is_fetched_and_used(self):
         newer = self.kit.tmp / "newer"
