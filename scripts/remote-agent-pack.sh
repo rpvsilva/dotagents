@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stages the parts of this machine's agent setup a remote sandbox needs into <dir>, laid out like $HOME.
 # Usage: scripts/remote-agent-pack.sh <dir>
-# Copies, following links: ~/.claude/{CLAUDE.md,skills,agents,commands,rules} and ~/.agents/{skills,hooks}.
+# Copies, following links: ~/.claude/{CLAUDE.md,skills,agents,commands,rules} and ~/.agents/{skills,hooks}, and
+# this repo's scripts/capped as ~/.agents/bin/capped, which the sandbox runs the agent's shell commands under.
 # Writes a filtered ~/.claude/settings.json (hooks that call ~/.agents/hooks, permissions, model, enabled
 # plugins and their GitHub-hosted marketplaces) and ~/.claude/remote-mcp.json (MCP servers with no env or
 # headers, which could hold secrets). Never copies credentials, history, transcripts, caches or settings env.
@@ -25,6 +26,10 @@ while IFS= read -r -d '' f; do
   if is_secret "${f#"$out"/}"; then rm -f "$f"; note "left out ${f#"$out"/} (looks like a secret)"; fi
 done < <(find "$out" -type f -print0)
 find "$out" -name .DS_Store -delete
+
+mkdir -p "$out/.agents/bin"
+cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capped" "$out/.agents/bin/capped"
+chmod +x "$out/.agents/bin/capped"
 
 settings="$HOME/.claude/settings.json"
 if [ -f "$settings" ]; then

@@ -91,7 +91,8 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     # decisions.md only records the Setting
 
     def test_decisions_saying_human_while_the_setting_is_unset_merges_nothing_as_the_human(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n", encoding="utf-8")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n",
+                                                       encoding="utf-8")
         self.kit.answer("api-user", out="rui\n")
         self.kit.answer("api-installation_repositories", out='{"total_count": 1}\n')
         self.assert_wrong_identity(self.merge())

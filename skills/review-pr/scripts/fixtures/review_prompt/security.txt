@@ -4,6 +4,7 @@ Read these, and take everything else from the code:
 - ~/.agents/skills/security-audit/security-brief.md: follow it
 - /runs/r1/decisions.md: a rule it waives is never a finding
 - its `ci:` line: with `ci: off`, missing CI checks are not a finding
+- its `test_command:` line: the exact command to run the tests with
 - /runs/r1/map.md, its `Checks` section: the commands to run tests with
 - /runs/r1/tickets/03-review.md: what the change was asked to do
 
