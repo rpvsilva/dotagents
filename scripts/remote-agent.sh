@@ -26,7 +26,8 @@
 # (cluster: sandbox.users.io/remote-agent-task) and every progress line on stderr starts with [NAME] ([<run>] without it).
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
 # secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
-# run scripts/remote-agent-sandbox.sh there; get the patch back and apply it with `git apply`, uncommitted.
+# run scripts/remote-agent-sandbox.sh there, with the caps (remote.cap_mb, remote.cap_secs) as its arguments, so each
+# shell command of the agent runs under scripts/capped; get the patch back and apply it with `git apply`, uncommitted.
 # The sandbox is released on exit, also on INT or TERM, once the run's processes here (the backend's client among
 # them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first (SSH bare
 # mode: the first acquire 10 minutes past it kills the run and removes its folder).
@@ -43,7 +44,11 @@
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
 # exit_code, status, report_status, changed, follow_up, report_path, duration_ms, num_turns, total_cost_usd, usage,
-# model, complete; unknowns null), through a temporary file and `mv`, the token's value redacted.
+# model, complete, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the token's value
+# redacted; and capped.log, the sandbox's own list of the commands its caps killed.
+# Each command the caps killed prints one line on stderr, whatever the exit: [<task>] killed: memory|timeout <command>
+# (from progress.log's `capped: killed:` lines, which the sandbox sends as they happen, else from capped.log). A kill
+# changes no exit code; result.json's lost tells a sandbox that vanished with no kill line before it.
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5 when
 # the run failed because the Claude account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
 # <time> (<time> as Claude gave it, e.g. 5:30pm (UTC), or unknown). Any other failed run exits with the sandbox's code,
@@ -468,6 +473,7 @@ set -m
 (
   { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
     | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox \
+      "${REMOTE_CAP_MB:-2000}" "${REMOTE_CAP_SECS:-300}" \
     | transcript_to "$keep/transcript.jsonl"
 ) &
 runner=$!
@@ -481,11 +487,17 @@ runner=""
 # at the end marker).
 mkdir -p "$stage/out"
 with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$stage/out" 2>/dev/null; cat >/dev/null; } || true
-for f in changes.patch stream.jsonl session.jsonl summary.md; do
+for f in changes.patch stream.jsonl session.jsonl summary.md capped.log; do
   if [ -L "$stage/out/$f" ] || [ ! -f "$stage/out/$f" ]; then continue; fi
   # The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
   if [ "$f" = changes.patch ]; then cp "$stage/out/$f" "$keep/$f"; else scrub "$stage/out/$f" "$keep/$f"; fi
 done
+# Each command the caps killed in the sandbox: its kill lines in progress.log, which came live, so a lost sandbox
+# keeps them; else in the capped.log that came back. remote-agent-result.sh reads them the same way.
+cap_kills() { tr -d '\r' 2>/dev/null <"$1" | sed -nE 's/^capped: killed: (memory|timeout)( |$)/\1\2/p'; }
+kills="$(cap_kills "$keep/progress.log")" || kills=""
+[ -n "$kills" ] || kills="$(cap_kills "$keep/capped.log")" || kills=""
+[ -z "$kills" ] || sed 's/^/killed: /' <<<"$kills" | progress
 # The session stays here: the sandbox wrote it, so placing it for /resume is the human's call (remote-agent resume).
 if [ -s "$keep/session.jsonl" ]; then
   say "session: $keep/session.jsonl (from the sandbox, not placed for /resume; to place it: remote-agent resume $run $(printf '%q' "$root"))"
