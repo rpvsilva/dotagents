@@ -224,9 +224,9 @@ while IFS=$'\t' read -r p _; do
     files+=("$f")
   done < <(scripts/parts.sh files "$p" | tr -d '\r')
 done < <(printf '%s\n_shared\n' "$parts_list")
-while IFS=$'\t' read -r f n p decl; do
-  fail "$f: refers to $n, not a need of $p in $decl"
-done < <({
+# Each finding carries the matched reference text m; a backtick match also prints agent_names once, control characters
+# visible, so a platform-only failure is diagnosable from the CI log.
+coupling_fails="$({
   [ -z "$parts_list" ] || awk '{print "P\t" $0}' <<<"$parts_list"
   [ -z "$owners" ] || awk '{print "O\t" $0}' <<<"$owners"
   [ ${#decls[@]} -eq 0 ] || jq -r 'input_filename as $f | [$f, (.needs // {} | keys[]?), (.agents // [])[]?] | "N\t" + join(" ")' \
@@ -271,9 +271,17 @@ done < <({
     for (j = 1; j <= c; j++) {
       p = ps[j]
       ok = " " p " _shared configure settings lib secret-patterns " (kind[p] == "agent" ? owner[p] : needs[decl[p]]) " "
-      if (index(ok, " " n " ") == 0) print f "\t" n "\t" p "\t" decl[p]
+      if (index(ok, " " n " ") == 0) print f "\t" n "\t" p "\t" decl[p] "\t" m
     }
-  }' | sort -u)
+  }' | sort | awk -F'\t' '!seen[$1 FS $2 FS $3 FS $4]++')"
+if [ -n "$coupling_fails" ] && cut -f5 <<<"$coupling_fails" | grep -q '^`'; then
+  echo "coupling scan: a backtick match; agent_names as built:"
+  printf '%s\n' "$agent_names" | sed -n l
+fi
+while IFS=$'\t' read -r f n p decl m; do
+  [ -n "$f" ] || continue
+  fail "$f: refers to $n, not a need of $p in $decl (matched: $m)"
+done <<<"$coupling_fails"
 
 # Hook snippets are valid JSON and call a hook script that exists.
 for h in adapters/*/hooks/*.json adapters/*/settings/*.json; do
