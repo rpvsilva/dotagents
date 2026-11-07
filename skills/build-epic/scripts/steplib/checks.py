@@ -53,13 +53,14 @@ NOT_TOOLS = {"a", "an", "the", "such", "any", "some", "this", "that", "these", "
 
 def env_prefix(run):
     """The shell commands that put a suite in the run's environment, as `setup.py` made it: `export BUILD_EPIC_ENV=
-    <run>/env` once its Setup succeeded (`env/.setup-done`), then `. <run>/env/bin/activate` when that exists."""
+    <run>/env` once its Setup succeeded (`env/.setup-done`), then `. <run>/env/bin/activate` when that exists. Paths
+    are written with `/`, which bash reads on every platform (Git Bash takes `C:/x`)."""
     env = core.resolve(run) / "env"
     if not (env / SETUP_DONE).is_file():
         return []
-    parts = [f"export {ENV_VAR}={shlex.quote(str(env))}"]
+    parts = [f"export {ENV_VAR}={shlex.quote(env.as_posix())}"]
     if (env / "bin" / "activate").is_file():
-        parts.append(f". {shlex.quote(str(env / 'bin' / 'activate'))}")
+        parts.append(f". {shlex.quote((env / 'bin' / 'activate').as_posix())}")
     return parts
 
 

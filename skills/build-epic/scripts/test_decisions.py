@@ -171,6 +171,15 @@ class ReaderTest(DecideCase):
         self.assertEqual(decisions.parse(text), decisions.load(self.run_dir))
         self.assertTrue(text.startswith("# Decisions\nbase: main\nmerge_identity: app\n"), text)
 
+    def test_a_file_with_crlf_line_ends_reads_as_with_lf(self):
+        self.decide("set", "ci", "off")
+        self.decide("set", "base", "int")
+        self.decide("clause", "Leave merges to Rui", "yes", "q")
+        self.decide("quote", "first\nsecond")
+        lf = decisions.load(self.run_dir)
+        self.file.write_bytes(self.text().replace("\n", "\r\n").encode("utf-8"))  # a Windows checkout or editor
+        self.assertEqual(decisions.load(self.run_dir), lf)
+        self.assertEqual((decisions.get(self.run_dir, "ci"), decisions.get(self.run_dir, "base")), ("off", "int"))
 
     def test_lines_it_does_not_know_are_ignored(self):
         text = ("# Decisions\nbase: main\ncolour: blue\nnot a header\nci:off\n\n"
