@@ -247,6 +247,17 @@ class MergeTaskTest(unittest.TestCase):
         self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "branch", "--list", "task/t/01"), "")
         self.assert_not_done()
 
+    def test_an_unreadable_rule_on_the_default_branch_fails_bad_rule_before_checks_and_nothing_merges(self):
+        clone = self.kit.clone
+        self.commit(clone, "AGENTS.md", "# Rules\n\n```agent-merge-guard\nprocess-exit added\n```\n", "docs: rules")
+        self.kit.git("push", "-q", "origin", "main", cwd=clone)
+        self.checks("echo suite ran")
+        line = self.merge()
+        self.assertTrue(line.startswith("FAIL 01-01 bad-rule: line 4: process-exit added (log: "), line)
+        self.assertNotIn("suite ran", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assert_not_done()
+
     def test_a_guarded_diff_whose_rule_is_waived_yes_merges(self):
         self.guard_on_ticket()
         p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "clause", "process-exit", "yes", "Rui: fine here")

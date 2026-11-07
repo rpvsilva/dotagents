@@ -24,7 +24,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 
 Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at most **N** at once (the **slots**).
 
-The `epic-implementer` is **remote-capable** ([Remote subagents](../remote-subagents/SKILL.md)): name it after its task's file, `--name NN-<scope>`, attach its task, `map.md`, `findings.md` and `reports/`, and dispatch it with the command build-epic's [Remote dispatcher](../build-epic/SKILL.md#remote-dispatcher) names. When it returns, commit its changes on its task branch and catch it up with the fix branch for it, as build-epic's [Subagents](../build-epic/SKILL.md#subagents) section does with the ticket branch. The mapper and reviewers write into the run folder, so they always run here.
+The mapper and every `security-reviewer` run here, whatever [Remote subagents](../remote-subagents/SKILL.md) declares for them: they write `map.md` and `reports/<scope>-r<round>.md` into the run folder, the repo-wide lane reads `git log -p`, and a sweep reads `reports/`, none of which reach the remote sandbox. The `epic-implementer` runs remotely when that skill's rule lets it. When it does, name it after its task's file, `--name NN-<scope>`, attach its task, `map.md`, `findings.md` and `reports/`, and dispatch it with the command build-epic's [Remote dispatcher](../build-epic/SKILL.md#remote-dispatcher) names. When it returns, commit its changes on its task branch and catch it up with the fix branch for it, as build-epic's [Subagents](../build-epic/SKILL.md#subagents) section does with the ticket branch.
 
 ## Steps
 

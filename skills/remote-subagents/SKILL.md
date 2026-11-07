@@ -1,11 +1,11 @@
 ---
 name: remote-subagents
-description: Run a subagent's brief on the remote backend (a cluster, Docker or an SSH host) instead of this machine, and act on its outcome. Use when a skill marks a subagent remote-capable, or the human asks to run a brief remotely.
+description: Run a subagent's brief on the remote backend (a cluster, Docker or an SSH host) instead of this machine, and act on its outcome. Use when a skill starts a subagent its needs.json declares remote-capable, or the human asks to run a brief remotely.
 ---
 
 # Remote subagents
 
-A subagent the calling skill marks **remote-capable** (it only changes its worktree), or one the human asks to run remotely, runs on the remote backend (the `remote.backend` Setting: a cluster, Docker or an SSH host) instead of this machine when `remote-agent ready` exits 0 in the repo and the human did not ask for `--local`. `ready` prints the backend, or why remote runs are off: no backend set, no token, the repo sets `remote.allowed` to `false`, or the backend does not answer (with its error). Say that reason once, then run subagents locally.
+A subagent is **remote-capable** when the `needs.json` of the skill holding its brief lists it under `remote` (`~/.agents/skills/<skill>/needs.json`, e.g. `"remote": ["epic-implementer"]`): it only changes its worktree. That list is the one place this is declared; no skill restates it. The entry covers **every use** of the agent whose inputs fit the sandbox: the worktree and the files attached, no git history, nothing written outside the worktree, the report coming back as its final message. A skill whose own use breaks that (it has the agent write into the run folder, read `git log` or read a folder only this machine holds) runs that use here and says why, and leaves the entry for the uses that fit: the security reviewer runs remotely in review-pr's `security` mode, and here in security-audit's hunt and sweeps. A remote-capable subagent, or one the human asks to run remotely, runs on the remote backend (the `remote.backend` Setting: a cluster, Docker or an SSH host) instead of this machine when `remote-agent ready` exits 0 in the repo and the human did not ask for `--local`. `ready` prints the backend, or why remote runs are off: no backend set, no token, the repo sets `remote.allowed` to `false`, or the backend does not answer (with its error). Say that reason once, then run subagents locally.
 
 The backend is compute only: it gets this machine's setup, a snapshot of the worktree and the files you attach, and gives back a patch. It has no GitHub access and no git branches, so it cannot push, open a PR, read CI logs or see another branch. Details: [remote/README.md](../../remote/README.md).
 
@@ -32,3 +32,11 @@ Each remote run takes a **remote slot**, not a local one: at most `~/.agents/bin
    Then, whatever the exit code, read `killed` and `lost`:
    - **`killed`** (`memory` or `timeout`, each kill in `capped_kills` as `{kind, cmd}`): the sandbox's caps (`remote.cap_mb`, `remote.cap_secs`) killed at least one of the subagent's shell commands, and stderr has a `[<task>] killed: <kind> <command>` line for each. The run went on after it, so a kill alone is no failure: act on the exit code and the report as above. When the report says `blocked` or the run failed, the kill is the likely cause: retry as the skill says (build-epic retries once with a cap note), else treat it as `blocked`, naming the kind and the command.
    - **`lost: true`**: the sandbox itself is gone (its container or pod vanished with no kill line before), so no cap is at fault: act as on **Anything else**.
+
+### A resolver
+
+A subagent sent back to resolve conflict markers (build-epic's implementer with `resolve:`) runs remotely on the worktree its skill left mid-merge, as in the steps above, with these differences:
+
+- **Before**: the merge stays in progress in the worktree, its markers in the files (build-epic: `finish_task.py` leaves it so on `FAIL TT-NN conflict <files>`). The snapshot carries the files with their markers but not the merge itself: no `MERGE_HEAD`, no unmerged index, no history of either side. Name the conflicted files from the failure in the message, and attach what the brief reads; the markers hold both sides.
+- **After**, on exit 0: the patch sits in the working tree, the merge still in progress. Do not commit it yourself; run the skill's finishing step (build-epic: `finish_task.py`), which commits it as the merge commit, with both parents, once no marker is left, and fails `conflict <files>` again while one is. On exit 3 the markers are still there: resolve the merge locally, with the same resolver message, as under **Limits**.
+- **Limits**: only content conflicts can be resolved remotely. A modify/delete, rename or binary conflict leaves no marker in a file, and a file deleted on one side is missing from the worktree, so the snapshot never holds it. When a conflicted file (`git diff --name-only --diff-filter=U`) has no `<<<<<<<` line, or is missing, resolve the merge locally.
