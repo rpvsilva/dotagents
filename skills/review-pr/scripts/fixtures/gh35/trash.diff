@@ -1,0 +1,550 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo delete ID...                   # move items to the trash, see Trash
++todo restore ID                     # bring an item back from the trash under a new id, see Trash
++todo trash [--empty]                # list the trash, or empty it for good, see Trash
++- A trashed blocker does not block (see Trash). `todo restore` gives it a new id, so its old dependants are no longer waiting on it: they still list the old id (`todo show` prints it as `waits on`), and nothing points at the restored item until you run `todo block` again.
++### Trash
++
++`todo delete ID...` moves items to the trash, kept in `$TODO_FILE.trash` next to the todo file. It prints `deleted ID: title` for each item, in the order given. Every id is checked first: an unknown id exits 2 and nothing is deleted. A repeated id deletes the item once.
++
++```
++$ todo delete 4
++deleted 4: data
++$ todo trash
++[ ] 4: data
++$ todo restore 4
++restored 4 as 6: data
++```
++
++`todo trash` lists the trashed items as `todo list` lines (or `trash is empty`). `todo trash --empty` removes everything in the trash for good and prints `emptied the trash: N items`; it cannot be undone.
++
++`todo restore ID` brings a trashed item back and prints `restored OLD as NEW: title`. ID is an id from the trash list.
++
++- The restored item gets a new id, above every id ever used (todo file, archive, trash and undo history), so the old id is never given to a different item.
++- It keeps every other field: title, tags, priority, due date and time, recurrence rule and series, done state and done date, creation date, snooze, doing, parent, project, estimate, blockers, notes and focus time. Only its last-change stamp is renewed.
++- Other items' references are not rewritten. A subtask whose parent was trashed (or later restored under a new id) stays a top-level item; an item waiting on a trashed item stops waiting (see Dependencies). A restored item's own parent and blockers are kept as they were, so it nests under that parent again if the parent is still there.
++- A trashed item is gone from `todo list`, `todo search`, `todo remind`, `todo export` and the views, and never counts in streaks, XP, achievements, stats, review or burndown. Deleting a parent does not delete its children.
++- An unknown id, an empty trash, or no free id (ids are used up) exits 2 and writes nothing. A trashed row that the todo file would now refuse (a hand-edited trash file) exits 1 with `trash file: cannot restore ID: ...` and writes nothing.
++
++- Deletes do not sync: `todo sync` merges only the todo file, by id, and keeps no record of a deletion. A deleted item comes back, under its old id, on every sync while any synced copy (the remote included) still holds it, and each time your trash gains another copy. To get rid of it, delete it on every copy before the next sync. The trash itself is not synced.
+diff --git a/tests/cli/test_cli_trash.py b/tests/cli/test_cli_trash.py
++++ b/tests/cli/test_cli_trash.py
++import json
++from types import SimpleNamespace
++from datetime import date, datetime, timezone
++
++import pytest
++
++from todo.insights import history_items
++from todo.storage import JsonStore
++from todo.storage.side_files import SideFiles
++
++TODAY = date(2026, 11, 6)
++NOW = datetime(2026, 11, 6, 10, 0)
++
++
++def run(cli, *argv):
++    return cli(*argv, today=TODAY, now=NOW)
++
++
++def fail(cli, capsys, code, *argv):
++    with pytest.raises(SystemExit) as exc:
++        run(cli, *argv)
++    assert exc.value.code == code
++    return capsys.readouterr().err
++
++
++def todo_path(tmp_path):
++    return tmp_path / "todo.json"
++
++
++def ids_in(path):
++    return [row["id"] for row in json.loads(path.read_text())] if path.exists() else []
++
++
++def test_delete_moves_one_item_to_the_trash(cli, tmp_path):
++    run(cli, "add", "milk")
++    run(cli, "add", "eggs")
++    assert run(cli, "delete", "1") == ["deleted 1: milk"]
++    assert run(cli, "list") == ["[ ] 2: eggs"]
++    assert run(cli, "trash") == ["[ ] 1: milk"]
++    assert ids_in(tmp_path / "todo.json.trash") == [1]
++
++
++def test_delete_moves_several_items_in_the_order_given(cli):
++    for title in ("a", "b", "c"):
++        run(cli, "add", title)
++    assert run(cli, "delete", "3", "1") == ["deleted 3: c", "deleted 1: a"]
++    assert run(cli, "list") == ["[ ] 2: b"]
++    assert sorted(run(cli, "trash")) == ["[ ] 1: a", "[ ] 3: c"]
++
++
++def test_delete_with_a_repeated_id_deletes_it_once(cli):
++    run(cli, "add", "milk")
++    assert run(cli, "delete", "1", "1") == ["deleted 1: milk"]
++
++
++def test_delete_with_an_unknown_id_changes_nothing_and_exits_2(cli, tmp_path, capsys):
++    run(cli, "add", "milk")
++    run(cli, "add", "eggs")
++    before = todo_path(tmp_path).read_bytes()
++    err = fail(cli, capsys, 2, "delete", "1", "9")
++    assert err == "todo: error: no item 9\n"
++    assert todo_path(tmp_path).read_bytes() == before
++    assert not (tmp_path / "todo.json.trash").exists()
++
++
++def test_delete_with_a_bad_reference_changes_nothing_and_exits_2(cli, tmp_path, capsys):
++    run(cli, "add", "milk")
++    before = todo_path(tmp_path).read_bytes()
++    fail(cli, capsys, 2, "delete", "1", "x")
++    assert todo_path(tmp_path).read_bytes() == before
++    assert not (tmp_path / "todo.json.trash").exists()
++
++
++def test_delete_without_an_id_exits_2(cli, capsys):
++    fail(cli, capsys, 2, "delete")
++
++
++def test_delete_keeps_the_todo_file_when_the_trash_cannot_be_written(cli, tmp_path, capsys):
++    run(cli, "add", "milk")
++    (tmp_path / "todo.json.trash").write_text("not json")
++    before = todo_path(tmp_path).read_bytes()
++    err = fail(cli, capsys, 1, "delete", "1")
++    assert err.startswith("todo: error: ")
++    assert todo_path(tmp_path).read_bytes() == before
++
++
++def test_delete_keeps_what_the_trash_already_holds(cli):
++    run(cli, "add", "a")
++    run(cli, "add", "b")
++    run(cli, "delete", "1")
++    run(cli, "delete", "2")
++    assert sorted(run(cli, "trash")) == ["[ ] 1: a", "[ ] 2: b"]
++
++
++def test_deleted_items_keep_their_fields_in_the_trash(cli):
++    run(cli, "add", "pay", "--due", "2026-11-01", "--tag", "home", "--priority", "high")
++    listed = run(cli, "list")
++    run(cli, "delete", "1")
++    assert run(cli, "trash") == listed == ["[ ] 1: pay (due 2026-11-01) !! #home"]
++
++
++def test_trash_says_so_when_it_is_empty(cli):
++    assert run(cli, "trash") == ["trash is empty"]
++
++
++def test_deleted_items_vanish_from_list_remind_and_export(cli, tmp_path):
++    run(cli, "add", "late", "--due", "2026-11-01")
++    run(cli, "add", "keep", "--due", "2026-11-01")
++    run(cli, "delete", "1")
++    assert run(cli, "list") == ["[ ] 2: keep (due 2026-11-01)"]
++    assert run(cli, "list", "--overdue") == ["[ ] 2: keep (due 2026-11-01)"]
++    assert "late" not in "\n".join(run(cli, "remind"))
++    out = tmp_path / "out.csv"
++    assert run(cli, "export", "--format", "csv", "--out", str(out)) == [f"exported 1 items to {out}"]
++    assert "late" not in out.read_text()
++    assert "keep" in out.read_text()
++    assert run(cli, "search", "late") == []
++
++
++def test_deleted_items_are_not_part_of_the_history_figures(cli, tmp_path):
++    run(cli, "add", "a")
++    run(cli, "add", "b")
++    run(cli, "done", "1")
++    run(cli, "delete", "1")
++    path = tmp_path / "todo.json"
++    sides = SideFiles(path, today=lambda: TODAY)
++    ctx = SimpleNamespace(sides=sides, store=JsonStore(path, today=lambda: TODAY))
++    assert [i.id for i in history_items(ctx)] == [2]
++
++
++def test_trash_empty_clears_the_trash_and_says_how_many(cli, tmp_path):
++    run(cli, "add", "a")
++    run(cli, "add", "b")
++    run(cli, "delete", "1", "2")
++    assert run(cli, "trash", "--empty") == ["emptied the trash: 2 items"]
++    assert run(cli, "trash") == ["trash is empty"]
++    assert ids_in(tmp_path / "todo.json.trash") == []
++
++
++def test_trash_empty_on_an_empty_trash_says_so(cli):
++    assert run(cli, "trash", "--empty") == ["emptied the trash: 0 items"]
++
++
++def test_ids_are_not_reused_after_the_trash_is_emptied(cli, tmp_path):
++    run(cli, "add", "a")
++    run(cli, "add", "b")
++    run(cli, "add", "c")
++    run(cli, "delete", "2", "3")
++    run(cli, "trash", "--empty")
++    run(cli, "add", "d")
++    assert run(cli, "list") == ["[ ] 1: a", "[ ] 4: d"]
++    history = json.loads((tmp_path / "todo.json.history").read_text())
++    assert history["high_water"] == 3
++
++
++def test_ids_are_not_reused_while_the_item_is_in_the_trash(cli):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    run(cli, "add", "b")
++    assert run(cli, "list") == ["[ ] 2: b"]
++
++
++def test_trash_empty_never_lowers_a_higher_high_water_and_keeps_the_steps(cli, tmp_path):
++    (tmp_path / "todo.json.history").write_text(json.dumps({"high_water": 50, "steps": [{"x": 1}]}))
++    run(cli, "add", "a")
++    assert run(cli, "list") == ["[ ] 51: a"]
++    run(cli, "add", "b")
++    run(cli, "delete", "52")
++    run(cli, "trash", "--empty")
++    assert json.loads((tmp_path / "todo.json.history").read_text()) == {"high_water": 52, "steps": [{"x": 1}]}
++    run(cli, "delete", "51")
++    run(cli, "trash", "--empty")
++    assert json.loads((tmp_path / "todo.json.history").read_text())["high_water"] == 52
++    run(cli, "add", "c")
++    assert run(cli, "list") == ["[ ] 53: c"]
++
++
++def test_trash_empty_leaves_the_trash_when_the_history_cannot_be_written(cli, tmp_path, capsys):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    (tmp_path / "todo.json.history").write_text("not json")
++    fail(cli, capsys, 1, "trash", "--empty")
++    assert ids_in(tmp_path / "todo.json.trash") == [1]
++
++
++def test_trash_rejects_extra_words(cli, capsys):
++    fail(cli, capsys, 2, "trash", "now")
++
++
++def test_delete_loses_no_row_when_two_rows_share_an_id(cli, tmp_path):
++    run(cli, "add", "a")
++    path = todo_path(tmp_path)
++    row = json.loads(path.read_text())[0]
++    path.write_text(json.dumps([row, {**row, "title": "b"}]))
++    run(cli, "delete", "1")
++    assert json.loads(path.read_text()) == []
++    assert sorted(r["title"] for r in json.loads((tmp_path / "todo.json.trash").read_text())) == ["a", "b"]
++
++
++def rows(path):
++    return json.loads(path.read_text())
++
++
++def test_restore_brings_an_item_back_under_a_new_id(cli, tmp_path):
++    run(cli, "add", "milk")
++    run(cli, "delete", "1")
++    assert run(cli, "restore", "1") == ["restored 1 as 2: milk"]
++    assert run(cli, "list") == ["[ ] 2: milk"]
++    assert run(cli, "trash") == ["trash is empty"]
++    assert ids_in(tmp_path / "todo.json.trash") == []
++
++
++def test_restore_gives_an_id_above_every_item_the_archive_and_the_history(cli, tmp_path):
++    for title in ("a", "b", "c"):
++        run(cli, "add", title)
++    run(cli, "delete", "1")
++    (tmp_path / "todo.json.archive").write_text(json.dumps([{**rows(todo_path(tmp_path))[0], "id": 40, "title": "old"}]))
++    (tmp_path / "todo.json.history").write_text(json.dumps({"high_water": 70, "steps": []}))
++    assert run(cli, "restore", "1") == ["restored 1 as 71: a"]
++    assert sorted(ids_in(todo_path(tmp_path))) == [2, 3, 71]
++
++
++def test_restore_gives_an_id_above_the_other_trashed_items(cli):
++    for title in ("a", "b", "c"):
++        run(cli, "add", title)
++    run(cli, "delete", "1", "3")
++    assert run(cli, "restore", "1") == ["restored 1 as 4: a"]
++    assert run(cli, "restore", "3") == ["restored 3 as 5: c"]
++
++
++def test_restore_keeps_every_field_and_the_created_date(cli, tmp_path):
++    run(cli, "add", "pay", "--due", "2026-11-01", "--tag", "home", "--priority", "high", "--every", "week")
++    path = todo_path(tmp_path)
++    row = rows(path)[0]
++    row.update({"created_on": "2026-10-01", "done_on": "2026-10-20", "done_priority": "low", "notes": [{"at": "2026-10-02T09:00:00+00:00", "text": "hi"}]})
++    path.write_text(json.dumps([row]))
++    before = run(cli, "list")
++    run(cli, "delete", "1")
++    run(cli, "restore", "1")
++    (new,) = rows(path)
++    assert new["id"] == 2
++    assert {k: v for k, v in new.items() if k not in ("id", "updated_at")} == {
++        k: v for k, v in row.items() if k not in ("id", "updated_at")
++    }
++    assert run(cli, "list")[0].replace("2:", "1:", 1) == before[0]
++
++
++def test_restore_stamps_the_item_with_the_clock_so_it_wins_a_sync(cli, tmp_path, monkeypatch):
++    run(cli, "add", "milk")
++    run(cli, "delete", "1")
++    trash = tmp_path / "todo.json.trash"
++    data = rows(trash)
++    data[0]["updated_at"] = "2020-01-01T00:00:00+00:00"
++    trash.write_text(json.dumps(data))
++    monkeypatch.setattr(JsonStore, "clock", staticmethod(lambda: datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)))
++    run(cli, "restore", "1")
++    stamp = datetime.fromisoformat(rows(todo_path(tmp_path))[0]["updated_at"])
++    assert stamp == datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)
++    assert stamp > datetime(2020, 1, 1, tzinfo=timezone.utc)
++
++
++def test_restore_gives_an_id_above_the_archive_when_it_holds_the_largest_id(cli, tmp_path):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    (tmp_path / "todo.json.archive").write_text(json.dumps([{"id": 90, "title": "old", "done": True}]))
++    assert run(cli, "restore", "1") == ["restored 1 as 91: a"]
++
++
++def test_restore_of_a_row_the_todo_file_would_refuse_exits_1_and_writes_nothing(cli, tmp_path, capsys):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    trash = tmp_path / "todo.json.trash"
++    data = rows(trash)
++    data[0]["parent"] = 2  # the id the restored item is about to get
++    trash.write_text(json.dumps(data))
++    trash_before = trash.read_bytes()
++    err = fail(cli, capsys, 1, "restore", "1")
++    assert err.startswith("todo: error: trash file: cannot restore 1: ")
++    assert "Traceback" not in err
++    assert not todo_path(tmp_path).exists() or rows(todo_path(tmp_path)) == []
++    assert trash.read_bytes() == trash_before
++
++
++def test_restore_does_not_rewrite_other_items_references(cli, tmp_path):
++    run(cli, "add", "parent")
++    run(cli, "add", "child")
++    path = todo_path(tmp_path)
++    data = rows(path)
++    data[1]["parent"] = 1
++    data[1]["blocked_on"] = [1]
++    path.write_text(json.dumps(data))
++    run(cli, "delete", "1")
++    run(cli, "restore", "1")
++    child = next(r for r in rows(path) if r["title"] == "child")
++    assert child["parent"] == 1
++    assert child["blocked_on"] == [1]
++
++
++def test_restore_with_an_unknown_trash_id_exits_2_and_changes_nothing(cli, tmp_path, capsys):
++    run(cli, "add", "milk")
++    run(cli, "add", "eggs")
++    run(cli, "delete", "1")
++    before = todo_path(tmp_path).read_bytes()
++    trash_before = (tmp_path / "todo.json.trash").read_bytes()
++    assert fail(cli, capsys, 2, "restore", "2") == "todo: error: no item 2\n"
++    assert todo_path(tmp_path).read_bytes() == before
++    assert (tmp_path / "todo.json.trash").read_bytes() == trash_before
++
++
++def test_restore_with_an_empty_trash_exits_2(cli, capsys):
++    run(cli, "add", "milk")
++    fail(cli, capsys, 2, "restore", "1")
++
++
++def test_restore_with_a_bad_reference_or_no_id_exits_2(cli, capsys):
++    fail(cli, capsys, 2, "restore", "x")
++    fail(cli, capsys, 2, "restore")
++    fail(cli, capsys, 2, "restore", "1", "2")
++
++
++def test_restore_leaves_other_trashed_items_in_the_trash(cli, tmp_path):
++    for title in ("a", "b", "c"):
++        run(cli, "add", title)
++    run(cli, "delete", "1", "2", "3")
++    run(cli, "restore", "2")
++    assert sorted(ids_in(tmp_path / "todo.json.trash")) == [1, 3]
++    assert run(cli, "list") == ["[ ] 4: b"]
++
++
++def test_restore_keeps_the_trash_when_the_todo_file_cannot_be_written(cli, tmp_path, capsys):
++    run(cli, "add", "milk")
++    run(cli, "delete", "1")
++    todo_path(tmp_path).write_text("not json")
++    trash_before = (tmp_path / "todo.json.trash").read_bytes()
++    fail(cli, capsys, 1, "restore", "1")
++    assert (tmp_path / "todo.json.trash").read_bytes() == trash_before
++
++
++def test_restore_a_row_whose_id_is_shared_restores_one_and_keeps_the_other(cli, tmp_path):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    trash = tmp_path / "todo.json.trash"
++    row = rows(trash)[0]
++    trash.write_text(json.dumps([row, {**row, "title": "b"}]))
++    assert run(cli, "restore", "1") == ["restored 1 as 2: a"]
++    assert [r["title"] for r in rows(trash)] == ["b"]
++
++
++def test_restored_item_is_never_given_its_old_id_again_after_delete_and_empty(cli):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    run(cli, "restore", "1")
++    run(cli, "delete", "2")
++    run(cli, "trash", "--empty")
++    run(cli, "add", "b")
++    assert run(cli, "list") == ["[ ] 3: b"]
+diff --git a/tests/cli/test_cli_trash_refs.py b/tests/cli/test_cli_trash_refs.py
++++ b/tests/cli/test_cli_trash_refs.py
++import json
++from datetime import date, datetime
++
++import pytest
++
++from todo.storage.model import MAX_ID
++
++TODAY = date(2026, 11, 6)
++NOW = datetime(2026, 11, 6, 10, 0)
++
++
++def run(cli, *argv):
++    return cli(*argv, today=TODAY, now=NOW)
++
++
++def fail(cli, capsys, code, *argv):
++    with pytest.raises(SystemExit) as exc:
++        run(cli, *argv)
++    assert exc.value.code == code
++    return capsys.readouterr().err
++
++
++def rows(path):
++    return json.loads(path.read_text())
++
++
++def test_restore_with_no_free_id_exits_2_and_writes_nothing(cli, tmp_path, capsys):
++    run(cli, "add", "a")
++    run(cli, "delete", "1")
++    trash = tmp_path / "todo.json.trash"
++    data = rows(trash)
++    data[0]["id"] = MAX_ID  # no id is left above it
++    trash.write_text(json.dumps(data))
++    before = trash.read_bytes()
++    err = fail(cli, capsys, 2, "restore", str(MAX_ID))
++    assert err.startswith("todo: error: no free id")
++    assert trash.read_bytes() == before
++    assert rows(tmp_path / "todo.json") == []
++
++
++def test_restore_keeps_every_field_of_a_fully_set_item(cli, tmp_path):
++    run(cli, "add", "full", "--due", "2026-11-09 09:30")
++    path = tmp_path / "todo.json"
++    row = rows(path)[0]
++    row.update(
++        {
++            "doing": True,
++            "snoozed_until": "2026-11-20",
++            "parent": 77,
++            "project": "home",
++            "estimate": 90,
++            "blocked_on": [78],
++            "focus": [{"on": "2026-11-05", "minutes": 25}],
++            "notes": [{"at": "2026-11-02T09:00:00+00:00", "text": "hi"}],
++            "created_on": "2026-10-01",
++        }
++    )
++    path.write_text(json.dumps([row]))
++    run(cli, "delete", "1")
++    run(cli, "restore", "1")
++    (new,) = rows(path)
++    assert new["id"] == 2
++    skip = ("id", "updated_at")
++    assert {k: v for k, v in new.items() if k not in skip} == {k: v for k, v in row.items() if k not in skip}
++    assert new["due_time"] == "09:30"
++
++
++@pytest.fixture
++def pair(cli):
++    run(cli, "add", "gather data")
++    run(cli, "add", "write report")
++    run(cli, "block", "2", "--on", "1")
++
++
++def test_a_deleted_blocker_stops_the_waiting_mark_and_blocking(cli, pair):
++    assert run(cli, "list")[1].endswith("waiting on 1")
++    assert "gather data" in run(cli, "next")[0]
++    run(cli, "delete", "1")
++    assert run(cli, "list") == ["[ ] 2: write report"]
++    assert "write report" in run(cli, "next")[0]
++    assert any("write report" in line for line in run(cli, "plan", "--hours", "1"))
++
++
++def test_a_child_lists_at_top_level_after_its_parent_is_deleted_and_after_restore(cli):
++    run(cli, "add", "trip")
++    run(cli, "add", "flights", "--parent", "1")
++    assert run(cli, "list")[1] == "  [ ] 2: flights"
++    run(cli, "delete", "1")
++    assert run(cli, "list") == ["[ ] 2: flights"]
++    run(cli, "restore", "1")
++    assert run(cli, "list") == ["[ ] 2: flights", "[ ] 3: trip"]
+diff --git a/todo/cli/commands/delete.py b/todo/cli/commands/delete.py
++++ b/todo/cli/commands/delete.py
++"""todo delete ID...: move items to the trash."""
++from todo.cli.refs import add_ref_argument, resolve_all
++
++
++def register(parser) -> None:
++    add_ref_argument(parser, many=True)
++
++
++def run(args, ctx) -> None:
++    items = ctx.store.load()
++    chosen = resolve_all(items, args.ref)  # every ref first: one bad ref changes nothing
++    gone = {i.id for i in chosen}
++    moved = [i for i in items if i.id in gone]  # every row with a chosen id, so a duplicated id loses none
++    ctx.sides.trash.save(ctx.sides.trash.load() + moved)  # receiving file first: a crash duplicates, never loses
++    ctx.store.save([i for i in items if i.id not in gone])
++    for i in chosen:
++        ctx.out(f"deleted {i.id}: {i.title}")
+diff --git a/todo/cli/commands/restore.py b/todo/cli/commands/restore.py
++++ b/todo/cli/commands/restore.py
++"""todo restore ID: bring an item back from the trash under a new id."""
++from todo.cli.errors import UsageError
++from todo.cli.refs import add_ref_argument, resolve
++from todo.storage import StoreError
++
++
++def register(parser) -> None:
++    add_ref_argument(parser)
++
++
++def run(args, ctx) -> None:
++    trashed = ctx.sides.trash.load()
++    item = resolve(trashed, args.ref)
++    try:
++        new = ctx.store.insert([item], ctx.today)[0]  # a new id above every id ever used; every other field kept
++    except StoreError:
++        raise  # a bad todo file: main exits 1
++    except ValueError as e:
++        if str(e).startswith("no free id"):
++            raise UsageError(str(e)) from None  # exit 2, as copy and template use
++        # a stored row the todo file would refuse (e.g. a parent equal to its new id): nothing is written
++        raise StoreError(f"{ctx.sides.trash.label}: cannot restore {item.id}: {e}") from None
++    # the trash last, after the todo file is saved: a crash duplicates, never loses
++    ctx.sides.trash.save([i for i in trashed if i is not item])
++    ctx.out(f"restored {item.id} as {new.id}: {new.title}")
+diff --git a/todo/cli/commands/trash.py b/todo/cli/commands/trash.py
++++ b/todo/cli/commands/trash.py
++"""todo trash [--empty]: list the trash, or clear it for good."""
++from todo.cli.format import format_list_item
++
++
++def register(parser) -> None:
++    parser.add_argument("--empty", action="store_true", help="delete everything in the trash for good")
++
++
++def run(args, ctx) -> None:
++    trashed = ctx.sides.trash.load()
++    if args.empty:
++        if trashed:
++            # the high-water mark first: ids of items gone for good are never given out again
++            ctx.sides.history.raise_high_water(max(i.id for i in trashed))
++            ctx.sides.trash.save([])
++        ctx.out(f"emptied the trash: {len(trashed)} items")
++    elif not trashed:
++        ctx.out("trash is empty")
++    else:
++        for item in trashed:
++            ctx.out(format_list_item(item))

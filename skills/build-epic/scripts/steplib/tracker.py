@@ -4,14 +4,14 @@ Before every update, `gh api user` names the active login (an App installation t
 `app-installation` when `gh api installation/repositories` answers). The first update of a run records that login as
 the run's identity in `<run>/tracker.json`. When a later one finds another login, the update is held in that file and
 `core.Fail("identity-changed")` is raised; the next update made under the run's identity applies the held ones first,
-in order. The same file records the human's login (learned once with `GH_TOKEN` unset) and the labels this run has
-created, so `gh label create --force` runs once per label per run.
+in order. The same file records the human's login (learned once with the tokens unset, never from `decisions.md`)
+and the labels this run has created, so `gh label create --force` runs once per label per run.
 """
 import json
 import os
 import re
 
-from . import core, gh
+from . import core, gh, identity
 
 MARKER = "<!-- build-epic-plan -->"
 IN_PROGRESS = "in progress"
@@ -27,7 +27,7 @@ def issues(value):
 
 def setting(section, key, repo, log):
     """A Setting's effective value through `~/.agents/bin/settings`, or None when unset or the tool is missing."""
-    tool = os.path.join(os.path.expanduser("~"), ".agents", "bin", "settings")
+    tool = os.path.join(core.home(), ".agents", "bin", "settings")
     if not os.path.exists(tool):
         log.write(f"no {tool}: {section}.{key} taken as unset\n")
         return None
@@ -81,12 +81,12 @@ class Tracker:
         raise core.Fail("identity-unknown")
 
     def human(self):
-        """The human's own login (`gh api user` with `GH_TOKEN` unset), learned once per run."""
+        """The human's own login: `gh api user` with the tokens unset, learned once per run."""
         with self._lock():
             state = self._load()
             if not state["human"]:
-                env = {k: v for k, v in os.environ.items() if k != "GH_TOKEN"}
-                login = self._gh(["api", "user", "--jq", ".login"], "human", env=env, identity=False).strip()
+                login = self._gh(["api", "user", "--jq", ".login"], "human", env=identity.human_env(),
+                                 identity=False).strip()
                 if not login:
                     raise core.Fail("gh-human")
                 state["human"] = login
@@ -102,7 +102,7 @@ class Tracker:
             if not state["identity"]:
                 state["identity"] = now
                 self._save(state)
-            if now != state["identity"]:
+            if not identity.same_login(now, state["identity"]):
                 state["held"].append([op, list(args)])
                 self._save(state)
                 self.log.write(f"identity is {now}, not {state['identity']}: held {op} {args}\n")

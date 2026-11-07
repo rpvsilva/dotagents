@@ -46,6 +46,12 @@ else
   echo "== actionlint: not installed, skipped (brew install actionlint)"
 fi
 
+# python.test.sh runs only the test folders holding a changed file (every folder when a changed file is in none).
+if [ "${1:-}" != --all ]; then
+  PYTHON_TEST_FILES="$(tests/affected.sh --files "$@")" || exit 1
+  export PYTHON_TEST_FILES
+fi
+
 suites=()
 for t in tests/*.test.sh; do want "${t##*/}" && suites+=("$t"); done
 # At once, through tests/parallel.sh (TEST_JOBS caps how many).

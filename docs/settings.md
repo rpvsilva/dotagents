@@ -39,6 +39,8 @@ Within a Level, a skill's own entry beats a shared one:
 
 Here `build-epic` runs 2 subagents at once and every other skill runs 4.
 
+This repo sets two at the repo Level, in its own [`.agents/settings.json`](../.agents/settings.json): `build-epic`'s `merge_command` (`scripts/merge-pr.sh {pr}`, so task and ticket PRs merge through the gate) and `identity_command` (`scripts/gh-app-token.sh`, so every `gh` call acts as the App).
+
 ## Reading and changing them
 
 Use the `configure` skill and just say what you want: "use 2 agents in this repo", or "disable remote". It shows the change, and a repo-level change ships as a PR.
