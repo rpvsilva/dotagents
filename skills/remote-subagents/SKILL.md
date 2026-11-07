@@ -1,11 +1,11 @@
 ---
 name: remote-subagents
-description: Run a subagent's brief on the remote backend (a cluster, Docker or an SSH host) instead of this machine, and act on its outcome. Use when a skill marks a subagent remote-capable, or the human asks to run a brief remotely.
+description: Run a subagent's brief on the remote backend (a cluster, Docker or an SSH host) instead of this machine, and act on its outcome. Use when a skill starts a subagent its needs.json declares remote-capable, or the human asks to run a brief remotely.
 ---
 
 # Remote subagents
 
-A subagent the calling skill marks **remote-capable** (it only changes its worktree), or one the human asks to run remotely, runs on the remote backend (the `remote.backend` Setting: a cluster, Docker or an SSH host) instead of this machine when `remote-agent ready` exits 0 in the repo and the human did not ask for `--local`. `ready` prints the backend, or why remote runs are off: no backend set, no token, the repo sets `remote.allowed` to `false`, or the backend does not answer (with its error). Say that reason once, then run subagents locally.
+A subagent is **remote-capable** when the `needs.json` of the skill holding its brief lists it under `remote` (`~/.agents/skills/<skill>/needs.json`, e.g. `"remote": ["epic-implementer"]`): it only changes its worktree. That list is the one place this is declared; no skill restates it. A remote-capable subagent, or one the human asks to run remotely, runs on the remote backend (the `remote.backend` Setting: a cluster, Docker or an SSH host) instead of this machine when `remote-agent ready` exits 0 in the repo and the human did not ask for `--local`. `ready` prints the backend, or why remote runs are off: no backend set, no token, the repo sets `remote.allowed` to `false`, or the backend does not answer (with its error). Say that reason once, then run subagents locally.
 
 The backend is compute only: it gets this machine's setup, a snapshot of the worktree and the files you attach, and gives back a patch. It has no GitHub access and no git branches, so it cannot push, open a PR, read CI logs or see another branch. Details: [remote/README.md](../../remote/README.md).
 
