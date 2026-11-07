@@ -168,6 +168,25 @@ class CheckTest(GuardCase):
             guard.check(self.repo, "origin/nope...HEAD", self.run_dir, self.log)
         self.assertEqual(caught.exception.reason, "guard-no-base: origin/nope")
 
+    def test_a_range_not_in_base_three_dots_head_form_refuses(self):
+        self.base({"AGENTS.md": AGENTS})
+        self.commit({"pkg/run.py": "sys.exit(1)\n"})
+        for range_ in ("origin/main..HEAD", "...HEAD", "HEAD"):
+            with self.subTest(range_=range_), self.assertRaises(core.Fail) as caught:
+                guard.check(self.repo, range_, self.run_dir, self.log)
+            self.assertEqual(caught.exception.reason, f"guard-bad-range: {range_}")
+
+    def test_a_symlinked_agents_md_pointing_outside_the_repo_has_no_rules(self):
+        self.base({"docs/rules.md": AGENTS})
+        # a link climbing out of the tree, even back into it, is no file: the guard reads no rules and fails nothing
+        (self.repo / "AGENTS.md").symlink_to(f"../{self.repo.name}/docs/rules.md")
+        self.kit.git("add", "AGENTS.md", cwd=self.repo)
+        self.kit.git("commit", "-qm", "link", cwd=self.repo)
+        self.kit.git("push", "-q", "origin", "pr:main", cwd=self.repo)
+        self.kit.git("fetch", "-q", "origin", cwd=self.repo)
+        self.commit({"tests/test_a.py": "x = 1\n"})
+        self.check()
+
 
 class ParseTest(unittest.TestCase):
     def rules(self, text):
@@ -246,6 +265,17 @@ class GuardRulesTest(GuardCase):
     def test_an_unreadable_block_line_fails(self):
         self.base({"AGENTS.md": "```agent-merge-guard\ntests tests/**\n```\n"})
         self.assertEqual(self.guard_rules(ok=False), ["FAIL run bad-rule: line 2: tests tests/**"])
+
+    def test_a_base_missing_on_origin_fails_git_fetch(self):
+        decisions.save(self.run_dir, decisions.Decisions(headers={"base": "feat/nope"}))
+        self.assertEqual(self.guard_rules(ok=False), ["FAIL run git-fetch"])
+
+    def test_a_missing_run_folder_or_argument_fails(self):
+        missing = self.kit.tmp / "no-run"
+        p = self.kit.step(GUARD_RULES, missing)
+        self.assertEqual((p.returncode, p.stdout), (1, f"FAIL run no-run-folder: {missing}\n"))
+        p = self.kit.step(GUARD_RULES)
+        self.assertEqual((p.returncode, p.stdout), (2, "FAIL run usage: guard_rules.py <run>\n"))
 
 
 if __name__ == "__main__":
