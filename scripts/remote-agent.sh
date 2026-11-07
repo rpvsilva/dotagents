@@ -497,6 +497,7 @@ done
 cap_kills() { tr -d '\r' 2>/dev/null <"$1" | sed -nE 's/^capped: killed: (memory|timeout)( |$)/\1\2/p'; }
 kills="$(cap_kills "$keep/progress.log")" || kills=""
 [ -n "$kills" ] || kills="$(cap_kills "$keep/capped.log")" || kills=""
+# shellcheck disable=SC2001 # a prefix on every line of a multi-line value
 [ -z "$kills" ] || sed 's/^/killed: /' <<<"$kills" | progress
 # The session stays here: the sandbox wrote it, so placing it for /resume is the human's call (remote-agent resume).
 if [ -s "$keep/session.jsonl" ]; then

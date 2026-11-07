@@ -550,6 +550,7 @@ grep -q "capped: killed: timeout" "$POD/out/capped.log" 2>/dev/null || fail "cap
 [ -f "$(kept)/capped.log" ] || fail "caps loop: capped.log not kept"
 grep -q "^capped: killed: timeout while" "$(kept)/progress.log" || fail "caps loop: the kill did not come live on the sandbox's stderr"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps loop: patch not applied"
+# shellcheck disable=SC2016 # jq, with a literal $SECONDS in the expected command
 result_is "caps loop result" '.status == "done" and .killed == "timeout" and .lost == false
   and .capped_kills == [{"kind": "timeout", "cmd": "while [ $SECONDS -lt 60 ]; do :; done"}]'
 rm -f "$W/hello.txt" "$SANDBOX/loop"
@@ -557,8 +558,9 @@ rm -f "$W/hello.txt" "$SANDBOX/loop"
 printf 'capped: killed: memory npm test\n' >"$SANDBOX/killmsg"
 code=0; run 0 "" --name caps-mem || code=$?
 [ "$code" = 0 ] || fail "caps memory: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
-[ "$(grep -c "killed: " "$SANDBOX/err")" = 2 ] && grep -qx "\[caps-mem\] killed: memory npm test" "$SANDBOX/err" \
-  || fail "caps memory: not one line [caps-mem] killed: memory npm test: $(cat "$SANDBOX/err")"
+if ! { [ "$(grep -c "killed: " "$SANDBOX/err")" = 2 ] && grep -qx "\[caps-mem\] killed: memory npm test" "$SANDBOX/err"; }; then
+  fail "caps memory: not one line [caps-mem] killed: memory npm test: $(cat "$SANDBOX/err")"
+fi
 result_is "caps memory result" '.killed == "memory" and .lost == false and .capped_kills == [{"kind": "memory", "cmd": "npm test"}]'
 rm -f "$W/hello.txt"
 printf 'capped: killed: timeout\n' >"$SANDBOX/killmsg"
