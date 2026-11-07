@@ -170,6 +170,14 @@ class RecordsTheRunsFacts(SetupCase):
         self.assertEqual(self.decided("test_command"),
                          f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/bin/activate && echo hi")
 
+    def test_test_command_activates_a_windows_virtualenv_setup_made(self):
+        activate = 'mkdir -p "$BUILD_EPIC_ENV/Scripts" && touch "$BUILD_EPIC_ENV/Scripts/activate"'
+        self.write_map("echo hi", setup=f"Setup: `{activate}`")
+        self.setup()
+        env = self.run_dir / "env"
+        self.assertEqual(self.decided("test_command"),
+                         f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/Scripts/activate && echo hi")
+
     def test_a_setup_heading_with_a_note_runs_its_code_spans(self):
         made = 'mkdir -p "$BUILD_EPIC_ENV" && echo ok > "$BUILD_EPIC_ENV/made"'
         self.write_map("echo hi", setup=f"Setup (fresh worktree): `{made}`")
