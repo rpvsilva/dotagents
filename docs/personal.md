@@ -35,7 +35,7 @@ Each value gets one of three treatments:
 
 ## The repo check
 
-`tests/repo.test.sh` scans every file a part of a public group ships (every group but `personal`; test files and `fixtures/` aside). It fails on `rpvsilva`, `maxibombo`, `0xgui` or `Rui`. `xgeekshq`, the image's owner, is allowed only in `remote/settings.json` and `remote/README.md`, where the image is the documented default.
+`tests/repo.test.sh` scans every file a part of a public group ships (every group but `personal`) and every core file, as `scripts/parts.sh files` lists them. It skips files under a `fixtures/` folder, `test_*` files and `*.test.*` files: they hold sample data. It fails on `rpvsilva`, `maxibombo`, `0xgui` or `xgeekshq` anywhere in a line, and on `Rui` as a whole word. `xgeekshq`, the image's owner, is allowed only in `remote/settings.json` and `remote/README.md`, where the image is the documented default.
 
 ## Keep today's setup
 
