@@ -51,6 +51,9 @@ why: <one line, when status is blocked>
 follow-up: <one line: the suites' total time before -> after, and the count of gaps closed>
 ```
 
+<<<<<<< HEAD
 With a report file named, write the full report there, then your final message is the block alone (its last four lines), at most 400 characters. With none, or running remotely, your final message is the full report, its block as the last four lines, unfenced.
 
+=======
+>>>>>>> origin/main
 A key with several values takes one per line, each indented or as a `- ` item under the key; `none` means no value. Each `mutations:` entry names a line of the code under test in your worktree (`file` relative to its root, `line` its line number there), the first `old` text on that line and the `new` text that replaces it (empty to delete it), e.g. `src/parse.py:42 >= 0 -> > 0`. A removed or merged assertion that `moved:` does not name, or a mutation that leaves the suites green, sends the PR to an agent review.
