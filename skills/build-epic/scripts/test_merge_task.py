@@ -230,13 +230,14 @@ class MergeTaskTest(unittest.TestCase):
 
     def test_merge_command_setting_runs_instead_of_gh_pr_merge(self):
         rule = self.kit.tmp / "merge-rule.sh"
-        rule.write_text(f"#!/bin/sh\npwd > {self.kit.tmp}/rule.cwd\necho \"$@\" > {self.kit.tmp}/rule.args\n")
+        out = self.kit.tmp.as_posix()  # a Windows path's backslashes would be escapes in sh
+        rule.write_text(f"#!/bin/sh\n{{ pwd -W 2>/dev/null || pwd; }} > {out}/rule.cwd\necho \"$@\" > {out}/rule.args\n")
         rule.chmod(0o755)
         self.setting("merge_command", f"{rule} {{pr}} --head {{sha}}")
         head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual((self.kit.tmp / "rule.args").read_text(), f"5 --head {head}\n")
-        self.assertEqual((self.kit.tmp / "rule.cwd").read_text().strip(), str(self.kit.clone))
+        self.assertEqual(Path((self.kit.tmp / "rule.cwd").read_text().strip()).resolve(), Path(self.kit.clone).resolve())
         self.assertEqual(self.calls("pr", "merge"), [])
 
     # Catching up with the ticket (bug 4)
