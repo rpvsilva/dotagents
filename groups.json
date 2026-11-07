@@ -1,0 +1,10 @@
+{
+  "core": {"about": "Always installed: Settings, shared conventions, the hooks library and the configure skill."},
+  "remote": {"about": "Run subagents remotely: the remote-agent command, the remote-subagents skill and the remote-runs mod."},
+  "pr-loop": {"about": "Ship, fix, review and keep PRs moving until they merge."},
+  "epics": {"about": "Plan and build an epic from sources to merged tasks, and tune a repo's tests."},
+  "security": {"about": "Audit a repo's security and fix what it finds."},
+  "safety-hooks": {"about": "Hooks that block leaked secrets and direct merges, and allow cleaning up task folders."},
+  "small-tools": {"about": "Remember lessons, read telemetry of past sessions, and the MCP servers."},
+  "personal": {"about": "Rui's own instructions, guardrails and plugins; a public install leaves it out."}
+}
