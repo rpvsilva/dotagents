@@ -12,9 +12,9 @@ Prints `OK run set up ci=<on|off> env=<run>/env skips=<n>`.
   `<run>/env/.setup-done` is written and a rerun does not run `Setup` again; a failed `Setup` fails `setup-failed`
   and runs again next time.
 - **Test command**: `map.md`'s `Checks` joined with `&&`, inside the run's environment (`steplib/checks.py`'s
-  `in_env`: `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` when it made a
-  virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`; every agent is given that
-  exact line.
+  `in_env`: `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` (`Scripts/activate` on
+  Windows) when it made a virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`;
+  every agent is given that exact line.
 - **CI**: `ci: on` when the repo's Actions are enabled and a `.github/workflows/*.yml` on the base (`decisions.md`'s
   `base:`, else `run.md`'s `Default:`) triggers on `pull_request` (or `pull_request_target`) into it, its `branches`
   and `branches-ignore` filters applied; else `ci: off`. When the Actions setting cannot be read, the workflows decide.
