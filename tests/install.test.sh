@@ -34,6 +34,15 @@ links() {
   done
 }
 
+# links "$1" with the checkout path $2 written REPO and the home $1 written HOME, to compare installs across paths.
+portable() {
+  local l
+  links "$1" | while IFS= read -r l; do
+    l="${l//"$2"/REPO}"
+    echo "${l//"$1"/HOME}"
+  done
+}
+
 # Prints every regular file under $1 (backups aside) with its content, so two runs can be compared.
 configs() {
   local f
@@ -79,6 +88,30 @@ assert_hooks() {
 ) &
 single=$!
 
+# Hook migrations and checkout paths, each in its own home. oldfull: main's layout (a full install whose
+# ~/.agents/hooks is one link to the repo folder) then a selection that names no hook. foreign: ~/.agents/hooks is a
+# link to a folder outside the repo. space: install.sh all from a copy of the checkout at a path with a space.
+(
+  home="$SANDBOX/oldfull"
+  mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+  run "$home" all >/dev/null
+  rm -rf "$home/.agents/hooks"
+  ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+  run "$home" all small-tools >"$SANDBOX/oldfull.out"
+  home="$SANDBOX/foreign"
+  mkdir -p "$home/.agents" "$SANDBOX/elsewhere"
+  echo mine >"$SANDBOX/elsewhere/mine.sh"
+  ln -s "$SANDBOX/elsewhere" "$home/.agents/hooks"
+  run "$home" shared >"$SANDBOX/foreign.out"
+  mkdir -p "$SANDBOX/sp pr"
+  cp -R "$REPO" "$SANDBOX/sp pr/repo"
+  home="$SANDBOX/space home"
+  mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+  HOME="$home" DOTAGENTS_SKIP_PLUGINS=1 "$SANDBOX/sp pr/repo/install.sh" all >"$SANDBOX/space.out"
+  portable "$home" "$SANDBOX/sp pr/repo" >"$SANDBOX/space.links"
+) &
+migrations=$!
+
 # Selective installs, each in a home with every tool's folder: remote alone, twice; then safety-hooks and pr-loop
 # added on top; and claude with epics. Each step's links land in $SANDBOX/<step>.links.
 (
@@ -104,6 +137,10 @@ single=$!
   mkdir -p "$home/.claude"
   if run "$home" remote nope >"$SANDBOX/badsel.out" 2>&1; then touch "$SANDBOX/badsel-exited-0"; fi
   links "$home" >"$SANDBOX/badsel.links"
+  home="$SANDBOX/twotools"
+  mkdir -p "$home/.claude" "$home/.codex"
+  if run "$home" claude codex remote >"$SANDBOX/twotools.out" 2>&1; then touch "$SANDBOX/twotools-exited-0"; fi
+  links "$home" >"$SANDBOX/twotools.links"
 ) &
 selective=$!
 
@@ -180,6 +217,8 @@ if [ -n "$remote" ]; then
   jq -e --arg n "$remote" '.mcpServers[$n]' "$home/.cursor/mcp.json" >/dev/null || fail "MCP server $remote not in Cursor config"
 fi
 
+portable "$home" "$REPO" >"$SANDBOX/all.links"
+
 wait "$single" || fail "a single-tool install failed"
 
 # claude: no codex links; codex and cursor: skipped cleanly when their folder is missing.
@@ -201,6 +240,28 @@ home="$SANDBOX/migrate"
 assert_hooks "$home"
 [ -z "$(find "$REPO/scripts/hooks" -type l)" ] || fail "install.sh linked into the repo through the old ~/.agents/hooks link"
 if grep -q "backed up" "$SANDBOX/migrate.out"; then fail "replacing the old ~/.agents/hooks link backed something up"; fi
+
+wait "$migrations" || fail "a migration or space-path install failed"
+
+# oldfull: every hook script a merged config calls is linked, though small-tools names no safety hook.
+home="$SANDBOX/oldfull"
+[ -d "$home/.agents/hooks" ] && [ ! -L "$home/.agents/hooks" ] || fail "oldfull: ~/.agents/hooks is not a real folder"
+called="$(cat "$home/.claude/settings.json" "$home/.codex/hooks.json" "$home/.cursor/hooks.json" |
+  grep -o '\.agents/hooks/[A-Za-z0-9_-]*\.sh' | sed 's|.*/||' | sort -u)"
+for h in guard-merge guard-secrets allow-task-cleanup; do grep -qx "$h.sh" <<<"$called" || fail "oldfull: no config calls $h"; done
+for h in $called; do assert_link "$home/.agents/hooks/$h" "$REPO/scripts/hooks/$h"; done
+[ -z "$(find "$REPO/scripts/hooks" -type l)" ] || fail "install.sh linked into the repo through the old ~/.agents/hooks link"
+
+# foreign: a ~/.agents/hooks link to a folder outside the repo is backed up, and nothing is linked into that folder.
+home="$SANDBOX/foreign"
+assert_hooks "$home"
+[ "$(ls "$SANDBOX/elsewhere")" = mine.sh ] || fail "install.sh linked into a foreign ~/.agents/hooks folder: $(ls "$SANDBOX/elsewhere")"
+grep -q "backed up $home/.agents/hooks" "$SANDBOX/foreign.out" || fail "a foreign ~/.agents/hooks link was not backed up: $(cat "$SANDBOX/foreign.out")"
+find "$home/.dotagents-backup" -type l -name '*hooks' 2>/dev/null | grep -q . || fail "the foreign ~/.agents/hooks link is not in the backup"
+
+# space: a checkout path with a space links the same as one without.
+[ "$(cat "$SANDBOX/space.links")" = "$(cat "$SANDBOX/all.links")" ] ||
+  fail "install.sh from a path with a space linked otherwise: $(diff "$SANDBOX/all.links" "$SANDBOX/space.links")"
 
 wait "$selective" || fail "a selective install failed"
 
@@ -262,6 +323,11 @@ fi
 [ ! -e "$SANDBOX/badsel-exited-0" ] || fail "install.sh with an unknown part exited 0"
 grep -q "^usage: .*<group>" "$SANDBOX/badsel.out" || fail "install.sh with an unknown part did not print the usage: $(cat "$SANDBOX/badsel.out")"
 [ ! -s "$SANDBOX/badsel.links" ] || fail "install.sh with an unknown part linked something"
+
+# A second tool word: usage, exit 1, nothing linked.
+[ ! -e "$SANDBOX/twotools-exited-0" ] || fail "install.sh claude codex remote exited 0"
+grep -q "^usage: " "$SANDBOX/twotools.out" || fail "install.sh with two tool words did not print the usage: $(cat "$SANDBOX/twotools.out")"
+[ ! -s "$SANDBOX/twotools.links" ] || fail "install.sh with two tool words linked something"
 
 # Unknown target exits non-zero.
 [ ! -e "$SANDBOX/bad-exited-0" ] || fail "unknown target exited 0"

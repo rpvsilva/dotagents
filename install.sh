@@ -9,6 +9,19 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() { echo "usage: $0 [all|shared|claude|codex|cursor] [<group>|<part>...]"; exit 1; }
+
+# One tool word at most: a second would silently win over the first.
+target="" words=()
+for w in "$@"; do
+  case "$w" in
+    all | shared | claude | codex | cursor) [ -z "$target" ] || usage; target="$w" ;;
+    *) words+=("$w") ;;
+  esac
+done
+target="${target:-all}"
+
 # On a terminal, the plain output below is drawn as a live view (scripts/ui.sh); DOTAGENTS_PLAIN=1 keeps it plain.
 if [ -t 1 ] && [ -z "${DOTAGENTS_PLAIN:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
   DOTAGENTS_PLAIN=1 "$BASH" "${BASH_SOURCE[0]}" "$@" 2>&1 | "$REPO/scripts/ui.sh" install "$@"
@@ -36,16 +49,6 @@ link() {
 # A failed merge or plugin install is reported at the end, so it does not stop the other tools.
 failed=0
 
-usage() { echo "usage: $0 [all|shared|claude|codex|cursor] [<group>|<part>...]"; exit 1; }
-
-target="" words=()
-for w in "$@"; do
-  case "$w" in
-    all | shared | claude | codex | cursor) target="$w" ;;
-    *) words+=("$w") ;;
-  esac
-done
-target="${target:-all}"
 # The parts to install, one per line: the selection, core and their required needs (scripts/parts.sh closure).
 # With no selection, every part.
 selected=""
@@ -72,13 +75,15 @@ merge() {
   done
 }
 
-# Links each file matching $1 (a glob) into folder $2 when the part its name stands for is selected.
+# Links each file $2... into folder $1 when the part its name stands for is selected. The caller expands the glob,
+# so a checkout path with a space stays one word.
 link_each() {
-  local f n
-  for f in $1; do
+  local dir="$1" f n
+  shift
+  for f in "$@"; do
     [ -e "$f" ] || continue
     n="${f##*/}"
-    if has "${n%.*}"; then link "$f" "$2/$n"; fi
+    if has "${n%.*}"; then link "$f" "$dir/$n"; fi
   done
 }
 
@@ -96,12 +101,25 @@ install_shared() {
   [ -z "$selected" ] || echo "  parts: $(paste -sd ' ' - <<<"$selected")"
   for s in $(skills); do if has "$s"; then link "$REPO/skills/$s" "$SHARED_SKILLS/$s"; fi; done
   # An older install linked the whole folder: linking into that link would write into the repo, so it goes first.
-  [ ! -L "$HOME/.agents/hooks" ] || rm "$HOME/.agents/hooks"
+  # Every hook was reachable through it and the tools' configs may call any of them, so each is linked back, selected
+  # or not. A link to anywhere else is not ours: it is backed up as a real file would be.
+  local old=""
+  if [ -L "$HOME/.agents/hooks" ]; then
+    case "$(readlink "$HOME/.agents/hooks")" in
+      "$REPO" | "$REPO"/*) rm "$HOME/.agents/hooks"; old=1 ;;
+      *)
+        mkdir -p "$BACKUP"
+        mv "$HOME/.agents/hooks" "$BACKUP/.agents_hooks"
+        echo "  backed up $HOME/.agents/hooks"
+        ;;
+    esac
+  fi
   # The hooks library is core: lib.sh and secret-patterns.txt come with every selection.
   link "$REPO/scripts/hooks/lib.sh" "$HOME/.agents/hooks/lib.sh"
   link "$REPO/scripts/hooks/secret-patterns.txt" "$HOME/.agents/hooks/secret-patterns.txt"
   for f in "$REPO"/scripts/hooks/*.sh; do
-    [ "${f##*/}" = lib.sh ] || link_each "$f" "$HOME/.agents/hooks"
+    [ "${f##*/}" != lib.sh ] || continue
+    if [ -n "$old" ]; then link "$f" "$HOME/.agents/hooks/${f##*/}"; else link_each "$HOME/.agents/hooks" "$f"; fi
   done
   if has remote; then link "$REPO/scripts/remote-agent.sh" "$HOME/.agents/bin/remote-agent"; fi
   link "$REPO/scripts/settings.sh" "$HOME/.agents/bin/settings"
@@ -118,7 +136,7 @@ install_claude() {
     if has "${m##*/}"; then link "$m" "$HOME/.claude/skills/${m##*/}"; fi
   done
   if has global; then link "$REPO/global/AGENTS.md" "$HOME/.claude/CLAUDE.md"; fi
-  link_each "$REPO/adapters/claude/agents/*.md" "$HOME/.claude/agents"
+  link_each "$HOME/.claude/agents" "$REPO"/adapters/claude/agents/*.md
   merge --each "$REPO/adapters/claude/hooks" "$HOME/.claude/settings.json"
   if has global; then merge "$REPO/adapters/claude/settings" "$HOME/.claude/settings.json"; fi
   has global || has mcp || return 0
@@ -143,7 +161,7 @@ install_codex() {
       [ -e "$r" ] && link "$r" "$HOME/.codex/rules/$(basename "$r")"
     done
   fi
-  link_each "$REPO/adapters/codex/agents/*.toml" "$HOME/.codex/agents"
+  link_each "$HOME/.codex/agents" "$REPO"/adapters/codex/agents/*.toml
   merge --each "$REPO/adapters/codex/hooks" "$HOME/.codex/hooks.json"
   if has mcp; then mcp codex; fi
   local h
@@ -156,7 +174,7 @@ install_codex() {
 install_cursor() {
   [ -d "$HOME/.cursor" ] || { echo "cursor: ~/.cursor not found, skipping"; return; }
   echo "cursor"
-  link_each "$REPO/adapters/cursor/agents/*.md" "$HOME/.cursor/agents"
+  link_each "$HOME/.cursor/agents" "$REPO"/adapters/cursor/agents/*.md
   merge --each "$REPO/adapters/cursor/hooks" "$HOME/.cursor/hooks.json"
   if has mcp; then mcp cursor; fi
 }

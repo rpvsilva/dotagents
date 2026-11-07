@@ -60,7 +60,7 @@ owners() {
     }' "$SANDBOX/files" -
 }
 
-# Links every install makes whatever the selection (core, and commands like ~/.agents/bin/capped no part ships).
+# Links every install makes whatever the selection: core.
 targets "$SANDBOX/home-core" >"$SANDBOX/core-targets"
 
 for g in $groups; do
@@ -75,7 +75,7 @@ for g in $groups; do
   outside="$(sed -n 's/^outside //p' "$SANDBOX/$g.targets")"
   [ -z "$outside" ] || fail "$g: links leading out of the repo: $outside"
   grep -v '^outside ' "$SANDBOX/$g.targets" | owners >"$SANDBOX/$g.owners"
-  unknown="$(grep '^? ' "$SANDBOX/$g.owners" | cut -d' ' -f2 | LC_ALL=C comm -23 - "$SANDBOX/core-targets")"
+  unknown="$(sed -n 's/^? //p' "$SANDBOX/$g.owners" | LC_ALL=C comm -23 - "$SANDBOX/core-targets")"
   [ -z "$unknown" ] || fail "$g: links to files no part ships: $unknown"
 
   grep -v '^? ' "$SANDBOX/$g.owners" | cut -d' ' -f1 | LC_ALL=C sort -u >"$SANDBOX/$g.installed"

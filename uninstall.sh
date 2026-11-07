@@ -22,6 +22,22 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() { echo "usage: $0 [--dry-run] [--purge] [all|claude|codex|cursor] [<group>|<part>...]"; exit 1; }
+
+# One tool word at most: a second would silently win over the first.
+dry=0 purge=0 target="" words=()
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) dry=1 ;;
+    --purge) purge=1 ;;
+    all | claude | codex | cursor) [ -z "$target" ] || usage; target="$arg" ;;
+    -*) usage ;;
+    *) words+=("$arg") ;;
+  esac
+done
+target="${target:-all}"
+
 # On a terminal, the plain output below is drawn as a live view (scripts/ui.sh); DOTAGENTS_PLAIN=1 keeps it plain.
 if [ -t 1 ] && [ -z "${DOTAGENTS_PLAIN:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
   DOTAGENTS_PLAIN=1 "$BASH" "${BASH_SOURCE[0]}" "$@" 2>&1 | "$REPO/scripts/ui.sh" uninstall "$@"
@@ -32,18 +48,6 @@ BACKUP="$BACKUPS/$(date +%Y%m%d-%H%M%S)-uninstall"
 SHARED_SKILLS="$HOME/.agents/skills"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 
-usage() { echo "usage: $0 [--dry-run] [--purge] [all|claude|codex|cursor] [<group>|<part>...]"; exit 1; }
-
-dry=0 purge=0 target=all words=()
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run) dry=1 ;;
-    --purge) purge=1 ;;
-    all | claude | codex | cursor) target="$arg" ;;
-    -*) usage ;;
-    *) words+=("$arg") ;;
-  esac
-done
 command -v jq >/dev/null || { echo "uninstall.sh needs jq"; exit 1; }
 
 # A failed step is reported at the end, so it does not stop the others.
@@ -83,14 +87,15 @@ unlink_in() {
 
 parts() { PARTS_REPO="$REPO" "$REPO/scripts/parts.sh" "$@"; }
 
-# Is part $1 of kind $2 installed: does one of its links stand in this $HOME? An mcp part has no link: never.
+# Is part $1 of kind $2 installed: does one of its links stand in this $HOME? An mcp part has no link: never. Under an
+# older install's one link to the hooks folder, every hook script reachable through it is installed.
 installed() {
   local f
   case "$2" in
     skill) ours "$SHARED_SKILLS/$1" || ours "$HOME/.claude/skills/$1" ;;
     mod) ours "$HOME/.claude/skills/$1" ;;
     agent) ours "$HOME/.claude/agents/$1.md" || ours "$HOME/.codex/agents/$1.toml" || ours "$HOME/.cursor/agents/$1.md" ;;
-    hook) ours "$HOME/.agents/hooks/$1.sh" ;;
+    hook) ours "$HOME/.agents/hooks/$1.sh" || { ours "$HOME/.agents/hooks" && [ -f "$HOME/.agents/hooks/$1.sh" ]; } ;;
     remote) ours "$HOME/.agents/bin/remote-agent" ;;
     global)
       ours "$HOME/.claude/CLAUDE.md" || ours "$HOME/.codex/AGENTS.md" && return 0
