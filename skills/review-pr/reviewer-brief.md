@@ -20,11 +20,11 @@ You review one PR and never edit it: your one output is the findings report belo
 
 ## When you run remotely
 
-Your prompt says so. Your worktree is `~/work`: a snapshot of the PR head, one commit with no history, no other branches and no GitHub access. Your inputs are under `~/attached`, read-only: the diff (both diffs in `hub` mode), the PR facts, and the decisions file, `map.md`, `spec.md`, the task or ticket file and the findings when the prompt names them. So:
+Your prompt says so, and only for a PR by the human or the run's own identity. Your worktree is `~/work`: a snapshot of the PR head, one commit with no history, no other branches and no GitHub access. Your inputs are under `~/attached`, read-only: the diff (both diffs in `hub` mode), the PR facts, and the decisions file, `map.md`, `spec.md`, the task or ticket file and the findings when the prompt names them. So:
 
 - Step 1 reads the PR facts file the prompt names (title, description, base branch, changed files) in place of `gh pr view`; never call `gh`.
 - Step 2 reads the attached diff in place of the merge-base command; there is no merge base to diff against.
-- The sandbox is yours: run the tests whenever they help, before the whole diff is read too. That order guards this machine, so a local run still reads the whole diff first. Skip the slow-suite comparison on the merge base, which the snapshot lacks.
+- Read the whole diff before running any test, as step 2 says: the sandbox holds a token and can reach the network, so the order guards it as it guards this machine. Skip the slow-suite comparison on the merge base, which the snapshot lacks.
 - Change no file, and write no report file: your final message is your whole report, ending with the block below, unfenced.
 
 ## Report

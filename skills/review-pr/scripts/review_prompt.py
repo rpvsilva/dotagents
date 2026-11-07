@@ -3,7 +3,7 @@
 
 Usage: python3 -I review_prompt.py <mode> --pr <n> --worktree <path> --head <sha> --base <ref>
          [--run <run>] [--decisions <file>] [--task <file>] [--findings <file>] [--ticket <file>] [--task-base <ref>]
-         [--report <file> | --remote <dir>]
+         [--report <file> | --remote <dir> --allow-author <login>...]
 
 Modes: `task` (one task PR), `hub` (section A: the hub task PR against `--task-base`, the ticket branch; section B:
 the whole ticket against `--base`; needs `--ticket` and `--task-base`), `ticket` (`--task` is the ticket file),
@@ -17,18 +17,22 @@ it may write; the prompt then ends by saying so. The text comes from `templates/
 
 `--remote <dir>` renders the prompt for a reviewer run remotely, on a snapshot of the worktree with no history and no
 GitHub access. It writes into `<dir>` the diff (`pr-<n>.diff`; in `hub` mode also the task diff, `pr-<n>-task.diff`)
-and the PR facts (`pr-<n>.json`, from `gh pr view <n> --json title,body,headRefOid,baseRefName,files`), and
+and the PR facts (`pr-<n>.json`, from `gh pr view <n> --json author,title,body,headRefOid,baseRefName,files`), and
 `attach.txt`: the absolute path of each file to attach, one per line (those, the decisions file, `<run>/map.md`,
 `<run>/spec.md` when it exists, `--task`, `--ticket` and `--findings`), every basename distinct: an input whose name is
 taken is copied into `<dir>` as `<its option>-<name>`. The prompt names the worktree as `~/work` and each input as
 `~/attached/<name>`, runs no `gh` or git command, and ends by asking for the report as the final message, since the
-reviewer writes no file.
+reviewer writes no file. A remote reviewer runs the PR's tests in a sandbox holding a token, so `--remote` renders only
+a PR whose author is one of the `--allow-author` logins (repeatable, as `gh pr view --json author` spells them; case
+aside): the human's and the run's identity. Any other author is refused before the diff is written, and that reviewer
+runs locally, reading the whole diff before it runs anything.
 
 Exits 2 with a usage line on an unknown mode, a missing option, a `--findings` file that does not exist, or
-`--remote` with `--report`; with `--remote`, exits 1 with a reason on stderr when `gh pr view`, the merge base or the
-diff fails, or an input to attach is missing.
+`--remote` with `--report` or without `--allow-author`; with `--remote`, exits 1 with a reason on stderr when
+`gh pr view`, the merge base or the diff fails, the PR's author is not allowed, or an input to attach is missing.
 """
 import argparse
+import json
 import os
 import shlex
 import shutil
@@ -42,7 +46,7 @@ BRIEFS = "~/.agents/skills"
 REVIEWER_BRIEF = f"{BRIEFS}/review-pr/reviewer-brief.md"
 SECURITY_BRIEF = f"{BRIEFS}/security-audit/security-brief.md"
 MODES = ("task", "hub", "ticket", "re-review", "security")
-PR_FIELDS = "title,body,headRefOid,baseRefName,files"
+PR_FIELDS = "author,title,body,headRefOid,baseRefName,files"
 WORK = "~/work"
 ATTACHED = "~/attached"
 REMOTE = ("\nYou run remotely: {work} is a snapshot of the PR head, one commit with no history, no other branches and no "
@@ -71,9 +75,12 @@ def parse(argv):
     p.add_argument("--task-base")
     p.add_argument("--report", type=absolute)
     p.add_argument("--remote", type=absolute)
+    p.add_argument("--allow-author", action="append", default=[])
     args = p.parse_args(argv)
     if args.remote and args.report:
         p.error("--remote takes no --report: a remote reviewer returns its report as its final message")
+    if args.remote and not args.allow_author:
+        p.error("--remote needs --allow-author: only a PR by the human or the run's identity is reviewed remotely")
     if args.mode == "re-review" and not args.findings:
         p.error("re-review needs --findings")
     if args.findings and not os.path.isfile(args.findings):
@@ -152,6 +159,18 @@ class Attachments:
         Path(self.folder, "attach.txt").write_text("".join(f"{p}\n" for p in self.paths.values()), encoding="utf-8")
 
 
+def check_author(facts, allowed):
+    """`Failed` unless the PR facts' author is one of the `allowed` logins: a remote reviewer runs the PR's tests in a
+    sandbox that holds a token, so it reviews only PRs by the human or the run's identity."""
+    try:
+        login = json.loads(facts)["author"]["login"]
+    except (ValueError, KeyError, TypeError):
+        raise Failed("author: pr-view names no author; review this PR locally") from None
+    if login.casefold() not in {a.casefold() for a in allowed}:
+        raise Failed(f"author {login} is not in --allow-author ({', '.join(allowed)}): its tests could read the "
+                     "sandbox's token, so review this PR locally")
+
+
 def remote_inputs(args):
     """The values `--remote` names instead of local paths and commands, after writing the diffs, the PR facts and the
     attach list into `args.remote`."""
@@ -159,8 +178,9 @@ def remote_inputs(args):
     folder.mkdir(parents=True, exist_ok=True)
     attach = Attachments(str(folder))
     facts = folder / f"pr-{args.pr}.json"
-    facts.write_text(output(["gh", "pr", "view", args.pr, "--json", PR_FIELDS], args.worktree, "pr-view"),
-                     encoding="utf-8")
+    text = output(["gh", "pr", "view", args.pr, "--json", PR_FIELDS], args.worktree, "pr-view")
+    check_author(text, args.allow_author)
+    facts.write_text(text, encoding="utf-8")
     inputs = {"facts": attach.add(str(facts), "pr")}
     whole = folder / f"pr-{args.pr}.diff"
     write_diff(args.worktree, args.base, args.head, whole)
