@@ -34,7 +34,8 @@ class StartCase(unittest.TestCase):
         self.write_ticket("ready", "#5")
 
     def write_ticket(self, status, issue):
-        self.ticket.write_text(f"# 01: JSON\nStatus: {status}\nIssue: {issue}\nBranch: {BRANCH}\n\nBody.\n", encoding="utf-8")
+        self.ticket.write_text(f"# 01: JSON\nStatus: {status}\nIssue: {issue}\nBranch: {BRANCH}\n\nBody.\n",
+                               encoding="utf-8")
 
     def one_line(self, p):
         self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)
@@ -250,8 +251,10 @@ class StartTaskTest(StartCase):
         self.kit.git("push", "-q", "origin", f"origin/main:refs/heads/{BRANCH}", cwd=self.kit.clone)
         self.commit(BRANCH, "ticket.txt", "ticket work\n", "ticket work")
         tasks = self.kit.run_dir / "tasks"
-        (tasks / "01-01-lib.md").write_text("# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: none\n", encoding="utf-8")
-        (tasks / "01-02-hub.md").write_text("# 01-02: Hub\nStatus: ready\nTicket: 01\nBlocked by: 01, ticket 02\n", encoding="utf-8")
+        (tasks / "01-01-lib.md").write_text("# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: none\n",
+                                            encoding="utf-8")
+        (tasks / "01-02-hub.md").write_text("# 01-02: Hub\nStatus: ready\nTicket: 01\nBlocked by: 01, ticket 02\n",
+                                            encoding="utf-8")
         (tasks / "01-tests.md").write_text("# 01-tests: Tune\nStatus: ready\n", encoding="utf-8")
 
     def task(self, name):
@@ -346,7 +349,8 @@ class RefspecShellTest(StartCase):
 
     def check(self, shell):
         self.write_ticket("ready", "none")
-        (self.kit.run_dir / "tasks" / "01-01-lib.md").write_text("# 01-01\nStatus: ready\nBlocked by: none\n", encoding="utf-8")
+        (self.kit.run_dir / "tasks" / "01-01-lib.md").write_text("# 01-01\nStatus: ready\nBlocked by: none\n",
+                                                                 encoding="utf-8")
         p = self.start_both(shell)
         lines = p.stdout.splitlines()
         self.assertEqual(len(lines), 2, p.stdout + p.stderr)

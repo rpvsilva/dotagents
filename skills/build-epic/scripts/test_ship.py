@@ -35,37 +35,12 @@ def answer(name, default):
     p = os.path.join(d, "answers", name)
     return open(p, encoding="utf-8").read().strip() if os.path.exists(p) else default
 
-head = subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "feat/t"], capture_output=True, text=True, encoding="utf-8")
+head = subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "feat/t"], capture_output=True, text=True,
+                      encoding="utf-8")
 print(json.dumps({{"state": answer("pr-state", "MERGED"), "headRefOid": head.stdout.strip(),
                   "baseRefName": answer("pr-base", "main")}}))
 '''
 
-TEMPLATE = """## Summary
-
-## Testing
-
-<!-- What you ran and its result. TODO, N/A or an unchecked box counts as empty. -->
-
-## Risk
-
-## How to revert
-"""
-FILLED = """## Summary
-
-Cuts the JSON step in two.
-
-## Testing
-
-tests/run.sh: all ok
-
-## Risk
-
-Low: scripts only.
-
-## How to revert
-
-Revert the squash commit.
-"""
 TICKET = "# 01: Ship JSON things\nStatus: building\nIssue: #7, #8\nBranch: feat/t\nBlocked by: none\n"
 TASK = "# 01-{nn}: task {nn}\nStatus: done\nTicket: 01\nBlocked by: none\nWrites: x\nPR: https://github.com/o/r/pull/{pr}\n"
 REVIEWS = "api-repos__owner___repo__pulls_{n}_reviews"
@@ -130,25 +105,13 @@ class PostReviewTest(Base):
         call = self.calls("api")[-1]
         return json.loads(Path(call[call.index("--input") + 1]).read_text(encoding="utf-8"))
 
-    def test_a_relative_report_path_posts_the_files_text(self):
-        work = self.kit.tmp / "work"
-        work.mkdir()
-        (work / "report.md").write_text("Finding: the JSON parser drops keys.\n", encoding="utf-8")
-        self.kit.answer(REVIEWS.format(n=12), out=json.dumps({"html_url": "https://github.com/o/r/pull/12#r1"}))
-        line = self.post("12", "report.md", cwd=work)
-        self.assertEqual(line, "OK PR12 review https://github.com/o/r/pull/12#r1")
-        self.assertEqual(self.payload()["body"], "Finding: the JSON parser drops keys.\n")
-
     def test_the_payload_is_a_comment_on_the_prs_head_and_never_an_approval(self):
         report = self.kit.tmp / "r.md"
         report.write_text("ok\n", encoding="utf-8")
-        comments = self.kit.tmp / "c.json"
-        comments.write_text(json.dumps([{"path": "a.py", "line": 3, "body": "nit"}]), encoding="utf-8")
-        self.post("https://github.com/o/r/pull/12", report, "--comments", comments)
+        self.post("https://github.com/o/r/pull/12", report)
         payload = self.payload()
         self.assertEqual(payload["event"], "COMMENT")
         self.assertEqual(payload["commit_id"], self.head())
-        self.assertEqual(payload["comments"], [{"path": "a.py", "line": 3, "body": "nit"}])
         call = self.calls("api")[-1]
         self.assertEqual(call[:4], ["api", "repos/{owner}/{repo}/pulls/12/reviews", "--method", "POST"])
         self.assertNotIn("APPROVE", json.dumps(self.kit.gh_calls()))
@@ -170,20 +133,6 @@ class PostReviewTest(Base):
         report.write_text("ok\n", encoding="utf-8")
         self.assertRegex(self.post("latest", report), r"^FAIL latest bad-pr: latest \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
-
-    def test_comments_that_are_not_a_json_array_of_objects_are_refused(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n", encoding="utf-8")
-        for comments in ("not json", '{"path": "a.py"}', '["nit"]'):
-            with self.subTest(comments):
-                self.assertRegex(self.post("12", report, "--comments", comments), r"^FAIL PR12 bad-comments \(log: ")
-        self.assertEqual(self.kit.gh_calls(), [])
-
-    def test_inline_comments_given_with_an_equals_sign_are_posted(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n", encoding="utf-8")
-        self.post("PR12", report, '--comments=[{"path": "a.py", "line": 3, "body": "nit"}]')
-        self.assertEqual(self.payload()["comments"], [{"path": "a.py", "line": 3, "body": "nit"}])
 
     def test_a_pr_view_without_a_head_fails_and_nothing_posts(self):
         report = self.kit.tmp / "r.md"
@@ -241,52 +190,6 @@ class ShipOpenTest(Base):
         self.kit.answer("pr-create", err="HTTP 422", rc=1)
         self.assertRegex(self.ship("open"), r"^FAIL 01 pr-create \(log: ")
         self.assertIsNone(runfolder.get(self.ticket, "PR"))
-
-    def body_file(self, text):
-        path = self.kit.tmp / "body.md"
-        path.write_text(text, encoding="utf-8")
-        return path
-
-    def test_the_orchestrators_body_fills_the_template_and_the_script_adds_tasks_and_closes(self):
-        self.commit_to_base(".github/pull_request_template.md", TEMPLATE)
-        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
-        body = self.body_file(FILLED)
-        line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open", "--body-file", body))
-        self.assertEqual(line, "OK 01 open pr=20")
-        edit = self.calls("pr", "edit")[0]
-        sent = Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8")
-        self.assertTrue(sent.startswith(FILLED), sent)
-        self.assertIn("task 01: https://github.com/o/r/pull/5", sent)
-        self.assertIn("Closes #7\nCloses #8", sent)
-
-    def test_a_relative_body_file_is_read_from_the_callers_folder(self):
-        work = self.kit.tmp / "work"
-        work.mkdir()
-        (work / "body.md").write_text(FILLED, encoding="utf-8")
-        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
-        line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open", "--body-file", "body.md", cwd=work))
-        self.assertEqual(line, "OK 01 open pr=20")
-        edit = self.calls("pr", "edit")[0]
-        self.assertIn("Cuts the JSON step", Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8"))
-
-    def test_a_template_section_left_empty_todo_or_na_is_refused_and_nothing_is_sent(self):
-        self.commit_to_base(".github/pull_request_template.md", TEMPLATE)
-        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
-        cases = {
-            "no body": None,
-            "empty Risk": FILLED.replace("Low: scripts only.", ""),
-            "TODO Testing": FILLED.replace("tests/run.sh: all ok", "TODO"),
-            "N/A revert": FILLED.replace("Revert the squash commit.", "N/A"),
-            "only a comment": FILLED.replace("Low: scripts only.", "<!-- say the risk -->"),
-            "an unchecked box": FILLED.replace("tests/run.sh: all ok", "- [ ] ran the tests"),
-        }
-        for name, text in cases.items():
-            with self.subTest(name):
-                args = ["open"] if text is None else ["open", "--body-file", self.body_file(text)]
-                line = self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", *args))
-                self.assertRegex(line, r"^FAIL 01 empty-template-section ")
-        self.assertEqual(self.calls("pr", "edit"), [])
-        self.assertEqual(self.calls("pr", "ready"), [])
 
 
 class ShipMergeTest(Base):

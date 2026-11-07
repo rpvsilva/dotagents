@@ -132,7 +132,7 @@ class StateTest(unittest.TestCase):
             with self.subTest(args=args):
                 p = self.status(*args)
                 self.assertEqual(p.returncode, 2)
-                self.assertEqual(p.stdout, "FAIL run usage: status.py <run> [--line <TT> | --write]\n")
+                self.assertEqual(p.stdout, "FAIL run usage: status.py <run> [--report | --line <TT> | --write]\n")
 
     def test_line_of_an_unknown_ticket_is_one_fail_line(self):
         p = self.status("--line", "99")

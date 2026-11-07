@@ -1,9 +1,11 @@
 """`map.md`'s `Checks`: the suite commands a merge runs in the task's worktree, each timed.
 
 The commands are the lines inside the fenced code blocks of the `## Checks` section, blank lines and `#` comments
-skipped. Each runs under `bash -c` in the worktree, its output in the step's log. `save` keeps the results in
-`<run>/reports/<id>.checks.json`: a list of `{command, rc, passed, failed, skipped, seconds, skip_reasons}`, the counts
-read from the suite's output by `counts`, `null` when it says none.
+skipped, except the block right after a `Setup:` line (the one-time Setup `setup.py` runs). Each runs under
+`bash -c` in the worktree, its output in the step's log. `save` keeps the results in `<run>/reports/<id>.checks.json`:
+a list of `{command, rc, passed, failed, skipped, seconds, skip_reasons}`, the counts read from the suite's output by
+`counts`, `null` when it says none. `skip_reasons` reads the skipped tests out of a suite's output, each with the tool
+it names (what `setup.py` lists in `skips.md`).
 """
 import json
 import re
@@ -13,6 +15,7 @@ from collections import namedtuple
 from . import core
 
 Suite = namedtuple("Suite", "command rc seconds out", defaults=("",))
+Skip = namedtuple("Skip", "tool reason")
 
 # This repo's runners: `<suite>: ok`, `<suite>: skipped (why)` or `== <tool>: why, skipped (how)`, `== <suite>: FAILED`,
 # read only inside their framing (`tests/parallel.sh`'s `== tests/a.test.sh (3s)`, `tests/run.sh`'s `== <step>`).
@@ -27,6 +30,9 @@ UNITTEST_END = re.compile(r"^(OK|FAILED)(?: \((.*)\))?\s*$")
 UNITTEST_SKIP = re.compile(r"\.\.\. skipped '(.*)'$")
 # Jest: `Tests:       1 failed, 2 skipped, 40 passed, 43 total`.
 JEST_SUMMARY = re.compile(r"^Tests:\s+((?:\d+ \w+, )*)\d+ total\s*$")
+SKIPPED = re.compile(r"\bskipped\b", re.IGNORECASE)
+TOOL_BEFORE = re.compile(r"([\w.+-]+)\W* (?:is |are )?not (?:installed|found|available|on PATH)", re.IGNORECASE)
+TOOL_AFTER = re.compile(r"\b(?:requires|needs|without|missing|install|no) ([\w.+-]+)", re.IGNORECASE)
 
 
 def commands(map_md):
@@ -35,9 +41,13 @@ def commands(map_md):
     if not path.is_file():
         raise core.Fail(f"no-map: {path}")
     m = re.search(r"^## Checks[ \t]*\n(.*?)(?=^## |\Z)", path.read_text(encoding="utf-8"), re.MULTILINE | re.DOTALL)
-    found = []
-    for block in re.findall(r"^```[^\n]*\n(.*?)^```", m.group(1) if m else "", re.MULTILINE | re.DOTALL):
-        found += [line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith("#")]
+    found, section = [], m.group(1) if m else ""
+    for block in re.finditer(r"^```[^\n]*\n(.*?)^```", section, re.MULTILINE | re.DOTALL):
+        before = section[:block.start()].rstrip().rsplit("\n", 1)[-1]
+        if before.startswith("Setup:"):  # the one-time Setup's block (`setup.py`), not a suite
+            continue
+        found += [line.strip() for line in block.group(1).splitlines()
+                  if line.strip() and not line.strip().startswith("#")]
     if not found:
         raise core.Fail("no-checks: map.md has no command in a Checks code block")
     return found
@@ -146,3 +156,28 @@ def save(run, ident, suites):
         rows.append({"command": s.command, "rc": s.rc, "passed": passed, "failed": failed, "skipped": skipped,
                      "seconds": round(s.seconds, 1), "skip_reasons": reasons})
     path.write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")
+
+
+def tool(reason):
+    """The tool a skip reason names as missing (`zsh is not installed`, `requires docker`), or None."""
+    m = TOOL_BEFORE.search(reason) or TOOL_AFTER.search(reason)
+    return m.group(1) if m else None
+
+
+def skip_reasons(text):
+    """Every skipped test or suite in a suite's output, in order, as `Skip(tool, reason)`: pytest's `-rs` summary,
+    unittest's verbose `... skipped 'reason'` (both as `counts` reads them), and any other line saying `skipped`, as
+    this repo's suites print (`<suite>: skipped (reason)`). unittest's `OK (skipped=N)` summary names no reason and is
+    not one."""
+    found = []
+    for line in text.splitlines():
+        line = line.strip()
+        m = PYTEST_SKIP.match(line) or UNITTEST_SKIP.search(line)
+        if m:
+            reason = m.group(1)
+        elif SKIPPED.search(line) and not UNITTEST_END.match(line):
+            reason = line
+        else:
+            continue
+        found.append(Skip(tool(reason), reason))
+    return found

@@ -6,7 +6,8 @@
  */
 export type RunState = 'starting' | 'running' | 'done' | 'failed' | 'stopped' | 'unknown'
 
-/** One row of the pane: a run folder of this repo, `<git dir>/remote-agent/<id>/`, as its files describe it. */
+/** One row of the pane: a run folder of this repo, `<common git dir>/remote-agent/<id>/` (or, from before
+ * records moved there, `<common git dir>/worktrees/<name>/remote-agent/<id>/`), as its files describe it. */
 export type Run = {
   id: string
   folder: string
