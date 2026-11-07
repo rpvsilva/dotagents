@@ -59,7 +59,7 @@ left_behind() {
     case "$REMOTE_BACKEND" in
       docker) docker ps -aq --filter "label=$label" ;;
       cluster)
-        kubectl --context "${REMOTE_CONTEXT:-my-cluster}" -n "${REMOTE_NAMESPACE:-agents}" get sandboxclaim "$run" \
+        kubectl --context "${REMOTE_CONTEXT:-}" -n "${REMOTE_NAMESPACE:-agents}" get sandboxclaim "$run" \
           --ignore-not-found -o jsonpath="{.metadata.name}{\" \"}{.metadata.deletionTimestamp}" | awk "NF == 1" ;;
       ssh)
         if [ "${REMOTE_SSH_MODE:-container}" = bare ]; then

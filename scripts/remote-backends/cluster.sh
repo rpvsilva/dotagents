@@ -9,8 +9,9 @@
 # in the namespace.
 # ping asks the cluster for its version, giving up after 5 seconds (`remote-agent ready`): exit 0 when it answers, else
 # one line on stdout with kubectl's error (e.g. Unable to connect to the server: ... no route to host) and exit 1.
-# Settings: REMOTE_CONTEXT (kube context, default my-cluster), REMOTE_NAMESPACE (agents), REMOTE_POOL (claude-runner),
-# REMOTE_HOURS (2), REMOTE_KEEP, REMOTE_CLAIM_TIMEOUT (seconds acquire waits for the claim to be Ready, 180);
+# Settings: REMOTE_CONTEXT (kube context) and REMOTE_POOL (warm pool), both required: every op but release refuses
+# without them; REMOTE_NAMESPACE (agents), REMOTE_HOURS (2), REMOTE_KEEP, REMOTE_CLAIM_TIMEOUT (seconds acquire waits
+# for the claim to be Ready, 180);
 # REMOTE_TASK (set by remote-agent.sh from --name, a valid label value).
 # The claim and its pod are labelled sandbox.users.io/remote-agent-run=<run> and, with REMOTE_TASK,
 # sandbox.users.io/remote-agent-task=<task>, so `kubectl get pods -L sandbox.users.io/remote-agent-task` tells the
@@ -20,9 +21,9 @@ set -euo pipefail
 # shellcheck source=lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-context="${REMOTE_CONTEXT:-my-cluster}"
+context="${REMOTE_CONTEXT:-}"
 namespace="${REMOTE_NAMESPACE:-agents}"
-pool="${REMOTE_POOL:-claude-runner}"
+pool="${REMOTE_POOL:-}"
 hours="${REMOTE_HOURS:-2}"
 claim_timeout="${REMOTE_CLAIM_TIMEOUT:-180}"
 
@@ -32,6 +33,15 @@ kc() { kubectl --context "$context" -n "$namespace" "$@"; }
 untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
 
 op="${1:-}"
+problem=""
+[ -n "$context" ] || problem="REMOTE_CONTEXT not set: the kube context (remote.context; \`remote-agent setup\`)"
+[ -n "$problem" ] || [ -n "$pool" ] || problem="REMOTE_POOL not set: the warm pool (remote.pool; \`remote-agent setup\`)"
+if [ -n "$problem" ]; then
+  # acquire already said it; release has nothing to remove.
+  [ "$op" = release ] && exit 0
+  if [ "$op" = check ] || [ "$op" = ping ]; then echo "$problem"; else say "$problem"; fi
+  exit 1
+fi
 case "$op" in
   acquire)
     claim="$2"

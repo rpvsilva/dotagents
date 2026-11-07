@@ -111,7 +111,7 @@ case " \$* " in
     # The probe of \`remote-agent ready\`: with \$SANDBOX/unreachable, as kubectl when the cluster has no route.
     [ ! -e "$SANDBOX/unreachable" ] || { echo "Client Version: v1.31.0"; echo "Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: no route to host" >&2; exit 1; } ;;
   *" get sandboxclaim "*conditions*) cat "$SANDBOX/conditions" 2>/dev/null || cat "$SANDBOX/state" ;;
-  *" get sandboxclaim "*) printf 'claude-runner-abc' ;;
+  *" get sandboxclaim "*) printf 'test-pool-abc' ;;
   *" get sandbox "*) printf '' ;;
   *" remote-agent-sandbox"*)
     if [ -e "$SANDBOX/real" ]; then
@@ -188,7 +188,7 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"did the t
 echo '{"type":"result","result":"did the thing","is_error":false}'
 EOF
 chmod +x "$SANDBOX/podbin/claude"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 
 # A worktree with a tracked file, an untracked one, an ignored one and a secret-looking one.
 W="$SANDBOX/work"
@@ -599,7 +599,7 @@ grep -q "^\[quote\] killed: " "$SANDBOX/err" && fail "quoted kill: counted as a 
 result_is "quoted kill result" '.killed == null and .capped_kills == [] and .lost == false'
 rm -f "$W/hello.txt"
 # Nor does Claude's text quoting a container error make a failed run lost.
-{ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Error from server: No such container: claude-runner-abc"}]}}'
+{ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Error from server: No such container: test-pool-abc"}]}}'
   echo '{"type":"result","is_error":true,"result":"gave up"}'; } >"$SANDBOX/quote"
 code=0; run 0 "" --name quote || code=$?
 [ "$code" = 1 ] || fail "quoted container error: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
@@ -625,12 +625,12 @@ result_is "caps no python3 result" '.capped_off == "python3" and .capped_kills =
 rm -f "$W/hello.txt" "$SANDBOX/podbin/python3" "$SANDBOX/real"
 
 # A sandbox that went away mid-run with no kill line before it is lost; one killed first reads as the kill.
-echo "Error from server: error executing command in container: No such container: claude-runner-abc" >"$SANDBOX/vanish"
+echo "Error from server: error executing command in container: No such container: test-pool-abc" >"$SANDBOX/vanish"
 code=0; run 0 "$patch" || code=$?
 [ "$code" = 1 ] || fail "lost: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
 grep -q "killed: " "$SANDBOX/err" && fail "lost: a kill line printed: $(cat "$SANDBOX/err")"
 result_is "lost result" '.lost == true and .killed == null and .capped_kills == [] and .status == "failed"'
-{ echo "== capped: killed: memory make test"; echo "Error from server: No such container: claude-runner-abc"; } >"$SANDBOX/vanish"
+{ echo "== capped: killed: memory make test"; echo "Error from server: No such container: test-pool-abc"; } >"$SANDBOX/vanish"
 code=0; run 0 "$patch" || code=$?
 [ "$code" = 1 ] || fail "killed then lost: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
 grep -q "^\[agent-[^]]*\] killed: memory make test$" "$SANDBOX/err" || fail "killed then lost: no kill line: $(cat "$SANDBOX/err")"
@@ -645,6 +645,7 @@ run 0 "$patch" --name "07-Visible runs!" --attach "$SANDBOX/att/ticket.md" || fa
 claim="$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"
 [ "$(pod_labels)" = "sandbox.users.io/remote-agent-run: $claim, sandbox.users.io/remote-agent-task: 07-visible-runs" ] || fail "name: pod labels are $(pod_labels)"
 grep -qF "sandbox.users.io/remote-agent-task: 07-visible-runs" "$SANDBOX/claim.yaml" || fail "name: claim not labelled"
+grep -qx "    name: test-pool" "$SANDBOX/claim.yaml" || fail "name: claim not on the pool Setting's warm pool: $(cat "$SANDBOX/claim.yaml")"
 logged_all "[07-visible-runs]" "$POD/main-stdout" "name"
 [ "$(cat "$SANDBOX/report")" = "did the thing" ] || fail "name: stdout changed: $(cat "$SANDBOX/report")"
 run_data "name run data" "done" 0 07-visible-runs
@@ -659,7 +660,7 @@ task="$(pod_labels | sed -n 's/.*sandbox\.users\.io\/remote-agent-task: //p')"
 grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "leftover: the old REMOTE_BACKEND was used, not settings.json"
 grep -q "REMOTE_BACKEND.*remote-agent setup" "$SANDBOX/err" || fail "leftover: not named: $(cat "$SANDBOX/err")"
 rm -f "$W/hello.txt"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 code=0; run 0 "$patch" --name "!!" || code=$?
 if [ "$code" != 1 ] || [ -e "$SANDBOX/calls" ]; then fail "name without letters or digits: not refused"; fi
 
@@ -716,7 +717,7 @@ refused "unknown backend" "cluster, docker, ssh"
 grep -qw "lib" "$SANDBOX/out" && fail "unknown backend: lib.sh listed as a backend"
 remote_config "$SANDBOX/config"
 refused "no backend" "remote-agent setup"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 mkdir -p "$W/.agents"
 echo '{"remote": {"allowed": false}}' >"$W/.agents/settings.json"
 refused "not allowed" "remote.allowed"
@@ -734,21 +735,36 @@ rm -rf "$W/.agents"
 remote_config "$SANDBOX/config"
 ready && fail "ready: yes with no backend"
 grep -q "remote-agent setup" "$SANDBOX/out" || fail "ready, no backend: $(cat "$SANDBOX/out")"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 rm "$SANDBOX/config/dotagents/remote.env"
 ready && fail "ready: yes with no token"
 grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$SANDBOX/out" || fail "ready, no token: $(cat "$SANDBOX/out")"
-remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 # The backend is probed, briefly: an unreachable cluster is a no, with kubectl's own error on one line.
 rm -f "$SANDBOX/calls"
 ready || fail "ready: no though the cluster answers: $(cat "$SANDBOX/out")"
-grep -q -- "--context my-cluster --request-timeout=5s version" "$SANDBOX/calls" || fail "ready: the cluster not probed: $(cat "$SANDBOX/calls" 2>/dev/null)"
+grep -q -- "--context test-ctx --request-timeout=5s version" "$SANDBOX/calls" || fail "ready: the cluster not probed: $(cat "$SANDBOX/calls" 2>/dev/null)"
 : >"$SANDBOX/unreachable"
 code=0; ready || code=$?
 [ "$code" = 1 ] || fail "ready, unreachable: wanted exit 1, got $code"
-[ "$(cat "$SANDBOX/out")" = "cluster backend not reachable: context my-cluster: Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: no route to host" ] \
+[ "$(cat "$SANDBOX/out")" = "cluster backend not reachable: context test-ctx: Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: no route to host" ] \
   || fail "ready, unreachable: not one line naming the backend and the error: $(cat "$SANDBOX/out")"
 rm -f "$SANDBOX/unreachable" "$SANDBOX/calls"
+
+# The cluster backend has no default kube context or warm pool: unset, ready and a run say which one, and nothing
+# reaches kubectl.
+for missing in CONTEXT POOL; do
+  if [ "$missing" = CONTEXT ]; then remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_POOL=test-pool
+  else remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx; fi
+  code=0; ready || code=$?
+  [ "$code" = 1 ] || fail "ready, no $missing: wanted exit 1, got $code"
+  grep -q "REMOTE_${missing} not set" "$SANDBOX/out" || fail "ready, no $missing: not named: $(cat "$SANDBOX/out")"
+  code=0; run 0 "$patch" || code=$?
+  [ "$code" = 1 ] || fail "run, no $missing: wanted exit 1, got $code"
+  grep -q "REMOTE_${missing} not set" "$SANDBOX/out" || fail "run, no $missing: not named: $(cat "$SANDBOX/out")"
+  [ ! -e "$SANDBOX/calls" ] || fail "no $missing: kubectl was called: $(cat "$SANDBOX/calls")"
+done
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 
 # --help prints the usage on stdout and exits 0; an unknown --option is refused; neither starts a run.
 code=0; (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
