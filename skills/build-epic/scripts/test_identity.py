@@ -147,14 +147,12 @@ class ModeTest(unittest.TestCase):
         self.file.write_text("# Decisions\nmerge_identity:\n")
         self.assertEqual(identity.mode(self.kit.run_dir, lambda: "human"), "human")
 
-    def test_any_other_identity_fails_bad_value(self):
-        self.file.write_text("# Decisions\nmerge_identity: rui\n")
+    def test_any_other_setting_fails_bad_value(self):
         with self.assertRaises(core.Fail) as caught:
-            identity.mode(self.kit.run_dir, lambda: "app")
-        self.assertEqual(caught.exception.reason, "bad-value: merge_identity is one of app|human")
-        self.file.unlink()
-        with self.assertRaises(core.Fail):
             identity.mode(self.kit.run_dir, lambda: "bot")
+        self.assertEqual(caught.exception.reason, "bad-value: merge_identity is one of app|human")
+        self.file.write_text("# Decisions\nmerge_identity: rui\n")  # decisions.md never decides the mode
+        self.assertEqual(identity.mode(self.kit.run_dir, lambda: "app"), "app")
 
 
 class MergeArgvTest(unittest.TestCase):
