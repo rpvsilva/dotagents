@@ -49,3 +49,21 @@ _Avoid_: Setting, key
 **Declaration**:
 A skill's list of the Settings it reads: each one's key, kind of value, default and meaning. A Setting no skill declares does not exist.
 _Avoid_: Schema, manifest
+
+## Parts
+
+**Part**:
+One installable piece of the setup: a skill, a subagent, a mod, a hook, or one of the folder parts `remote` (the `remote-agent` command), `mcp` (the MCP servers) and `global` (the personal instructions, guardrails and plugins). Each names its Group and Needs in a `needs.json` beside it; a subagent's is in the `needs.json` of the skill holding its brief.
+_Avoid_: Component, module, package
+
+**Group**:
+A named feature made of Parts, which a person can take on its own: `core`, `remote`, `pr-loop`, `epics`, `security`, `safety-hooks`, `small-tools` or `personal`. Every Part belongs to exactly one; `groups.json` names them.
+_Avoid_: Bundle, set, profile
+
+**Need**:
+Another Part a Part refers to, named in its `needs.json`. A required Need is one the Part calls and cannot work without; it always comes along. An optional Need is one the Part works without, such as remote runs it falls back from to local ones; it comes only when named too.
+_Avoid_: Dependency, requirement, coupling
+
+**Core**:
+The Parts every Group comes with, which no Part names as a Need: the shared conventions (`skills/_shared`), Settings (`~/.agents/bin/settings`), the hooks library and the `configure` skill.
+_Avoid_: Base, common, runtime

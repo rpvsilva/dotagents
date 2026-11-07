@@ -1,0 +1,1 @@
+{"group": "security", "needs": {"build-epic": "required", "epic-implementer": "required", "review-pr": "required", "ship-pr": "required", "remote-subagents": "optional", "remote": "optional"}, "agents": ["security-mapper", "security-reviewer"]}
