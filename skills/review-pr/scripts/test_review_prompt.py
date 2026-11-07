@@ -79,10 +79,41 @@ class ReviewPromptTest(unittest.TestCase):
                 self.assertNotIn("/runs/r1/map.md", out)
                 self.assertIn("merge-base", out)
 
+    def test_a_decisions_file_is_named_with_or_without_a_run(self):
+        args = [a for a in ARGS["task"] if a not in RUN]
+        out = self.render("task", args + ["--decisions", "/d/decisions.md"])
+        self.assertIn("- /d/decisions.md: a rule it waives is never a finding", out)
+        self.assertIn("its `ci:` line", out)
+        self.assertNotIn("map.md", out)
+        out = self.render("task", ARGS["task"] + ["--decisions", "/d/decisions.md"])
+        self.assertIn("- /d/decisions.md: a rule it waives", out)
+        self.assertNotIn("/runs/r1/decisions.md", out)
+        self.assertIn("/runs/r1/map.md", out)
+
     def test_relative_paths_are_made_absolute(self):
         got = run("task", "--pr", "1", "--worktree", "wt", "--head", "h", "--base", "b", cwd=self.tmp)
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertIn(str(Path(self.tmp, "wt")), got.stdout)
+
+    def test_the_diff_command_runs_as_given_whatever_the_worktree_and_refs_hold(self):
+        repo = self.tmp / "a repo $(touch pwned)"
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "f.txt").write_text("one\n")
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-qm", "one"], check=True)
+        (repo / "f.txt").write_text("two\n")
+        subprocess.run(git + ["commit", "-qam", "two"], check=True)
+        got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1;touch pwned2")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
+        subprocess.run(["bash", "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        self.assertFalse((self.tmp / "pwned").exists() or (self.tmp / "pwned2").exists(), command)
+        got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1")
+        command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
+        res = subprocess.run(["bash", "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("+two", res.stdout)
 
     def assert_usage(self, got):
         self.assertEqual(got.returncode, 2, got.stdout + got.stderr)

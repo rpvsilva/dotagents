@@ -217,6 +217,64 @@ class VerifyTunerTest(unittest.TestCase):
         self.write_report("covered: none")
         self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=0\n")
 
+    def base_commit(self, files):
+        """Adds `files` to the ticket branch, under the tuning branch's fork point."""
+        for name, text in files.items():
+            (self.wt / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.wt / name).write_text(text)
+        self.kit.git("add", ".", cwd=self.wt)
+        self.kit.git("commit", "-qm", "base", cwd=self.wt)
+        self.kit.git("update-ref", "refs/remotes/origin/feat/t", "HEAD", cwd=self.wt)
+
+    def test_a_removed_shell_assertion_without_a_moved_line_fails_naming_it(self):
+        lines = ['check "exit code" 0 "$rc"', "cmp -s want got || fail 'output differs'",
+                 "grep -q ok out.txt || fail 'no ok'", '[ "$rc" -eq 0 ] || fail "rc $rc"',
+                 'grep -q bad out.txt && fail "bad"']
+        self.base_commit({"tests/guard.test.sh": "#!/bin/sh\nrc=0\n" + "\n".join(lines) + "\n"})
+        for n, line in enumerate(lines, start=3):
+            with self.subTest(line):
+                test = self.wt / "tests" / "guard.test.sh"
+                original = test.read_text()
+                test.write_text(original.replace(line + "\n", ""))
+                self.write_report("mutations: calc.py:6 a - b -> a + b")
+                self.assertFails(self.verify(), f"assertion-removed tests/guard.test.sh:{n}")
+                test.write_text(original)
+
+    def test_a_mutation_on_a_test_file_fails(self):
+        self.write_report("mutations: test_calc.py:8 5 -> 6")
+        self.assertFails(self.verify(), "test-file-mutation test_calc.py:8")
+
+    def test_covered_entries_without_a_mutation_each_fail(self):
+        self.write_report("covered: calc.sub", "mutations: none")
+        self.assertFails(self.verify(), "unproven-covered covered=1 mutations=0")
+        self.write_report("covered:", "- calc.sub", "- calc.mul", "mutations: calc.py:6 a - b -> a + b")
+        self.assertFails(self.verify(), "unproven-covered covered=2 mutations=1")
+
+    def test_test_harness_files_under_tests_are_not_test_files(self):
+        for name in ("tests/run.sh", "tests/suites.txt", "tests/affected.sh"):
+            with self.subTest(name):
+                (self.wt / "tests").mkdir(exist_ok=True)
+                (self.wt / name).write_text("x\n")
+                self.write_report("mutations: calc.py:6 a - b -> a + b")
+                self.assertFails(self.verify(), f"non-test-file {name}")
+                (self.wt / name).unlink()
+
+    def test_fixtures_and_test_helpers_count_as_test_files(self):
+        self.base_commit({"tests/fixtures/in.json": "{}\n", "tests/helpers.py": "X = 1\n"})
+        (self.wt / "tests" / "fixtures" / "in.json").write_text('{"a": 1}\n')
+        (self.wt / "tests" / "helpers.py").write_text("X = 2\n")
+        self.kit.git("commit", "-qam", "test: data", cwd=self.wt)
+        self.write_report("mutations: calc.py:6 a - b -> a + b")
+        self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=1\n")
+
+    def test_an_assertion_copied_into_an_untracked_file_still_counts_as_removed(self):
+        test = self.wt / "test_calc.py"
+        test.write_text(test.read_text().replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"))
+        self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
+        (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"))
+        self.write_report("mutations: calc.py:6 a - b -> a + b")
+        self.assertFails(self.verify(), "assertion-removed test_calc.py:8")
+
     def test_a_missing_report_fails(self):
         self.assertFails(self.verify(), f"no-report {self.report}")
 

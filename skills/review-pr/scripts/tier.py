@@ -5,15 +5,27 @@ Usage: tier.py <diff file>
        tier.py --git <worktree> <merge-base>   (tiers `git diff <merge-base>..HEAD` in the worktree)
        tier.py --trim <diff file>              (prints the diff cut to its changed files and added lines, a fixture)
 
-Only added lines count, and only in source files: test and doc files never raise the tier. A change is high when an
-added non-comment source line reaches an I/O sink, a write or a file read (`sink: save( in <file>`), when it touches
-a storage-format file (`storage: <file>`), or when it adds more source lines than the `tier_max_lines` Setting
-(`size: ...`), read through `~/.agents/bin/settings` (600 when the tool is missing). Otherwise it is low. Read-only: it never writes a file.
+Only added lines count. Test files (`test_*`, `*.test.*`, ... and code files under `tests/`; test-harness scripts
+and config there, such as `tests/run.sh` or `tests/suites.txt`, are not tests), fixtures and docs never raise the
+tier. The default is safe, so a change is high when it:
+- touches a file that runs or steers code by its kind: a test harness file (`harness: <file>`), a shell script (`shell: <file>`), a CI, workflow or build file
+  (`ci: <file>`), an agent-instruction file such as `AGENTS.md`, `SKILL.md` or a brief (`agent-instructions: <file>`),
+  the review gate, `CODEOWNERS` or a path either marks high (`gate: <file>`), or the repo's `.agents/settings.json`
+  (`settings: <file>`);
+- touches a storage-format file (`storage: <file>`);
+- adds a non-comment source line reaching a sink: an I/O write or read, a process, the network, code from data
+  (`sink: eval in <file>`);
+- or adds more source lines than the `tier_max_lines` Setting (`size: ...`), read through `~/.agents/bin/settings`
+  (600 when the tool is missing).
+Otherwise it is low. The gate files and the Setting's repo Level come from the merge base in `--git` mode, so a PR
+cannot lower its own tier; from the current folder otherwise. Read-only: it never writes to the repo.
 """
+import fnmatch
 import os
 import re
 import subprocess
 import sys
+import tempfile
 
 DEFAULT_MAX_LINES = 600
 
@@ -27,39 +39,155 @@ SINKS = [
     ("os.rename", r"\bos\.rename\b"),
     ("shutil", r"\bshutil\b"),
     ("subprocess", r"\bsubprocess\b"),
+    ("os.system", r"\bos\.system\b"),
+    ("os.popen", r"\bos\.popen\b"),
+    ("os.exec", r"\bos\.(exec|spawn)\w*\("),
     ("socket", r"\bsocket\b"),
     ("urllib", r"\burllib\b"),
+    ("requests", r"\b(requests|httpx|aiohttp)\.\w+\("),
+    ("http", r"\bhttp\.(client|request|get)\b"),
     ("os.environ", r"\bos\.environ\b"),
+    ("process.env", r"\bprocess\.env\b"),
     ("json.dump", r"\bjson\.dump\("),
+    ("pickle.loads", r"\b(c?pickle|marshal|dill)\.loads?\("),
+    ("yaml.load", r"\byaml\.(unsafe_)?load\("),
     ("unlink", r"\bunlink\b"),
     ("mkdir", r"\bmkdir"),
     (".write(", r"\.write\("),
     ("save(", r"save\("),
+    ("eval", r"(^|[^\w.])eval\b"),
+    ("exec(", r"(^|[^\w.])exec\("),
+    ("child_process", r"\bchild_process\b"),
+    ("fetch(", r"\bfetch\("),
+    ("fs write", r"\bfs\.(write|append|rm|unlink|rename|copy|mkdir)\w*\("),
+    ("new Function", r"\bnew\s+Function\("),
+    ("curl", r"\b(curl|wget)\b"),
+    ("| sh", r"\|\s*(sudo\s+)?(ba|z|da)?sh\b"),
+    ("sh -c", r"\b(ba|z)?sh\s+-c\b"),
+    ("rm -r", r"\brm\s+-\w*[rf]"),
+    ("source", r"(^|[;&|]\s*)(source|\.)\s+\S"),
 ]
 SINKS = [(name, re.compile(pattern)) for name, pattern in SINKS]
 
-COMMENT = re.compile(r"\s*(#|//|/\*|\*|--|<!--)")
+# The comment markers per file extension; any other extension takes DEFAULT_COMMENT.
+HASH = r"#"
+C_LIKE = r"//|/\*|\*(\s|/|$)"
+COMMENTS = {
+    **dict.fromkeys(("py", "sh", "bash", "zsh", "rb", "pl", "yml", "yaml", "toml", "cfg", "ini", "r", "ps1"), HASH),
+    **dict.fromkeys(("js", "jsx", "ts", "tsx", "mjs", "cjs", "java", "kt", "go", "rs", "c", "h", "cc", "cpp", "hpp",
+                     "cs", "swift", "scala", "dart"), C_LIKE),
+    "php": f"{HASH}|{C_LIKE}",
+    **dict.fromkeys(("sql", "lua", "hs", "elm"), r"--\s"),
+    **dict.fromkeys(("html", "htm", "xml", "vue", "svelte"), r"<!--"),
+}
+DEFAULT_COMMENT = f"{HASH}|{C_LIKE}"
+
 DOC_EXT = {".md", ".markdown", ".rst", ".txt", ".adoc", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 DOC_DIRS = {"docs", "doc"}
 DOC_NAMES = re.compile(r"^(readme|changelog|license|contributing|authors|notice)\b", re.I)
-TEST_DIRS = {"test", "tests", "__tests__", "spec", "testdata"}
+# Under these folders every file is test data.
+FIXTURE_DIRS = {"fixtures", "__fixtures__", "testdata", "__snapshots__"}
+# Under these folders a code file is a test (a helper included); a shell script, config or data file is harness.
+TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_CODE_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rb", ".java", ".kt", ".rs", ".c",
+                 ".cc", ".cpp", ".cs", ".php", ".swift", ".scala", ".ex", ".exs"}
 TEST_NAMES = re.compile(r"^(test_.*|.*_test\.\w+|.*\.(test|spec)\.\w+|conftest\.py)$")
 STORAGE_EXT = {".sql", ".proto", ".avsc", ".fbs", ".prisma"}
 STORAGE_DIRS = {"migrations", "migration"}
+SHELL_EXT = {".sh", ".bash", ".zsh", ".ksh", ".fish", ".ps1", ".psm1", ".bat", ".cmd"}
+SHEBANG = re.compile(r"^#!.*\b(ba|z|k|da|fi)?sh\b")
+CI_DIRS = (".github/workflows/", ".github/actions/", ".circleci/", ".buildkite/", ".gitlab/", ".husky/")
+CI_NAMES = re.compile(r"^(\.gitlab-ci\.ya?ml|\.travis\.ya?ml|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml"
+                      r"|jenkinsfile|action\.ya?ml|\.pre-commit-config\.ya?ml|makefile|gnumakefile|.*\.mk"
+                      r"|dockerfile.*|.*\.dockerfile|docker-compose.*\.ya?ml|compose\.ya?ml"
+                      r"|package\.json|\.npmrc|setup\.py|setup\.cfg|pyproject\.toml|requirements.*\.(txt|in)"
+                      r"|pipfile|tox\.ini|noxfile\.py|cargo\.toml|go\.mod|gemfile|rakefile|build\.gradle(\.kts)?"
+                      r"|settings\.gradle(\.kts)?|pom\.xml|build\.xml|cmakelists\.txt|justfile|taskfile\.ya?ml"
+                      r"|\.envrc|\.gitattributes|\.gitmodules)$", re.I)
+AGENT_NAMES = re.compile(r"^(agents|claude|gemini|skill|copilot-instructions)\.md$|^\.(cursor|windsurf|cline)rules$"
+                         r"|.*-brief\.md$|.*\.mdc$|.*\.prompt\.md$|.*\.instructions\.md$", re.I)
+AGENT_DIRS = {"skills", "agents", "prompts", "commands", "rules", ".claude", ".cursor", ".codex", ".agents",
+              ".windsurf", ".gemini"}
+GATE_FILES = {".review-gate.yml", ".review-gate.yaml", "CODEOWNERS"}
+CODEOWNERS = ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
+SETTINGS_FILE = ".agents/settings.json"
 
 
-def kind(path):
-    """`test`, `doc`, `storage` or `source`."""
+def is_test(parts, name, ext):
+    if FIXTURE_DIRS & set(parts):
+        return True
+    if TEST_NAMES.match(name):
+        return True
+    return bool(TEST_DIRS & set(parts)) and ext in TEST_CODE_EXT
+
+
+def kind(path, first=""):
+    """`test`, `harness`, `doc`, `storage`, `shell`, `ci`, `agent-instructions` or `source`. `first` is the file's first added
+    line, for a shebang."""
     parts = path.split("/")
-    name = parts[-1]
+    dirs, name = parts[:-1], parts[-1]
     ext = os.path.splitext(name)[1].lower()
-    if TEST_DIRS & set(parts[:-1]) or TEST_NAMES.match(name):
+    if is_test(dirs, name, ext):
         return "test"
-    if ext in DOC_EXT or DOC_DIRS & set(parts[:-1]) or DOC_NAMES.match(name):
+    if TEST_DIRS & set(dirs) and not (ext in (".md", ".rst") or DOC_NAMES.match(name)):
+        return "harness"
+    if ext in SHELL_EXT or SHEBANG.match(first):
+        return "shell"
+    if path.startswith(CI_DIRS) or CI_NAMES.match(name):
+        return "ci"
+    if ext in (".md", ".mdc") or AGENT_NAMES.match(name):
+        if AGENT_NAMES.match(name) or AGENT_DIRS & set(dirs) or path.startswith(".github/prompts/"):
+            return "agent-instructions"
+    if ext in DOC_EXT or DOC_DIRS & set(dirs) or DOC_NAMES.match(name):
         return "doc"
-    if ext in STORAGE_EXT or STORAGE_DIRS & set(parts[:-1]) or "schema" in name.lower():
+    if ext in STORAGE_EXT or STORAGE_DIRS & set(dirs) or "schema" in name.lower():
         return "storage"
     return "source"
+
+
+def comment(path):
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    return re.compile(r"\s*(" + COMMENTS.get(ext, DEFAULT_COMMENT) + ")")
+
+
+def gate_patterns(read):
+    """The path patterns the review gate's high tier and CODEOWNERS mark, from `read(<file>)` (None when missing)."""
+    patterns = []
+    text = read(".review-gate.yml") or read(".review-gate.yaml") or ""
+    high = False
+    for line in text.splitlines():
+        m = re.match(r"^(\s*)(\w+):\s*(.*)$", line)
+        if m:
+            high = m.group(2) == "high"
+            if high and m.group(3).startswith("["):
+                patterns += [p.strip(" '\"") for p in m.group(3).strip("[]").split(",") if p.strip()]
+            continue
+        m = re.match(r"^\s*-\s*['\"]?([^'\"#\s]+)", line)
+        if m and high:
+            patterns.append(m.group(1))
+    for name in CODEOWNERS:
+        for line in (read(name) or "").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                patterns.append(line.split()[0])
+    return patterns
+
+
+def matches(pattern, path):
+    """Whether a CODEOWNERS-style `pattern` (anchored with a leading `/`, a folder with a trailing `/`) covers `path`."""
+    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
+    folder = pattern.endswith("/")
+    pattern = pattern.strip("/")
+    if not pattern:
+        return False
+    parts = path.split("/")
+    starts = [0] if anchored else range(len(parts))
+    for i in starts:
+        n = len(pattern.split("/"))
+        head = "/".join(parts[i:i + n])
+        if fnmatch.fnmatchcase(head, pattern) and (not folder or i + n < len(parts)):
+            return True
+    return False
 
 
 def parse(text):
@@ -90,33 +218,49 @@ def trim(text):
     return "\n".join(out) + "\n"
 
 
-def max_lines(folder):
-    """The `tier_max_lines` Setting, or the default when `~/.agents/bin/settings` is missing."""
+def max_lines(folder, base_settings=None):
+    """The `tier_max_lines` Setting, or the default when `~/.agents/bin/settings` is missing. With `base_settings`
+    (the merge base's `.agents/settings.json` text, or "" when it has none), the repo Level is that file, not
+    `folder`'s."""
     tool = os.path.expanduser("~/.agents/bin/settings")
     if not os.path.exists(tool):
         return DEFAULT_MAX_LINES
-    res = subprocess.run([tool, "--dir", folder, "get", "review-pr", "tier_max_lines"], capture_output=True,
-                         text=True, stdin=subprocess.DEVNULL)
+    with tempfile.TemporaryDirectory() as scratch:
+        if base_settings is not None:
+            # A throwaway repo holding only the base's file, so the tool reads that as the repo Level.
+            folder = scratch
+            subprocess.run(["git", "init", "-q", scratch], capture_output=True, stdin=subprocess.DEVNULL, check=True)
+            if base_settings:
+                os.mkdir(os.path.join(scratch, ".agents"))
+                with open(os.path.join(scratch, SETTINGS_FILE), "w") as f:
+                    f.write(base_settings)
+        res = subprocess.run([tool, "--dir", folder, "get", "review-pr", "tier_max_lines"], capture_output=True,
+                             text=True, stdin=subprocess.DEVNULL)
     if res.returncode != 0:
         sys.exit(f"tier.py: settings failed: {res.stderr.strip()}")
     value = res.stdout.strip()
     return int(value) if value else DEFAULT_MAX_LINES
 
 
-def tier(files, limit):
-    """(`low` or `high`, the signals that decided it)."""
+def tier(files, limit, gate=()):
+    """(`low` or `high`, the signals that decided it). `gate` holds the path patterns the gate files mark high."""
     signals = []
     size = 0
     for path, added in files:
-        k = kind(path)
-        if k == "storage":
-            signals.append(f"storage: {path}")
-        if k != "source":
+        k = kind(path, added[0] if added else "")
+        if path.split("/")[-1] in GATE_FILES or any(matches(p, path) for p in gate):
+            signals.append(f"gate: {path}")
+        if path == SETTINGS_FILE:
+            signals.append(f"settings: {path}")
+        if k in ("storage", "harness", "shell", "ci", "agent-instructions"):
+            signals.append(f"{k}: {path}")
+        if k in ("test", "doc", "agent-instructions"):
             continue
         size += len(added)
         hit = []
+        skip = comment(path)
         for line in added:
-            if COMMENT.match(line):
+            if skip.match(line):
                 continue
             hit += [name for name, pattern in SINKS if name not in hit and pattern.search(line)]
         signals += [f"sink: {name} in {path}" for name in hit]
@@ -125,6 +269,21 @@ def tier(files, limit):
     if signals:
         return "high", signals
     return "low", [f"no sink, no storage file, {size} added source lines <= {limit}"]
+
+
+def git_show(worktree, rev, path):
+    """`path`'s text at `rev`, or None when it has none."""
+    res = subprocess.run(["git", "-C", worktree, "show", f"{rev}:{path}"], capture_output=True, text=True,
+                         errors="replace", stdin=subprocess.DEVNULL)
+    return res.stdout if res.returncode == 0 else None
+
+
+def read_file(path):
+    try:
+        with open(path, errors="replace") as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def main(argv):
@@ -138,14 +297,17 @@ def main(argv):
                              capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL)
         if res.returncode != 0:
             sys.exit(f"tier.py: git diff failed: {res.stderr.strip()}")
-        text, folder = res.stdout, worktree
+        text = res.stdout
+        gate = gate_patterns(lambda name: git_show(worktree, base, name))
+        limit = max_lines(worktree, git_show(worktree, base, SETTINGS_FILE) or "")
     elif len(argv) == 1 and not argv[0].startswith("--"):
         with open(argv[0], errors="replace") as f:
             text = f.read()
-        folder = os.getcwd()
+        gate = gate_patterns(read_file)
+        limit = max_lines(os.getcwd())
     else:
         sys.exit(__doc__.split("\n\n")[1])
-    verdict, signals = tier(parse(text), max_lines(folder))
+    verdict, signals = tier(parse(text), limit, gate)
     print(verdict)
     for signal in signals:
         print(signal)
