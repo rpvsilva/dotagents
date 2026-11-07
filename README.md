@@ -10,7 +10,7 @@
 ![Cursor](https://img.shields.io/badge/Cursor-partial-000000?logo=cursor&logoColor=white)
 ![Shell](https://img.shields.io/badge/shell-bash_3.2+-4EAA25?logo=gnubash&logoColor=white)
 
-🧩 13 skills · 🧑‍🤝‍🧑 10 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
+🧩 14 skills · 🧑‍🤝‍🧑 10 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
 
 [What's included](#-whats-included) · [Install](#-install) · [Use](#-use) · [Docs](#-docs) · [Contributing](#-contributing)
 
@@ -86,6 +86,7 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`add-plugin`](skills/add-plugin/SKILL.md) | Add a Claude Code plugin after showing what it adds and costs |
 | [`configure`](skills/configure/SKILL.md) | Show or change the Settings skills read, for this machine or this repo |
 | [`remember`](skills/remember/SKILL.md) | After a skill run, save what it learned about the repo for next time |
+| [`remote-subagents`](skills/remote-subagents/SKILL.md) | Run a subagent's brief on the remote backend (cluster, Docker or SSH host) instead of this machine, and act on its outcome |
 | [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill or per subagent role (`--by-role`), compare runs over time, find wasted steps, and measure and compare build-epic runs (`run_metrics.py`, `compare_runs.py`) |
 
 ### 🧑‍🤝‍🧑 Subagents
