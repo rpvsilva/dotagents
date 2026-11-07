@@ -43,8 +43,13 @@ class TicketBodyTest(FixtureRun):
         testing = prbody.section(body, "Testing")
         self.assertIn("- `tests/run.sh`: passed in 30.2s (12 passed, 0 failed, 1 skipped)", testing)
         self.assertIn("- `tests/run.sh`: passed in 28s", testing)
-        self.assertIn("- `tests/run.sh` (07-01): zsh not installed", testing)
         self.assertNotIn("never-shown", body)
+
+    def test_skip_reasons_are_listed_once_under_not_exercised_here_and_not_under_testing(self):
+        body = self.body(REPO_TEMPLATE.read_text(encoding="utf-8"))
+        self.assertEqual(prbody.section(body, "Not exercised here"), "- zsh not installed")
+        self.assertNotIn("zsh not installed", prbody.section(body, "Testing"))
+        self.assertEqual(body.count("zsh not installed"), 1, body)
 
     def test_a_template_heading_the_run_cannot_fill_is_left_empty(self):
         template = REPO_TEMPLATE.read_text(encoding="utf-8") + "\n## Screenshots\n"
@@ -100,19 +105,19 @@ class SuiteResultTest(FixtureRun):
     def save(self, ident, suites):
         (self.run_dir / "reports" / f"{ident}.checks.json").write_text(json.dumps(suites), encoding="utf-8")
 
-    def testing_section(self):
+    def saved_results(self):
         return prbody.section(self.body(None), "Testing")
 
     def test_a_suite_is_passed_or_failed_by_its_exit_code_whatever_its_passed_count(self):
         self.save("07-01", [{"command": "red", "rc": 1, "passed": 5, "failed": 1},
                             {"command": "none-ran", "rc": 0, "passed": 0}])
-        testing = self.testing_section()
+        testing = self.saved_results()
         self.assertIn("- `red`: failed (5 passed, 1 failed)", testing)
         self.assertIn("- `none-ran`: passed (0 passed)", testing)
 
     def test_an_old_result_with_a_boolean_passed_still_reads(self):
         self.save("07-01", [{"command": "old-red", "passed": False}, {"command": "old-green", "passed": True}])
-        testing = self.testing_section()
+        testing = self.saved_results()
         self.assertIn("- `old-red`: failed\n", testing)
         self.assertIn("- `old-green`: passed\n", testing)
 

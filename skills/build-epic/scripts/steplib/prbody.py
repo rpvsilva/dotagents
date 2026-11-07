@@ -6,11 +6,10 @@ leaves them open.
 
 A ticket body holds no prose but the run's. It has one `## ` section per heading of the repo's PR template (with no
 template, `Summary` and `Testing`), each filled by what its name asks for: a summary (the ticket's title, its issues and
-task count), testing (each task's saved suite results, then the skipped tests' reasons by suite), risk (the files
-the tasks write) and how to revert (the commit the PR lands on the base). A heading naming none of those
-takes the ticket's own section of that name. A section the run cannot fill is left empty, so `empty_sections` names
-it. Then come the tasks with their `PR:` links, their acceptance criteria, the skipped tests' reasons under
-`## Not exercised here`, and `Closes #n` for each issue.
+task count), testing (each task's saved suite results), risk (the files the tasks write) and how to revert (the commit
+the PR lands on the base). A heading naming none of those takes the ticket's own section of that name. A section the run
+cannot fill is left empty, so `empty_sections` names it. Then come the tasks with their `PR:` links, their acceptance
+criteria, the skipped tests' reasons under `## Not exercised here`, and `Closes #n` for each issue.
 
 Both bodies hold a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the
 human's own login), into which branch (a task PR into its ticket's `Branch:`, a ticket PR into `base:` or the run's
@@ -216,20 +215,16 @@ def _ident(task_path):
 
 
 def _testing(run, tasks):
-    """Each task's saved suite results, then the skipped tests' reasons; "" when no task saved any."""
-    rows, skips, any_saved = [], [], False
+    """Each task's saved suite results; "" when no task saved any. Skip reasons go under `## Not exercised here`."""
+    rows, any_saved = [], False
     for f in tasks:
         suites = [s for path in _reports(run, f) for s in _suites(path)]
-        ident = _ident(f)
-        rows.append(f"- {ident} {title(f)}:" + ("" if suites else " no saved result."))
+        rows.append(f"- {_ident(f)} {title(f)}:" + ("" if suites else " no saved result."))
         rows += ["  " + _suite_line(s) for s in suites]
-        skips += [f"- `{s.get('command') or s.get('suite') or s.get('name') or '?'}` ({ident}): {r}"
-                  for s in suites for r in _skips(s)]
         any_saved = any_saved or bool(suites)
     if not any_saved:
         return ""
-    text = "Each task's local run of map.md's Checks before its merge:\n\n" + "\n".join(rows)
-    return text + ("\n\nNot exercised here:\n" + "\n".join(skips) if skips else "")
+    return "Each task's local run of map.md's Checks before its merge:\n\n" + "\n".join(rows)
 
 
 def _writes(tasks):
