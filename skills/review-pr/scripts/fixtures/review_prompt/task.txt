@@ -1,0 +1,16 @@
+Review task PR #42. The worktree /wt/pr-42 is checked out at its head, abc1234.
+
+Read these, and take everything else from the code:
+- ~/.agents/skills/review-pr/reviewer-brief.md: follow it
+- /runs/r1/decisions.md: a rule it waives is never a finding
+- its `ci:` line: with `ci: off`, missing CI checks are not a finding
+- /runs/r1/map.md, its `Checks` section: the commands to run tests with
+- /runs/r1/tasks/03-02-review-prompt.md: what the change was asked to do
+
+Review this diff, from the merge base of origin/main and the head:
+
+    git -C /wt/pr-42 diff $(git -C /wt/pr-42 merge-base origin/main abc1234) abc1234
+
+A change on origin/main after the merge base is base drift, not a finding. Run tests only after you have read the whole diff and each changed file in context.
+
+Report as the brief says.

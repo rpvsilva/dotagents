@@ -1,0 +1,179 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo board [--overdue] [--snoozed] [--tag TAG]... [--priority P] [--open|--done] [--search TEXT] [--sort priority|due]   # todo, doing and done side by side
++Shared filters: `--overdue` and `--snoozed` work on `todo board`, `todo list`, `todo search` and `todo export`, next to `--tag`, `--priority`, `--open|--done`, `--search` and `--sort`. `--overdue` shows only open items past their due date. A snoozed item is hidden by default from `todo board`, `todo list`, `todo search`, `todo export` and `todo remind`; `--snoozed` shows only the snoozed ones instead. `todo search TEXT` takes only `--overdue` and `--snoozed` (the same as `todo list --search TEXT`), so `todo search TEXT --snoozed` finds a snoozed item.
++### Board
++
++`todo board` prints the items in three columns side by side: `todo`, `doing` and `done`. It takes the same filters as `todo list` (`--overdue`, `--snoozed`, `--tag`, `--priority`, `--open|--done`, `--search`, `--sort`) and writes nothing.
++
++```
++todo                doing               done
++1 write report      3 review the quar…  4 call mum
++2 buy milk          6 file taxes
++```
++
++- A column is the item's state: `done` for a done item, `doing` for an open item marked as doing, `todo` for every other open item. A done item is never in `doing`.
++- Each cell is `ID title`. The items are the ones `todo list` shows, in the order `todo list` shows them (`--sort due` and `--sort priority` order within each column), so snoozed items are hidden unless you pass `--snoozed`, which shows only the snoozed ones. `--overdue` keeps only open items past their due date, so the `done` column is empty.
++- The three columns share the terminal width, each `(width - 4) // 3` characters wide with two spaces between them. A title that does not fit is cut and ends with `…`. Wide characters (such as Chinese) count as two characters, so a column never runs over. The width comes from your terminal (`$COLUMNS` when set, 80 when it cannot be found).
++- Trailing spaces are cut. A column with fewer items than the others leaves blank cells, and with no items to show it prints only the header line.
++- Below a width of 7 the columns no longer fit, so each line is cut to the width.
++- A bad flag or value exits 2, as in `todo list`.
++
+diff --git a/tests/cli/test_cli_board.py b/tests/cli/test_cli_board.py
++++ b/tests/cli/test_cli_board.py
++from datetime import date, datetime
++
++import pytest
++
++from todo.storage import Item, JsonStore
++
++TODAY = date(2026, 11, 10)
++NOW = datetime(2026, 11, 10, 12, 0)
++
++
++@pytest.fixture
++def seeded(cli, tmp_path):
++    JsonStore(tmp_path / "todo.json").save(
++        [
++            Item(1, "buy milk", due=date(2026, 11, 8), tags=["home"]),
++            Item(2, "write report", doing=True, priority="high"),
++            Item(3, "old chore", done=True),
++            Item(4, "napping", snoozed_until=date(2026, 11, 20)),
++            Item(5, "call mum"),
++        ]
++    )
++    return cli
++
++
++def board(cli, *args, width=40):
++    return cli("board", *args, today=TODAY, now=NOW, width=lambda: width)
++
++
++def board_ids(lines):
++    ids = []
++    for line in lines[1:]:
++        ids += [int(w) for w in line.split() if w.isdigit()]
++    return sorted(ids)
++
++
++def list_ids(cli, *args):
++    return sorted(int(l.split(":")[0].split()[-1]) for l in cli("list", *args, today=TODAY, now=NOW))
++
++
++def test_board_puts_open_doing_and_done_items_in_three_columns(seeded):
++    lines = board(seeded, width=40)
++    assert lines == [
++        "todo          doing         done",
++        "1 buy milk    2 write rep…  3 old chore",
++        "5 call mum",
++    ]
++
++
++def test_board_columns_are_a_third_of_the_width_minus_two_gaps_at_width_120(seeded):
++    lines = board(seeded, width=120)
++    assert lines[0] == "todo".ljust(38) + "  " + "doing".ljust(38) + "  done"
++    assert lines[1] == "1 buy milk".ljust(38) + "  " + "2 write report".ljust(38) + "  3 old chore"
++
++
++def test_board_lines_never_exceed_the_width(seeded):
++    for width in (12, 40, 120):
++        assert all(len(line) <= width for line in board(seeded, width=width))
++
++
++def test_board_cuts_a_long_title_with_an_ellipsis(cli):
++    cli("add", "a very long title that cannot possibly fit", today=TODAY)
++    lines = board(cli, width=40)
++    assert lines[1] == "1 a very lo…"
++
++
++def test_board_hides_snoozed_items_by_default(seeded):
++    assert 4 not in board_ids(board(seeded))
++
++
++def test_board_snoozed_shows_only_snoozed_items(seeded):
++    assert board_ids(board(seeded, "--snoozed")) == [4]
++
++
++def test_board_filters_agree_with_list(seeded):
++    for flags in (["--overdue"], ["--tag", "home"], ["--priority", "high"], ["--open"], ["--done"], ["--snoozed"], ["--search", "call"]):
++        assert board_ids(board(seeded, *flags)) == list_ids(seeded, *flags), flags
++
++
++def test_board_with_no_items_prints_only_the_headers(cli):
++    assert board(cli) == ["todo          doing         done"]
++
++
++def columns_of(text):
++    import unicodedata
++
++    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
++
++
++@pytest.mark.parametrize("title", ["日本語のタイトルです", "party 🎉🎉🎉🎉🎉🎉🎉🎉", "é" * 30])
++def test_board_measures_wide_characters_in_terminal_columns(cli, title):
++    cli("add", title, today=TODAY)
++    cli("add", "plain", today=TODAY)
++    lines = board(cli, width=40)
++    assert all(columns_of(line) <= 40 for line in lines)
++    assert lines[1].startswith("1 ") and "…" in lines[1]
++    assert lines[2] == "2 plain"
++
++
++@pytest.mark.parametrize("width", [1, 2, 3, 4, 5, 6, 7, 8])
++def test_board_lines_fit_very_small_widths(seeded, width):
++    assert all(columns_of(line) <= width for line in board(seeded, width=width))
+diff --git a/todo/cli/commands/board.py b/todo/cli/commands/board.py
++++ b/todo/cli/commands/board.py
++"""todo board [list's filters]: items in three columns, todo, doing and done, fitting the terminal width."""
++import unicodedata
++
++from todo.cli.select import add_filter_arguments, select_items
++
++HEADERS = ("todo", "doing", "done")
++GAP = "  "
++
++
++def register(parser) -> None:
++    add_filter_arguments(parser)
++
++
++def char_width(char: str) -> int:
++    """Terminal columns one character takes: 0 for combining marks, 2 for wide and fullwidth, else 1."""
++    if unicodedata.combining(char):
++        return 0
++    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
++
++
++def text_width(text: str) -> int:
++    return sum(map(char_width, text))
++
++
++def fit(text: str, width: int, pad: bool = True) -> str:
++    """text cut to at most width columns with a trailing `…` when too long, padded with spaces when pad."""
++    if text_width(text) > width:
++        kept, used = "", 0
++        for char in text:
++            if used + char_width(char) > width - 1:
++                break
++            kept, used = kept + char, used + char_width(char)
++        text = kept + "…" if width >= 1 else ""
++    return text + " " * (width - text_width(text)) if pad else text
++
++
++def column_of(item) -> int:
++    if item.done:
++        return 2
++    return 1 if item.doing else 0
++
++
++def run(args, ctx) -> None:
++    total = ctx.width()
++    width = max((total - len(GAP) * 2) // 3, 1)
++    columns = ([], [], [])
++    for item in select_items(ctx.store.load(), args, ctx):
++        columns[column_of(item)].append(f"{item.id} {item.title}")
++    height = max(map(len, columns))
++    rows = [HEADERS, *zip(*(col + [""] * (height - len(col)) for col in columns))]
++    for row in rows:
++        line = GAP.join(fit(cell, width) for cell in row).rstrip()
++        ctx.out(fit(line, total, pad=False))  # below width 7 the columns no longer fit: cut the line
