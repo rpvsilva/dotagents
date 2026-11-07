@@ -14,7 +14,9 @@ from . import core
 
 Suite = namedtuple("Suite", "command rc seconds out", defaults=("",))
 
-# This repo's runners: `<suite>: ok`, `<suite>: skipped (why)` or `== <tool>: why, skipped (how)`, `== <suite>: FAILED`.
+# This repo's runners: `<suite>: ok`, `<suite>: skipped (why)` or `== <tool>: why, skipped (how)`, `== <suite>: FAILED`,
+# read only inside their framing (`tests/parallel.sh`'s `== tests/a.test.sh (3s)`, `tests/run.sh`'s `== <step>`).
+FRAMING = re.compile(r"^== [\w./*-]+(?: \(\d+s\)|: .*)?$")
 REPO_LINE = re.compile(r"^(?:== )?([\w./-]+): (ok\b.*|.*\bskipped\b.*|FAILED\b.*)$")
 # pytest: the `-rs` lines and the final `N passed, N skipped in Xs` line, with or without its `=` rule.
 PYTEST_SKIP = re.compile(r"^SKIPPED \[\d+\] (?:\S+?:\d+: )?(.*)$")
@@ -23,6 +25,8 @@ PYTEST_SUMMARY = re.compile(r"^=*\s*((?:\d+ \w+(?:, )?)+) in [\d.]+s\b")
 UNITTEST_RAN = re.compile(r"^Ran (\d+) tests? in ")
 UNITTEST_END = re.compile(r"^(OK|FAILED)(?: \((.*)\))?\s*$")
 UNITTEST_SKIP = re.compile(r"\.\.\. skipped '(.*)'$")
+# Jest: `Tests:       1 failed, 2 skipped, 40 passed, 43 total`.
+JEST_SUMMARY = re.compile(r"^Tests:\s+((?:\d+ \w+, )*)\d+ total\s*$")
 
 
 def commands(map_md):
@@ -54,6 +58,8 @@ def run_all(cmds, cwd, log):
 
 
 def _repo(lines):
+    if not any(map(FRAMING.match, lines)):
+        return None
     found = [m for m in map(REPO_LINE.match, lines) if m]
     if not found:
         return None
@@ -104,14 +110,26 @@ def _unittest(lines):
     return passed, failed, skipped, [m.group(1) for m in map(UNITTEST_SKIP.search, lines) if m]
 
 
+def _jest(lines):
+    totals, seen = {}, False
+    for m in filter(None, map(JEST_SUMMARY.match, lines)):
+        seen = True
+        for n, word in re.findall(r"(\d+) (\w+)", m.group(1)):
+            totals[word] = totals.get(word, 0) + int(n)
+    if not seen:
+        return None
+    return totals.get("passed", 0), totals.get("failed", 0), totals.get("skipped", 0) + totals.get("todo", 0), []
+
+
 def counts(out):
     """`(passed, failed, skipped, skip_reasons)` read from a suite's output, or `(None, None, None, [])`.
 
-    This repo's suite lines win, since `tests/run.sh` also prints the unittest output of the suites it runs; then
-    pytest's summary, then unittest's. Several summaries of one kind (one per folder) are summed.
+    Inside this repo's runner framing its suite lines win, since `tests/run.sh` also prints the unittest output of the
+    suites it runs; elsewhere a `<word>: ok` line is any program's log, and pytest's summary, then unittest's, then
+    Jest's count. Several summaries of one kind (one per folder) are summed.
     """
     lines = out.splitlines()
-    for parse in (_repo, _pytest, _unittest):
+    for parse in (_repo, _pytest, _unittest, _jest):
         found = parse(lines)
         if found:
             return found
