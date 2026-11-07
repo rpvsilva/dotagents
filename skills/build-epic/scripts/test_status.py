@@ -18,7 +18,10 @@ import os, sys
 d = os.environ["GH_STUB_DIR"]
 args = sys.argv[1:]
 if args[:2] != ["pr", "view"]:
-    os.execv({kit_gh!r}, [{kit_gh!r}, *args])
+    if os.name == "nt":  # Windows starts no `#!` script, and its os.execv returns before the child ends
+        import subprocess
+        sys.exit(subprocess.run([sys.executable, "-IS", {kit_gh!r}, *args]).returncode)
+    os.execv(sys.executable, [sys.executable, "-IS", {kit_gh!r}, *args])
 import json
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write(json.dumps(args) + "\n")

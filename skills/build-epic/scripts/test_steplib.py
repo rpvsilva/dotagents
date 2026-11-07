@@ -103,6 +103,90 @@ class RunTest(unittest.TestCase):
         self.assertEqual(core.run(["no-such-command-steplib"], io.StringIO()).rc, 127)
 
 
+class WindowsCommandTest(KitCase):
+    """What `core.run` starts on Windows, which cannot start a `#!` script and finds WSL's `bash` before `PATH`'s."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(core, "WINDOWS", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def script(self, path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o755)
+        return path
+
+    def test_a_python_stub_on_path_runs_through_this_python(self):
+        gh_stub = self.kit.bin / "gh"
+        self.assertEqual(core.command(["gh", "pr", "list"], self.kit.env)[:4],
+                         [sys.executable, "-IS", str(gh_stub), "pr"])
+        self.assertEqual(core.run(["gh", "pr", "list"], io.StringIO(), env=self.kit.env).rc, 0)
+        self.assertEqual(self.kit.gh_calls(), [["pr", "list"]])
+
+    def test_an_env_script_runs_through_the_first_interpreter_on_path(self):
+        first = self.script(self.kit.tmp / "first" / "bash", "#!/bin/sh\necho first \"$@\"\n")
+        self.script(self.kit.tmp / "second" / "bash", "#!/bin/sh\necho second\n")
+        tool = self.script(self.kit.tmp / "tool", "#!/usr/bin/env bash\necho tool\n")
+        env = dict(self.kit.env, PATH=os.pathsep.join([str(first.parent), str(self.kit.tmp / "second")]))
+        self.assertEqual(core.command([str(tool), "a b"], env), [str(first), str(tool), "a b"])
+
+    def test_a_relative_script_without_a_shebang_runs_through_bash_from_its_folder(self):
+        rule = self.script(self.kit.tmp / "repo" / "scripts" / "rule.sh", "echo rule\n")
+        bash = self.script(self.kit.bin / "bash", "#!/bin/sh\n")
+        self.assertEqual(core.command(["scripts/rule.sh", "7"], self.kit.env, cwd=self.kit.tmp / "repo"),
+                         [str(bash), str(rule), "7"])
+
+    def test_a_windows_program_runs_as_found_and_a_file_without_shebang_on_path_is_skipped(self):
+        later = self.kit.tmp / "later"
+        self.script(self.kit.bin / "tool", "not a script\n")
+        exe = self.script(later / "tool.exe", "")
+        env = dict(self.kit.env, PATH=os.pathsep.join([str(self.kit.bin), str(later)]))
+        self.assertEqual(core.command(["tool", "x"], env), [str(exe), "x"])
+
+    def test_a_command_line_keeps_backslashed_paths(self):
+        self.assertEqual(core.split(r"C:\x\tool.sh {pr}"), ["C:/x/tool.sh", "{pr}"])
+
+    def test_off_windows_argv_is_unchanged(self):
+        with mock.patch.object(core, "WINDOWS", False):
+            self.assertEqual(core.command(["gh", 3], self.kit.env), ["gh", "3"])
+            self.assertEqual(core.split(r"a\ b c"), ["a b", "c"])
+
+
+class HomeTest(unittest.TestCase):
+    def test_home_is_HOME_whatever_the_os_profile_says(self):
+        # Windows' expanduser reads USERPROFILE, not HOME; install.sh linked ~/.agents under HOME.
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, HOME=home), \
+                mock.patch.object(os.path, "expanduser", lambda p: p.replace("~", "/profile", 1)):
+            self.assertEqual(core.home(), home)
+            self.assertEqual(core.resolve("~/a"), Path(os.path.realpath(home)) / "a")
+
+
+class KitSandboxTest(unittest.TestCase):
+    def test_each_kit_has_its_own_origin(self):
+        with Kit() as a, Kit() as b:
+            a.make_origin()
+            b.make_origin()
+            for kit in (a, b):
+                self.assertEqual(Path(kit.git("remote", "get-url", "origin", cwd=kit.clone)), kit.origin)
+            (a.clone / "x").write_text("x\n")
+            a.git("add", "x", cwd=a.clone)
+            a.git("commit", "-qm", "x", cwd=a.clone)
+            a.git("push", "-q", "origin", "HEAD:main", cwd=a.clone)
+            self.assertNotEqual(a.git("--git-dir", str(a.origin), "rev-parse", "main"),
+                                b.git("--git-dir", str(b.origin), "rev-parse", "main"))
+
+    def test_a_path_git_wrote_with_doubled_backslashes_is_rehomed(self):
+        with Kit() as kit:
+            template = mock.Mock(tmp=Path(r"C:\t\steplib-a"))
+            config = kit.tmp / "config"
+            config.write_text('[remote "origin"]\n\turl = C:\\\\t\\\\steplib-a\\\\origin.git\n')
+            kit._rehome(template, config)
+            self.assertNotIn("steplib-a", config.read_text())
+            self.assertIn(str(kit.tmp).replace("\\", "\\\\"), config.read_text())  # git config doubles backslashes
+
+
 class RunFolderPathTest(KitCase):
     """Bug 8: a script that worked only from inside the repo."""
 
