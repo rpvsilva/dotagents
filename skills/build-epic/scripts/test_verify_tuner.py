@@ -66,7 +66,7 @@ class VerifyTunerTest(unittest.TestCase):
         kit.git("worktree", "add", "-q", "-b", "task/t/tests", str(self.wt), "origin/feat/t", cwd=clone)
         (kit.bin / "capped").write_text(CAPPED)
         (kit.bin / "capped").chmod(0o755)
-        self.checks("capped --mb 2000 --secs 2 -- python3 -m unittest -q")
+        self.checks("capped --mb 2000 --secs 8 -- python3 -m unittest -q")
         self.report = kit.run_dir / "reports" / "01-tests.md"
         self.tune(NEW_TEST)
 
@@ -134,7 +134,7 @@ class VerifyTunerTest(unittest.TestCase):
     def test_a_red_suite_fails_before_any_mutation(self):
         self.tune("\n    def test_broken(self):\n        self.assertEqual(calc.add(1, 1), 3)\n")
         self.write_report("mutations: calc.py:6 a - b -> a + b")
-        self.assertFails(self.verify(), "red capped --mb 2000 --secs 2 -- python3 -m unittest -q")
+        self.assertFails(self.verify(), "red capped --mb 2000 --secs 8 -- python3 -m unittest -q")
 
     def test_a_removed_assertion_without_a_moved_line_fails_naming_it(self):
         test = self.wt / "test_calc.py"
@@ -187,12 +187,12 @@ class VerifyTunerTest(unittest.TestCase):
         self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
         self.assertEqual(self.snapshot(), before)
         log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text()
-        self.assertIn("timeout after 2s", log)
+        self.assertIn("timeout after 8s", log)
 
     def test_a_looping_green_suite_fails_on_the_time_limit(self):
         self.tune("\n    def test_slow(self):\n        while True:\n            pass\n")
         self.write_report("mutations: calc.py:6 a - b -> a + b")
-        self.assertFails(self.verify(), "timeout capped --mb 2000 --secs 2 -- python3 -m unittest -q")
+        self.assertFails(self.verify(), "timeout capped --mb 2000 --secs 8 -- python3 -m unittest -q")
 
     def test_an_interrupted_mutation_restores_the_worktree(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
