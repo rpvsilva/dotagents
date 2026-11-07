@@ -246,7 +246,8 @@ run_data() {
     || fail "$1: run.json is not $2 with exit $3 and name ${4:-null}: $(cat "$k/run.json" 2>/dev/null)"
   [ -z "$(find "$k" -name 'run.json.*')" ] || fail "$1: a temporary run.json left: $(find "$k" -name 'run.json.*')"
   [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null)" = "$(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //")" ] \
-    || fail "$1: progress.log is not stderr without the tag: $(cat "$k/progress.log" 2>/dev/null)"
+    || fail "$1: progress.log is not stderr without the tag: $(diff <(tr -d '\r' <"$k/progress.log" 2>/dev/null) \
+      <(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //") 2>&1)"
   grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "$1: the token is in run.json or progress.log"
   return 0
 }

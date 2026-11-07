@@ -134,6 +134,21 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 - **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `remote-runs` adds a `/remote-runs` pane listing remote subagent runs and their live logs.
 - **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow my GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
 
+### 🧱 Groups
+
+Every skill, subagent, mod, hook and folder part belongs to one **group**, a feature you can take on its own. Each part declares its group and the parts it needs in a `needs.json` beside it; the groups are named in [`groups.json`](groups.json), and `scripts/parts.sh` reads both.
+
+| Group | What it holds |
+|---|---|
+| `core` | Always installed: Settings (`~/.agents/bin/settings`), the shared conventions, the hooks library and the `configure` skill |
+| `remote` | Running subagents remotely: the `remote-agent` command, the `remote-subagents` skill and the `remote-runs` mod |
+| `pr-loop` | `ship-pr`, `fix-pr`, `address-review`, `renovate-prs`, `review-pr` and their subagents |
+| `epics` | `build-epic`, `to-epic`, `tune-tests` and their subagents |
+| `security` | `security-audit` and its subagents |
+| `safety-hooks` | The `guard-secrets`, `guard-merge` and `allow-task-cleanup` hooks |
+| `small-tools` | `remember`, `telemetry`, the `telemetry-save` hook and the MCP servers |
+| `personal` | My own instructions, guardrails and plugins (`global/`) and `add-plugin`; a public install leaves it out |
+
 ## 🚀 Install
 
 Needs `bash`, `git` and `jq`. The `claude` CLI is needed for plugins and MCP servers. `python3` (3.9 or later) is needed for `telemetry` and `build-epic` (its step scripts), and `gh` for the PR skills.
@@ -176,6 +191,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 README.md           this file
 AGENTS.md           how to work on this repo (CLAUDE.md links to it)
 GLOSSARY.md         the repo's terms
+groups.json         the groups every part belongs to
 global/AGENTS.md    my global instructions, linked into every tool
 skills/             tool-neutral skills; skills/_shared/ holds what they share
 mcp/servers.json    MCP servers for every tool

@@ -1,0 +1,1 @@
+{"group": "pr-loop", "needs": {"fix-pr": "required", "pr-fixer": "required"}}
