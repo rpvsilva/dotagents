@@ -73,7 +73,7 @@ class VerifyTunerTest(unittest.TestCase):
     def checks(self, *cmds):
         body = "\n".join(cmds)
         (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\n{body}\n```\n\n## Gaps\n",
-                                                 encoding="utf-8")
+                                                encoding="utf-8")
 
     def tune(self, added, commit=True):
         """The tuner's change: `added` appended to the test file, committed on the tuning branch."""
@@ -140,7 +140,8 @@ class VerifyTunerTest(unittest.TestCase):
     def test_a_removed_assertion_without_a_moved_line_fails_naming_it(self):
         test = self.wt / "test_calc.py"
         text = test.read_text(encoding="utf-8")
-        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"), encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b", "moved: none")
         self.assertFails(self.verify(), "assertion-removed test_calc.py:8")
@@ -148,7 +149,8 @@ class VerifyTunerTest(unittest.TestCase):
     def test_a_removed_assertion_named_in_a_moved_line_passes(self):
         test = self.wt / "test_calc.py"
         text = test.read_text(encoding="utf-8")
-        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"), encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b",
                           "moved: `self.assertEqual(calc.add(2, 3), 5)`: covered by test_sub's setup")
@@ -157,7 +159,8 @@ class VerifyTunerTest(unittest.TestCase):
     def test_an_assertion_moved_within_the_diff_needs_no_moved_line(self):
         test = self.wt / "test_calc.py"
         text = test.read_text(encoding="utf-8")
-        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"), encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"), encoding="utf-8")
         self.kit.git("add", ".", cwd=self.wt)
         self.kit.git("commit", "-qm", "test: move", cwd=self.wt)
@@ -215,7 +218,7 @@ class VerifyTunerTest(unittest.TestCase):
                 p = subprocess.Popen([sys.executable, "-I", str(VERIFY), str(self.kit.run_dir), "01-tests",
                                       "--report", str(self.report), "--timeout", "60"], env=self.kit.env, text=True,
                                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-encoding="utf-8")
+                                     encoding="utf-8")
                 calc = self.wt / "calc.py"
                 deadline = time.monotonic() + 15
                 while "while True" not in calc.read_text(encoding="utf-8") and time.monotonic() < deadline:
@@ -284,7 +287,8 @@ encoding="utf-8")
     def test_an_assertion_copied_into_an_untracked_file_still_counts_as_removed(self):
         test = self.wt / "test_calc.py"
         text = test.read_text(encoding="utf-8")
-        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"), encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
         (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"), encoding="utf-8")
         self.write_report("mutations: calc.py:6 a - b -> a + b")

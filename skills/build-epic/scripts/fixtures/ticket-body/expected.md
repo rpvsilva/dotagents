@@ -49,6 +49,10 @@ Revert the commit this PR lands on `main`: `git revert <commit>`.
 
 - SKILL.md step 7 names no body file.
 
+## Not exercised here
+
+- zsh not installed
+
 ## Merge
 
 Merges as the App, with its installation token, into `main`, after a review and green CI.
