@@ -149,14 +149,23 @@ Every skill, subagent, mod, hook and folder part belongs to one **group**, a fea
 | `small-tools` | `remember`, `telemetry`, the `telemetry-save` hook and the MCP servers |
 | `personal` | My own instructions, guardrails and plugins (`global/`) and `add-plugin`; a public install leaves it out |
 
+Install one group with `./install.sh <group>` (see [Install](#-install)).
+
 ## 🚀 Install
 
 Needs `bash`, `git` and `jq`. The `claude` CLI is needed for plugins and MCP servers. `python3` (3.9 or later) is needed for `telemetry` and `build-epic` (its step scripts), and `gh` for the PR skills.
 
 ```sh
 git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
-~/Desktop/Projects/dotagents/install.sh          # or one tool: install.sh claude|codex|cursor
+~/Desktop/Projects/dotagents/install.sh          # everything, for every tool
 ```
+
+`install.sh [tool] [<group>|<part>...]` and `uninstall.sh [tool] [<group>|<part>...]` take the same words, in any order: a tool (`claude`, `codex`, `cursor`) and any groups or parts (`scripts/parts.sh list`).
+
+- A bare `./install.sh` installs every group, `personal` included. To install one feature only, name it: `./install.sh remote`, or for Claude Code only, `./install.sh claude pr-loop`.
+- A selection brings core and every part it requires. An optional need comes only when you name it too.
+- Installs add up: `./install.sh remote`, then `./install.sh pr-loop`, keeps remote and adds pr-loop.
+- `./uninstall.sh <group>` removes that group, keeping core and anything another installed group still requires.
 
 - Everything is symlinked, so editing the repo updates every tool at once.
 - Re-run `install.sh` after adding a skill or moving the repo. Running it twice is safe.
