@@ -45,6 +45,23 @@ PLAIN
 grep -q "→ remove ~/.claude/CLAUDE.md" <<<"$out" || fail "dry run plan not shown: $out"
 grep -q "Dry run, nothing changed" <<<"$out" || fail "dry run summary missing: $out"
 
+out="$(view uninstall all <<'PLAIN'
+claude
+  removed /home/me/.claude/CLAUDE.md
+  restored /home/me/.claude/CLAUDE.md from /home/me/.dotagents-backup/1/.claude_CLAUDE.md
+  /home/me/.claude/settings.json: dotagents entries removed
+codex: ~/.codex not found, skipping
+cursor: ~/.cursor not found, skipping
+shared
+  removed /home/me/.agents/skills/a
+your original files are still in /home/me/.dotagents-backup; delete it once you no longer need them
+PLAIN
+)"
+grep -q "✓ claude  1 updated · 1 removed · 1 restored" <<<"$out" || fail "uninstall section not summed up: $out"
+grep -q "↺ restored ~/.claude/CLAUDE.md" <<<"$out" || fail "restore not shown with ~: $out"
+grep -q "✓ Uninstalled .* 1 updated · 2 removed · 1 restored$" <<<"$out" || fail "uninstall summary missing: $out"
+grep -q "your original files are still in ~/.dotagents-backup" <<<"$out" || fail "closing line dropped: $out"
+
 out="$(view install bogus <<<"usage: ./install.sh [all|shared|claude|codex|cursor]")"
 grep -q "Stopped" <<<"$out" || fail "usage error not shown as stopped: $out"
 grep -q "usage:" <<<"$out" || fail "usage line dropped: $out"

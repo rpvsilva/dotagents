@@ -116,6 +116,11 @@ for s in address-review renovate-prs; do
 done
 [ -L "$home/.agents/skills/_shared" ] && [ -L "$home/.agents/hooks/lib.sh" ] || fail "uninstall pr-loop removed core"
 [ -z "$(dangling "$home")" ] || fail "uninstall pr-loop left dangling links: $(dangling "$home")"
+# A tool word with a selection: that tool's links of the selected parts go; the other tools' and the shared ones stay.
+uninstall "$home" cursor to-epic >/dev/null
+[ ! -L "$home/.cursor/agents/source-reader.md" ] || fail "uninstall cursor to-epic kept Cursor's source-reader"
+[ -L "$home/.claude/agents/source-reader.md" ] && [ -L "$home/.codex/agents/source-reader.toml" ] && [ -L "$home/.agents/skills/to-epic" ] ||
+  fail "uninstall cursor to-epic removed another tool's or the shared links"
 # A skill named alone takes its subagents with it.
 uninstall "$home" to-epic >/dev/null
 [ ! -L "$home/.agents/skills/to-epic" ] && [ ! -L "$home/.claude/agents/source-reader.md" ] && [ ! -L "$home/.codex/agents/source-reader.toml" ] ||
@@ -156,8 +161,13 @@ jq -e '. == {"version": 1, "hooks": {"Stop": [{"hooks": [{"type": "command", "co
 [ -z "$(dangling "$home")" ] || fail "uninstall safety-hooks left dangling links: $(dangling "$home")"
 
 # A part another installed part requires stays, even when named.
-uninstall "$home" telemetry >/dev/null
+# --purge with a selection keeps dotagents' data, and says so.
+mkdir -p "$home/.config/dotagents" "$home/.agents/telemetry"
+out="$(uninstall "$home" --purge telemetry)"
 [ -L "$home/.agents/skills/telemetry" ] || fail "uninstall telemetry removed it while telemetry-save requires it"
+grep -q "^kept telemetry:" <<<"$out" || fail "uninstall telemetry did not say why it kept it: $out"
+[ -d "$home/.config/dotagents" ] && [ -d "$home/.agents/telemetry" ] || fail "--purge with a selection deleted data"
+grep -q "purge applies to a full uninstall only" <<<"$out" || fail "--purge with a selection did not say it kept the data: $out"
 # Removing remote leaves nothing dangling.
 uninstall "$home" remote >/dev/null
 [ ! -L "$home/.agents/bin/remote-agent" ] && [ ! -L "$home/.claude/skills/remote-runs" ] || fail "uninstall remote kept its links"
