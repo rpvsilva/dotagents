@@ -340,6 +340,7 @@ if [ -f "$rs" ]; then
   grep -qi 'not redirect' <<<"$remote" || fail "$rs: does not say to leave stderr unredirected"
   grep -q 'result\.json' <<<"$remote" || fail "$rs: does not name result.json"
   grep -q 'remote-agent result' <<<"$remote" || fail "$rs: does not name remote-agent result"
+  # shellcheck disable=SC2016 # literal backticks: `remote` is matched, not run
   grep -q 'needs\.json.*under `remote`' <<<"$remote" || fail "$rs: does not say an agent is remote-capable when its needs.json lists it under remote"
 else
   fail "$rs is missing"
