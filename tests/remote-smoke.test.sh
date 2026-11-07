@@ -71,6 +71,55 @@ left_behind() {
     esac' smoke "$run" "$REPO" 2>&1 || true
 }
 
+# Makes a fresh repo at $1 with one commit, for one remote run.
+new_repo() {
+  git init -q "$1"
+  git -C "$1" config user.email smoke@example.com
+  git -C "$1" config user.name smoke
+  printf 'remote-agent smoke test\n' >"$1/README.md"
+  git -C "$1" add -A
+  git -C "$1" commit -qm base
+}
+
+# The cap case on backend $b, in its own repo: a command past REMOTE_CAP_SECS is killed by the sandbox's shell prefix
+# (scripts/capped), and the run still ends, well under Claude's own 2-minute Bash timeout.
+cap_case() {
+  local C="$SANDBOX/$b/cap" out="$SANDBOX/$b/cap.out" code=0 start elapsed result run keep off
+  new_repo "$C"
+  start="$(date +%s)"
+  (cd "$C" && REMOTE_BACKEND="$b" REMOTE_HOURS=1 REMOTE_CAP_SECS=5 "$REPO/scripts/remote-agent.sh" --name "smoke-cap-$b" \
+    "Run exactly this shell command once, in the foreground (not in the background), with no timeout of your own: python3 -c 'import time; time.sleep(100)'. If it fails or is killed, do not retry it and do not investigate; just stop. Do nothing else.") \
+    >"$out" 2>&1 || code=$?
+  elapsed=$(($(date +%s) - start))
+  # 3: the run changed nothing, which is all this case asks of it.
+  [ "$code" -eq 0 ] || [ "$code" -eq 3 ] || fail "$b: cap run: remote-agent exited $code: $(tail -5 "$out")"
+  [ "$elapsed" -lt 120 ] || fail "$b: cap run took ${elapsed}s, not under 120s"
+  if ! result="$(cd "$C" && "$REPO/scripts/remote-agent.sh" result "smoke-cap-$b" 2>&1)"; then
+    fail "$b: cap run: no result.json: $result"
+    return
+  fi
+  off="$(printf '%s' "$result" | jq -r '.capped_off // empty' 2>/dev/null)"
+  if [ -n "$off" ]; then
+    fail "$b: cap run: the sandbox's caps are OFF, it lacks: $off (the runner image needs it; see docs/remote.md)"
+    return
+  fi
+  printf '%s' "$result" | jq -e '.killed == "timeout"' >/dev/null 2>&1 \
+    || fail "$b: cap run: result.json does not say killed: timeout: $(printf '%s' "$result" | jq -c '{killed, lost, capped_kills}' 2>&1)"
+  run="$(printf '%s' "$result" | jq -r '.run // empty' 2>/dev/null)"
+  keep="$C/.git/remote-agent/$run"
+  if [ -z "$run" ] || [ ! -d "$keep" ]; then
+    fail "$b: cap run: result.json names no kept run folder (run: ${run:-none})"
+    return
+  fi
+  grep -q "capped: killed: timeout" "$keep/capped.log" 2>/dev/null \
+    || fail "$b: cap run: capped.log has no timeout kill: $(tail -3 "$keep/capped.log" 2>&1)"
+  holds_token "$keep" && fail "$b: cap run: the token is in a kept file"
+  holds_token "$out" && fail "$b: cap run: the token is in remote-agent's output"
+  local left
+  left="$(left_behind "$run")"
+  [ -z "$left" ] || fail "$b: cap run: sandbox left behind after the run: $left"
+}
+
 ran=0
 for b in ${wanted[@]+"${wanted[@]}"}; do
   backend="$REPO/scripts/remote-backends/$b.sh"
@@ -79,12 +128,7 @@ for b in ${wanted[@]+"${wanted[@]}"}; do
     continue
   fi
   W="$SANDBOX/$b/work"
-  git init -q "$W"
-  git -C "$W" config user.email smoke@example.com
-  git -C "$W" config user.name smoke
-  printf 'remote-agent smoke test\n' >"$W/README.md"
-  git -C "$W" add -A
-  git -C "$W" commit -qm base
+  new_repo "$W"
   if ! why="$(with_settings "$backend" check 2>&1)"; then
     if [ -n "$strict" ]; then
       fail "$b: not configured: $why"
@@ -95,6 +139,9 @@ for b in ${wanted[@]+"${wanted[@]}"}; do
   fi
   echo "== $b: real run"
   ran=$((ran + 1))
+
+  echo "== $b: cap run (a 100 s sleep under a 5 s cap)"
+  cap_case
 
   out="$SANDBOX/$b/out"
   code=0

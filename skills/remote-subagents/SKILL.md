@@ -28,3 +28,7 @@ Each remote run takes a **remote slot**, not a local one: at most `~/.agents/bin
    - **4**: the worktree changed after the snapshot; run it again.
    - **5**: the account hit its usage limit, so every remote run will fail the same way until it resets. Hold every new remote run, let the running ones end, and tell the human the reset time from stderr. The task that hit the limit waits with the held ones. Resume once that time has passed, or sooner when the human switches the account.
    - **Anything else**: treat it as `blocked`, with the last lines of stderr as the reason. When two runs in a row fail the same way within a minute, the backend is down: hold every new remote run until `remote-agent ready` exits 0 again.
+
+   Then, whatever the exit code, read `killed` and `lost`:
+   - **`killed`** (`memory` or `timeout`, each kill in `capped_kills` as `{kind, cmd}`): the sandbox's caps (`remote.cap_mb`, `remote.cap_secs`) killed at least one of the subagent's shell commands, and stderr has a `[<task>] killed: <kind> <command>` line for each. The run went on after it, so a kill alone is no failure: act on the exit code and the report as above. When the report says `blocked` or the run failed, the kill is the likely cause: retry as the skill says (build-epic retries once with a cap note), else treat it as `blocked`, naming the kind and the command.
+   - **`lost: true`**: the sandbox itself is gone (its container or pod vanished with no kill line before), so no cap is at fault: act as on **Anything else**.
