@@ -18,7 +18,8 @@
 # and every part of group core) and, transitively, every required need, with --optional every optional one too; an
 # agent requires its owning skill and a skill its agents. files prints the repo-relative files a part ships.
 # A skill ships its folder and adapters/<tool>/<skill>/. `_shared` stands for core and has no declaration: list
-# leaves it out, closure always has it, files gives its folder plus scripts/settings.sh and the hooks library.
+# leaves it out, closure always has it, files gives its folder plus scripts/settings.sh, scripts/capped and the hooks
+# library.
 # The repo is the one holding this script, or $PARTS_REPO. Exit 2 on an unknown subcommand, part or group.
 # shellcheck disable=SC2016 # the single-quoted strings are jq programs, expanded by jq
 set -euo pipefail
@@ -117,7 +118,7 @@ case "$cmd" in
         # A skill's tool-specific helpers (adapters/claude/telemetry/extract.py) sit in adapters/<tool>/<skill>/.
         for d in adapters/*/"$part"; do ship "$d"; done
         if [ "$part" = _shared ]; then
-          for f in scripts/settings.sh scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt; do [ ! -f "$f" ] || echo "$f"; done
+          for f in scripts/settings.sh scripts/capped scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt; do [ ! -f "$f" ] || echo "$f"; done
         fi
         ;;
       mod) ship "adapters/claude/mods/$part" ;;

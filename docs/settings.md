@@ -50,12 +50,14 @@ Use the `configure` skill and just say what you want: "use 2 agents in this repo
 Or use the command directly:
 
 ```sh
-~/.agents/bin/settings list                          # every Setting, its value and Level
+~/.agents/bin/settings list                          # every installed part's Setting, its value and Level
 ~/.agents/bin/settings get build-epic max_parallel
 ~/.agents/bin/settings set shared max_parallel 2 --machine
 ~/.agents/bin/settings unset build-epic max_parallel --repo
 ~/.agents/bin/settings check                         # validate both files
 ```
+
+`list` shows only installed parts: `shared`, each skill linked as `~/.agents/skills/<skill>`, and `remote` when `~/.agents/bin/remote-agent` is linked (before any install, when `~/.agents/skills` does not exist, it shows every part). A value saved for a part that is not installed is kept: `get`, `set`, `unset` and `check` still accept it, it is just not listed.
 
 A bad value fails loudly and names the file and key. It never falls back to the default silently. Full usage is at the top of [`scripts/settings.sh`](../scripts/settings.sh).
 
