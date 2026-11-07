@@ -98,6 +98,41 @@ class StateTest(unittest.TestCase):
         self.assertRegex(self.line("01"), r"^01 merged #11 Alpha +next: none$")
         self.assertRegex(self.line("08"), r"next: someone \(claimed\)$")
 
+    def test_line_of_a_building_ticket_names_its_red_ci_running_tasks_and_dispatchable_ones(self):
+        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "building", 43, extra="CI red: 777\n"))
+        for n, status, blocked in (("01", "in-progress", "none"), ("02", "ready", "none"), ("03", "ready", "01")):
+            write(self.run_dir / "tasks" / f"11-{n}-x.md", task(f"11-{n}", status, blocked))
+        self.assertRegex(self.line("11"), r"^11 building #43 Lambda +next: fix ticket CI red 777; tasks 11-01; "
+                                          r"dispatch 11-02$")
+        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "building", 43))
+        write(self.run_dir / "tasks" / "11-02-x.md", task("11-02", "in-progress"))
+        self.assertRegex(self.line("11"), r"next: tasks 11-01, 11-02$")
+        write(self.run_dir / "tasks" / "11-01-x.md", task("11-01", "done"))
+        write(self.run_dir / "tasks" / "11-02-x.md", task("11-02", "done"))
+        write(self.run_dir / "tasks" / "11-03-x.md", task("11-03", "ready", "ticket 03"))
+        self.assertRegex(self.line("11"), r"next: tasks$")
+
+    def test_line_without_a_pr_or_a_claimant_and_of_a_blocked_ticket(self):
+        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "in-review"))
+        self.assertRegex(self.line("11"), r"^11 in-review - Lambda +next: human approval$")
+        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "claimed"))
+        self.assertRegex(self.line("11"), r"next: another developer \(claimed\)$")
+        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "blocked"))
+        self.assertRegex(self.line("11"), r"next: human: ticket blocked$")
+
+    def test_a_done_task_with_a_blocked_report_waits_on_no_human(self):
+        write(self.run_dir / "reports" / "05-01.md", "status: blocked\nchanged: none\nwhy: old\nfollow-up:\n")
+        self.assertRegex(self.line("05"), r"next: ship$")
+        _, text = self.state()
+        self.assertNotIn("05-01", text)
+
+    def test_bad_arguments_print_the_usage_and_exit_2(self):
+        for args in (("--line",), ("--write", "x"), ("--bogus",)):
+            with self.subTest(args=args):
+                p = self.status(*args)
+                self.assertEqual(p.returncode, 2)
+                self.assertEqual(p.stdout, "FAIL run usage: status.py <run> [--line <TT> | --write]\n")
+
     def test_line_of_an_unknown_ticket_is_one_fail_line(self):
         p = self.status("--line", "99")
         self.assertEqual(p.returncode, 1)
@@ -109,6 +144,14 @@ class StateTest(unittest.TestCase):
         p, text = self.state()
         self.assertEqual(p.stdout, f"OK run state {self.run_dir.resolve() / 'state.md'}\n")
         self.assertLessEqual(len(text.splitlines()), 40, text)
+        self.assertEqual(sorted(f.name for f in self.run_dir.glob(".state.md.*")), [])
+
+    def test_a_run_waiting_on_nothing_says_nothing_under_each_heading(self):
+        for f in (*self.run_dir.glob("tickets/*.md"), *self.run_dir.glob("tasks/*.md")):
+            f.unlink()
+        write(self.run_dir / "tickets" / "01-t.md", ticket("01", "Alpha", "merged", 11))
+        _, text = self.state()
+        self.assertIn("In flight: none\n\n## Needs a human\n- nothing\n\n## Next\n- nothing\n", text)
 
     def test_state_lists_every_ticket_with_its_status_line(self):
         _, text = self.state()
