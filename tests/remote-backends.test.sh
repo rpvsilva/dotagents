@@ -206,6 +206,12 @@ for b in docker ssh; do
   grep -q "REMOTE_IMAGE not set" "$SANDBOX/out" || fail "$b no image: message: $(cat "$SANDBOX/out")"
   grep -q "^run -d" "$S/calls" 2>/dev/null && fail "$b no image: a container started: $(cat "$S/calls")"
 done
+# ready says the same on the docker backend, without calling docker.
+echo '{"remote": {"backend": "docker", "image": ""}}' >"$SANDBOX/config/dotagents/settings.json"
+code=0; ready || code=$?
+[ "$code" != 0 ] || fail "docker ready, no image: exited 0"
+grep -q "REMOTE_IMAGE not set" "$SANDBOX/out" || fail "docker ready, no image: message: $(cat "$SANDBOX/out")"
+[ ! -e "$S/calls" ] || fail "docker ready, no image: docker was called: $(cat "$S/calls")"
 
 # ready over ssh: a login with a 5-second connect timeout, then docker info on the host; the host's or the daemon's
 # error on one line when either fails.
