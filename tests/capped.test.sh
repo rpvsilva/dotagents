@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Runs scripts/capped on real commands: the memory and time caps, the closed stdin, SIGTERM to the runner, a missing
-# `ps`, and `capped stop` in throwaway worktrees. On Linux the cases run with `ps` (when there is one) and again with
-# it hidden from PATH, so capped reads the groups from /proc. Git Bash skips every case that needs process groups.
+# `ps`, and `capped stop` in throwaway worktrees (forged, planted and oddly named registry entries included). On Linux
+# the cases run with `ps` (when there is one), again with it hidden from PATH and again with a `ps` that fails (as
+# BusyBox's does on these options), so capped reads the groups from /proc. Git Bash skips every case that needs process
+# groups.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,10 +39,10 @@ pid_in() {
   cat "$1"
 }
 
-# True when pid $1 is a live process (not gone, not a zombie): from ps, else from /proc.
+# True when pid $1 is a live process (not gone, not a zombie): from ps where it works, else from /proc.
 alive() {
   local s
-  if command -v ps >/dev/null; then
+  if ps -o stat= -p $$ >/dev/null 2>&1; then
     s="$(ps -o stat= -p "$1" 2>/dev/null || true)"
   else
     s="$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null || true)"
@@ -54,12 +56,47 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* ]]; then gitbash=1; fi
 procfs=0
 if [ "$(uname -s)" = Linux ] && [ -r /proc/self/stat ]; then procfs=1; fi
 
-# A PATH with what the cases run but no ps.
+# A PATH with what the cases run but no ps, and one whose ps fails.
 nops="$SANDBOX/nops"
-mkdir "$nops"
+badps="$SANDBOX/badps"
+mkdir "$nops" "$badps"
 if [ "$gitbash" -eq 0 ]; then
-  for t in python3 sh sleep cat git grep ls sed mkdir; do ln -s "$(command -v "$t")" "$nops/$t"; done
+  for t in python3 bash sh sleep cat git grep ls sed mkdir rm ln true find tail; do
+    ln -s "$(type -P "$t")" "$nops/$t"
+    ln -s "$(type -P "$t")" "$badps/$t"
+  done
+  printf '#!/bin/sh\necho "ps: unrecognized option" >&2\nexit 1\n' >"$badps/ps"
+  chmod +x "$badps/ps"
 fi
+
+# Prints the start time capped registers for pid $1: ps's lstart in the C locale, else /proc's start in clock ticks.
+cat >"$SANDBOX/start_of.py" <<'PY'
+import os, subprocess, sys
+try:
+    out = subprocess.run(["ps", "-o", "lstart=", "-p", sys.argv[1]], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         universal_newlines=True, env=dict(os.environ, LC_ALL="C"))
+    ok = out.returncode == 0
+except OSError:
+    ok = False
+if ok:
+    print(out.stdout.strip())
+else:
+    print("proc %s" % open("/proc/%s/stat" % sys.argv[1]).read().rsplit(")", 1)[1].split()[19])
+PY
+start_of() { python3 "$SANDBOX/start_of.py" "$1"; }
+
+# Runs `capped stop` (the rest of argv) in a session of its own, beside a sentinel sleep in its group whose pid goes
+# to file $2, after forging an entry for its own group in registry folder $1. Exits with the stop's code.
+cat >"$SANDBOX/stopper.py" <<'PY'
+import os, subprocess, sys
+os.setsid()
+sentinel = subprocess.Popen(["sleep", "30"])
+open(sys.argv[2], "w").write(str(sentinel.pid))
+me = subprocess.run([sys.executable, os.path.join(os.path.dirname(sys.argv[0]), "start_of.py"), str(os.getpid())],
+                    stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+open(os.path.join(sys.argv[1], str(os.getpgrp())), "w").write("x\n1\n%s\n%s\n" % (me, me))
+sys.exit(subprocess.call(sys.argv[3:]))
+PY
 
 # Without ps and without /proc (macOS) the runner refuses to run uncapped (Windows needs neither: it has no memory cap).
 if [ "$gitbash" -eq 0 ] && [ "$procfs" -eq 0 ]; then
@@ -71,7 +108,8 @@ fi
 
 # Every case, under the PATH it is called with; $1 names the run in failures and its throwaway folder.
 cases() {
-  local how="$1" dir="$SANDBOX/$1" jc code ms start runner leader gc main w i plain s1 s2 stale key target
+  local how="$1" dir="$SANDBOX/$1" jc code ms start runner leader gc main w i plain s1 s2 s3 stale key target reg
+  local orphan sentinel l other
   mkdir "$dir"
 
   # Over the time cap: killed with 124 and the timeout line.
@@ -180,11 +218,82 @@ time.sleep(30)"
     alive "$s2" || fail "stop wt1: killed the capped sleeper of wt2"
     alive "$plain" || fail "stop wt1: killed a plain sleep it did not start"
     alive "$stale" || fail "stop wt1: killed a group under a stale entry"
+    reg="$main/.git/capped/$key"
+
+    # An entry whose name is digits outside ASCII ("²") is skipped, not a crash: the stop still stops the rest.
+    # shellcheck disable=SC2016 # expanded by the capped sh
+    (cd "$dir/wt1" && exec "$CAPPED" -- sh -c 'echo $$ >"$1"; exec sleep 30' sh "$dir/s3.pid" 2>/dev/null) &
+    pids+=("$!")
+    s3="$(pid_in "$dir/s3.pid")"
+    pids+=("$s3")
+    printf '%s\n1\nx\nx\n' "$dir/wt1" >"$reg/²"
+    code=0
+    "$CAPPED" stop "$dir/wt1" >"$SANDBOX/out" 2>"$SANDBOX/err" || code=$?
+    [ "$code" -eq 0 ] || fail "stop with a ² entry: exit $code ($(tail -1 "$SANDBOX/err"))"
+    i=0
+    while alive "$s3" && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    if alive "$s3"; then fail "stop with a ² entry: the capped sleeper survived"; fi
+    rm -f "$reg/²"
+
+    # A forged entry for a live group whose leader is gone, naming this shell as its runner, kills nothing.
+    python3 -c 'import os, subprocess, sys; os.setsid(); c = subprocess.Popen(["sleep", "30"])
+open(sys.argv[1], "w").write("%d %d" % (os.getpid(), c.pid))' "$dir/orphan"
+    orphan="$(cat "$dir/orphan")"
+    pids+=("${orphan#* }")
+    printf '%s\n%s\n%s\ngone\n' "$dir/wt1" "$$" "$(start_of $$)" >"$reg/${orphan% *}"
+    "$CAPPED" stop "$dir/wt1" >"$SANDBOX/out" 2>"$SANDBOX/err" || fail "leaderless entry: the stop failed"
+    alive "${orphan#* }" || fail "leaderless entry: killed a group whose leader is gone"
+
+    # Nor does one for group 0 (the stopper's own, to killpg) naming a live runner, nor one for the stopper's group
+    # with its leader's true start time.
+    s1="$(start_of 1)"
+    printf 'x\n1\n%s\n%s\n' "$s1" "$s1" >"$reg/0"
+    code=0
+    python3 "$SANDBOX/stopper.py" "$reg" "$dir/sentinel" "$CAPPED" stop "$dir/wt1" >"$SANDBOX/out" 2>"$SANDBOX/err" || code=$?
+    sentinel="$(cat "$dir/sentinel")"
+    pids+=("$sentinel")
+    [ "$code" -eq 0 ] || fail "forged entries: the stop exited $code (143: it killed its own group)"
+    alive "$sentinel" || fail "forged entries: killed the stopper's group"
+    grep -q "stopped 0 group" "$SANDBOX/out" || fail "forged entries: stopped some: $(cat "$SANDBOX/out")"
+
+    # A link planted at the entry's name is not written through: links at the next few hundred pids (made in one
+    # process, so they use none up), then a capped run in wt1.
+    printf 'victim\n' >"$dir/victim"
+    python3 -c 'import os, sys
+for n in range(os.getpid() + 1, os.getpid() + 300): os.symlink(sys.argv[1], os.path.join(sys.argv[2], str(n)))' \
+      "$dir/victim" "$reg"
+    (cd "$dir/wt1" && "$CAPPED" -- true) || fail "planted link: the capped run failed"
+    [ "$(cat "$dir/victim")" = victim ] || fail "planted link: the entry was written through it: $(cat "$dir/victim")"
+    find "$reg" -type l -exec rm -f {} +
+
+    # The start times are read in the C locale: a group registered under another locale is still stopped.
+    other=""
+    if command -v ps >/dev/null && LC_ALL=C ps -o lstart= -p $$ >/dev/null 2>&1; then
+      for l in $(locale -a 2>/dev/null | grep -Ei '^(de_DE|fr_FR|es_ES|pt_PT|pt_BR|it_IT)\.utf-?8$' || true); do
+        if [ "$(LC_ALL="$l" ps -o lstart= -p $$ 2>/dev/null)" != "$(LC_ALL=C ps -o lstart= -p $$)" ]; then other="$l"; break; fi
+      done
+    fi
+    if [ -z "$other" ]; then
+      echo "capped.test.sh ($how): no locale whose ps lstart differs from C's, locale case skipped"
+    else
+      # shellcheck disable=SC2016 # expanded by the capped sh
+      (cd "$dir/wt1" && LC_ALL="$other" exec "$CAPPED" -- sh -c 'echo $$ >"$1"; exec sleep 30' sh "$dir/s4.pid" 2>/dev/null) &
+      pids+=("$!")
+      s3="$(pid_in "$dir/s4.pid")"
+      pids+=("$s3")
+      LC_ALL=C "$CAPPED" stop "$dir/wt1" >/dev/null 2>&1 || fail "locale: the stop failed"
+      i=0
+      while alive "$s3" && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+      if alive "$s3"; then fail "locale: a group registered under $other survived a stop in C"; fi
+    fi
   fi
 }
 
 if command -v ps >/dev/null || [ "$procfs" -eq 0 ]; then cases ps; fi
-if [ "$procfs" -eq 1 ]; then PATH="$nops" cases proc; fi
+if [ "$procfs" -eq 1 ]; then
+  PATH="$nops" cases proc
+  PATH="$badps" cases failps
+fi
 
 [ "$fails" -eq 0 ] || { echo "capped.test.sh: $fails failure(s)"; exit 1; }
 echo "capped.test.sh: ok"

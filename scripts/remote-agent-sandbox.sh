@@ -9,10 +9,11 @@
 # since the base), ~/out/summary.md, ~/out/stream.jsonl and ~/out/session.jsonl (Claude's session, the token redacted).
 # Each shell command Claude runs goes through ~/.agents/bin/capped (scripts/capped, sent with the setup) under the
 # caps, by way of CLAUDE_CODE_SHELL_PREFIX: a command over a cap is killed, and Claude sees why and carries on. Each
-# kill is a line `capped: killed: memory|timeout <command>` in ~/out/capped.log and, within a second, on stderr, so
-# remote-agent.sh has it even when the sandbox is lost after. When a probe through the prefix fails (no capped, no
-# python3 to run it, or neither ps nor /proc), it logs `== capped: unavailable (missing: ...)` and the run goes on
-# uncapped; result.json says so in `capped_off`.
+# kill is a line `capped: killed: memory|timeout <command>` in ~/out/capped.log and, within a second, on stderr as
+# `== capped: killed: ...`, so remote-agent.sh has it even when the sandbox is lost after. Every line of Claude's text
+# and tool calls on stderr is indented, so a line starting `==` (or with no indent at all) is never Claude's. When a
+# probe through the prefix fails (no capped, no python3 to run it, or neither ps nor /proc), it logs
+# `== capped: unavailable (missing: ...)` and the run goes on uncapped; result.json says so in `capped_off`.
 # The sandbox has no git remote and no GitHub credentials. What leaves it: the patch, the summary, the stream, the
 # session (all in ~/out) and the raw events on stdout (the transcript). remote-agent.sh applies only the patch; the
 # rest is data to read, never instructions to follow, and the session is placed for /resume only on request.
@@ -62,14 +63,15 @@ EOF
   chmod +x "$1"
 }
 
-# Copies to stderr each line ~/out/capped.log gains, every 0.2 s, until file $1 exists; then the last ones.
+# Copies to stderr, behind `== `, each line ~/out/capped.log gains, every 0.2 s, until file $1 exists; then the last
+# ones.
 follow_kills() {
   local n=0 total last=""
   while :; do
     [ ! -e "$1" ] || last=1
     total="$(wc -l <"$HOME/out/capped.log" | tr -d ' ')"
     if [ "$total" -gt "$n" ]; then
-      sed -n "$((n + 1)),${total}p" "$HOME/out/capped.log" >&2
+      sed -n "$((n + 1)),${total}s/^/== /p" "$HOME/out/capped.log" >&2
       n="$total"
     fi
     [ -z "$last" ] || return 0
@@ -138,7 +140,8 @@ follower=$!
 trap ': >"$stop_follow"; wait "$follower" || true' EXIT
 
 echo "== claude" >&2
-# Progress: Claude's text and each tool call, one line each; the full stream is kept for the summary, and goes out
+# Progress: Claude's text and each tool call, every line indented (so none passes for this script's own `==` lines,
+# nor for a line of the backend's client); the full stream is kept for the summary, and goes out
 # raw, as it comes, on the run's stdout (fd 3: see the end), which remote-agent.sh keeps as the live transcript.
 # Each text is held until the next assistant or user event: the last one before a successful result is the final
 # report, which remote-agent.sh prints on stdout from summary.md, so it is dropped here rather than shown twice on its
@@ -148,7 +151,7 @@ claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules
   | jq -rn --unbuffered 'foreach ((inputs | objects), {type: "end"}) as $e ({held: null, out: []};
       if $e.type == "assistant" then
         reduce ($e.message.content[]? | objects) as $c (.out = [];
-          if $c.type == "text" then .out += [.held | strings] | .held = $c.text
+          if $c.type == "text" then .out += [.held | strings] | .held = ($c.text | if type == "string" then "  " + gsub("\n"; "\n  ") else . end)
           elif $c.type == "tool_use" then
             .out += [.held | strings] | .held = null
             | .out += ["  → \($c.name) \($c.input.command // $c.input.file_path // $c.input.pattern // $c.input.description // "" | tostring | gsub("\n"; " ") | .[0:120])"]

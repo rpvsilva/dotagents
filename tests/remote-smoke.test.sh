@@ -84,7 +84,7 @@ new_repo() {
 # The cap case on backend $b, in its own repo: a command past REMOTE_CAP_SECS is killed by the sandbox's shell prefix
 # (scripts/capped), and the run still ends, well under Claude's own 2-minute Bash timeout.
 cap_case() {
-  local C="$SANDBOX/$b/cap" out="$SANDBOX/$b/cap.out" code=0 start elapsed result run keep
+  local C="$SANDBOX/$b/cap" out="$SANDBOX/$b/cap.out" code=0 start elapsed result run keep off
   new_repo "$C"
   start="$(date +%s)"
   (cd "$C" && REMOTE_BACKEND="$b" REMOTE_HOURS=1 REMOTE_CAP_SECS=5 "$REPO/scripts/remote-agent.sh" --name "smoke-cap-$b" \

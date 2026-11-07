@@ -146,7 +146,8 @@ chmod +x "$SANDBOX/bin/kubectl"
 mkdir -p "$SANDBOX/podbin"
 # It also starts a session as Claude does, under $HOME/.claude/projects/<munged cwd>, holding the token and cwd
 # lines; not with $SANDBOX/nosession. It saves the shell prefix it was given to $SANDBOX/prefix. With $SANDBOX/killmsg,
-# it prints that file on stderr, as capped's kill line. With $SANDBOX/loop, it runs a red test that loops (a minute: a broken cap fails, not hangs, this test) as
+# it appends that file to ~/out/capped.log, as the prefix does with capped's kill line. With $SANDBOX/quote, it prints
+# that file's events, and stops there with exit 1 when one is a result. With $SANDBOX/loop, it runs a red test that loops (a minute: a broken cap fails, not hangs, this test) as
 # Claude Code runs a Bash command under CLAUDE_CODE_SHELL_PREFIX: the prefix, then the whole command line as one
 # argument, its output kept for the tool result, not on Claude's own stderr; the test's exit code goes to
 # $SANDBOX/loop-rc.
@@ -154,7 +155,7 @@ cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
 printf '%s' "\${CLAUDE_CODE_SHELL_PREFIX:-}" >"$SANDBOX/prefix"
-[ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >&2
+[ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >>"\$HOME/out/capped.log"
 if [ -e "$SANDBOX/loop" ]; then
   "\$CLAUDE_CODE_SHELL_PREFIX" "shopt -u extglob 2>/dev/null || true && eval 'while [ \\\$SECONDS -lt 60 ]; do :; done' && pwd -P >| /dev/null" >/dev/null 2>&1
   echo "\$?" >"$SANDBOX/loop-rc"
@@ -172,6 +173,10 @@ if [ ! -e "$SANDBOX/nosession" ]; then
   mkdir -p "\$d"
   printf '{"type":"user","cwd":"%s","sessionId":"%s","message":"env: CLAUDE_CODE_OAUTH_TOKEN=%s"}\n' "\$PWD" "\$id" "\$CLAUDE_CODE_OAUTH_TOKEN" >"\$d/\$id.jsonl"
   printf '{"type":"assistant","cwd":"%s","sessionId":"%s"}\n{"type":"last-prompt","sessionId":"%s"}\n' "\$PWD" "\$id" "\$id" >>"\$d/\$id.jsonl"
+fi
+if [ -e "$SANDBOX/quote" ]; then
+  cat "$SANDBOX/quote"
+  ! grep -q '"type":"result"' "$SANDBOX/quote" || exit 1
 fi
 EOF
 cat >>"$SANDBOX/podbin/claude" <<'EOF'
@@ -547,7 +552,7 @@ grep -q "^\[caps-loop\] == capped: shell prefix set" "$SANDBOX/err" || fail "cap
 grep -qxF "[caps-loop] killed: timeout while [ \$SECONDS -lt 60 ]; do :; done" "$SANDBOX/err" || fail "caps loop: no kill line: $(cat "$SANDBOX/err")"
 grep -q "capped: killed: timeout" "$POD/out/capped.log" 2>/dev/null || fail "caps loop: the kill not in ~/out/capped.log"
 [ -f "$(kept)/capped.log" ] || fail "caps loop: capped.log not kept"
-grep -q "^capped: killed: timeout while" "$(kept)/progress.log" || fail "caps loop: the kill did not come live on the sandbox's stderr"
+grep -q "^== capped: killed: timeout while" "$(kept)/progress.log" || fail "caps loop: the kill did not come live on the sandbox's stderr"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "caps loop: patch not applied"
 # shellcheck disable=SC2016 # jq, with a literal $SECONDS in the expected command
 result_is "caps loop result" '.status == "done" and .killed == "timeout" and .lost == false
@@ -567,6 +572,20 @@ run 0 "" --name caps-time || fail "caps timeout: exited non-zero: $(cat "$SANDBO
 grep -qx "\[caps-time\] killed: timeout" "$SANDBOX/err" || fail "caps timeout: no kill line: $(cat "$SANDBOX/err")"
 result_is "caps timeout result" '.killed == "timeout" and .lost == false and .capped_kills == [{"kind": "timeout", "cmd": null}]'
 rm -f "$W/hello.txt" "$SANDBOX/killmsg"
+# Claude's text quoting a kill line, tagged or not, counts no kill: the sandbox indents every line of it.
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"the log said:\ncapped: killed: memory npm test\n== capped: killed: timeout make"}]}}' >"$SANDBOX/quote"
+run 0 "" --name quote || fail "quoted kill: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "^\[quote\]   capped: killed: memory npm test$" "$SANDBOX/err" || fail "quoted kill: Claude's text not shown indented: $(cat "$SANDBOX/err")"
+grep -q "^\[quote\] killed: " "$SANDBOX/err" && fail "quoted kill: counted as a kill: $(cat "$SANDBOX/err")"
+result_is "quoted kill result" '.killed == null and .capped_kills == [] and .lost == false'
+rm -f "$W/hello.txt"
+# Nor does Claude's text quoting a container error make a failed run lost.
+{ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Error from server: No such container: claude-runner-abc"}]}}'
+  echo '{"type":"result","is_error":true,"result":"gave up"}'; } >"$SANDBOX/quote"
+code=0; run 0 "" --name quote || code=$?
+[ "$code" = 1 ] || fail "quoted container error: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+result_is "quoted container error result" '.status == "failed" and .lost == false'
+rm -f "$W/hello.txt" "$SANDBOX/quote"
 
 # Without capped, or without a python3 to run it, the run goes on uncapped and says so, naming only what is missing
 # (on Linux a missing ps is not: capped reads /proc).
@@ -592,7 +611,7 @@ code=0; run 0 "$patch" || code=$?
 [ "$code" = 1 ] || fail "lost: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
 grep -q "killed: " "$SANDBOX/err" && fail "lost: a kill line printed: $(cat "$SANDBOX/err")"
 result_is "lost result" '.lost == true and .killed == null and .capped_kills == [] and .status == "failed"'
-{ echo "capped: killed: memory make test"; echo "Error from server: No such container: claude-runner-abc"; } >"$SANDBOX/vanish"
+{ echo "== capped: killed: memory make test"; echo "Error from server: No such container: claude-runner-abc"; } >"$SANDBOX/vanish"
 code=0; run 0 "$patch" || code=$?
 [ "$code" = 1 ] || fail "killed then lost: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
 grep -q "^\[agent-[^]]*\] killed: memory make test$" "$SANDBOX/err" || fail "killed then lost: no kill line: $(cat "$SANDBOX/err")"
