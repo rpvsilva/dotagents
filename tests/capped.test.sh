@@ -71,7 +71,7 @@ fi
 
 # Every case, under the PATH it is called with; $1 names the run in failures and its throwaway folder.
 cases() {
-  local how="$1" dir="$SANDBOX/$1" code ms start runner leader gc main w i plain s1 s2 stale key target
+  local how="$1" dir="$SANDBOX/$1" jc code ms start runner leader gc main w i plain s1 s2 stale key target
   mkdir "$dir"
 
   # Over the time cap: killed with 124 and the timeout line.
@@ -107,6 +107,16 @@ time.sleep(30)"
     # Under the cap it runs to the end.
     run --mb 500 --secs 10 -- python3 -c "b = ' ' * 10**7"
     [ "$code" -eq 0 ] || fail "under the memory cap: exit $code"
+
+    # A shell with job control (Claude Code's Bash tool) puts each command in a group of its own: the time cap still kills
+    # it, and does not wait for it to end.
+    # shellcheck disable=SC2016 # expanded by the capped bash
+    run --secs 1 -- bash -c 'set -m; sleep 30 & echo $! >"$1/jc"; wait' bash "$dir"
+    [ "$code" -eq 124 ] || fail "job control timeout: exit $code, want 124"
+    [ "$ms" -lt 3000 ] || fail "job control timeout: took ${ms} ms"
+    jc="$(pid_in "$dir/jc")"
+    pids+=("$jc")
+    if alive "$jc"; then fail "job control timeout: a command in a group of its own outlived the kill"; fi
 
     # SIGTERM to the runner kills its whole group (the command and its children) before it exits.
     # shellcheck disable=SC2016 # expanded by the capped sh

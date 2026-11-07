@@ -4,13 +4,14 @@
   capped [--mb N] [--secs N] -- <cmd> [args...]
   capped stop <worktree>
 
-The command runs in its own process group with stdin from /dev/null. Every 0.2 s the runner sums the group's RSS from
-`ps -A -o pgid=,rss=` (the same call on macOS and Linux), or from /proc/<pid>/stat and statm on Linux without ps. Over
+The command runs in its own process group with stdin from /dev/null. Every 0.2 s the runner sums the RSS of the group
+and of every process descended from it, from `ps -A -o pid=,ppid=,pgid=,rss=` (the same call on macOS and Linux), or from /proc/<pid>/stat and statm on Linux without ps. Over
 --mb it kills the group, prints `capped: killed: memory` on stderr and exits 137; over --secs it prints
 `capped: killed: timeout` and exits 124. A cap left out is not enforced. Otherwise it exits with the command's code
 (128+N for signal N). When the command exits, what is left of its group is killed too, and SIGTERM, SIGINT or SIGHUP to
 the runner kills the group before the runner exits. Without `ps` or /proc it refuses to run (exit 125) rather than run
-uncapped. A process that leaves the group (setsid, a daemon) escapes the caps and stop.
+uncapped. A descendant in a group of its own (a shell with job control puts each command in one) is capped and killed
+with it; a process that is orphaned (its parent gone) or calls setsid escapes the caps and stop.
 
 Inside a git worktree, each group is registered as <git common dir>/capped/<sha1 of the worktree's real path>/<pgid>
 until it ends. `capped stop <worktree>` kills only those groups: TERM, then KILL after 3 s. It refuses /, $HOME and a
@@ -86,38 +87,53 @@ def started(pid):
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
-def group_kb_proc(pgid):
-    """Summed RSS in KB of the processes in group pgid, from /proc/<pid>/stat and statm."""
-    page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
-    total = 0
-    for pid in os.listdir("/proc"):
-        if not pid.isdigit():
-            continue
-        fields = proc_stat(pid)
-        if not fields or len(fields) < 3 or fields[2] != str(pgid):
-            continue
-        try:
-            with open("/proc/%s/statm" % pid) as f:
-                total += int(f.read().split()[1]) * page_kb
-        except (OSError, IndexError, ValueError):
-            pass  # gone since the listing
-    return total
-
-
-def group_kb(pgid):
-    """Summed RSS in KB of the processes in group pgid, or None when ps fails."""
+def snapshot():
+    """Every process as (pid, ppid, pgid, rss in KB), from `ps -A -o pid=,ppid=,pgid=,rss=` or /proc, or None when ps
+    fails."""
+    rows = []
     if use_proc():
-        return group_kb_proc(pgid)
-    out = subprocess.run(["ps", "-A", "-o", "pgid=,rss="], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
+        for pid in os.listdir("/proc"):
+            fields = proc_stat(pid) if pid.isdigit() else None
+            if not fields or len(fields) < 3:
+                continue
+            try:
+                with open("/proc/%s/statm" % pid) as f:
+                    rss = int(f.read().split()[1]) * page_kb
+                rows.append((int(pid), int(fields[1]), int(fields[2]), rss))
+            except (OSError, IndexError, ValueError):
+                pass  # gone since the listing
+        return rows
+    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,rss="], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, universal_newlines=True)
     if out.returncode != 0:
         return None
-    total = 0
     for line in out.stdout.splitlines():
         fields = line.split()
-        if len(fields) == 2 and fields[0] == str(pgid) and fields[1].isdigit():
-            total += int(fields[1])
-    return total
+        if len(fields) == 4 and all(f.isdigit() for f in fields):
+            rows.append(tuple(int(f) for f in fields))
+    return rows
+
+
+def members(rows, pgid):
+    """The rows of the command: its group, and every process descended from it. A shell with job control (Claude
+    Code's) puts each command in a group of its own, out of reach of a kill of the group, but it stays a descendant
+    until its parent dies."""
+    mine = {r[0] for r in rows if r[2] == pgid}
+    grew = True
+    while grew:
+        grew = False
+        for pid, ppid, _, _ in rows:
+            if ppid in mine and pid not in mine:
+                mine.add(pid)
+                grew = True
+    return [r for r in rows if r[0] in mine]
+
+
+def group_kb(pgid):
+    """Summed RSS in KB of the command's processes (see members), or None when ps fails."""
+    rows = snapshot()
+    return None if rows is None else sum(r[3] for r in members(rows, pgid))
 
 
 def kill_group(proc):
@@ -126,9 +142,15 @@ def kill_group(proc):
                        stderr=subprocess.DEVNULL)
         return
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        rows = snapshot() or []
     except OSError:
-        pass
+        rows = []
+    groups = {r[2] for r in members(rows, proc.pid)} | {proc.pid}
+    for g in groups:
+        try:
+            os.killpg(g, signal.SIGKILL)
+        except OSError:
+            pass
 
 
 def parse_run(args):
