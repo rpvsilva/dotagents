@@ -128,7 +128,7 @@ fi
 # Every case, under the PATH it is called with; $1 names the run in failures and its throwaway folder.
 cases() {
   local how="$1" dir="$SANDBOX/$1" jc code ms start runner leader gc main w i plain s1 s2 s3 stale key target reg
-  local orphan sentinel l other
+  local orphan sentinel l other base capd
   mkdir "$dir"
 
   # Over the time cap: killed with 124 and the timeout line, not before the cap.
@@ -150,14 +150,24 @@ cases() {
   run --secs 5 -- sh -c 'exit 3'
   [ "$code" -eq 3 ] || fail "exit code: got $code, want 3"
 
-  # A command that ends ends the runner at once, not at the next poll (0.2 s): three 50 ms runs inside 0.6 s.
+  # A command that ends ends the runner at once, not at the next poll. The poll is set to 3 s (CAPPED_POLL), so waiting
+  # it out costs seconds whatever ps or /proc costs. Each capped run of a 50 ms sleep is set against capped refusing its
+  # arguments (its startup, no poll) plus the same sleep, run alternately so both see the same load; the fastest of each
+  # is compared, as load only adds time. Half the poll (1.5 s) is allowed for the first check (ps on macOS: ~150 ms).
   if [ "$gitbash" -eq 0 ]; then
-    start="$(now_ms)"
-    for i in 1 2 3; do "$CAPPED" --mb 500 --secs 5 -- sleep 0.05 || fail "quick exit: run $i failed"; done
-    ms=$(($(now_ms) - start))
-    # Under ps each poll runs ps, slower on macOS; the old stall (a full poll per run) still adds ~600 ms over either bound.
-    limit=600; [ "$how" != ps ] || limit=1200
-    [ "$ms" -lt "$limit" ] || fail "quick exit: three runs took ${ms} ms, want under $limit"
+    base=""; capd=""
+    for i in 1 2 3 4 5; do
+      start="$(now_ms)"
+      CAPPED_POLL=3 "$CAPPED" --bogus 2>/dev/null || true
+      sleep 0.05
+      ms=$(($(now_ms) - start))
+      if [ -z "$base" ] || [ "$ms" -lt "$base" ]; then base="$ms"; fi
+      start="$(now_ms)"
+      CAPPED_POLL=3 "$CAPPED" --mb 500 --secs 10 -- sleep 0.05 || fail "quick exit: run $i failed"
+      ms=$(($(now_ms) - start))
+      if [ -z "$capd" ] || [ "$ms" -lt "$capd" ]; then capd="$ms"; fi
+    done
+    [ $((capd - base)) -lt 1500 ] || fail "quick exit: fastest run took ${capd} ms, ${base} ms without the poll loop"
   fi
 
   if [ "$gitbash" -eq 1 ]; then

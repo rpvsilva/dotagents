@@ -4,7 +4,8 @@
   capped [--mb N] [--secs N] -- <cmd> [args...]
   capped stop <worktree>
 
-The command runs in its own process group with stdin from /dev/null. Every 0.2 s the runner sums the RSS of the group
+The command runs in its own process group with stdin from /dev/null. Every 0.2 s (CAPPED_POLL seconds when that is set
+to a number over 0) the runner sums the RSS of the group
 and of every process descended from it, from `ps -A -o pid=,ppid=,pgid=,rss=` (the same call on macOS and Linux), or from /proc/<pid>/stat and statm on Linux when ps is missing or fails. Over
 --mb it kills the group, prints `capped: killed: memory` on stderr and exits 137; over --secs it prints
 `capped: killed: timeout` and exits 124. A cap left out is not enforced. Otherwise it exits with the command's code
@@ -31,7 +32,17 @@ import subprocess
 import sys
 import time
 
-POLL = 0.2
+
+def poll_interval():
+    """Seconds between checks: CAPPED_POLL when it is a number over 0, else 0.2."""
+    try:
+        value = float(os.environ.get("CAPPED_POLL", ""))
+    except ValueError:
+        return 0.2
+    return value if 0 < value < float("inf") else 0.2
+
+
+POLL = poll_interval()
 EXIT_MEMORY = 137
 EXIT_TIMEOUT = 124
 EXIT_REFUSED = 125
