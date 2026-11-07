@@ -1,0 +1,4 @@
+[
+ {"command": "tests/run.sh", "rc": 1, "passed": 11, "failed": 1, "skipped": 1, "seconds": 28.0, "skip_reasons": ["mod.test.sh: no node"]},
+ {"command": "make lint", "rc": 0, "passed": null, "failed": null, "skipped": null, "seconds": 1.0, "skip_reasons": []}
+]

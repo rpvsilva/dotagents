@@ -1,0 +1,1 @@
+{"number": 20, "url": "https://github.com/example/app/pull/20", "state": "MERGED", "additions": 215, "deletions": 17, "changedFiles": 6, "createdAt": "2026-11-01T10:00:00Z", "mergedAt": "2026-11-01T16:00:00Z", "mergedBy": {"login": "rui"}, "reviews": [{"state": "COMMENTED"}, {"state": "COMMENTED"}, {"state": "APPROVED"}]}

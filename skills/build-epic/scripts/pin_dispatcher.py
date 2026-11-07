@@ -35,14 +35,14 @@ def step(ctx):
             return "installed"
     git = gitops.Git(info["Repo"], ctx.log)
     if sha_file.exists():
-        sha = sha_file.read_text().strip()
+        sha = sha_file.read_text(encoding="utf-8").strip()
         if not SHA.match(sha):
             raise core.Fail(f"bad-dispatcher-sha: {sha_file}")
     else:
         git.fetch()
         sha = git.tip(f"refs/remotes/origin/{info['Default']}")
         tmp = sha_file.with_name(".dispatcher.sha.tmp")
-        tmp.write_text(sha + "\n")
+        tmp.write_text(sha + "\n", encoding="utf-8")
         os.replace(str(tmp), str(sha_file))
     wt = ctx.run_dir / "worktrees" / "dispatcher"
     if wt.exists():

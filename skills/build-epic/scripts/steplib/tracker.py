@@ -49,11 +49,11 @@ class Tracker:
     def _load(self):
         if not self.state_path.exists():
             return {"identity": None, "human": None, "labels": [], "held": []}
-        return json.loads(self.state_path.read_text())
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
 
     def _save(self, state):
         tmp = self.state_path.with_name(".tracker.json.tmp")
-        tmp.write_text(json.dumps(state, indent=1) + "\n")
+        tmp.write_text(json.dumps(state, indent=1) + "\n", encoding="utf-8")
         os.replace(str(tmp), str(self.state_path))
 
     def _lock(self):
