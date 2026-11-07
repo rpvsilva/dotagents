@@ -102,6 +102,20 @@ class FileMissedTargets(unittest.TestCase):
         self.run_script()
         self.assertEqual(len(self.calls()), 2)
 
+    def test_the_output_names_the_issues_filed_and_those_filed_before(self):
+        first = json.loads(self.run_script().stdout)
+        self.assertEqual(first, {"filed": {"total-cost": 101, "conflict-resolvers": 102}, "already": {}})
+        rerun = json.loads(self.run_script().stdout)
+        self.assertEqual(rerun, {"filed": {}, "already": {"total-cost": 101, "conflict-resolvers": 102}})
+
+    def test_an_empty_gh_is_refused(self):
+        res = subprocess.run([sys.executable, "-I", str(SCRIPT), str(self.file), "--epic", "192", "--gh", " "],
+                             capture_output=True, text=True, encoding="utf-8", env=self.env, cwd=str(self.tmp),
+                             stdin=subprocess.DEVNULL)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--gh is empty", res.stderr)
+        self.assertEqual(self.calls(), [])
+
     def test_the_comparison_names_each_filed_issue_number(self):
         self.run_script()
         got = self.targets()

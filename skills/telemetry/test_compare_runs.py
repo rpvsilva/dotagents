@@ -30,12 +30,22 @@ def gh35_args(**override):
     return [arg for key, value in files.items() if value is not None for arg in (f"--{key}", str(value))]
 
 
+COMMITTED = {}  # compare_runs.py's output per args naming only committed files: those runs repeat across cases
+
+
 def compare(args):
-    res = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
-                         stdin=subprocess.DEVNULL)
-    if res.returncode != 0:
-        raise AssertionError(f"exit {res.returncode}: {res.stderr}")
-    return json.loads(res.stdout)
+    """compare_runs.py's output for `args`, a fresh copy each call."""
+    key = tuple(args)
+    committed = all(a.startswith("--") or not Path(a).is_absolute() or HERE in Path(a).parents for a in args)
+    if not committed or key not in COMMITTED:
+        res = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True,
+                             encoding="utf-8", stdin=subprocess.DEVNULL)
+        if res.returncode != 0:
+            raise AssertionError(f"exit {res.returncode}: {res.stderr}")
+        if not committed:
+            return json.loads(res.stdout)
+        COMMITTED[key] = res.stdout
+    return json.loads(COMMITTED[key])
 
 
 def first_difference(actual, expected, path="$"):
