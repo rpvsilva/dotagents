@@ -48,20 +48,12 @@ URL = re.compile(r"https?://\S+/pull/(\d+)")
 WAITS_ON_HUMAN = re.compile(r"approv|review required|required review|code ?owner", re.IGNORECASE)
 
 
-def base_branch(run, default):
-    """`decisions.md`'s `base:` when it names a branch, else `default`."""
-    path = run / "decisions.md"
-    value = runfolder.get(path, "base") if path.exists() else None
-    value = (value or "").strip().strip("`")
-    return default if value.lower() in ("", "null", "none", "default", "~") else value
-
-
 class Ship:
     def __init__(self, ctx):
         self.ctx, self.run = ctx, ctx.run_dir
         info = runfolder.run_info(self.run)
         self.repo, self.default = core.resolve(info["Repo"]), info["Default"]
-        self.base = base_branch(self.run, self.default)
+        self.base = ci.base(self.run, self.default)
         self.ticket = runfolder.ticket_file(self.run, ctx.id)
         self.branch = runfolder.get(self.ticket, "Branch")
         if not self.branch:
