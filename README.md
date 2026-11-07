@@ -10,7 +10,7 @@
 ![Cursor](https://img.shields.io/badge/Cursor-partial-000000?logo=cursor&logoColor=white)
 ![Shell](https://img.shields.io/badge/shell-bash_3.2+-4EAA25?logo=gnubash&logoColor=white)
 
-🧩 13 skills · 🧑‍🤝‍🧑 10 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
+🧩 14 skills · 🧑‍🤝‍🧑 10 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
 
 [What's included](#-whats-included) · [Install](#-install) · [Use](#-use) · [Docs](#-docs) · [Contributing](#-contributing)
 
@@ -86,6 +86,7 @@ A **skill** is a `SKILL.md` file that teaches an agent one workflow. Skills are 
 | [`add-plugin`](skills/add-plugin/SKILL.md) | Add a Claude Code plugin after showing what it adds and costs |
 | [`configure`](skills/configure/SKILL.md) | Show or change the Settings skills read, for this machine or this repo |
 | [`remember`](skills/remember/SKILL.md) | After a skill run, save what it learned about the repo for next time |
+| [`remote-subagents`](skills/remote-subagents/SKILL.md) | Run a subagent's brief on the remote backend (cluster, Docker or SSH host) instead of this machine, and act on its outcome |
 | [`telemetry`](skills/telemetry/SKILL.md) | Show what a run cost per skill or per subagent role (`--by-role`), compare runs over time, find wasted steps, and measure and compare build-epic runs (`run_metrics.py`, `compare_runs.py`) |
 
 ### 🧑‍🤝‍🧑 Subagents
@@ -105,7 +106,7 @@ Some skills start **subagents**: focused helpers, each with a fresh context. Eac
 | `security-reviewer` | `security-audit`, `review-pr` | Hunts security issues in one PR, area or flow |
 | `test-tuner` | `tune-tests`, `build-epic` | Makes tests faster and widens coverage |
 
-Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only: the sandbox gets a snapshot of one worktree and sends back a patch, and never touches GitHub. Overview with diagrams: [docs/remote.md](docs/remote.md). Full reference: [remote/README.md](remote/README.md).
+Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only: the sandbox gets a snapshot of one worktree and sends back a patch, and never touches GitHub. Overview with diagrams: [docs/remote.md](docs/remote.md). Full reference: [remote/README.md](remote/README.md). The rules an agent follows to run one remotely live in the [`remote-subagents`](skills/remote-subagents/SKILL.md) skill.
 
 ### 🪝 Hooks
 

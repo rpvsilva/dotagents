@@ -163,13 +163,21 @@ while read -r p; do
   fail "$p is in only one of .review-gate.yml (high tier) and CODEOWNERS"
 done < <(comm -3 <(echo "$high") <(echo "$owned") | tr -d '\t' | grep . || true)
 
-# Remote subagents say to give the human the transcript path, to leave remote-agent's stderr unredirected, and to read
-# the outcome from result.json through remote-agent result.
-remote="$(awk '/^## Remote subagents/ {on=1; next} on && /^## / {exit} on' skills/_shared/conventions.md)"
-grep -q 'transcript' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not mention the transcript"
-grep -qi 'not redirect' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not say to leave stderr unredirected"
-grep -q 'result\.json' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not name result.json"
-grep -q 'remote-agent result' <<<"$remote" || fail "skills/_shared/conventions.md: Remote subagents does not name remote-agent result"
+# The remote-subagents skill says to give the human the transcript path, to leave remote-agent's stderr unredirected,
+# and to read the outcome from result.json through remote-agent result. The shared conventions only link to it.
+rs=skills/remote-subagents/SKILL.md
+if [ -f "$rs" ]; then
+  remote="$(cat "$rs")"
+  grep -q 'transcript' <<<"$remote" || fail "$rs: does not mention the transcript"
+  grep -qi 'not redirect' <<<"$remote" || fail "$rs: does not say to leave stderr unredirected"
+  grep -q 'result\.json' <<<"$remote" || fail "$rs: does not name result.json"
+  grep -q 'remote-agent result' <<<"$remote" || fail "$rs: does not name remote-agent result"
+else
+  fail "$rs is missing"
+fi
+if grep -q '^## Remote subagents' skills/_shared/conventions.md; then
+  fail "skills/_shared/conventions.md: restates Remote subagents; link ../remote-subagents/SKILL.md instead"
+fi
 
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
