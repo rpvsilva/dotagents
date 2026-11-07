@@ -38,6 +38,11 @@ jobs:
           if [ -n "$GITHUB_BASE_REF" ]; then args=(--base "origin/$GITHUB_BASE_REF"); else args=(--all); fi
           checks=" $(tests/affected.sh "${args[@]}" | tr '\n' ' ')"
           echo "checks:$checks"
+          # python.test.sh runs only the test folders holding a changed file, as under tests/run.sh.
+          if [ -n "$GITHUB_BASE_REF" ]; then
+            PYTHON_TEST_FILES="$(tests/affected.sh --files --base "origin/$GITHUB_BASE_REF")"
+            export PYTHON_TEST_FILES
+          fi
           suites=()
           for t in tests/*.test.sh; do case "$checks " in *" ${t##*/} "*) suites+=("$t") ;; esac; done
           tests/parallel.sh ${suites[@]+"${suites[@]}"}
