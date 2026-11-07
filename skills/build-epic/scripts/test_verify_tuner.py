@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from testkit import SCRIPTS, Kit  # noqa: E402
+from testkit import SCRIPTS, Kit, env_tool_setup  # noqa: E402
 
 VERIFY = SCRIPTS / "verify_tuner.py"
 
@@ -111,6 +111,18 @@ class VerifyTunerTest(VerifyTunerCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
         self.assertEqual(self.snapshot(), before)
+
+    def test_checks_calling_a_tool_setup_installed_in_the_env_run_green(self):
+        suite = "capped --mb 2000 --secs 8 -- python3 -m unittest -q"
+        (self.kit.run_dir / "map.md").write_text(
+            f"# Map\n\n## Checks\n\n```\nenvtool\n{suite}\n```\n\n" + env_tool_setup("envtool", "from the env")
+            + "\n## Gaps\n", encoding="utf-8")
+        p = self.kit.step(SCRIPTS / "setup.py", self.kit.run_dir)
+        self.assertTrue(p.stdout.startswith("OK run set up "), p.stdout + p.stderr)
+        self.write_report("mutations: calc.py:6 a - b -> a + b", "moved: none")
+        p = self.verify()
+        self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
+        self.assertIn("from the env", (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text(encoding="utf-8"))
 
     def test_mutations_listed_under_one_key_are_each_applied(self):
         self.tune("\n    def test_mul(self):\n        self.assertEqual(calc.mul(2, 3), 6)\n")
