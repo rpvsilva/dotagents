@@ -283,7 +283,7 @@ class Targets(unittest.TestCase):
     def test_remote_kills_cost_measured_and_suites_per_merge_come_from_run_metrics(self):
         args = gh35_args(**{"b-metrics": RUN_METRICS}) + ["--targets", str(TARGETS)]
         targets = compare(args)["comparison"]["targets"]
-        # 1 run killed by memory, 1 run without cost, 3 merged task PRs with 3 saved suite files.
+        # 1 run killed by memory then by timeout, 1 run without cost, 3 merged task PRs with 3 saved suite files.
         self.assertEqual((targets["remote-memory-kills"]["value"], targets["remote-memory-kills"]["status"]),
                          (1, "missed"))
         self.assertEqual((targets["remote-cost-measured"]["value"], targets["remote-cost-measured"]["status"]),

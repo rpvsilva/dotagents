@@ -81,7 +81,8 @@ class FixtureRun(unittest.TestCase):
         self.assertTrue(all(c[:2] == ["pr", "view"] and c[3] == "--json" for c in calls), calls)
 
     def test_round_trips_are_the_quotes_recorded_after_approval(self):
-        # Three dated quotes (one spanning two lines); the first was recorded before the first clause, the approval.
+        # Four dated quotes (one spanning two lines): the first recorded before the clauses, the second in the
+        # approval reply right after them; the other two later in the run.
         self.assertEqual(self.got["human_round_trips"], 2)
 
     def test_hand_written_scripts_skip_env_worktrees_and_remote(self):
@@ -139,6 +140,43 @@ class RunMetrics(unittest.TestCase):
         got = self.metrics(run, "--gh", self.gh)
         self.assertIsNone(got["human_round_trips"])
         self.assertIn("human round trips: no logs/decisions-decide.log to place the approval", got["gaps"])
+
+    def approved_run(self, name, log, quotes):
+        """A run folder with one Authorizations row, `quotes` dated Decisions and `log` as its decide log."""
+        run = self.tmp / name
+        (run / "logs").mkdir(parents=True)
+        lines = "".join(f"- 2026-11-01: {q}\n" for q in quotes)
+        (run / "decisions.md").write_text("# Decisions\nbase: main\n\n## Authorizations\n\n| clause | waived | quote |\n"
+                                          "| --- | --- | --- |\n| Merge | yes | Rui: \"go\" |\n\n## Decisions\n\n" + lines,
+                                          encoding="utf-8")
+        (run / "logs" / "decisions-decide.log").write_text(log, encoding="utf-8")
+        return run
+
+    CLAUSES = ("== decide decisions clause Merge yes Rui: \"go\" at 2026-11-01T09:30:00\nOK decisions clause waived=yes\n"
+               "== decide decisions clause Approve no Rui: \"mine\" at 2026-11-01T09:30:20\nOK decisions clause waived=no\n")
+
+    def test_quotes_from_the_approval_reply_after_its_clauses_are_not_round_trips(self):
+        log = self.CLAUSES + ("== decide decisions quote run 02 first at 2026-11-01T09:31:00\nOK decisions quote 2026-11-01\n"
+                              "== decide decisions quote skip docs,\n  they are fine at 2026-11-01T09:31:30\n"
+                              "OK decisions quote 2026-11-01\n")
+        run = self.approved_run("approval-quotes", log, ["run 02 first", "skip docs,\n  they are fine"])
+        self.assertEqual(self.metrics(run, "--gh", self.gh)["human_round_trips"], 0)
+
+    def test_a_quote_logged_at_a_later_separate_step_is_a_round_trip(self):
+        log = self.CLAUSES + ("== decide decisions quote run 02 first at 2026-11-01T09:31:00\nOK decisions quote 2026-11-01\n"
+                              "== decide decisions quote rebase 02 at 2026-11-01T13:00:00\nOK decisions quote 2026-11-01\n")
+        run = self.approved_run("later-quote", log, ["run 02 first", "rebase 02"])
+        self.assertEqual(self.metrics(run, "--gh", self.gh)["human_round_trips"], 1)
+
+    def test_a_run_killed_for_memory_then_timeout_counts_as_a_memory_kill(self):
+        run = self.tmp / "kills"
+        (run / "remote").mkdir(parents=True)
+        (run / "remote" / "01-01.json").write_text(json.dumps({
+            "status": "failed", "total_cost_usd": 1.0, "killed": "timeout",
+            "capped_kills": [{"kind": "memory", "cmd": "pytest"}, {"kind": "timeout", "cmd": None}]}), encoding="utf-8")
+        (run / "remote" / "01-02.json").write_text(json.dumps({"status": "failed", "total_cost_usd": 1.0,
+                                                               "killed": "timeout"}), encoding="utf-8")
+        self.assertEqual(self.metrics(run, "--gh", self.gh)["remote"]["killed"], {"memory": 1, "timeout": 2})
 
     def test_docstring_names_both_new_fields(self):
         doc = SCRIPT.read_text(encoding="utf-8").split('"""')[1]

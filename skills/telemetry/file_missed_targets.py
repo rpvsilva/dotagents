@@ -5,8 +5,12 @@ Usage: python3 -I file_missed_targets.py <comparison.json> --epic <n> [--repo <o
 
 Reads `comparison.targets` (`compare_runs.py --targets`'s output) and files one issue per target whose `status` is
 `missed` and that has no `issue` yet: its title names the target, its body holds the threshold, the run's value, an
-HTML marker and `Part of #<n>`. After each issue it writes the issue number into that target (`issue`) in the
-comparison file, so a rerun, or a run after a failure, files only the rest. Met and unknown targets file nothing.
+HTML marker (`<!-- telemetry-missed-target: <id> -->`) and `Part of #<n>`. Before filing, it searches the repo's
+issues, open or closed, for that marker (`gh issue list --search`): a target an issue already holds is recorded, not
+filed again, so a comparison rerun and saved over the file files no duplicates. After each issue it writes the
+issue number into that target (`issue`) in the comparison file, so a rerun, or a run after a failure, files only the
+rest; a `gh issue create` that prints no URL is looked up by its marker. Met and unknown targets file nothing; a
+failing search files nothing.
 Issues are filed as the identity the `identity_command` Setting names (read through `~/.agents/bin/settings`): a
 command printing a GitHub token, run before every gh call; unset (or no settings tool), the current gh login.
 `--gh` is the gh command (default `gh`), split like a shell would. Prints `{"filed": {id: n}, "already": {id: n}}`.
@@ -15,13 +19,16 @@ Exit 2 when the comparison has no targets.
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-MARKER = "<!-- telemetry-missed-target: {} -->"
+SEARCH = "telemetry-missed-target"
+MARKER = "<!-- " + SEARCH + ": {} -->"
+MARKER_RE = re.compile(r"<!-- " + SEARCH + r": (\S+) -->")
 OPS = {"lt": "<", "le": "<=", "eq": "=", "ge": ">=", "gt": ">"}
 
 
@@ -74,6 +81,27 @@ def issue_text(tid, t, epic):
     return title, "\n".join(lines) + "\n"
 
 
+def search(gh, repo, env, stop):
+    """{target id: issue number} for the issues (open or closed) whose body holds a target's marker; the lowest
+    number when several do."""
+    res = run(gh + ["issue", "list", "--search", f'"{SEARCH}" in:body', "--state", "all", "--limit", "1000",
+                    "--json", "number,body"] + repo, env=env)
+    try:
+        issues = json.loads(res.stdout) if res.returncode == 0 else None
+    except ValueError:
+        issues = None
+    if not isinstance(issues, list):
+        stop(f"searching the filed issues failed (rc {res.returncode}): {(res.stderr or res.stdout).strip()}")
+    held = {}
+    for issue in issues:
+        if not isinstance(issue, dict) or not isinstance(issue.get("number"), int) or not isinstance(issue.get("body"), str):
+            continue
+        number, body = issue["number"], issue["body"]
+        for tid in MARKER_RE.findall(body):
+            held[tid] = min(held.get(tid, number), number)
+    return held
+
+
 def save(path, data):
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -100,18 +128,30 @@ def main(argv=None):
     already = {tid: t["issue"] for tid, t in missed.items() if t.get("issue")}
     todo = [tid for tid in missed if tid not in already]
     command = identity_command() if todo else None
+    repo = ["--repo", args.repo] if args.repo else []
     filed = {}
+
+    def stop(message):
+        print(json.dumps({"filed": filed, "already": already}))
+        sys.exit(f"file_missed_targets.py: {message}")
+
+    if todo:
+        held = search(gh, repo, gh_env(command), stop)
+        for tid in [t for t in todo if t in held]:
+            missed[tid]["issue"] = already[tid] = held[tid]
+            todo.remove(tid)
+        save(args.comparison, data)
     for tid in todo:
         title, body = issue_text(tid, missed[tid], args.epic)
-        argv = gh + ["issue", "create", "--title", title, "--body", body]
-        if args.repo:
-            argv += ["--repo", args.repo]
-        res = run(argv, env=gh_env(command))
+        res = run(gh + ["issue", "create", "--title", title, "--body", body] + repo, env=gh_env(command))
+        if res.returncode != 0:
+            stop(f"filing {tid} failed (rc {res.returncode}): {(res.stderr or res.stdout).strip()}")
         url = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else ""
         number = url.rstrip("/").rsplit("/", 1)[-1]
-        if res.returncode != 0 or not number.isdigit():
-            print(json.dumps({"filed": filed, "already": already}))
-            sys.exit(f"file_missed_targets.py: filing {tid} failed (rc {res.returncode}): {(res.stderr or res.stdout).strip()}")
+        if not number.isdigit():  # filed, but no URL to tell its number: find it by its marker
+            number = str(search(gh, repo, gh_env(command), stop).get(tid, ""))
+            if not number:
+                stop(f"filed {tid} but found no issue number; a rerun finds it by its marker")
         missed[tid]["issue"] = filed[tid] = int(number)
         save(args.comparison, data)
     print(json.dumps({"filed": filed, "already": already}))

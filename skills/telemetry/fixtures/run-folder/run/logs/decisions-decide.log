@@ -6,6 +6,8 @@ OK decisions quote 2026-11-01
 OK decisions clause waived=yes
 == decide decisions clause Approve high-tier PRs no Rui: "those are mine" at 2026-11-01T09:31:00
 OK decisions clause waived=no
+== decide decisions quote go ahead, 03 can wait at 2026-11-01T09:32:00
+OK decisions quote 2026-11-01
 == decide decisions quote rebase 02 onto the new base at 2026-11-01T14:00:00
 OK decisions quote 2026-11-01
 == decide decisions quote bad

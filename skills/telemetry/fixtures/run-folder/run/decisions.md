@@ -14,6 +14,7 @@ review_before_agent_merge: yes
 ## Decisions
 
 - 2026-11-01: install shellcheck, skip docker
+- 2026-11-01: go ahead, 03 can wait
 - 2026-11-01: rebase 02 onto the new base
 - 2026-11-02: drop task 01-03,
   the lexer covers it
