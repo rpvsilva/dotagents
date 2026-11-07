@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs scripts/capped on real commands: the memory and time caps, the closed stdin, SIGTERM to the runner, a missing
-# `ps`, and `capped stop` in throwaway worktrees (forged, planted and oddly named registry entries included). On Linux
+# Runs scripts/capped on real commands: bad arguments, the exit codes, the memory and time caps, the closed stdin, how
+# soon the runner ends after its command, SIGTERM to the runner, a missing `ps`, and `capped stop` in throwaway
+# worktrees (forged, planted and oddly named registry entries included). On Linux
 # the cases run with `ps` (when there is one), again with it hidden from PATH and again with a `ps` that fails (as
 # BusyBox's does on these options), so capped reads the groups from /proc. Git Bash skips every case that needs process
 # groups.
@@ -35,7 +36,7 @@ run() {
 # Waits up to 5 s for file $1 to hold a pid, then prints it.
 pid_in() {
   local i=0
-  while [ ! -s "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  while [ ! -s "$1" ] && [ "$i" -lt 250 ]; do sleep 0.02; i=$((i + 1)); done
   cat "$1"
 }
 
@@ -106,17 +107,36 @@ if [ "$gitbash" -eq 0 ] && [ "$procfs" -eq 0 ]; then
   grep -q "capped: .*ps" "$SANDBOX/err" || fail "no ps: no message naming ps"
 fi
 
+# Bad arguments get the usage and exit 2; a command that cannot start exits 127 saying why.
+for args in "--secs 0 -- true" "--mb x -- true" "--secs" "--secs 5 true" "--" "stop" "stop a b"; do
+  code=0
+  # shellcheck disable=SC2086 # the words of $args are the arguments
+  "$CAPPED" $args >/dev/null 2>"$SANDBOX/err" || code=$?
+  [ "$code" -eq 2 ] || fail "usage ($args): exit $code, want 2"
+  grep -q "^usage: capped" "$SANDBOX/err" || fail "usage ($args): no usage on stderr"
+done
+run --secs 5 -- "$SANDBOX/no-such-command"
+[ "$code" -eq 127 ] || fail "missing command: exit $code, want 127"
+grep -q "^capped: cannot run .*no-such-command" "$SANDBOX/err" || fail "missing command: not said: $(cat "$SANDBOX/err")"
+# A command ended by signal N exits 128+N.
+if [ "$gitbash" -eq 0 ]; then
+  # shellcheck disable=SC2016 # expanded by the capped sh
+  run --secs 5 -- sh -c 'kill -TERM $$'
+  [ "$code" -eq 143 ] || fail "signal: exit $code, want 143"
+fi
+
 # Every case, under the PATH it is called with; $1 names the run in failures and its throwaway folder.
 cases() {
   local how="$1" dir="$SANDBOX/$1" jc code ms start runner leader gc main w i plain s1 s2 s3 stale key target reg
   local orphan sentinel l other
   mkdir "$dir"
 
-  # Over the time cap: killed with 124 and the timeout line.
-  run --secs 1 -- sleep 5
+  # Over the time cap: killed with 124 and the timeout line, not before the cap.
+  run --secs 0.5 -- sleep 5
   [ "$code" -eq 124 ] || fail "timeout: exit $code, want 124"
   grep -qx "capped: killed: timeout" "$SANDBOX/err" || fail "timeout: no 'capped: killed: timeout' on stderr"
-  [ "$ms" -lt 3000 ] || fail "timeout: took ${ms} ms"
+  [ "$ms" -ge 500 ] || fail "timeout: killed after ${ms} ms, before the 0.5 s cap"
+  [ "$ms" -lt 2500 ] || fail "timeout: took ${ms} ms"
 
   # Stdin is closed: a command waiting on input returns at once, though the caller's stdin stays open.
   code=0
@@ -129,6 +149,14 @@ cases() {
   # The command's own exit code passes through.
   run --secs 5 -- sh -c 'exit 3'
   [ "$code" -eq 3 ] || fail "exit code: got $code, want 3"
+
+  # A command that ends ends the runner at once, not at the next poll (0.2 s): three 50 ms runs inside 0.6 s.
+  if [ "$gitbash" -eq 0 ]; then
+    start="$(now_ms)"
+    for i in 1 2 3; do "$CAPPED" --mb 500 --secs 5 -- sleep 0.05 || fail "quick exit: run $i failed"; done
+    ms=$(($(now_ms) - start))
+    [ "$ms" -lt 600 ] || fail "quick exit: three runs took ${ms} ms, want under 600"
+  fi
 
   if [ "$gitbash" -eq 1 ]; then
     echo "capped.test.sh: memory, SIGTERM and stop cases skipped on Git Bash"
@@ -149,10 +177,11 @@ time.sleep(30)"
     # A shell with job control (Claude Code's Bash tool) puts each command in a group of its own: the time cap still kills
     # it, and does not wait for it to end.
     # shellcheck disable=SC2016 # expanded by the capped bash
-    run --secs 1 -- bash -c 'set -m; sleep 30 & echo $! >"$1/jc"; wait' bash "$dir"
+    run --secs 0.5 -- bash -c 'set -m; sleep 30 & echo $! >"$1/jc"; wait' bash "$dir"
     [ "$code" -eq 124 ] || fail "job control timeout: exit $code, want 124"
     [ "$ms" -lt 3000 ] || fail "job control timeout: took ${ms} ms"
     jc="$(pid_in "$dir/jc")"
+    [ -n "$jc" ] || fail "job control timeout: the command was killed before it started its sleep"
     pids+=("$jc")
     if alive "$jc"; then fail "job control timeout: a command in a group of its own outlived the kill"; fi
 
@@ -213,7 +242,7 @@ time.sleep(30)"
     [ "$code" -eq 0 ] || fail "stop wt1: exit $code ($(cat "$SANDBOX/err"))"
     # Bounded: the sleepers end on their own after 30 s, which must not pass for a stop.
     i=0
-    while alive "$s1" && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    while alive "$s1" && [ "$i" -lt 250 ]; do sleep 0.02; i=$((i + 1)); done
     if alive "$s1"; then fail "stop wt1: the capped sleeper of wt1 survived"; fi
     alive "$s2" || fail "stop wt1: killed the capped sleeper of wt2"
     alive "$plain" || fail "stop wt1: killed a plain sleep it did not start"
@@ -231,7 +260,7 @@ time.sleep(30)"
     "$CAPPED" stop "$dir/wt1" >"$SANDBOX/out" 2>"$SANDBOX/err" || code=$?
     [ "$code" -eq 0 ] || fail "stop with a ² entry: exit $code ($(tail -1 "$SANDBOX/err"))"
     i=0
-    while alive "$s3" && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    while alive "$s3" && [ "$i" -lt 250 ]; do sleep 0.02; i=$((i + 1)); done
     if alive "$s3"; then fail "stop with a ² entry: the capped sleeper survived"; fi
     rm -f "$reg/²"
 
@@ -283,7 +312,7 @@ for n in range(os.getpid() + 1, os.getpid() + 300): os.symlink(sys.argv[1], os.p
       pids+=("$s3")
       LC_ALL=C "$CAPPED" stop "$dir/wt1" >/dev/null 2>&1 || fail "locale: the stop failed"
       i=0
-      while alive "$s3" && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+      while alive "$s3" && [ "$i" -lt 250 ]; do sleep 0.02; i=$((i + 1)); done
       if alive "$s3"; then fail "locale: a group registered under $other survived a stop in C"; fi
     fi
   fi
