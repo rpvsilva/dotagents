@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gh, runfolder, tracker  # noqa: E402
+from steplib import core, gh, identity, runfolder, tracker  # noqa: E402
 
 USAGE = "planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush | close-epic [<n>]"
 BLOCKED = "blocked"
@@ -142,7 +142,8 @@ def claims(ctx):
                         cwd=t.repo)
             if res.rc != 0:
                 raise core.Fail("gh-issue-view")
-            others += [login for login in res.out.split() if login != human and login not in others]
+            others += [login for login in res.out.split()
+                       if not identity.same_login(login, human) and login not in others]
         if others:
             runfolder.set_header(ticket, "Claimed by", ", ".join(others))
             runfolder.set_header(ticket, "Status", "claimed")

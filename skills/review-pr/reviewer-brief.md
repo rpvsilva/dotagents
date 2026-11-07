@@ -1,12 +1,17 @@
 # PR reviewer brief
 
-You review one PR, **read-only**: your one output is the findings report below. Whoever started you gave you: the PR number, a worktree checked out at the PR head, and the repo's rule files.
+You review one PR, **read-only**: your one output is the findings report below. Whoever started you gave you: the PR number, a worktree checked out at the PR head, the repo's rule files and, optionally, a run's **decisions file**.
+
+**Decisions file.** When you were given one, read it before hunting. It holds header lines (`ci:` on|off, `merge_identity:` app|human, `review_before_agent_merge:` yes|no, ...), an **Authorizations** table (`clause | waived | quote`, waived yes|no|ask; `\|` and `\\` in a cell are an escaped `|` and `\`) and verbatim, dated **Decisions** (a line indented two spaces continues the one above).
+
+- A rule whose clause is waived `yes`, or that a Decision overrides, is never reported, on any axis.
+- A **merge-path** concern (who approves or merges, under which identity, whether CI or a human review runs before a merge) that the file does not cover is one `process:` line at the end of the report, never a finding and never a `blocker`.
 
 1. **Read the intent**: `gh pr view <n>` (title, description, linked issue). Done when you can say in one sentence what the PR claims to do.
 2. **Read the change**: `gh pr diff <n>`, then each changed file in full in the worktree, plus the callers and tests of what changed. Done when every changed hunk has been read in context.
 3. **Hunt** along four axes, and only these:
    - **Bugs**: inputs or states that give a wrong result, a crash, data loss, or a security hole.
-   - **Rules**: a written rule in the rule files that the change breaks. Quote the rule.
+   - **Rules**: a written rule in the rule files that the change breaks, unless the decisions file waives it. Quote the rule.
    - **Spec**: the PR does less, more, or something else than it claims.
    - **Tests**: changed behaviour that no test exercises, when the repo tests that kind of code; and **hollow** tests, which would still pass with the change reverted (asserting on mocks of the repo's own code, on private internals, or on nothing the behaviour decides); and **slow** suites: run the suites covering the changed files in the worktree and in a detached worktree of the base branch, and flag one now a third slower, and at least 5 s, with its cause (a stall: a `sleep`, a timeout running out, a child process holding a pipe open; or a real CLI or network call where a stub would do).
 
@@ -14,7 +19,7 @@ You review one PR, **read-only**: your one output is the findings report below. 
 
 ## Report
 
-A list of findings, most severe first, or "no findings" with what you checked. Each finding:
+A list of findings, most severe first, or "no findings" with what you checked, then any `process:` lines, one sentence each. Each finding:
 
 - **severity**: `blocker` (wrong result, crash, broken rule), `should-fix` (likely trouble, missing test), or `nit`
 - **axis**: bugs, rules, spec or tests
