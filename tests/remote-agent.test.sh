@@ -90,8 +90,9 @@ pod="$POD" code="$SANDBOX/code" patch="$SANDBOX/patch"
 if [ -n "\${REMOTE_TASK:-}" ] && [ -e "$SANDBOX/code.\$REMOTE_TASK" ]; then
   pod="$POD.\$REMOTE_TASK" code="$SANDBOX/code.\$REMOTE_TASK" patch="$SANDBOX/patch.\$REMOTE_TASK"
 fi
-mkdir -p "\$pod"
-[ -e "$SANDBOX/nomain" ] || touch "\$pod/main-stdout"
+# Builtins where they do: this stub runs about ten times a run.
+[ -d "\$pod" ] || mkdir -p "\$pod"
+[ -e "$SANDBOX/nomain" ] || : >>"\$pod/main-stdout"
 case " \$* " in
   *" apply "*)
     cat >"$SANDBOX/claim.yaml"
@@ -279,37 +280,6 @@ grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not d
 run_data "success run data" "done" 0
 rm "$W/hello.txt"
 
-# No changes: exit 3, claim still deleted.
-code=0; run 0 "" || code=$?
-[ "$code" = 3 ] || fail "no changes: wanted exit 3, got $code"
-grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "no changes: claim not deleted"
-run_data "no changes run data" "done" 3
-
-# A failed run: non-zero, nothing applied, claim deleted.
-code=0; run 1 "$patch" || code=$?
-[ "$code" = 1 ] || fail "failed run: wanted exit 1, got $code"
-[ ! -e "$W/hello.txt" ] || fail "failed run: patch applied anyway"
-grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
-run_data "failed run data" failed 1
-# A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
-for c in 3 4 5; do
-  code=0; run "$c" "$patch" || code=$?
-  [ "$code" = 1 ] || fail "failed run exiting $c: wanted exit 1, got $code"
-done
-
-# A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched.
-stale='diff --git a/tracked.txt b/tracked.txt
---- a/tracked.txt
-+++ b/tracked.txt
-@@ -1 +1 @@
--not what the file says
-+two
-'
-code=0; run 0 "$stale" || code=$?
-[ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
-[ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
-run_data "stale patch run data" failed 4
-
 # result.json: what the run came to, for a caller that lost stdout, stderr or the exit code. Its figures come from
 # the transcript's last result event and the init event's model, the changed files from the patch, the report's
 # status and follow-ups from the summary. The events and the summary carry the token, which never reaches it.
@@ -327,10 +297,23 @@ result_is "result on exit 0" '.exit_code == 0 and .status == "done" and .complet
   and .changed == ["hello.txt"] and .report_status == "done"
   and .follow_up == ["document --flag", "token [redacted]"] and (.report_path | endswith("/summary.md"))'
 rm -f "$W/hello.txt"
+
+# No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
-[ "$code" = 3 ] || fail "result on exit 3: wanted exit 3, got $code"
+[ "$code" = 3 ] || fail "no changes: wanted exit 3, got $code"
+grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "no changes: claim not deleted"
+run_data "no changes run data" "done" 3
 result_is "result on exit 3" '.exit_code == 3 and .status == "done" and .complete == true and .changed == []'
-# The patch is kept as it came, so a file named after the token is redacted in result.json only.
+
+# A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched. The patch is kept as it
+# came, so a file named after the token is redacted in result.json only.
+stale='diff --git a/tracked.txt b/tracked.txt
+--- a/tracked.txt
++++ b/tracked.txt
+@@ -1 +1 @@
+-not what the file says
++two
+'
 code=0; run 0 "$stale"'diff --git a/sk-claude-secret.txt b/sk-claude-secret.txt
 new file mode 100644
 --- /dev/null
@@ -338,13 +321,21 @@ new file mode 100644
 @@ -0,0 +1 @@
 +x
 ' || code=$?
-[ "$code" = 4 ] || fail "result on exit 4: wanted exit 4, got $code"
+[ "$code" = 4 ] || fail "stale patch: wanted exit 4, got $code"
+[ "$(cat "$W/tracked.txt")" = "one" ] || fail "stale patch: worktree changed"
+[ ! -e "$W/sk-claude-secret.txt" ] || fail "stale patch: partly applied"
+run_data "stale patch run data" failed 4
 result_is "result on exit 4" '.exit_code == 4 and .status == "failed" and .complete == true
   and .changed == ["tracked.txt", "[redacted].txt"]'
 rm -f "$SANDBOX/events" "$SANDBOX/summary"
-# A failed run with no result event: every figure unknown, the time from run.json, and no report status.
+
+# A failed run: non-zero, nothing applied, claim deleted. With no result event: every figure unknown, the time from
+# run.json, and no report status.
 code=0; run 1 "$patch" || code=$?
-[ "$code" = 1 ] || fail "result on exit 1: wanted exit 1, got $code"
+[ "$code" = 1 ] || fail "failed run: wanted exit 1, got $code"
+[ ! -e "$W/hello.txt" ] || fail "failed run: patch applied anyway"
+grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
+run_data "failed run data" failed 1
 result_is "result on exit 1" '.exit_code == 1 and .status == "failed" and .complete == false and .total_cost_usd == null
   and .num_turns == null and .usage == null and .model == null and .report_status == null and .follow_up == []
   and (.duration_ms | type) == "number"'
@@ -374,6 +365,11 @@ run 0 "$patch" --name 08-big || fail "result of a big report: exited non-zero: $
 result_is "result of a big report" '.complete == true and .num_turns == 2 and .report_status == "done"
   and .follow_up == ["read it all"] and .changed == ["hello.txt"]'
 rm -f "$W/hello.txt" "$SANDBOX/events" "$SANDBOX/summary"
+# A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
+for c in 3 4 5; do
+  code=0; run "$c" "$patch" || code=$?
+  [ "$code" = 1 ] || fail "failed run exiting $c: wanted exit 1, got $code"
+done
 
 # A hostile sandbox's out archive cannot write outside the run folder through links, nor replace run.json: its links
 # named after the files the host writes (run.json.tmp, progress.log, the scrub's temporaries) aim at $SANDBOX/victim.
@@ -963,6 +959,20 @@ jq -e --arg r "$first" '.exit_code == 1 and .run == $r' "$SANDBOX/result" >/dev/
   || fail "result of a retry, first newer: not the newest by start: $(cat "$SANDBOX/result")"
 # A name matches as --name writes it.
 result 08-Retry || fail "result 08-Retry: the name not matched as --name writes it: $(cat "$SANDBOX/err")"
+# From outside the repo, given its dir; a run kept before records moved, in a linked worktree's own git dir, is found
+# there by name.
+old="$W/.git/worktrees/wt/remote-agent/agent-oldres"
+mkdir -p "$old"
+printf '{"run":"agent-oldres","name":"08-old","started":1}\n' >"$old/run.json"
+printf '{"run":"agent-oldres","exit_code":0}\n' >"$old/result.json"
+code=0; (cd "$SANDBOX" && env HOME="$H" "$REPO/scripts/remote-agent.sh" result 08-old "$W") >"$SANDBOX/result" 2>"$SANDBOX/err" || code=$?
+[ "$code" = 0 ] || fail "result with a dir: exited $code: $(cat "$SANDBOX/err")"
+jq -e '.run == "agent-oldres"' "$SANDBOX/result" >/dev/null 2>&1 \
+  || fail "result with a dir: not the old location's run: $(cat "$SANDBOX/result")"
+rm -rf "$W/.git/worktrees/wt"
+code=0; result 08-retry "$W" extra || code=$?
+[ "$code" = 1 ] || fail "result with three arguments: exited $code, not 1"
+grep -q "usage: remote-agent result" "$SANDBOX/err" || fail "result with three arguments: no usage: $(cat "$SANDBOX/err")"
 # Unknown names, and names that are no run name, exit non-zero with one line.
 for q in 08-nothing ../x ""; do
   code=0; result "$q" || code=$?
@@ -1142,6 +1152,22 @@ prune --older-than 1d || fail "prune, no ps: exited non-zero: $(cat "$SANDBOX/pr
 [ -d "$P/.git/remote-agent/agent-live" ] || fail "prune, no ps: removed the live run"
 [ ! -e "$P/.git/remote-agent/agent-stopped" ] || fail "prune, no ps: kept the stopped run"
 psbin="$SANDBOX/psbin"
+# From outside the repo, given its dir; two dirs are refused with the usage, and a dir outside any repo by name.
+make_records
+code=0; (cd "$SANDBOX" && env HOME="$H" PATH="$psbin:$PATH" "$REPO/scripts/remote-agent.sh" prune --older-than 1d "$P") \
+  >"$SANDBOX/prune.out" 2>"$SANDBOX/prune.err" || code=$?
+[ "$code" = 0 ] || fail "prune with a dir: exited $code: $(cat "$SANDBOX/prune.err")"
+for r in $gone; do [ ! -e "$P/.git/remote-agent/$r" ] || fail "prune with a dir: kept old $r"; done
+for r in $kept; do [ -d "$P/.git/remote-agent/$r" ] || fail "prune with a dir: removed $r"; done
+make_records
+code=0; prune --older-than 1d "$P" "$P" || code=$?
+[ "$code" = 1 ] || fail "prune with two dirs: exited $code, not 1"
+grep -q 'usage: remote-agent prune' "$SANDBOX/prune.err" || fail "prune with two dirs: no usage: $(cat "$SANDBOX/prune.err")"
+[ -d "$P/.git/remote-agent/agent-done" ] || fail "prune with two dirs: removed a run"
+mkdir -p "$SANDBOX/nogit"
+code=0; prune --older-than 1d "$SANDBOX/nogit" || code=$?
+[ "$code" = 1 ] || fail "prune outside a repo: exited $code, not 1"
+grep -q "not in a git worktree: $SANDBOX/nogit" "$SANDBOX/prune.err" || fail "prune outside a repo: not said: $(cat "$SANDBOX/prune.err")"
 (cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "prune --older-than" || fail "--help does not list prune"
 grep -q "remote-agent prune --older-than" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list prune"
 
