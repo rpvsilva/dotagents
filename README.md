@@ -106,7 +106,7 @@ Some skills start **subagents**: focused helpers, each with a fresh context. Eac
 | `security-reviewer` | `security-audit`, `review-pr` | Hunts security issues in one PR, area or flow |
 | `test-tuner` | `tune-tests`, `build-epic` | Makes tests faster and widens coverage |
 
-Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only: the sandbox gets a snapshot of one worktree and sends back a patch, and never touches GitHub. Overview with diagrams: [docs/remote.md](docs/remote.md). Full reference: [remote/README.md](remote/README.md).
+Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an SSH host) for compute only: the sandbox gets a snapshot of one worktree and sends back a patch, and never touches GitHub. Overview with diagrams: [docs/remote.md](docs/remote.md). Full reference: [remote/README.md](remote/README.md). The rules an agent follows to run one remotely live in the [`remote-subagents`](skills/remote-subagents/SKILL.md) skill.
 
 ### 🪝 Hooks
 
