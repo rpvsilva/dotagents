@@ -9,7 +9,9 @@ line:
 
     - <severity> <kind> <path[:line]>: <claim>
 
-`severity` is `blocker`, `should-fix` or `nit`; `kind` is `follow-up` or `interaction`; blank lines are skipped. Each
+`severity` is `blocker`, `should-fix` or `nit`; `kind` is `follow-up` or `interaction`; blank lines are skipped. The
+section ends at the next `## ` heading or the first other line that is not a row (the report's block, `process:`
+lines), so only a bullet that is not a row, or a first line that is not a row, is malformed. Each
 row is recorded with ticket `TT`, PR `N` (null without `--pr`) and the report's path as its `source`, unless a row
 with the same ticket, kind, file and claim is already there. Prints `OK TT recorded <n> new=<m>`: `n` rows in the
 section, `m` of them new. A report with no section records 0.
@@ -19,7 +21,8 @@ FAIL reasons:
 - `bad-ticket: <value>`: `TT` is not a ticket number.
 - `bad-pr: <value>`: `N` is not a PR number.
 - `no-report: <path>`: the report file does not exist.
-- `bad-followup <line>`: a line of the section is not a row; nothing from that report is recorded.
+- `bad-followup <line>`: the section's first line, or a bullet in it, is not a row; nothing from that report is
+  recorded.
 """
 import sys
 from pathlib import Path

@@ -116,6 +116,30 @@ class RecordTest(FollowupsCase):
                 line = self.record(self.report(f"## Follow-ups\n{bad}\n"), "--ticket", "03", ok=False)
                 self.assertTrue(line.startswith(f"FAIL 03 bad-followup {bad.strip()} (log: "), line)
 
+    def test_an_implementers_report_with_the_block_unfenced_after_the_section_records_its_rows(self):
+        report = self.report("# Report\n\nBuilt it.\n\n## Follow-ups\n\n- nit follow-up a.py:3: typo\n\n"
+                             "status: done\nchanged: abc123 a.py\nwhy:\nfollow-up: none\n")
+        self.assertEqual(self.record(report, "--ticket", "03"), "OK 03 recorded 1 new=1")
+        self.assertEqual([(r["file"], r["line"], r["claim"]) for r in self.rows()], [("a.py", 3, "typo")])
+
+    def test_a_report_with_the_block_fenced_after_the_section_records_its_rows(self):
+        report = self.report("## Follow-ups\n\n- nit follow-up a.py:3: typo\n- should-fix interaction b.py: undo\n"
+                             "\n```\nstatus: done\nchanged: report.md\nwhy:\nfollow-up: 0 blocker\n```\n")
+        self.assertEqual(self.record(report, "--ticket", "03"), "OK 03 recorded 2 new=2")
+
+    def test_a_reviewers_process_lines_after_the_section_are_not_rows(self):
+        report = self.report("No findings.\n\n## Follow-ups\n\n- nit follow-up a.py: typo\n\n"
+                             "process: the suite took 40 s\nprocess: the diff was large\n")
+        self.assertEqual(self.record(report, "--ticket", "03"), "OK 03 recorded 1 new=1")
+
+    def test_a_bullet_that_does_not_parse_after_rows_still_fails(self):
+        for bad in ("- minor follow-up a.py: typo", "* nit follow-up a.py: typo"):
+            with self.subTest(bad=bad):
+                text = f"## Follow-ups\n\n- nit follow-up b.py: one\n\n{bad}\n\nstatus: done\n"
+                line = self.record(self.report(text), "--ticket", "03", ok=False)
+                self.assertTrue(line.startswith(f"FAIL 03 bad-followup {bad} (log: "), line)
+                self.assertEqual(self.rows(), [])
+
     def test_a_report_outside_the_run_folder_keeps_its_full_path_as_source(self):
         outside = self.kit.tmp / "elsewhere.md"
         outside.write_text(REPORT, encoding="utf-8")
