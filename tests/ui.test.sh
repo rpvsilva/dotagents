@@ -45,13 +45,54 @@ PLAIN
 grep -q "→ remove ~/.claude/CLAUDE.md" <<<"$out" || fail "dry run plan not shown: $out"
 grep -q "Dry run, nothing changed" <<<"$out" || fail "dry run summary missing: $out"
 
+out="$(view uninstall all <<'PLAIN'
+claude
+  removed /home/me/.claude/CLAUDE.md
+  restored /home/me/.claude/CLAUDE.md from /home/me/.dotagents-backup/1/.claude_CLAUDE.md
+  /home/me/.claude/settings.json: dotagents entries removed
+codex: ~/.codex not found, skipping
+cursor: ~/.cursor not found, skipping
+shared
+  removed /home/me/.agents/skills/a
+your original files are still in /home/me/.dotagents-backup; delete it once you no longer need them
+PLAIN
+)"
+grep -q "✓ claude  1 updated · 1 removed · 1 restored" <<<"$out" || fail "uninstall section not summed up: $out"
+grep -q "↺ restored ~/.claude/CLAUDE.md" <<<"$out" || fail "restore not shown with ~: $out"
+grep -q "✓ Uninstalled .* 1 updated · 2 removed · 1 restored$" <<<"$out" || fail "uninstall summary missing: $out"
+grep -q "your original files are still in ~/.dotagents-backup" <<<"$out" || fail "closing line dropped: $out"
+
 out="$(view install bogus <<<"usage: ./install.sh [all|shared|claude|codex|cursor]")"
 grep -q "Stopped" <<<"$out" || fail "usage error not shown as stopped: $out"
 grep -q "usage:" <<<"$out" || fail "usage line dropped: $out"
 
+# A selection word (a group or part) is no tool word: the run still covers every tool, and the title names it.
+out="$(view install remote <<'PLAIN'
+shared
+  parts: _shared configure remote remote-runs remote-subagents
+  /home/me/.agents/skills/remote-subagents -> /repo/skills/remote-subagents
+claude
+  /home/me/.claude/skills/remote-runs -> /repo/adapters/claude/mods/remote-runs
+codex
+cursor
+PLAIN
+)"
+grep -q "install · all · remote" <<<"$out" || fail "selection not in the title: $out"
+grep -q "✓ cursor  nothing to do" <<<"$out" || fail "a selection word was taken for a tool: $out"
+grep -q "· parts: _shared configure" <<<"$out" || fail "parts line not shown as a note: $out"
+grep -q "✓ Installed .* 2 linked$" <<<"$out" || fail "selective run not summed up: $out"
+out="$(view install epics claude <<<"shared")"
+grep -q "install · claude · epics" <<<"$out" || fail "tool and selection not both in the title: $out"
+
+# A second tool word: the usage and exit 1, as the scripts refuse it.
+out="$(view install claude codex remote </dev/null 2>&1)" && rc=0 || rc=$?
+{ [ "$rc" -eq 1 ] && grep -q "^usage: " <<<"$out"; } || fail "ui with two tool words: want usage and exit 1, got $rc: $out"
+
 # Off a terminal both scripts print the plain lines the other tests read.
 out="$(HOME="$SANDBOX" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" shared)"
 grep -qx shared <<<"$out" || fail "install.sh off a terminal did not print plain lines: $out"
+out="$(HOME="$SANDBOX/sel" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" remote shared)"
+grep -qx shared <<<"$out" || fail "install.sh with a selection did not print its section: $out"
 
 [ "$fails" -eq 0 ] || exit 1
 echo "ui: ok"

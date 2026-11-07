@@ -47,6 +47,7 @@ uninstall "$home" all >"$SANDBOX/all.out" || fail "uninstall all exited non-zero
 
 left="$(ours "$home")"
 [ -z "$left" ] || fail "links left behind: $left"
+[ ! -e "$home/.agents/hooks" ] || fail "$home/.agents/hooks left behind"
 [ "$(cat "$home/.claude/CLAUDE.md")" = "old instructions" ] || fail "original CLAUDE.md not restored"
 [ -L "$home/.agents/skills/foreign" ] || fail "foreign skill link removed"
 jq -e '. == {"model": "opus", "permissions": {"deny": ["Bash(rm:*)"]}}' "$home/.claude/settings.json" >/dev/null ||
@@ -78,10 +79,120 @@ mkdir -p "$home/.claude"
 install "$home" claude
 uninstall "$home" claude >/dev/null
 [ -z "$(ours "$home/.claude")" ] || fail "uninstall claude left Claude links"
-[ -L "$home/.agents/hooks" ] || fail "uninstall claude removed the shared links"
+[ -L "$home/.agents/hooks/lib.sh" ] || fail "uninstall claude removed the shared links"
+
+# A home from before per-file hook links: its ~/.agents/hooks folder link is removed too, and nothing in the repo.
+home="$SANDBOX/old"
+mkdir -p "$home/.agents"
+ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+uninstall "$home" all >/dev/null
+[ ! -e "$home/.agents/hooks" ] && [ ! -L "$home/.agents/hooks" ] || fail "old ~/.agents/hooks folder link left behind"
+[ -f "$REPO/scripts/hooks/lib.sh" ] || fail "uninstall removed a file in the repo through the old folder link"
 
 # Unknown target exits non-zero.
 if uninstall "$home" nope >/dev/null 2>&1; then fail "unknown target exited 0"; fi
+out="$(uninstall "$home" nope 2>&1)" && rc=0 || rc=$?
+{ [ "$rc" -eq 1 ] && grep -q "^usage:" <<<"$out"; } || fail "unknown word: want usage and exit 1, got $rc: $out"
+out="$(uninstall "$home" --nope 2>&1)" && rc=0 || rc=$?
+{ [ "$rc" -eq 1 ] && grep -q "^usage:" <<<"$out"; } || fail "unknown option: want usage and exit 1, got $rc: $out"
+
+# A second tool word: usage, exit 1, nothing removed.
+home="$SANDBOX/twotools"
+mkdir -p "$home/.claude" "$home/.codex"
+install "$home" claude
+install "$home" codex
+before="$(state "$home")"
+out="$(uninstall "$home" claude codex 2>&1)" && rc=0 || rc=$?
+{ [ "$rc" -eq 1 ] && grep -q "^usage:" <<<"$out"; } || fail "two tool words: want usage and exit 1, got $rc: $out"
+[ "$before" = "$(state "$home")" ] || fail "uninstall claude codex changed files"
+
+# A home from before per-file hook links, with telemetry: the hooks reachable through the folder link count as
+# installed, so telemetry, which telemetry-save requires, stays.
+home="$SANDBOX/oldsel"
+mkdir -p "$home/.claude"
+install "$home" claude small-tools
+rm -rf "$home/.agents/hooks"
+ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+out="$(uninstall "$home" telemetry)"
+[ -L "$home/.agents/skills/telemetry" ] || fail "uninstall telemetry under the old folder link removed it while telemetry-save requires it"
+grep -q "^kept telemetry:" <<<"$out" || fail "uninstall telemetry under the old folder link did not say why it kept it: $out"
+
+# Every link under $1 whose target is gone.
+dangling() { find "$1" -type l ! -exec test -e {} \; -print; }
+
+# Removing a group keeps the parts another installed group still requires.
+home="$SANDBOX/pr-loop"
+mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+install "$home" pr-loop epics
+uninstall "$home" pr-loop >"$SANDBOX/pr-loop.out" || fail "uninstall pr-loop exited non-zero: $(cat "$SANDBOX/pr-loop.out")"
+for s in review-pr ship-pr fix-pr build-epic; do
+  [ -L "$home/.agents/skills/$s" ] && [ -L "$home/.claude/skills/$s" ] || fail "uninstall pr-loop removed $s, which epics requires"
+done
+for a in pr-fixer pr-reviewer pr-reviewer-light; do
+  [ -L "$home/.claude/agents/$a.md" ] && [ -L "$home/.codex/agents/$a.toml" ] && [ -L "$home/.cursor/agents/$a.md" ] ||
+    fail "uninstall pr-loop removed agent $a, which epics requires"
+done
+for s in address-review renovate-prs; do
+  [ ! -e "$home/.agents/skills/$s" ] && [ ! -L "$home/.claude/skills/$s" ] || fail "uninstall pr-loop kept $s"
+done
+[ -L "$home/.agents/skills/_shared" ] && [ -L "$home/.agents/hooks/lib.sh" ] || fail "uninstall pr-loop removed core"
+[ -z "$(dangling "$home")" ] || fail "uninstall pr-loop left dangling links: $(dangling "$home")"
+# A tool word with a selection: that tool's links of the selected parts go; the other tools' and the shared ones stay.
+uninstall "$home" cursor to-epic >/dev/null
+[ ! -L "$home/.cursor/agents/source-reader.md" ] || fail "uninstall cursor to-epic kept Cursor's source-reader"
+[ -L "$home/.claude/agents/source-reader.md" ] && [ -L "$home/.codex/agents/source-reader.toml" ] && [ -L "$home/.agents/skills/to-epic" ] ||
+  fail "uninstall cursor to-epic removed another tool's or the shared links"
+# A skill named alone takes its subagents with it.
+uninstall "$home" to-epic >/dev/null
+[ ! -L "$home/.agents/skills/to-epic" ] && [ ! -L "$home/.claude/agents/source-reader.md" ] && [ ! -L "$home/.codex/agents/source-reader.toml" ] ||
+  fail "uninstall to-epic kept the skill or its source-reader agent"
+
+# Removing the hooks group drops its links and config entries, and keeps remote, the other hooks and a foreign hook.
+home="$SANDBOX/hooks"
+mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
+echo '{"version": 1, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' >"$home/.cursor/hooks.json"
+echo '{"model": "opus"}' >"$home/.claude/settings.json"
+install "$home" remote safety-hooks small-tools
+before="$(state "$home")"
+out="$(uninstall "$home" --dry-run safety-hooks)"
+[ "$before" = "$(state "$home")" ] || fail "--dry-run safety-hooks changed files"
+grep -q "would remove $home/.agents/hooks/guard-merge.sh" <<<"$out" || fail "--dry-run safety-hooks did not list guard-merge.sh: $out"
+grep -q "would edit $home/.claude/settings.json" <<<"$out" || fail "--dry-run safety-hooks did not list settings.json: $out"
+# One hook alone: the hooks beside it in the same arrays stay.
+uninstall "$home" guard-merge >/dev/null
+for f in "$home/.claude/settings.json" "$home/.codex/hooks.json" "$home/.cursor/hooks.json"; do
+  { ! grep -q "guard-merge.sh" "$f" && grep -q "guard-secrets.sh" "$f"; } || fail "uninstall guard-merge: want guard-secrets kept and guard-merge gone in $f"
+done
+grep -q "allow-task-cleanup.sh" "$home/.claude/settings.json" || fail "uninstall guard-merge dropped allow-task-cleanup"
+uninstall "$home" safety-hooks >"$SANDBOX/hooks.out" || fail "uninstall safety-hooks exited non-zero: $(cat "$SANDBOX/hooks.out")"
+for h in guard-merge guard-secrets allow-task-cleanup; do
+  [ ! -L "$home/.agents/hooks/$h.sh" ] || fail "uninstall safety-hooks kept the $h.sh link"
+  for f in "$home/.claude/settings.json" "$home/.codex/hooks.json" "$home/.cursor/hooks.json"; do
+    [ ! -e "$f" ] || ! grep -q "$h.sh" "$f" || fail "uninstall safety-hooks kept $h in $f"
+  done
+done
+for l in .agents/bin/remote-agent .agents/skills/remote-subagents .claude/skills/remote-subagents .claude/skills/remote-runs \
+  .agents/hooks/telemetry-save.sh .agents/hooks/lib.sh; do
+  [ -L "$home/$l" ] || fail "uninstall safety-hooks removed $l"
+done
+jq -e '.model == "opus" and any(.hooks.SessionEnd[].hooks[]; .command | test("telemetry-save"))' "$home/.claude/settings.json" >/dev/null ||
+  fail "uninstall safety-hooks dropped another hook or a setting: $(cat "$home/.claude/settings.json")"
+jq -e '. == {"version": 1, "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "orca"}]}]}}' "$home/.cursor/hooks.json" >/dev/null ||
+  fail "uninstall safety-hooks did not leave Cursor's foreign hook alone: $(cat "$home/.cursor/hooks.json")"
+[ -z "$(dangling "$home")" ] || fail "uninstall safety-hooks left dangling links: $(dangling "$home")"
+
+# A part another installed part requires stays, even when named.
+# --purge with a selection keeps dotagents' data, and says so.
+mkdir -p "$home/.config/dotagents" "$home/.agents/telemetry"
+out="$(uninstall "$home" --purge telemetry)"
+[ -L "$home/.agents/skills/telemetry" ] || fail "uninstall telemetry removed it while telemetry-save requires it"
+grep -q "^kept telemetry:" <<<"$out" || fail "uninstall telemetry did not say why it kept it: $out"
+[ -d "$home/.config/dotagents" ] && [ -d "$home/.agents/telemetry" ] || fail "--purge with a selection deleted data"
+grep -q "purge applies to a full uninstall only" <<<"$out" || fail "--purge with a selection did not say it kept the data: $out"
+# Removing remote leaves nothing dangling.
+uninstall "$home" remote >/dev/null
+[ ! -L "$home/.agents/bin/remote-agent" ] && [ ! -L "$home/.claude/skills/remote-runs" ] || fail "uninstall remote kept its links"
+[ -z "$(dangling "$home")" ] || fail "uninstall remote left dangling links: $(dangling "$home")"
 
 [ "$fails" -eq 0 ] || { echo "uninstall.test.sh: $fails failure(s)"; exit 1; }
 echo "uninstall.test.sh: ok"

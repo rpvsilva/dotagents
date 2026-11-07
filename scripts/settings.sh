@@ -18,7 +18,8 @@
 # get prints the effective value (a list one item per line, nothing when unset); with --machine or --repo, only what
 # that Level holds. set validates the value (a list as a comma-separated string) and writes it through a temp file;
 # `set shared <key>` writes the top-level entry. list prints `<section>.<key> TAB <value> TAB <level> TAB <meaning>`
-# for every key the sections read, the meaning ending with the values it takes. env prints `export VAR=value` lines
+# for every key the sections read, the meaning ending with the values it takes; only installed parts' sections list
+# (see `installed` below), and a known section not installed prints nothing. env prints `export VAR=value` lines
 # for the section's keys that have an `env` variable and a value (a true bool as 1, a list joined by commas), and
 # `unset VAR` for a false bool, since scripts read any non-empty value as true. check validates both files whole: unknown keys, bad values, keys set at a Level they do not allow.
 # A bad value fails loudly, naming the file and key, instead of falling back to the default. Exit 2 on an unknown
@@ -56,15 +57,24 @@ if root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then REPO_FILE
 # the `read` builtin, and jq answers with the command's output or one `!<exit code> <message>` line.
 
 # Every skill is a section, with or without Settings of its own; `sections` names them, `decl_files` holds the
-# Declarations that exist.
+# Declarations that exist. `installed` names the sections `list` shows: shared, each skill linked as
+# ~/.agents/skills/<skill>, and remote when ~/.agents/bin/remote-agent is a link; empty (every section) when
+# ~/.agents/skills does not exist. get, set, unset and check use every section, so a value saved for a part not
+# installed stays valid.
 sections=""
 decl_files=()
+installed=""
+[ ! -d "$HOME/.agents/skills" ] || installed=" shared"
 for d in "$REPO"/skills/*/ "$REPO/remote/"; do
   d="${d%/}"
   s="${d##*/}"
   [ "$s" != _shared ] || s=shared
   sections="$sections $s"
   [ ! -f "$d/settings.json" ] || decl_files+=("$d/settings.json")
+  if [ -n "$installed" ]; then
+    if [ "$s" = remote ]; then link="$HOME/.agents/bin/remote-agent"; else link="$HOME/.agents/skills/$s"; fi
+    [ ! -L "$link" ] || installed="$installed $s"
+  fi
 done
 
 # Each settings file's text, and whether it exists (`read` returns non-zero at end of file, which is expected).
@@ -215,15 +225,16 @@ case "$cmd" in
     [ -z "$out" ] || write "$file"
     ;;
   list)
-    # The named sections, else every one: shared first.
+    # The named sections, else every one: shared first. Only the installed ones are shown.
     q '($wanted | split(" ") | map(select(. != ""))) as $w
+      | ($installed | split(" ") | map(select(. != ""))) as $inst
       | (if $w == [] then ["shared"] + ($decls | keys_unsorted | map(select(. != "shared"))) else $w end) as $ss
       | ($ss | map(select($decls[.] == null))) as $bad
       | if $bad != [] then "!2 settings: unknown section \($bad[0])" else
-        $ss[] as $s | $decls[$s] | keys_unsorted | sort[] as $k | resolve($s; $k) as $r | decl($s; $k).d as $d
+        $ss[] as $s | select($inst == [] or ($inst | index([$s]))) | $decls[$s] | keys_unsorted | sort[] as $k | resolve($s; $k) as $r | decl($s; $k).d as $d
         | "\($s).\($k)\t\(if $r.error then "ERROR: " + $r.error else ($r.value | show) end)\t\($r.level // "")\t\($d.meaning) (\(describe($d)))"
-        end' --arg wanted "$*"
-    printf '%s\n' "$out"
+        end' --arg wanted "$*" --arg installed "$installed"
+    [ -z "$out" ] || printf '%s\n' "$out"
     if [[ "$out" == *$'\tERROR: '* ]]; then exit 1; fi
     ;;
   env)
