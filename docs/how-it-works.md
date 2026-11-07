@@ -26,7 +26,7 @@ Every tool target installs this first. It's the one tool-neutral place the other
 | Path | Points at | Used for |
 |---|---|---|
 | `~/.agents/skills/<skill>` | `skills/<skill>/` | Skills. Codex reads them here directly |
-| `~/.agents/hooks/<file>` | `scripts/hooks/<file>` | The one path every tool's hook config calls: a real folder of one link per file, `lib.sh` and `secret-patterns.txt` always and each installed hook's script, so its links show which hooks are installed. An older install's one link to the repo folder is replaced by per-file links to every hook, since the tools' configs may call any of them; a link to anywhere else is backed up |
+| `~/.agents/hooks/<file>` | `scripts/hooks/<file>` | The one path every tool's hook config calls: a real folder of one link per file, `lib.sh` and `secret-patterns.txt` always and each installed hook's script, so its links show which hooks are installed. An older install's one link to the repo folder is replaced by per-file links to every hook, since the tools' configs may call any of them; a link to anywhere else is backed up. Every hook a tool's config calls is linked to this checkout's script, whatever installed it, and one this checkout lacks is named |
 | `~/.agents/bin/settings` | `scripts/settings.sh` | Reading and writing Settings ([settings.md](settings.md)) |
 | `~/.agents/bin/remote-agent` | `scripts/remote-agent.sh` | Remote subagents ([remote/README.md](../remote/README.md)) |
 
