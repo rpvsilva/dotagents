@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Starts a `ready` ticket: pushes its branch from `origin/<default>`, sets it `building`, marks its issues started.
+"""Starts a `ready` ticket: pushes its branch from `origin/<base>`, sets it `building`, marks its issues started.
 
 Usage: python3 -I start_ticket.py <run> <TT>
+The base is `decisions.md`'s `base:`, or the default branch when it is unset.
 Prints `OK TT building branch=<b> base=<sha7>`, plus `started=manual` when the `tracker` Setting names another
 tracker or the `in_progress` Setting is set: the orchestrator then marks the issues started as those say. Started,
 by default: the `in progress` label added (created once per run) and each issue assigned to the human.
@@ -12,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gitops, runfolder, tracker  # noqa: E402
+from steplib import ci, core, gitops, runfolder, tracker  # noqa: E402
 
 STARTED = ("building", "in-review", "merged")
 
@@ -32,7 +33,7 @@ def step(ctx):
     info = runfolder.run_info(ctx.run_dir)
     git = gitops.Git(info["Repo"], ctx.log)
     git.fetch()
-    base = git.tip(f"refs/remotes/origin/{info['Default']}")
+    base = git.tip(f"refs/remotes/origin/{ci.base(ctx.run_dir, info['Default'])}")
     # The SHA, not a ref name, on the left: nothing in the refspec is ever read by a shell or rewritten (bug 6).
     if git.push("origin", f"{base}:refs/heads/{branch}").rc != 0:
         raise core.Fail("push")

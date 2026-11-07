@@ -4,8 +4,8 @@
 Usage: python3 -I start_task.py <run> <TT-NN|TT-tests>
 Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from `origin/<ticket-branch>` and sets the task
 `in-progress`. Prints `OK TT-NN in-progress wt=<path> tip=<sha7>`. A hub task (one `ticket NN` blocker) also merges
-`origin/<default>` there, adding `synced=<sha7>` (the default branch's tip it merged); on a conflict it removes the
-worktree and branch, leaves the task `ready` and prints `FAIL TT-NN sync-conflict <files>`.
+`origin/<base>` there (`decisions.md`'s `base:`, else the default branch), adding `synced=<sha7>` (the tip it merged);
+on a conflict it removes the worktree and branch, leaves the task `ready` and prints `FAIL TT-NN sync-conflict <files>`.
 A task not `ready`, or whose worktree or branch already exists, is refused.
 """
 import sys
@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gitops, runfolder  # noqa: E402
+from steplib import ci, core, gitops, runfolder  # noqa: E402
 
 
 def names(task):
@@ -61,9 +61,9 @@ def step(ctx):
     git.worktree_add(wt, tip, branch=branch)
     details = ""
     if runfolder.task_blockers(task)[1]:
-        default = f"refs/remotes/origin/{info['Default']}"
-        synced = git.tip(default)
-        merge = git_in(ctx, info["Repo"], wt, "merge", "--no-edit", default)
+        base = f"refs/remotes/origin/{ci.base(ctx.run_dir, info['Default'])}"
+        synced = git.tip(base)
+        merge = git_in(ctx, info["Repo"], wt, "merge", "--no-edit", base)
         if merge.rc != 0:
             conflicted = git_in(ctx, info["Repo"], wt, "diff", "--name-only", "--diff-filter=U").out.split()
             git_in(ctx, info["Repo"], wt, "merge", "--abort")

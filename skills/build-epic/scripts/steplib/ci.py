@@ -1,6 +1,7 @@
-"""Ticket CI: the draft ticket PR into the default branch, and its checks read before each later task merge.
+"""Ticket CI: the draft ticket PR into the run's base, and its checks read before each later task merge.
 
-CI runs only on PRs into the default branch, so the ticket's draft PR is where a ticket's merged tasks meet CI.
+The base is `decisions.md`'s `base:`, or the default branch when it is unset (`base`). The ticket's draft PR is where
+a ticket's merged tasks meet CI.
 `decisions.md`'s `ci: off` (or `none`) turns all of it off. A red check is reported once per failing run: the
 orchestrator hands it to a later task, so the next merge into the ticket goes ahead on the same red run.
 """
@@ -21,6 +22,17 @@ def enabled(run):
     path = core.resolve(run) / "decisions.md"
     value = runfolder.get(path, "ci") if path.exists() else None
     return (value or "on").lower() not in ("off", "none", "no")
+
+
+def base(run, default=None):
+    """The branch the run's tickets are cut from and open against: `<run>/decisions.md`'s `base:` when it names a
+    branch, else `default` (None: `run.md`'s `Default:`)."""
+    path = core.resolve(run) / "decisions.md"
+    value = (runfolder.get(path, "base") if path.exists() else None) or ""
+    value = value.strip().strip("`")
+    if value.lower() not in ("", "null", "none", "default", "~"):
+        return value
+    return default or runfolder.run_info(run)["Default"]
 
 
 def pr_number(value):
@@ -77,10 +89,12 @@ def title(ticket):
 
 
 def open_draft(ticket, default, log, repo):
-    """After a task merge: opens the draft ticket PR into `default` when the ticket has no `PR:` line (reusing an open
-    one for its branch), and records it. Returns the PR number, or None when the ticket already had one."""
+    """After a task merge: opens the draft ticket PR into the run's base (`base`, `default` when unset) when the
+    ticket has no `PR:` line (reusing an open one for its branch), and records it. Returns the PR number, or None when
+    the ticket already had one."""
     if runfolder.get(ticket, "PR"):
         return None
+    default = base(ticket.parent.parent, default)
     branch = runfolder.get(ticket, "Branch")
     if not branch:
         raise core.Fail("ticket-no-branch")
