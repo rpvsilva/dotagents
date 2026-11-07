@@ -83,8 +83,48 @@ class RunMetrics(unittest.TestCase):
         got = self.metrics(self.tmp / "empty", "--gh", self.gh)
         self.assertEqual(got["tickets"]["count"], 0)
         self.assertEqual(got["remote"]["runs"], 0)
-        self.assertEqual(got["gaps"], ["plan: no tickets/*.md or tasks/*.md", "suite results: no reports/*.checks.json"])
+        self.assertEqual(got["gaps"], ["plan: no tickets/*.md or tasks/*.md", "suite results: no reports/*.checks.json",
+                                       "human round trips: no decisions.md"])
         self.assertFalse(self.calls.exists())
+
+    def test_round_trips_are_the_quotes_recorded_after_approval(self):
+        got = self.metrics(FIXTURE / "run", "--gh", self.gh)
+        # Three dated quotes (one spanning two lines); the first was recorded before the first clause, the approval.
+        self.assertEqual(got["human_round_trips"], 2)
+
+    def test_hand_written_scripts_skip_env_worktrees_and_remote(self):
+        got = self.metrics(FIXTURE / "run", "--gh", self.gh)
+        # poll.sh and logs/tally.py; env/, worktrees/ and remote/ hold a .py each that does not count.
+        self.assertEqual(got["hand_written_scripts"], 2)
+
+    def test_a_run_without_decisions_has_no_round_trips_to_count(self):
+        run = self.tmp / "nodecisions"
+        shutil.copytree(FIXTURE / "run", run)
+        (run / "decisions.md").unlink()
+        got = self.metrics(run, "--gh", self.gh)
+        self.assertIsNone(got["human_round_trips"])
+        self.assertIn("human round trips: no decisions.md", got["gaps"])
+
+    def test_quotes_before_any_approval_are_not_round_trips(self):
+        run = self.tmp / "unapproved"
+        run.mkdir()
+        (run / "decisions.md").write_text("# Decisions\nbase: main\n\n## Authorizations\n\n| clause | waived | quote |\n"
+                                          "| --- | --- | --- |\n\n## Decisions\n\n- 2026-11-01: install it\n",
+                                          encoding="utf-8")
+        self.assertEqual(self.metrics(run, "--gh", self.gh)["human_round_trips"], 0)
+
+    def test_approval_without_the_decide_log_cannot_be_placed(self):
+        run = self.tmp / "nolog"
+        shutil.copytree(FIXTURE / "run", run)
+        (run / "logs" / "decisions-decide.log").unlink()
+        got = self.metrics(run, "--gh", self.gh)
+        self.assertIsNone(got["human_round_trips"])
+        self.assertIn("human round trips: no logs/decisions-decide.log to place the approval", got["gaps"])
+
+    def test_docstring_names_both_new_fields(self):
+        doc = SCRIPT.read_text(encoding="utf-8").split('"""')[1]
+        for field in ("human_round_trips", "hand_written_scripts"):
+            self.assertIn(f"`{field}`", doc)
 
     def test_old_checks_file_is_read_from_its_last_line(self):
         run = self.tmp / "old"
@@ -118,7 +158,8 @@ class RunMetrics(unittest.TestCase):
         got = self.metrics(run, "--gh", gh)
         self.assertEqual(got["gaps"], ["suite results: 01-01.checks.json is not JSON",
                                        "remote: 01-01.json is not a result", "remote: 01-02.json is not a result",
-                                       "remote: 2 run(s) without cost", "github: https://x/o/r/pull/7: no JSON"])
+                                       "remote: 2 run(s) without cost", "github: https://x/o/r/pull/7: no JSON",
+                                       "human round trips: no decisions.md"])
         self.assertEqual((got["suites"]["merges"], got["suites"]["runs"], got["suites"]["passed"]), (1, 1, 3))
         remote = got["remote"]
         self.assertEqual((remote["runs"], remote["runs_without_cost"], remote["cost_usd"], remote["by_status"]),

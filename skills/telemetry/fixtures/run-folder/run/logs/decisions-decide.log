@@ -1,0 +1,17 @@
+== decide decisions set base main at 2026-11-01T09:00:00
+OK decisions set base
+== decide decisions quote install shellcheck, skip docker at 2026-11-01T09:05:00
+OK decisions quote 2026-11-01
+== decide decisions clause Leave merges to the human yes Rui: "merge them as the App | no waiting" at 2026-11-01T09:30:00
+OK decisions clause waived=yes
+== decide decisions clause Approve high-tier PRs no Rui: "those are mine" at 2026-11-01T09:31:00
+OK decisions clause waived=no
+== decide decisions quote rebase 02 onto the new base at 2026-11-01T14:00:00
+OK decisions quote 2026-11-01
+== decide decisions quote bad
+ at 2026-11-01T15:00:00
+FAIL: carriage-return in quote
+FAIL decisions carriage-return in quote (log: run/logs/decisions-decide.log)
+== decide decisions quote drop task 01-03,
+the lexer covers it at 2026-11-02T10:00:00
+OK decisions quote 2026-11-02
