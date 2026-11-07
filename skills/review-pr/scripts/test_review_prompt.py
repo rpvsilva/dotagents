@@ -106,6 +106,23 @@ class ReviewPromptTest(unittest.TestCase):
         self.assertNotIn("/runs/r1/decisions.md", out)
         self.assertIn("/runs/r1/map.md", out)
 
+    def test_a_decisions_file_names_its_test_command_as_the_command_to_run(self):
+        self.assertIn("- its `test_command:` line: the exact command to run the tests with", self.render("task"))
+        args = [a for a in ARGS["task"] if a not in RUN]
+        self.assertNotIn("test_command", self.render("task", args))
+
+    def test_a_report_file_is_the_one_file_the_reviewer_may_write(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                args = [a.replace("@FINDINGS@", str(self.findings)) for a in ARGS[mode]]
+                got = run(mode, *args, "--report", "reviews/42-abc1234.md", cwd=self.tmp)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                report = str(Path(self.tmp, "reviews", "42-abc1234.md"))
+                self.assertTrue(got.stdout.endswith(
+                    f"\nWrite your report to {report}, the only file you may write, then return the block alone, "
+                    "as the brief's Report says.\n"), got.stdout)
+                self.assertNotIn("the only file you may write", self.render(mode))
+
     def test_relative_paths_are_made_absolute(self):
         got = run("task", "--pr", "1", "--worktree", "wt", "--head", "h", "--base", "b", cwd=self.tmp)
         self.assertEqual(got.returncode, 0, got.stderr)
