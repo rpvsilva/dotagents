@@ -88,7 +88,7 @@ flowchart LR
 
 | Backend | Sandbox | Needs | Pick it when |
 |---|---|---|---|
-| `cluster` | A pod claimed from a warm pool | A kube context that can create SandboxClaims and exec into pods | You have a cluster: fast starts, many runs at once |
+| `cluster` | A pod claimed from a warm pool | A kube context that can create SandboxClaims and exec into pods, and a warm pool: the `context` and `pool` Settings, which have no default | You have a cluster: fast starts, many runs at once |
 | `docker` | A fresh container of the runner image, on this machine | Docker and the runner image | Trying it out, or isolating runs without moving compute |
 | `ssh` | A fresh container on a VM or PC (default), or a bare folder | An SSH login and Docker on the host (bare: `bash`, `git`, `jq`, `node`, `claude`) | You have a spare machine with cores to lend |
 
