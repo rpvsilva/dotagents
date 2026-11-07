@@ -179,6 +179,22 @@ class PostReviewTest(Base):
                 self.assertRegex(self.post("12", report, "--comments", comments), r"^FAIL PR12 bad-comments \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
+    def test_inline_comments_given_with_an_equals_sign_are_posted(self):
+        report = self.kit.tmp / "r.md"
+        report.write_text("ok\n")
+        self.post("PR12", report, '--comments=[{"path": "a.py", "line": 3, "body": "nit"}]')
+        self.assertEqual(self.payload()["comments"], [{"path": "a.py", "line": 3, "body": "nit"}])
+
+    def test_a_pr_view_without_a_head_fails_and_nothing_posts(self):
+        report = self.kit.tmp / "r.md"
+        report.write_text("ok\n")
+        (self.kit.bin / "gh-kit").replace(self.kit.bin / "gh")  # the plain stub, so `pr view` answers what is set
+        for out, rc in (("", 1), ("not json", 0), ("{}", 0)):
+            with self.subTest(out=out, rc=rc):
+                self.kit.answer("pr-view", out=out, rc=rc)
+                self.assertRegex(self.post("12", report), r"^FAIL PR12 pr-view \(log: ")
+        self.assertEqual(self.calls("api"), [])
+
     def test_a_failed_post_fails(self):
         report = self.kit.tmp / "r.md"
         report.write_text("ok\n")
