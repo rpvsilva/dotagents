@@ -161,8 +161,9 @@ def run_suite(ctx, wt, command, limit):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     ctx.note(f"$ {command}  (in {wt}, limit {limit}s)")
     posix = os.name == "posix"
-    p = subprocess.Popen(["bash", "-c", command], cwd=str(wt), env=env, stdin=subprocess.DEVNULL, stdout=ctx.log,
-                         stderr=subprocess.STDOUT, start_new_session=posix,
+    # `core.command` finds `bash` on `PATH`: a bare `bash` on Windows is WSL's, which runs no Git Bash command line.
+    p = subprocess.Popen(core.command(["bash", "-c", command], env), cwd=str(wt), env=env, stdin=subprocess.DEVNULL,
+                         stdout=ctx.log, stderr=subprocess.STDOUT, start_new_session=posix,
                          creationflags=0 if posix else subprocess.CREATE_NEW_PROCESS_GROUP)
     try:
         rc = p.wait(timeout=limit)
@@ -175,7 +176,11 @@ def run_suite(ctx, wt, command, limit):
             except OSError:
                 pass
         elif p.poll() is None:
-            p.kill()
+            # Killing `bash` alone leaves the suite it started running: take the whole tree.
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if p.poll() is None:
+                p.kill()
         p.wait()
     ctx.note(f"timeout after {limit}s" if rc is None else f"[rc {rc}]")
     return rc

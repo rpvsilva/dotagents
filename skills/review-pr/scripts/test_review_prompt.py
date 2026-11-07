@@ -1,4 +1,7 @@
 """Tests for `review_prompt.py`: one golden prompt per mode, the shared rules, and the usage failures."""
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +26,19 @@ ARGS = {
 }
 
 
+# Git Bash's `bash`: a bare `bash` on Windows is WSL's.
+BASH = shutil.which("bash") or "bash"
+
+
+def posix(out, args):
+    """`out` with each absolute path of `args` as the goldens spell it. The script makes them absolute for the
+    platform: `/wt/pr-42` renders as `D:\\wt\\pr-42` on Windows, and quoted in the diff command."""
+    for path in sorted((a for a in args if a.startswith("/")), key=len, reverse=True):
+        native = os.path.abspath(path)
+        out = out.replace(shlex.quote(native), shlex.quote(path)).replace(native, path)
+    return out
+
+
 def run(*args, cwd=None):
     return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, cwd=cwd)
 
@@ -37,7 +53,7 @@ class ReviewPromptTest(unittest.TestCase):
         args = [a.replace("@FINDINGS@", str(self.findings)) for a in (args or ARGS[mode])]
         got = run(mode, *args)
         self.assertEqual(got.returncode, 0, got.stderr)
-        return got.stdout.replace(str(self.findings), "@FINDINGS@")
+        return posix(got.stdout.replace(str(self.findings), "@FINDINGS@"), args)
 
     def test_each_mode_matches_its_golden_prompt(self):
         for mode in MODES:
@@ -107,11 +123,11 @@ class ReviewPromptTest(unittest.TestCase):
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1;touch pwned2")
         self.assertEqual(got.returncode, 0, got.stderr)
         command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        subprocess.run(["bash", "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True)
         self.assertFalse((self.tmp / "pwned").exists() or (self.tmp / "pwned2").exists(), command)
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1")
         command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        res = subprocess.run(["bash", "-c", command], cwd=self.tmp, capture_output=True, text=True)
+        res = subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("+two", res.stdout)
 
