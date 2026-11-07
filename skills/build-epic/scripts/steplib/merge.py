@@ -3,15 +3,16 @@
 The rule is the `merge_command` Setting (e.g. `scripts/merge-pr.sh {pr}`, run from the repo root with `{pr}` and
 `{sha}` filled in) or, when it is unset, `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`.
 Before merging, the PR's head must be the pushed `sha` (a fresh push can take a few seconds to show); after, the PR
-must read `MERGED` at that head. Fails `head-moved` or `merge`; a `merge` failure carries the rule's own output in
-its `said` attribute, so a caller can read the rule's answer and nothing else.
+must read `MERGED` at that head. Every merge first proves who is merging (`identity.py`). Fails `wrong-identity`,
+`head-moved` or `merge`; a `merge` failure carries the rule's own output in its `said` attribute, so a caller can read
+the rule's answer and nothing else.
 """
 import json
 import os
 import re
 import time
 
-from . import core, gh
+from . import core, gh, identity
 
 HEAD_TRIES = 6
 HEAD_WAIT = 5
@@ -51,8 +52,12 @@ def merge_argv(command, pr, sha):
     return argv
 
 
-def merge(pr, sha, repo, log, command=None):
-    """Merges PR `pr` (a number) at head `sha` by the rule, from `repo`'s root. Returns once it reads `MERGED`."""
+def merge(pr, sha, repo, log, command=None, run=None):
+    """Merges PR `pr` (a number) at head `sha` by the rule, from `repo`'s root, as the identity `run` (default: the
+    step's run folder) decides. Returns once it reads `MERGED`."""
+    run = run or core.RUN_DIR
+    who = identity.mode(run, lambda: setting(repo, "merge_identity", log))
+    env = identity.prove(run, who, repo, log)
     pr, scale = str(pr), float(os.environ.get("BUILD_EPIC_RETRY_SLEEP", "1"))
     for attempt in range(HEAD_TRIES):
         head = view(pr, log, repo).get("headRefOid")
@@ -65,9 +70,11 @@ def merge(pr, sha, repo, log, command=None):
         log.write(f"PR #{pr} head stayed {head}; pushed {sha}\n")
         raise core.Fail("head-moved")
     argv = merge_argv(command, pr, sha)
-    # The rule runs as the run's identity too: its own `gh` calls read `GH_TOKEN`.
-    res = gh.retry(argv, log, cwd=repo) if argv[0] == "gh" else core.run(argv, log, cwd=repo,
-                                                                         env=gh.identity_env(log))
+    # The rule runs as the proven identity too: its own `gh` calls read `GH_TOKEN`, which `human` leaves unset.
+    if argv[0] == "gh":
+        res = gh.retry(argv, log, cwd=repo, identity=env is None, env=env)
+    else:
+        res = core.run(argv, log, cwd=repo, env=gh.identity_env(log) if env is None else env)
     if res.rc != 0 and re.search(r"match-head-commit|Head branch was modified|expected head sha",
                                  res.out + res.err, re.IGNORECASE):
         raise core.Fail("head-moved")

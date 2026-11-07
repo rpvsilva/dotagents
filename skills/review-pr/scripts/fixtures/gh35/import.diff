@@ -1,0 +1,755 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo import [--format json|md] FILE   # add the items of a JSON file or a Markdown checklist, see Import
++### Import
++
++`todo import [--format json|md] FILE` adds the items of FILE to the todo file in one save and prints `imported N, skipped M duplicates` (the Markdown form adds `, ignored K lines`). `--format` is `json` by default.
++
++```
++$ todo import tasks.json
++imported 5, skipped 0 duplicates
++$ todo import --format md notes.md
++imported 4, skipped 1 duplicates, ignored 4 lines
++```
++
++**JSON.** FILE is a list of items shaped like the todo file (`id` and `title` are required). Every row goes through the checks a load applies, so one bad row refuses the whole file and nothing is imported.
++
++- Imported items get new ids above every id in the todo file, the archive, the trash and the undo history, in file order. The ids in the file are only labels for each other.
++- A file that repeats an id exits 2 (`rep.json: repeated id 1`).
++- `parent` and `blocked_on` follow the new ids when they name another item in the file, and are dropped when they do not. A row that names itself as its parent or its blocker is refused.
++- Each series in the file (rows sharing a `series_id`) gets one fresh series id, so an imported series never merges with one already in the todo file.
++- Kept as written: title, tags, priority, done state, due date and time, recurrence rule, snooze, doing, project, estimate, notes, focus time and the done-time priority. A row with `due_time` and no `due` is refused (exit 2). `doing` is ignored on a done item.
++- `updated_at` is renewed (an import always wins a later sync) and `created_on` is today.
++- A done item keeps its `done_on`, so `todo streak` counts it on its real day. A `done_on` after tomorrow is capped at tomorrow, as on load. A done row with no `done_on` gets the local date of its `updated_at`; with neither, it counts on the day of the import.
++
++**Markdown.** Each line `- [ ] title` or `* [ ] title` is an open item, and `- [x] title` or `- [X] title` a done one, with `done_on` set to today. A line may be indented. A line that ends in CRLF is accepted: lines split on `\n` only, so a form feed or U+2028 stays in the title. Ids are new ones, in file order. Nothing else is read: no dates, tags or priorities.
++
++- `ignored K` counts the lines that are not blank and are not a checkbox with a title: other text, `+ [ ]` lines, and checkboxes with an empty title.
++- A file that is not UTF-8 text (or holds a NUL) exits 2.
++
++**Both formats.**
++
++- A duplicate is an item with the same title (compared exactly after non-printable characters, such as control codes and newlines, become `?`, so case and spaces matter; JSON titles are not trimmed, Markdown titles lose leading and trailing whitespace) and the same due date as an item already in the todo file, or as an earlier item in the file. It is skipped and counted. Importing the same file twice therefore imports nothing the second time. A skipped item stands for the one it repeats: `parent` and `blocked_on` that named it point at that item.
++- A file with more than 84,307 items (the most a 16 MiB todo file can hold) exits 2 and nothing is imported. A file under that cap can still exit 1 when the todo file plus the import would exceed 16 MiB; nothing is saved then.
++- When no id is free (ids go up to 9007199254740992), it exits 2 and nothing is saved.
++- A missing or unreadable FILE, a bad value, or an unknown `--format` exits 2. Nothing is written unless every row passes. The trash and the archive are untouched.
++
+diff --git a/tests/cli/test_cli_import.py b/tests/cli/test_cli_import.py
++++ b/tests/cli/test_cli_import.py
++import json
++from datetime import date, datetime, timedelta, timezone
++
++import pytest
++
++from todo.storage import JsonStore
++from todo.storage.model import done_date
++from todo.storage.side_files import SideFiles
++
++TODAY = date(2026, 11, 6)
++NOW = datetime(2026, 11, 6, 10, 0)
++
++
++def run(cli, *argv):
++    return cli(*argv, today=TODAY, now=NOW)
++
++
++def fail(cli, capsys, code, *argv):
++    with pytest.raises(SystemExit) as exc:
++        run(cli, *argv)
++    assert exc.value.code == code
++    return capsys.readouterr().err
++
++
++@pytest.fixture
++def todo_path(tmp_path):
++    return tmp_path / "todo.json"
++
++
++def load(todo_path):
++    return JsonStore(todo_path, today=lambda: TODAY).load()
++
++
++def write_import(tmp_path, rows, name="in.json"):
++    path = tmp_path / name
++    path.write_text(rows if isinstance(rows, str) else json.dumps(rows))
++    return path
++
++
++def test_import_adds_items_with_new_ids_above_the_todo_file(cli, tmp_path, todo_path):
++    run(cli, "add", "milk")
++    path = write_import(tmp_path, [{"id": 1, "title": "eggs"}, {"id": 7, "title": "bread", "due": "2026-12-01"}])
++    assert run(cli, "import", str(path)) == ["imported 2, skipped 0 duplicates"]
++    assert [(i.id, i.title) for i in load(todo_path)] == [(1, "milk"), (2, "eggs"), (3, "bread")]
++
++
++def test_import_keeps_the_item_fields(cli, tmp_path, todo_path):
++    row = {
++        "id": 4, "title": "report", "due": "2026-12-01", "due_time": "09:30", "tags": ["work"], "priority": "high",
++        "project": "q4", "estimate": 90, "snoozed_until": "2026-11-20", "doing": True,
++        "notes": [{"at": "2026-11-01T10:00:00+00:00", "text": "draft"}], "focus": [{"on": "2026-11-02", "minutes": 25}],
++    }
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    (item,) = load(todo_path)
++    assert (item.title, item.due, str(item.due_time), item.tags, item.priority) == ("report", date(2026, 12, 1), "09:30:00", ["work"], "high")
++    assert (item.project, item.estimate, item.snoozed_until, item.doing) == ("q4", 90, date(2026, 11, 20), True)
++    assert [n.text for n in item.notes] == ["draft"] and item.focus[0].minutes == 25
++
++
++def test_import_stamps_created_on_today_and_updated_at_now(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "old", "created_on": "2020-01-01", "updated_at": "2020-01-01T00:00:00+00:00"}
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    (item,) = load(todo_path)
++    assert item.created_on == TODAY
++    assert item.updated_at.year >= 2026
++
++
++def test_import_keeps_done_items_and_their_done_on(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "paid", "done": True, "done_on": "2026-10-20", "done_priority": "high"}
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    (item,) = load(todo_path)
++    assert (item.done, item.done_on, item.done_priority) == (True, date(2026, 10, 20), "high")
++
++
++def test_import_caps_a_future_done_on_as_a_load_does(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "paid", "done": True, "done_on": "2099-01-01"}
++    assert run(cli, "import", str(write_import(tmp_path, [row]))) == ["imported 1, skipped 0 duplicates"]
++    assert load(todo_path)[0].done_on == TODAY + timedelta(days=1)
++
++
++def test_import_remaps_parent_and_blocked_on_inside_the_file(cli, tmp_path, todo_path):
++    run(cli, "add", "milk")
++    rows = [
++        {"id": 10, "title": "parent"},
++        {"id": 20, "title": "child", "parent": 10, "blocked_on": [10, 99]},
++        {"id": 30, "title": "orphan", "parent": 99},
++    ]
++    run(cli, "import", str(write_import(tmp_path, rows)))
++    items = {i.title: i for i in load(todo_path)}
++    assert items["parent"].id == 2
++    assert (items["child"].parent, items["child"].blocked_on) == (2, [2])
++    assert items["orphan"].parent is None
++
++
++def test_import_does_not_point_a_reference_at_an_existing_item(cli, tmp_path, todo_path):
++    run(cli, "add", "milk")  # id 1; the file's parent 1 names a file row that does not exist
++    run(cli, "import", str(write_import(tmp_path, [{"id": 5, "title": "x", "parent": 1, "blocked_on": [1]}])))
++    item = load(todo_path)[1]
++    assert (item.parent, item.blocked_on) == (None, [])
++
++
++def test_import_gives_each_source_series_one_fresh_series_id(cli, tmp_path, todo_path):
++    rows = [
++        {"id": 1, "title": "water", "due": "2026-11-05", "every": "day", "series_id": "aaa", "occurrence": 1, "done": True},
++        {"id": 2, "title": "water", "due": "2026-11-06", "every": "day", "series_id": "aaa", "occurrence": 2},
++        {"id": 3, "title": "gym", "due": "2026-11-06", "every": "week", "series_id": "bbb", "occurrence": 1},
++        {"id": 4, "title": "plain"},
++    ]
++    run(cli, "import", str(write_import(tmp_path, rows)))
++    items = load(todo_path)
++    assert items[0].series_id == items[1].series_id
++    assert items[2].series_id not in (items[0].series_id, None)
++    assert "aaa" not in (items[0].series_id, items[1].series_id) and "bbb" != items[2].series_id
++    assert items[3].series_id is None
++    assert (items[0].occurrence, items[1].occurrence) == (1, 2)
++
++
++def test_import_skips_items_already_in_the_todo_file(cli, tmp_path, todo_path):
++    run(cli, "add", "Milk", "--due", "2026-12-01")
++    rows = [
++        {"id": 1, "title": "Milk", "due": "2026-12-01"},  # same title and due
++        {"id": 2, "title": "Milk", "due": "2026-12-02"},  # other due: kept
++        {"id": 3, "title": "Milk"},  # no due: kept
++    ]
++    assert run(cli, "import", str(write_import(tmp_path, rows))) == ["imported 2, skipped 1 duplicates"]
++    assert len(load(todo_path)) == 3
++
++
++def test_import_keeps_titles_that_differ_in_case_or_spacing(cli, tmp_path, todo_path):
++    run(cli, "add", "buy milk")
++    rows = [{"id": 1, "title": "Buy Milk"}, {"id": 2, "title": "buy  milk"}, {"id": 3, "title": "buy milk "}]
++    assert run(cli, "import", str(write_import(tmp_path, rows))) == ["imported 3, skipped 0 duplicates"]
++
++
++def test_import_skips_a_repeat_inside_the_file(cli, tmp_path, todo_path):
++    run(cli, "add", "milk")
++    rows = [{"id": 1, "title": "eggs"}, {"id": 2, "title": "eggs"}, {"id": 3, "title": "toast", "parent": 2}]
++    assert run(cli, "import", str(write_import(tmp_path, rows))) == ["imported 2, skipped 1 duplicates"]
++    items = load(todo_path)[1:]
++    assert [(i.id, i.title) for i in items] == [(2, "eggs"), (3, "toast")]
++    assert items[1].parent == 2  # a skipped repeat stands for the item kept
++
++
++def test_importing_the_same_file_twice_adds_nothing_the_second_time(cli, tmp_path, todo_path):
++    path = write_import(tmp_path, [{"id": 1, "title": "eggs"}])
++    run(cli, "import", str(path))
++    assert run(cli, "import", str(path)) == ["imported 0, skipped 1 duplicates"]
++    assert len(load(todo_path)) == 1
++
++
++def test_import_takes_ids_above_the_archive_and_the_trash(cli, tmp_path, todo_path):
++    sides = SideFiles(todo_path, today=lambda: TODAY)
++    store = JsonStore(todo_path, today=lambda: TODAY)
++    store.add("a"), store.add("b")
++    first, second = store.load()
++    store.save([])
++    sides.archive.save([first.__class__(id=40, title="old")])
++    sides.trash.save([second.__class__(id=55, title="gone")])
++    run(cli, "import", str(write_import(tmp_path, [{"id": 1, "title": "new"}])))
++    assert load(todo_path)[0].id == 56
++
++
++@pytest.mark.parametrize(
++    "content",
++    [
++        "{not json",
++        '{"id": 1}',
++        '[{"id": 1}]',
++        '[{"id": "x", "title": "a"}]',
++        '[{"id": 1, "title": "a", "done_on": "soon"}]',
++        '[{"id": 1, "title": "ok"}, {"id": 2, "title": "bad", "priority": "urgent"}]',
++        '[{"id": 1, "title": "a", "colour": "red"}]',
++    ],
++)
++def test_import_of_a_malformed_file_exits_2_and_changes_nothing(cli, capsys, tmp_path, todo_path, content):
++    run(cli, "add", "milk")
++    before = todo_path.read_bytes()
++    err = fail(cli, capsys, 2, "import", str(write_import(tmp_path, content)))
++    assert err.startswith("todo: error: ")
++    assert todo_path.read_bytes() == before
++
++
++def test_import_of_a_missing_file_exits_2(cli, capsys, tmp_path):
++    err = fail(cli, capsys, 2, "import", str(tmp_path / "nope.json"))
++    assert "nope.json" in err
++
++
++def test_import_of_a_folder_exits_2(cli, capsys, tmp_path):
++    fail(cli, capsys, 2, "import", str(tmp_path))
++
++
++def test_import_refuses_a_file_over_the_size_cap(cli, capsys, tmp_path, monkeypatch, todo_path):
++    monkeypatch.setattr("todo.storage.json_file.MAX_FILE_BYTES", 64)
++    path = write_import(tmp_path, [{"id": i, "title": f"item {i}"} for i in range(20)])
++    err = fail(cli, capsys, 2, "import", str(path))
++    assert "too large" in err
++    assert "a file to import holds at most" in err
++    assert not todo_path.exists()
++
++
++def test_import_of_a_long_reference_chain_stays_linear(cli, tmp_path, todo_path):
++    rows = [{"id": i, "title": f"t{i}", "parent": i - 1 if i > 1 else None, "blocked_on": [i - 1] if i > 1 else []} for i in range(1, 2001)]
++    assert run(cli, "import", str(write_import(tmp_path, rows))) == ["imported 2000, skipped 0 duplicates"]
++    items = load(todo_path)
++    assert items[-1].parent == items[-2].id
++
++
++def test_import_of_a_reference_cycle_terminates(cli, tmp_path, todo_path):
++    rows = [{"id": 1, "title": "a", "parent": 2}, {"id": 2, "title": "b", "parent": 1}]
++    assert run(cli, "import", str(write_import(tmp_path, rows))) == ["imported 2, skipped 0 duplicates"]
++
++
++def test_import_into_a_bad_todo_file_exits_1_and_changes_nothing(cli, capsys, tmp_path, todo_path):
++    todo_path.write_text("{broken")
++    path = write_import(tmp_path, [{"id": 1, "title": "a"}])
++    err = fail(cli, capsys, 1, "import", str(path))
++    assert err.startswith("todo: error: ")
++    assert todo_path.read_text() == "{broken"
++
++
++def test_import_builds_its_save_from_a_single_load(cli, tmp_path, todo_path, monkeypatch):
++    # Two loads would let a writer between them move the ids the remap was computed for.
++    run(cli, "add", "milk")
++    rows = [{"id": 10, "title": "parent"}, {"id": 20, "title": "child", "parent": 10, "blocked_on": [10]}]
++    path = write_import(tmp_path, rows)
++    real_load = JsonStore.load
++    loads = []
++
++    def counting_load(self):
++        loads.append(1)
++        return real_load(self)
++
++    monkeypatch.setattr(JsonStore, "load", counting_load)
++    run(cli, "import", str(path))
++    monkeypatch.undo()
++    assert len(loads) == 1
++    items = {i.title: i for i in load(todo_path)}
++    assert (items["parent"].id, items["child"].id) == (2, 3)
++    assert (items["child"].parent, items["child"].blocked_on) == (2, [2])
++
++
++def test_import_of_repeated_ids_exits_2_and_changes_nothing(cli, capsys, tmp_path, todo_path):
++    run(cli, "add", "milk")
++    before = todo_path.read_bytes()
++    rows = [{"id": 1, "title": "a"}, {"id": 1, "title": "b"}]
++    err = fail(cli, capsys, 2, "import", str(write_import(tmp_path, rows)))
++    assert "repeated id 1" in err
++    assert todo_path.read_bytes() == before
++
++
++def test_import_of_a_done_row_without_done_on_counts_on_its_own_day(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "paid", "done": True, "updated_at": "2026-10-20T12:00:00+00:00"}
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    (item,) = load(todo_path)
++    assert done_date(item, timezone.utc) == date(2026, 10, 20)
++
++
++def test_import_of_a_future_done_row_without_done_on_is_capped(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "paid", "done": True, "updated_at": "2026-11-20T12:00:00+00:00"}
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    assert load(todo_path)[0].done_on == TODAY + timedelta(days=1)
++
++
++def test_import_keeps_the_real_day_of_done_work(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "paid", "done": True, "done_on": "2026-10-20"}
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    assert done_date(load(todo_path)[0]) == date(2026, 10, 20)
++
++
++def test_import_of_a_done_row_with_no_date_at_all_counts_on_the_day_of_the_import(cli, tmp_path, todo_path):
++    run(cli, "import", str(write_import(tmp_path, [{"id": 1, "title": "paid", "done": True}])))
++    (item,) = load(todo_path)
++    assert item.done_on == TODAY
++    assert done_date(item, timezone.utc) == TODAY
++    assert run(cli, "streak")[0] == "current streak: 1 days"
++
++
++def test_import_of_a_no_free_id_error_exits_2_and_changes_nothing(cli, capsys, tmp_path, todo_path):
++    SideFiles(todo_path).history.raise_high_water(9007199254740992)
++    err = fail(cli, capsys, 2, "import", str(write_import(tmp_path, [{"id": 1, "title": "x"}])))
++    assert "no free id" in err
++    assert not todo_path.exists()
++
++
++def test_import_keeps_the_anchor_day_of_a_monthly_row(cli, tmp_path, todo_path):
++    row = {"id": 1, "title": "rent", "due": "2026-11-30", "every": "month", "anchor_day": 31}
++    run(cli, "import", str(write_import(tmp_path, [row])))
++    (item,) = load(todo_path)
++    assert (item.every, item.anchor_day) == ("month", 31)
++
++
++# --- todo import --format md FILE ---
++
++def write_md(tmp_path, text, name="in.md"):
++    path = tmp_path / name
++    path.write_text(text, encoding="utf-8")
++    return path
++
++
++def test_import_md_turns_checkbox_lines_into_items_and_counts_other_lines(cli, tmp_path, todo_path):
++    text = "# Groceries\n\n- [ ] milk\n* [x] eggs\n- [X] bread\nsome note\n- plain bullet\n-[ ] no space\n"
++    path = write_md(tmp_path, text)
++    assert run(cli, "import", "--format", "md", str(path)) == ["imported 3, skipped 0 duplicates, ignored 4 lines"]
++    milk, eggs, bread = load(todo_path)
++    assert [(i.id, i.title, i.done) for i in (milk, eggs, bread)] == [(1, "milk", False), (2, "eggs", True), (3, "bread", True)]
++    assert (milk.done_on, eggs.done_on, bread.done_on) == (None, TODAY, TODAY)
++    assert milk.created_on == TODAY
++
++
++def test_import_md_takes_ids_above_the_todo_file(cli, tmp_path, todo_path):
++    run(cli, "add", "first")
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] a\n- [ ] b\n")))
++    assert [(i.id, i.title) for i in load(todo_path)] == [(1, "first"), (2, "a"), (3, "b")]
++
++
++def test_import_md_skips_duplicates_of_the_todo_file_and_of_earlier_lines(cli, tmp_path, todo_path):
++    run(cli, "add", "milk")
++    run(cli, "add", "tea", "--due", "2026-12-01")
++    text = "- [ ] milk\n- [ ] tea\n- [ ] eggs\n- [x] eggs\n"
++    assert run(cli, "import", "--format", "md", str(write_md(tmp_path, text))) == ["imported 2, skipped 2 duplicates, ignored 0 lines"]
++    assert [i.title for i in load(todo_path)] == ["milk", "tea", "tea", "eggs"]
++
++
++def test_importing_the_same_md_file_twice_adds_nothing_the_second_time(cli, tmp_path, todo_path):
++    path = write_md(tmp_path, "- [ ] a\n- [x] b\n")
++    run(cli, "import", "--format", "md", str(path))
++    assert run(cli, "import", "--format", "md", str(path)) == ["imported 0, skipped 2 duplicates, ignored 0 lines"]
++
++
++def test_import_md_ignores_a_checkbox_with_no_title(cli, tmp_path, todo_path):
++    assert run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] \n- [x]\n- [ ] ok\n"))) == [
++        "imported 1, skipped 0 duplicates, ignored 2 lines"
++    ]
++
++
++def test_import_md_of_a_file_with_no_checkbox_lines_changes_nothing(cli, tmp_path, todo_path):
++    assert run(cli, "import", "--format", "md", str(write_md(tmp_path, "just words\n"))) == [
++        "imported 0, skipped 0 duplicates, ignored 1 lines"
++    ]
++    assert not todo_path.exists()
++
++
++def test_import_md_replaces_control_characters_in_a_title(cli, tmp_path, todo_path):
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] a\x1b[31mb\n")))
++    assert load(todo_path)[0].title == "a?[31mb"
++
++
++def test_import_md_accepts_crlf_lines(cli, tmp_path, todo_path):
++    path = tmp_path / "in.md"
++    path.write_bytes(b"- [ ] a\r\n- [x] b\r\n")
++    assert run(cli, "import", "--format", "md", str(path)) == ["imported 2, skipped 0 duplicates, ignored 0 lines"]
++    assert [i.title for i in load(todo_path)] == ["a", "b"]
++
++
++@pytest.mark.parametrize("data", [b"- [ ] ok\n\x00\x01\x02", b"- [ ] ok\n\xff\xfe\x80", b"\x89PNG\r\n\x1a\n"])
++def test_import_md_of_a_binary_file_exits_2_and_changes_nothing(cli, capsys, tmp_path, todo_path, data):
++    run(cli, "add", "milk")
++    before = todo_path.read_bytes()
++    path = tmp_path / "in.md"
++    path.write_bytes(data)
++    err = fail(cli, capsys, 2, "import", "--format", "md", str(path))
++    assert err.startswith("todo: error: ")
++    assert todo_path.read_bytes() == before
++
++
++def test_import_md_refuses_a_file_over_the_size_cap(cli, capsys, tmp_path, monkeypatch, todo_path):
++    monkeypatch.setattr("todo.storage.json_file.MAX_FILE_BYTES", 64)
++    err = fail(cli, capsys, 2, "import", "--format", "md", str(write_md(tmp_path, "- [ ] item\n" * 20)))
++    assert "too large" in err
++    assert not todo_path.exists()
++
++
++def test_import_md_of_a_missing_file_or_folder_exits_2(cli, capsys, tmp_path):
++    assert "nope.md" in fail(cli, capsys, 2, "import", "--format", "md", str(tmp_path / "nope.md"))
++    fail(cli, capsys, 2, "import", "--format", "md", str(tmp_path))
++
++
++def test_import_md_into_a_bad_todo_file_exits_1_and_changes_nothing(cli, capsys, tmp_path, todo_path):
++    todo_path.write_text("{broken")
++    fail(cli, capsys, 1, "import", "--format", "md", str(write_md(tmp_path, "- [ ] a\n")))
++    assert todo_path.read_text() == "{broken"
++
++
++def test_import_md_takes_ids_above_the_archive_and_the_trash(cli, tmp_path, todo_path):
++    sides = SideFiles(todo_path, today=lambda: TODAY)
++    store = JsonStore(todo_path, today=lambda: TODAY)
++    store.add("a"), store.add("b")
++    first, second = store.load()
++    store.save([])
++    sides.archive.save([first.__class__(id=40, title="old")])
++    sides.trash.save([second.__class__(id=55, title="gone")])
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] new\n")))
++    assert load(todo_path)[0].id == 56
++    sides.trash.save([])
++    store.save([])
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] newer\n")))
++    assert load(todo_path)[0].id == 41  # the archive alone holds the floor
++
++
++def test_import_md_done_items_count_on_today_in_the_streak_rules(cli, tmp_path, todo_path):
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [x] paid\n")))
++    assert done_date(load(todo_path)[0]) == TODAY
++
++
++def test_import_without_format_reads_json(cli, tmp_path, todo_path):
++    path = write_import(tmp_path, [{"id": 1, "title": "eggs"}])
++    assert run(cli, "import", str(path)) == ["imported 1, skipped 0 duplicates"]
++    assert run(cli, "import", "--format", "json", str(path)) == ["imported 0, skipped 1 duplicates"]
++
++
++def test_import_rejects_an_unknown_format(cli, capsys, tmp_path):
++    fail(cli, capsys, 2, "import", "--format", "xml", str(write_md(tmp_path, "- [ ] a\n")))
++
++
++def test_import_md_does_not_split_a_line_on_a_form_feed_or_line_separator(cli, tmp_path, todo_path):
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] a\x0cb\n- [ ] c\u2028d\n- [ ] e\x85f\n")))
++    assert [i.title for i in load(todo_path)] == ["a?b", "c?d", "e?f"]  # one item each, odd character shown as ?
++
++
++def test_import_md_of_too_many_items_exits_2_and_changes_nothing(cli, capsys, tmp_path, monkeypatch, todo_path):
++    monkeypatch.setattr("todo.storage.importer.MAX_IMPORT_ITEMS", 3)
++    path = write_md(tmp_path, "- [ ] a\n- [ ] b\n- [ ] c\n- [ ] d\n")
++    assert "too many items" in fail(cli, capsys, 2, "import", "--format", "md", str(path))
++    assert not todo_path.exists()
++    assert run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] a\n- [ ] b\n- [ ] c\n"))) == [
++        "imported 3, skipped 0 duplicates, ignored 0 lines"
++    ]
++
++
++def test_import_json_of_too_many_items_exits_2_and_changes_nothing(cli, capsys, tmp_path, monkeypatch, todo_path):
++    monkeypatch.setattr("todo.storage.importer.MAX_IMPORT_ITEMS", 2)
++    path = write_import(tmp_path, [{"id": i, "title": f"t{i}"} for i in range(1, 4)])
++    assert "too many items" in fail(cli, capsys, 2, "import", str(path))
++    assert not todo_path.exists()
++
++
++def test_the_import_item_cap_is_no_more_than_a_todo_file_can_hold(cli, tmp_path, todo_path):
++    # MAX_IMPORT_ITEMS assumes a saved row of at least MAX_FILE_BYTES / MAX_IMPORT_ITEMS bytes.
++    from todo.storage.importer import MAX_IMPORT_ITEMS
++    from todo.storage.json_file import MAX_FILE_BYTES
++
++    run(cli, "import", "--format", "md", str(write_md(tmp_path, "- [ ] a\n")))
++    row = len(todo_path.read_bytes()) - len("[\n\n]") + len(",\n")  # one row as it sits among others
++    assert MAX_IMPORT_ITEMS * row <= MAX_FILE_BYTES
+diff --git a/tests/storage/test_storage_insert_prepare.py b/tests/storage/test_storage_insert_prepare.py
++++ b/tests/storage/test_storage_insert_prepare.py
++from datetime import date
++
++import pytest
++
++from todo.storage import Item, JsonStore
++from todo.storage.side_files import SideFiles
++
++TODAY = date(2026, 11, 6)
++
++
++@pytest.fixture
++def store(tmp_path):
++    return JsonStore(tmp_path / "todo.json", today=lambda: TODAY)
++
++
++def test_prepare_returning_nothing_saves_nothing(store, monkeypatch):
++    store.add("milk")
++    saves = []
++    monkeypatch.setattr(JsonStore, "save", lambda self, items: saves.append(items))
++    assert store.insert([], TODAY, lambda stored, first_id: []) == []
++    assert saves == []
++
++
++def test_prepare_raising_saves_nothing(store, tmp_path):
++    store.add("milk")
++    before = (tmp_path / "todo.json").read_bytes()
++
++    def boom(stored, first_id):
++        raise RuntimeError("no")
++
++    with pytest.raises(RuntimeError):
++        store.insert([], TODAY, boom)
++    assert (tmp_path / "todo.json").read_bytes() == before
++
++
++def test_prepare_sees_the_stored_items_and_the_ids_the_items_get(store):
++    store.add("milk")
++    seen = {}
++
++    def prepare(stored, first_id):
++        seen["stored"] = [i.title for i in stored]
++        seen["first_id"] = first_id
++        return [Item(50, "a"), Item(51, "b")]
++
++    saved = store.insert([], TODAY, prepare)
++    assert seen == {"stored": ["milk"], "first_id": 2}
++    assert [i.id for i in saved] == [2, 3]
++    assert [i.id for i in store.load()] == [1, 2, 3]
++
++
++def test_prepare_replaces_the_items_passed_in(store):
++    saved = store.insert([Item(9, "ignored")], TODAY, lambda stored, first_id: [Item(1, "used")])
++    assert [i.title for i in saved] == ["used"]
++
++
++def test_first_id_respects_the_archive_trash_and_history(store, tmp_path):
++    sides = SideFiles(tmp_path / "todo.json", today=lambda: TODAY)
++    store.id_floor = sides.id_floor
++    store.add("milk")  # id 1
++    sides.archive.save([Item(20, "old")])
++    firsts = []
++
++    def prepare(stored, first_id):
++        firsts.append(first_id)
++        return [Item(1, "x")]
++
++    assert store.insert([], TODAY, prepare)[0].id == 21
++    sides.trash.save([Item(30, "gone")])
++    assert store.insert([], TODAY, prepare)[0].id == 31
++    sides.history.raise_high_water(77)
++    assert store.insert([], TODAY, prepare)[0].id == 78
++    assert firsts == [21, 31, 78]
+diff --git a/todo/cli/commands/import_cmd.py b/todo/cli/commands/import_cmd.py
++++ b/todo/cli/commands/import_cmd.py
++"""todo import [--format json|md] FILE: add the items of a JSON file shaped like the todo file, or of a Markdown checklist."""
++from pathlib import Path
++
++from todo.cli.errors import UsageError
++from todo.storage import StoreError
++from todo.storage.importer import import_items, read_import, read_markdown
++
++
++def register(parser) -> None:
++    parser.add_argument("--format", choices=("json", "md"), default="json", help="json (default): a file shaped like the todo file; md: `- [ ] title` lines")
++    parser.add_argument("file", type=Path, metavar="FILE", help="file to import")
++
++
++def run(args, ctx) -> None:
++    ignored = None
++    try:
++        if args.format == "md":
++            items, ignored = read_markdown(args.file, ctx.today)
++        else:
++            items = read_import(args.file, ctx.today)
++    except StoreError as e:
++        raise UsageError(str(e)) from None
++    try:
++        imported, skipped = import_items(ctx.store, items, ctx.today)
++    except StoreError:
++        raise  # a bad todo file: exit 1
++    except ValueError as e:  # no free id
++        raise UsageError(str(e)) from None
++    tail = "" if ignored is None else f", ignored {ignored} lines"
++    ctx.out(f"imported {imported}, skipped {skipped} duplicates{tail}")
+diff --git a/todo/storage/base.py b/todo/storage/base.py
++++ b/todo/storage/base.py
++    def insert(
++        self,
++        items: list[Item],
++        today: date,
++        prepare: Callable[[list[Item], int], list[Item]] | None = None,
++    ) -> list[Item]:
++
++        `prepare(stored, first_id)`, when given, runs on the one load this save is built from and returns
++        the items to insert; they get ids `first_id`, `first_id + 1`, ... in order, so it can point
++        references at them. Nothing is saved when it raises or returns no items.
++        if not items and prepare is None:
++        floor = self.id_floor()
++        if prepare is not None:
++            items = prepare(stored, _next_id(stored, floor))
++            if not items:
++                return []
++        take_id = _id_source(stored, floor)
+diff --git a/todo/storage/importer.py b/todo/storage/importer.py
++++ b/todo/storage/importer.py
++"""Import items from a JSON file shaped like the todo file."""
++import dataclasses
++import re
++from datetime import date, datetime, timedelta
++from pathlib import Path
++
++from todo.storage.base import Store
++from todo.storage.json_file import MAX_FILE_BYTES, JsonFile
++from todo.storage.json_store import MAX_CLOCK_SKEW, item_from_row
++from todo.storage.model import Item, StoreError, local_date, new_series_id, normalize_title, utc_now
++
++
++# The most items one import reads. An imported item is saved with `done`, `due`, `updated_at`, `tags`,
++# `priority` and `created_on` always written, so its smallest saved row (indented as saved) takes about
++# 197 bytes, 199 with the comma and newline after it: a 16 MiB todo file holds no more than MAX_FILE_BYTES // 199 of them, so more can never be saved.
++# Without the cap a 16 MiB file of `- [ ] a` lines builds about 2 million items (GBs) before the save refuses.
++MAX_IMPORT_ITEMS = MAX_FILE_BYTES // 199
++
++
++def _too_many(path: Path) -> StoreError:
++    return StoreError(f"{path} holds too many items, an import takes at most {MAX_IMPORT_ITEMS}")
++
++
++def read_import(path: Path, today: date, now: datetime | None = None) -> list[Item]:
++    """The items in an import file, each through the todo file's row checks and caps.
++
++    `done_on` after `today` + 1 is capped there, as a load caps it. The file is untrusted: its size is
++    capped by `JsonFile`, and every later step is one pass. Raises StoreError on a bad file; nothing is read twice.
++    """
++    try:
++        rows = JsonFile(path, True, "file to import").read_json()
++    except OSError as e:
++        raise StoreError(f"cannot read {path}: {e.strerror or e}") from None
++    if rows is None:
++        raise StoreError(f"cannot read {path}: no such file")
++    if not isinstance(rows, list):
++        raise StoreError(f"invalid {path}, expected a list of items")
++    if len(rows) > MAX_IMPORT_ITEMS:
++        raise _too_many(path)
++    cap = today + timedelta(days=1)
++    latest = (now or utc_now()) + MAX_CLOCK_SKEW
++    items = []
++    ids = set()
++    for row in rows:
++        item = item_from_row(row, path, latest, lambda: cap)
++        if item.id in ids:
++            raise StoreError(f"{path}: repeated id {item.id}")
++        ids.add(item.id)
++        if item.done and item.done_on is None:
++            # insert restamps updated_at, so keep the day the row says it was done on; a row with no
++            # stamp either counts on the day of the import, as a Markdown `[x]` does
++            item.done_on = today if item.updated_at is None else min(local_date(item.updated_at), cap)
++        items.append(item)
++    return items
++
++
++_CHECKBOX = re.compile(r"[ \t]*[-*] \[([ xX])\](?:[ \t]+(.*))?")
++
++
++def read_markdown(path: Path, today: date) -> tuple[list[Item], int]:
++    """The items in a Markdown checklist and the number of other (non-blank) lines ignored.
++
++    A line `- [ ] title` or `* [x] title` (`x` or `X`) is an item; `[x]` items are done with `done_on`
++    `today`. A checkbox with no title is ignored. Ids are 1, 2, ... in file order (`import_items` gives
++    them new ones). The file is untrusted: its size is capped by `JsonFile`, and a file that is not UTF-8
++    text (or holds a NUL) raises StoreError, so a binary file imports nothing.
++    """
++    try:
++        data = JsonFile(path, True, "file to import").read_bytes()
++    except OSError as e:
++        raise StoreError(f"cannot read {path}: {e.strerror or e}") from None
++    if data is None:
++        raise StoreError(f"cannot read {path}: no such file")
++    try:
++        text = data.decode("utf-8-sig")
++    except UnicodeDecodeError:
++        raise StoreError(f"{path} is not a text file") from None
++    if "\0" in text:
++        raise StoreError(f"{path} is not a text file")
++    items = []
++    ignored = 0
++    for line in text.split("\n"):
++        line = line.rstrip("\r")  # only \n and \r\n end a line: a form feed or U+2028 stays in its title
++        match = _CHECKBOX.fullmatch(line)
++        title = normalize_title((match.group(2) or "").strip()) if match else ""
++        if not title:
++            ignored += bool(line.strip())
++            continue
++        done = match.group(1) != " "
++        if len(items) >= MAX_IMPORT_ITEMS:
++            raise _too_many(path)
++        items.append(Item(id=len(items) + 1, title=title, done=done, done_on=today if done else None))
++    return items, ignored
++
++
++def _key(item: Item) -> tuple[str, date | None]:
++    """Normalised title (exact otherwise) and due date: two items with the same key are duplicates."""
++    return normalize_title(item.title), item.due
++
++
++def import_items(store: Store, items: list[Item], today: date) -> tuple[int, int]:
++    """Add `items` to `store` in one save; return (imported, skipped duplicates).
++
++    An item whose title and due date match one in the store, or an earlier one in `items`, is skipped.
++    Imported items take new ids above everything (`Store.insert`), `created_on` today and a fresh stamp.
++    `parent` and `blocked_on` follow the new ids when they name an item in `items` (a skipped item stands
++    for the one it repeats), else they are dropped; each source series gets one fresh series id.
++    The duplicate check and the id remap run on the load the save is built from (`insert`'s `prepare`),
++    so a writer between two loads cannot leave references pointing at other items.
++    One pass over the items, a dict lookup per reference. Source ids are unique (`read_import`).
++    """
++    skipped = 0
++
++    def prepare(stored: list[Item], first_id: int) -> list[Item]:
++        nonlocal skipped
++        seen = {}
++        for item in stored:
++            seen.setdefault(_key(item), item.id)
++        new_id = {}  # source id -> id in the store
++        keep = []
++        for item in items:
++            key = _key(item)
++            if key not in seen:
++                seen[key] = first_id + len(keep)
++                keep.append(item)
++            new_id[item.id] = seen[key]
++        skipped = len(items) - len(keep)
++        series = {}
++        prepared = []
++        for item in keep:
++            mine = new_id[item.id]
++            blocked = [new_id[b] for b in item.blocked_on if b in new_id and new_id[b] != mine]
++            parent = new_id.get(item.parent)
++            prepared.append(
++                dataclasses.replace(
++                    item,
++                    created_on=None,
++                    parent=None if parent == mine else parent,
++                    blocked_on=list(dict.fromkeys(blocked)),
++                    series_id=None if item.series_id is None else series.setdefault(item.series_id, new_series_id()),
++                )
++            )
++        return prepared
++
++    saved = store.insert([], today, prepare)  # ValueError (no free id) is a caller's mistake: the command maps it to exit 2
++    return len(saved), skipped

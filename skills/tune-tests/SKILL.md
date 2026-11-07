@@ -20,16 +20,21 @@ Inputs: optional `--diff <ref>` to tune only the suites covering the files chang
 
    The test-tuner is **remote-capable** ([Remote subagents](../_shared/conventions.md#remote-subagents)): name it `--name tune-tests` and attach the baseline file, plus the notes file when it sits outside the worktree. The snapshot has one commit and no history, so give a `since <ref>` scope as the list of files `git diff --name-only <ref>` prints here. When it returns, commit its changes with the repo's convention, then act on its report.
 
-5. **Verify.** In the worktree:
-   - Run each suite again, by itself, as in step 3. Every suite is green, and the total is at most the baseline's.
-   - Read the diff of every test file. Each assertion the tuner removed or merged has the replacement its report names; a change that drops one without a replacement goes back to the tuner, or gets reverted.
-   - Pick the new test you trust least: break the behaviour it covers, watch it go **red**, restore the code.
+5. **Verify** with the script `build-epic` uses too: `python3 -I ~/.agents/skills/build-epic/scripts/verify_tuner.py <run> <TT>-tests [--report <file>]`. It checks that only test files changed, that no assertion was removed without a `moved:` line naming it, that the suites are green, and that each `mutations:` line of the report turns them red (applied, run, and restored on any exit). Outside a `build-epic` run, make it a throwaway run folder beside the worktree, `<path>/../tune-tests-run/`, holding:
+   - `map.md` with a `## Checks` section: one fenced code block, one suite command per line (the commands from step 3);
+   - `tickets/00-tune.md` with a `Branch: <default>` line, so the script diffs the worktree against where it left the default branch;
+   - `worktrees/00-tests`, a link to the worktree;
+   - `reports/00-tests.md`, the tuner's report as it returned it.
 
-   Send what does not hold back to the tuner (continue the same subagent if your harness can, otherwise start a new one on the same worktree; a remote tuner gets a new run on the same worktree, with what did not hold in its message), then verify again. Done when all three hold.
+   Then run it with `<path>/../tune-tests-run 00-tests`. Act on its one line:
+   - `OK <TT>-tests verified mutations=<n>`: the claims hold. Run each suite again, by itself, as in step 3, for the after times: the total is at most the baseline's.
+   - `FAIL ...` (its log is named on the line): send what it names back to the tuner (continue the same subagent if your harness can, otherwise start a new one on the same worktree; a remote tuner gets a new run on the same worktree, with the line in its message), then run it again. When the same failure comes back, or the script cannot check the PR (`no-report`, `bad-mutation`, a suite that times out), verify that part by hand: read the diff of every test file for each assertion's replacement, break the behaviour of the new test you trust least and watch it go **red**, then restore the code.
+
+   Done when the script prints `OK` (or every part it could not check holds by hand) and the total time is at most the baseline's.
 
 6. **Ship** with [ship-pr](../ship-pr/SKILL.md) from the worktree. The PR description holds a table of each suite's time before (step 3) and after (step 5), and the tuner's causes and coverage additions. Done when the PR exists.
 
-7. **Clean up**: once the PR is merged or closed, `git worktree remove <path>` and delete the baseline file.
+7. **Clean up**: once the PR is merged or closed, `git worktree remove <path>` and delete the baseline file and `tune-tests-run/`.
 
 ## Report
 
