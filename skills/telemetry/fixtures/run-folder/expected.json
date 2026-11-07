@@ -186,6 +186,8 @@
    "minutes_first_task_pr_to_ticket_merge": null
   }
  },
+ "human_round_trips": 2,
+ "hand_written_scripts": 2,
  "gaps": [
   "remote: 1 run(s) without cost",
   "github: https://github.com/example/app/pull/13: exit 1"

@@ -19,6 +19,11 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
   `first_created`, `last_merged` and the minutes between them.
 - `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, and the minutes from its first task PR's
   opening to its own PR's merge.
+- `human_round_trips`: the dated quotes under `decisions.md`'s Decisions recorded after its first Authorizations row,
+  the approval: the quotes `decide.py` logged (`OK decisions quote` in `logs/decisions-decide.log`) before its first
+  `OK decisions clause` are not counted. `null` without `decisions.md`, or with Authorizations rows but no logged
+  clause to place them; `0` before any Authorizations row.
+- `hand_written_scripts`: the `*.py` and `*.sh` files in the run folder, outside `env/`, `worktrees/` and `remote/`.
 - `gaps`: what could not be measured, one line each.
 """
 import argparse
@@ -38,6 +43,8 @@ TASK_ID = re.compile(r"^(\d+-\d+)(?:-|$)")
 OLD_PASSED = re.compile(r"(\d+) passed")
 OLD_FAILED = re.compile(r"(\d+) failed")
 NO_FOLLOW_UP = {"", "none", "-", "n/a"}
+DATED = re.compile(r"^- \d{4}-\d{2}-\d{2}: ")
+NOT_HAND_WRITTEN = {"env", "worktrees", "remote"}
 
 
 def header(path, key):
@@ -209,6 +216,41 @@ def remote(run, gaps):
     return out
 
 
+def human_round_trips(run, gaps):
+    """The dated quotes in `decisions.md` recorded after its first Authorizations row; None when that cannot be told."""
+    path = run / "decisions.md"
+    if not path.is_file():
+        gaps.append("human round trips: no decisions.md")
+        return None
+    section, rows, quotes = None, 0, 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("#"):
+            section = line
+        elif section == "## Authorizations" and line.startswith("|") and not re.match(r"^\|\s*(clause|---)\s*\|", line):
+            rows += 1
+        elif section == "## Decisions" and DATED.match(line):
+            quotes += 1
+    if not rows:
+        return 0
+    log = run / "logs" / "decisions-decide.log"
+    if not log.is_file():
+        gaps.append("human round trips: no logs/decisions-decide.log to place the approval")
+        return None
+    before = 0
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("OK decisions clause "):
+            return max(0, quotes - before)
+        before += line.startswith("OK decisions quote ")
+    gaps.append("human round trips: no clause in logs/decisions-decide.log to place the approval")
+    return None
+
+
+def hand_written_scripts(run):
+    """The `*.py` and `*.sh` files in the run folder outside the folders the steps fill."""
+    return sum(1 for p in run.rglob("*") if p.suffix in (".py", ".sh") and p.is_file()
+               and p.relative_to(run).parts[0] not in NOT_HAND_WRITTEN)
+
+
 def when(stamp):
     try:
         return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
@@ -316,6 +358,8 @@ def metrics(run, gh):
         "remote": remote_,
         "prs": prs_,
         "per_ticket": per_ticket(tickets, tasks, prs_, times),
+        "human_round_trips": human_round_trips(run, gaps),
+        "hand_written_scripts": hand_written_scripts(run),
         "gaps": gaps,
     }
 
