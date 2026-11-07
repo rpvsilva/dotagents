@@ -161,7 +161,8 @@ esac
 backend_script() {
   local f known=()
   for f in "$REPO"/scripts/remote-backends/*.sh; do
-    [ "$(basename "$f")" = lib.sh ] || known+=("$(basename "$f" .sh)")
+    f="${f##*/}"
+    [ "$f" = lib.sh ] || known+=("${f%.sh}")
   done
   backend="$REPO/scripts/remote-backends/$REMOTE_BACKEND.sh"
   if [ "$REMOTE_BACKEND" = lib ] || [[ "$REMOTE_BACKEND" == */* ]] || [ ! -f "$backend" ]; then
@@ -296,7 +297,8 @@ progress() {
     [ "${1:-}" = --no-log ] || printf '%s\n' "$line" >>"$stage/log"
   done
 }
-say() { echo "remote-agent: $*" | progress; }
+# A here-string, not a pipe: no subshell for each line.
+say() { progress <<<"remote-agent: $*"; }
 # Runs a command with its stderr through progress; its stdout and exit code are kept.
 with_progress() {
   local opt=""
