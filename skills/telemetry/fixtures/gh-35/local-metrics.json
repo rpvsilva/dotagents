@@ -1,0 +1,306 @@
+{
+ "run": "~/.agents/runs/build-epic-sandbox/gh-35-todo-superpowers-local",
+ "repo": "rpvsilva/build-epic-sandbox",
+ "measured_at": "2026-11-06T18:38:38+00:00",
+ "gaps": [
+  "no reports/*.checks: suite results were not saved to files; run the suite on the final branch for the test count",
+  "no --git clone: integration catch-up merges not counted"
+ ],
+ "tickets": {
+  "count": 32,
+  "by_status": {
+   "merged": 32
+  }
+ },
+ "tasks": {
+  "count": 78,
+  "by_kind": {
+   "implement": 43,
+   "hub": 32,
+   "review-fixes": 2,
+   "other": 1
+  },
+  "by_status": {
+   "done": 78
+  },
+  "with_pr": 78,
+  "no_change": 0,
+  "feedback_redispatches": 0
+ },
+ "findings_saved": {
+  "total": 91,
+  "by_severity": {
+   "kept": 7,
+   "security": 3,
+   "followup": 81
+  },
+  "by_source": {
+   "kept": {},
+   "ticket-findings": {},
+   "keep-files": {
+    "kept": 7,
+    "security": 3
+   },
+   "followups": 81,
+   "integration": {}
+  },
+  "note": "Saved findings only (kept for later fixes); findings fixed in the same round are not all recorded."
+ },
+ "human_decisions": 13,
+ "tests": {
+  "local_suite_runs": 0,
+  "red_runs": 0,
+  "final_passed": null,
+  "first_passed": null
+ },
+ "prs": {
+  "count": 110,
+  "merged": 110,
+  "by_state": {
+   "MERGED": 110
+  },
+  "merged_by": {
+   "rpvsilva": 110
+  },
+  "additions": 35592,
+  "deletions": 1144,
+  "first_created": "2026-11-06T11:43:35+00:00",
+  "last_merged": "2026-11-06T18:07:47+00:00",
+  "wall_minutes_first_pr_to_last_merge": 384.2
+ },
+ "per_ticket": {
+  "01": {
+   "tasks": 7,
+   "review_fix_tasks": 1,
+   "pr": 299,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 52.7
+  },
+  "02": {
+   "tasks": 5,
+   "review_fix_tasks": 1,
+   "pr": 305,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 25.7
+  },
+  "03": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 313,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 93.4
+  },
+  "04": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 325,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 18.0
+  },
+  "05": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 337,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 27.9
+  },
+  "06": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 343,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 10.7
+  },
+  "07": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 351,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 16.3
+  },
+  "08": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 353,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 56.2
+  },
+  "09": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 355,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 61.0
+  },
+  "10": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 357,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 64.8
+  },
+  "11": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 359,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 65.2
+  },
+  "12": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 361,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 69.1
+  },
+  "13": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 363,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 77.0
+  },
+  "14": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 365,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 82.4
+  },
+  "15": {
+   "tasks": 1,
+   "review_fix_tasks": 0,
+   "pr": 367,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 4.6
+  },
+  "16": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 369,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 95.9
+  },
+  "17": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 371,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 104.0
+  },
+  "18": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 373,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 112.8
+  },
+  "19": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 375,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 120.2
+  },
+  "20": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 377,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 127.5
+  },
+  "21": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 379,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 134.2
+  },
+  "22": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 381,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 140.0
+  },
+  "23": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 383,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 149.2
+  },
+  "24": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 385,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 161.4
+  },
+  "25": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 387,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 174.5
+  },
+  "26": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 389,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 181.5
+  },
+  "27": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 391,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 215.0
+  },
+  "28": {
+   "tasks": 3,
+   "review_fix_tasks": 0,
+   "pr": 393,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 232.8
+  },
+  "29": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 395,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 245.1
+  },
+  "30": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 397,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 251.4
+  },
+  "31": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 399,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 262.2
+  },
+  "32": {
+   "tasks": 2,
+   "review_fix_tasks": 0,
+   "pr": 401,
+   "state": "MERGED",
+   "minutes_first_task_pr_to_ticket_merge": 273.7
+  }
+ },
+ "remote_runs": {
+  "count": 0,
+  "tasks": 0,
+  "by_outcome": {},
+  "tasks_needing_retry": [],
+  "minutes_total_known": 0,
+  "minutes_median_known": null,
+  "runs_with_known_duration": 0
+ }
+}

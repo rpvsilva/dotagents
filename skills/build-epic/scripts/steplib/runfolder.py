@@ -23,7 +23,7 @@ HEADER_LINE = re.compile(r"^[A-Z][A-Za-z0-9 _-]*:[ \t]")
 
 def get(path, key):
     """The value of header `key` in the file at `path`, or None."""
-    return header(Path(path).read_text(), re.escape(key))
+    return header(Path(path).read_text(encoding="utf-8"), re.escape(key))
 
 
 def set_header(path, key, value, title="# Run"):
@@ -36,7 +36,7 @@ def set_header(path, key, value, title="# Run"):
         raise ValueError(f"header {key} value has a newline")
     path = core.resolve(path)
     with core.file_lock(path.parent / ".headers.lock"):
-        text = path.read_text() if path.exists() else f"{title}\n"
+        text = path.read_text(encoding="utf-8") if path.exists() else f"{title}\n"
         lines = text.splitlines(keepends=True)
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
@@ -54,7 +54,7 @@ def set_header(path, key, value, title="# Run"):
             lines.insert(at, line)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.writelines(lines)
             if path.exists():
                 os.chmod(tmp, path.stat().st_mode & 0o777)

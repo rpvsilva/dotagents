@@ -63,7 +63,7 @@ def write_tuning_task(ctx, repo, tt, ticket, default, suites):
     title = ci.title(ticket).split(": ", 1)[-1]
     lines = [f"# {tt}-tests: tune {title}", "Status: ready", f"Ticket: {tt}", f"Range: {first}..{tip}", "",
              "## Suites", ""] + [f"- `{s.command}`: {s.seconds:.0f}s" for s in suites]
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     ctx.note(f"wrote {path}")
 
 

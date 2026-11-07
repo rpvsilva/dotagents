@@ -34,7 +34,7 @@ class DecideCase(unittest.TestCase):
         return lines[0]
 
     def text(self):
-        with open(self.file, newline="") as f:
+        with open(self.file, newline="", encoding="utf-8") as f:
             return f.read()
 
 

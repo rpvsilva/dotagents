@@ -49,7 +49,7 @@ def load_comments(value):
     if value is None:
         return None
     path = core.resolve(value)
-    text = path.read_text() if path.is_file() else value
+    text = path.read_text(encoding="utf-8") if path.is_file() else value
     try:
         got = json.loads(text)
     except ValueError:
@@ -65,7 +65,7 @@ def step(ctx):
     number = ctx.id[2:]
     report, comments = parse(ctx.args)
     try:
-        body = report.read_text()
+        body = report.read_text(encoding="utf-8")
     except OSError:
         body = ""
     if not body.strip():
@@ -84,7 +84,7 @@ def step(ctx):
     if comments:
         payload["comments"] = comments
     payload_file = ctx.run_dir / "logs" / f"{ctx.id}-review.json"
-    payload_file.write_text(json.dumps(payload, indent=1) + "\n")
+    payload_file.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
     ctx.note(f"report {report} ({len(body)} chars) on {head}")
     res = gh.gh(["api", f"repos/{{owner}}/{{repo}}/pulls/{number}/reviews", "--method", "POST",
                  "--input", payload_file], ctx.log, cwd=repo)

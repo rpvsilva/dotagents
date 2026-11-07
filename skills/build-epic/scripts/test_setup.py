@@ -51,14 +51,14 @@ class SetupCase(unittest.TestCase):
         self.write_map("echo suite ok")
 
     def write_map(self, checks_block, setup="Setup: none."):
-        (self.run_dir / "map.md").write_text(MAP.format(checks=checks_block, setup=setup))
+        (self.run_dir / "map.md").write_text(MAP.format(checks=checks_block, setup=setup), encoding="utf-8")
 
     def workflows(self, files):
         """Commits `.github/workflows/<name>` files on `main` and pushes them."""
         clone = self.kit.clone
         (clone / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
         for name, text in files.items():
-            (clone / ".github" / "workflows" / name).write_text(text)
+            (clone / ".github" / "workflows" / name).write_text(text, encoding="utf-8")
         self.kit.git("add", ".github", cwd=clone)
         self.kit.git("commit", "-qm", "ci", cwd=clone)
         self.kit.git("push", "-q", "origin", "main", cwd=clone)
@@ -94,7 +94,7 @@ class PrintsOneLine(SetupCase):
         self.assertTrue(self.setup(ok=False).startswith("FAIL run no-run-md"))
 
     def test_without_checks_fails(self):
-        (self.run_dir / "map.md").write_text("# Map\n\n## Checks\n\nSetup: none\n")
+        (self.run_dir / "map.md").write_text("# Map\n\n## Checks\n\nSetup: none\n", encoding="utf-8")
         self.assertTrue(self.setup(ok=False).startswith("FAIL run no-checks"))
 
 
@@ -133,7 +133,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.write_map("echo hi", setup=f"Setup: `echo x >> {count} && false`")
         self.assertTrue(self.setup(ok=False).startswith("FAIL run setup-failed"))
         self.setup(ok=False)
-        self.assertEqual(count.read_text(), "x\nx\n")
+        self.assertEqual(count.read_text(encoding="utf-8"), "x\nx\n")
 
 
 class DetectsCI(SetupCase):
@@ -145,7 +145,7 @@ class DetectsCI(SetupCase):
     def test_pull_request_into_main_is_off_for_another_base(self):
         self.workflows({"ci.yml": PR_INTO_MAIN})
         self.kit.branch_from_main("int")
-        (self.run_dir / "decisions.md").write_text("# Decisions\nbase: int\n")
+        (self.run_dir / "decisions.md").write_text("# Decisions\nbase: int\n", encoding="utf-8")
         self.assertIn(" ci=off ", self.setup())
         self.assertEqual(self.decided("ci"), "off")
         self.assertEqual(self.decided("base"), "int")
@@ -186,11 +186,11 @@ class ListsSkippedTools(SetupCase):
                "== shellcheck: not installed, skipped (install shellcheck)\n"
                "SKIPPED [1] tests/test_x.py:3: requires docker\n")
         script = self.kit.tmp / "suite.sh"
-        script.write_text(f"cat <<'EOF'\n{out}EOF\n")
+        script.write_text(f"cat <<'EOF'\n{out}EOF\n", encoding="utf-8")
         self.write_map(f"bash {script}")
         line = self.setup()
         self.assertTrue(line.endswith(" skips=3"), line)
-        skips = (self.run_dir / "skips.md").read_text()
+        skips = (self.run_dir / "skips.md").read_text(encoding="utf-8")
         for reason in checks.skip_reasons(out):
             self.assertIn(reason.reason, skips)
         for tool in ("node", "shellcheck", "docker"):
@@ -199,7 +199,7 @@ class ListsSkippedTools(SetupCase):
     def test_a_red_suite_still_lists_its_skips(self):
         self.write_map("echo 'zsh.test.sh: skipped (zsh is not installed)'; exit 1")
         self.assertTrue(self.setup().endswith(" skips=1"))
-        self.assertRegex((self.run_dir / "skips.md").read_text(), r"(?m)^\| zsh \|")
+        self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| zsh \|")
 
 
 class Reruns(SetupCase):
@@ -209,7 +209,7 @@ class Reruns(SetupCase):
         first = self.setup()
         second = self.setup()
         self.assertEqual(first, second)
-        self.assertEqual(count.read_text(), "x\n")
+        self.assertEqual(count.read_text(encoding="utf-8"), "x\n")
 
 
 class SkipReasons(unittest.TestCase):

@@ -44,7 +44,7 @@ FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 def setup_commands(map_md):
     """The commands of `map.md`'s `Setup:` line: none for `Setup: none` or no such line; the code spans on the line;
     else the lines of the code block after it."""
-    text = map_md.read_text()
+    text = map_md.read_text(encoding="utf-8")
     m = re.search(r"^Setup:[ \t]*(.*)$", text, re.MULTILINE)
     if not m or re.match(r"none\b", m.group(1).strip(), re.IGNORECASE):
         return []
@@ -69,7 +69,7 @@ def make_env(ctx, repo, commands):
     for cmd in commands:
         if ctx.run(["bash", "-c", cmd], cwd=repo, env=environ).rc != 0:
             raise core.Fail(f"setup-failed: {cmd}")
-    done.write_text("".join(c + "\n" for c in commands))
+    done.write_text("".join(c + "\n" for c in commands), encoding="utf-8")
     return env_dir
 
 
@@ -254,8 +254,8 @@ def list_skips(ctx, repo, command):
                 reasons.append(skip.reason)
         rows = "".join(f"| {_cell(t)} | {_cell('; '.join(r))} |\n" for t, r in by_tool.items())
         path.write_text(f"# Skipped tools\n\ntest_command: {command}\nrc: {res.rc}\n\n"
-                        f"| tool | reasons |\n| --- | --- |\n{rows}")
-    return sum(1 for line in path.read_text().splitlines()
+                        f"| tool | reasons |\n| --- | --- |\n{rows}", encoding="utf-8")
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines()
                if line.startswith("| ") and not line.startswith(("| tool |", "| --- |")))
 
 

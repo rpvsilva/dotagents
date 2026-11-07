@@ -74,7 +74,7 @@ def load(run):
     p = path(run)
     if not p.exists():
         return None
-    with open(p, newline="") as f:
+    with open(p, newline="", encoding="utf-8") as f:
         return parse(f.read())
 
 
@@ -173,7 +173,7 @@ def save(run, d):
     p = path(run)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{NAME}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", newline="") as f:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
             f.write(render(d))
         os.replace(tmp, str(p))
     except BaseException:

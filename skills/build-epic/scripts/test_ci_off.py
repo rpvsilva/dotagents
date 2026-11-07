@@ -75,9 +75,9 @@ class CiOffBodyTest(unittest.TestCase):
         (run / "tickets").mkdir()
         (run / "tasks").mkdir()
         self.ticket = run / "tickets" / "01-alpha.md"
-        self.ticket.write_text(TICKET)
+        self.ticket.write_text(TICKET, encoding="utf-8")
         self.task = run / "tasks" / "01-02-json-export.md"
-        self.task.write_text(TASK)
+        self.task.write_text(TASK, encoding="utf-8")
 
     def bodies(self):
         run = self.kit.run_dir

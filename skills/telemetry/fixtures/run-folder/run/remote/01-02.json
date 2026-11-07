@@ -1,0 +1,14 @@
+{
+  "run": "01-02-20261101T100000",
+  "name": "01-02",
+  "exit_code": 0,
+  "status": "done",
+  "complete": true,
+  "duration_ms": 600000,
+  "num_turns": 30,
+  "total_cost_usd": 2.5,
+  "usage": {"input_tokens": 100, "output_tokens": 2000, "cache_read_input_tokens": 50000, "cache_creation_input_tokens": 3000},
+  "model": "model-b",
+  "killed": null,
+  "lost": false
+}

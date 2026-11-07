@@ -1,0 +1,1 @@
+{"type": "assistant", "timestamp": "2026-10-25T10:00:05.000Z", "requestId": "o1", "message": {"id": "msg_o1", "model": "claude-haiku-5-5", "role": "assistant", "content": [{"type": "tool_use", "id": "ob1", "name": "Bash", "input": {"command": "make"}}], "usage": {"input_tokens": 10, "output_tokens": 100}}, "isSidechain": true}

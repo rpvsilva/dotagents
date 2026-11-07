@@ -12,7 +12,7 @@ from . import core, gh
 def common_dir(repo):
     """The repo's git common dir, absolute and resolved (the same for every worktree of one repo)."""
     out = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
     if out.returncode != 0:
         raise core.Fail(f"not-a-repo: {repo}")
     return core.resolve(out.stdout.strip())

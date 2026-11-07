@@ -32,13 +32,13 @@ class PriceCheck(unittest.TestCase):
         return proc
 
     def prices(self):
-        return json.loads(self.pricing.read_text())
+        return json.loads(self.pricing.read_text(encoding="utf-8"))
 
     def test_shows_changes_without_writing(self):
-        before = self.pricing.read_text()
+        before = self.pricing.read_text(encoding="utf-8")
         out = self.check("model-a").stdout
         self.assertIn("model-a: cacheRead 0.1 → 0.05", out)
-        self.assertEqual(self.pricing.read_text(), before)
+        self.assertEqual(self.pricing.read_text(encoding="utf-8"), before)
 
     def test_shows_a_model_missing_from_the_file_as_new(self):
         out = self.check("model-b").stdout
@@ -71,17 +71,17 @@ class PriceCheck(unittest.TestCase):
         self.assertNotIn("model-c", self.prices()["models"])
 
     def test_changes_nothing_when_litellm_is_unavailable(self):
-        before = self.pricing.read_text()
+        before = self.pricing.read_text(encoding="utf-8")
         proc = self.check("model-a", "--apply", source=str(FIXTURES / "missing.json"))
         self.assertEqual(proc.returncode, 3)
         self.assertIn("LiteLLM unavailable; prices unchanged", proc.stdout)
-        self.assertEqual(self.pricing.read_text(), before)
+        self.assertEqual(self.pricing.read_text(encoding="utf-8"), before)
 
     def test_apply_dates_a_check_that_found_no_changes(self):
         self.check("model-a", "--apply")
         prices = self.prices()
         prices["asOf"] = "2020-01-01"
-        self.pricing.write_text(json.dumps(prices))
+        self.pricing.write_text(json.dumps(prices), encoding="utf-8")
         self.check("model-a", "--apply")
         self.assertEqual(self.prices()["asOf"], date.today().isoformat())
 
