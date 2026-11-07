@@ -72,7 +72,8 @@
    "model-b": 1
   },
   "killed": {
-   "memory": 1
+   "memory": 1,
+   "timeout": 1
   },
   "lost": 0
  },

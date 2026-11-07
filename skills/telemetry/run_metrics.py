@@ -13,16 +13,20 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `suites`: the suites of `reports/<id>.checks.json` (a count may be `null`: output it could not read), or, for an id
   without one, the old `reports/<id>.checks` whose last line says `N passed` and `N failed`.
 - `remote`: the remote runs' results in `remote/<task>-<remote run>.json`; `cost_usd` sums those with a cost and
-  `runs_without_cost` counts the rest.
+  `runs_without_cost` counts the rest. `killed` counts the runs by each kind of kill in their `capped_kills` (a run
+  killed for memory, then for timeout, counts under both), or by `killed` in a result without that list.
 - `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
   folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network. Also
   `first_created`, `last_merged` and the minutes between them.
 - `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, and the minutes from its first task PR's
   opening to its own PR's merge.
-- `human_round_trips`: the dated quotes under `decisions.md`'s Decisions recorded after its first Authorizations row,
-  the approval: the quotes `decide.py` logged (`OK decisions quote` in `logs/decisions-decide.log`) before its first
-  `OK decisions clause` are not counted. `null` without `decisions.md`, or with Authorizations rows but no logged
-  clause to place them; `0` before any Authorizations row.
+- `human_round_trips`: the dated quotes under `decisions.md`'s Decisions recorded after approval. Approval is placed
+  from `logs/decisions-decide.log`, where each `decide.py` call logs `== decide ... at <time>` and, once recorded,
+  `OK decisions <set|clause|quote>`: build-epic step 5 records the clauses, then the approval reply's own decisions
+  as quotes. So approval ends after the first run of recorded clauses and the quotes right after it, each logged
+  within 10 minutes of the entry before it with no `set` between; those quotes, and any before the first clause,
+  are not counted. `null` without `decisions.md`, or with Authorizations rows but no logged clause to place them;
+  `0` before any Authorizations row.
 - `hand_written_scripts`: the `*.py` and `*.sh` files in the run folder, outside `env/`, `worktrees/` and `remote/`.
 - `gaps`: what could not be measured, one line each.
 """
@@ -32,7 +36,7 @@ import re
 import shlex
 import statistics
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 SCHEMA = "build-epic-run-metrics/v1"
@@ -45,6 +49,8 @@ OLD_FAILED = re.compile(r"(\d+) failed")
 NO_FOLLOW_UP = {"", "none", "-", "n/a"}
 DATED = re.compile(r"^- \d{4}-\d{2}-\d{2}: ")
 NOT_HAND_WRITTEN = {"env", "worktrees", "remote"}
+STAMP = re.compile(r" at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})$")
+APPROVAL_GAP = timedelta(minutes=10)
 
 
 def header(path, key):
@@ -205,8 +211,7 @@ def remote(run, gaps):
                 out["tokens"][kind] = out["tokens"].get(kind, 0) + n
         if isinstance(r.get("model"), str):
             models.append(r["model"])
-        if isinstance(r.get("killed"), str):
-            killed.append(r["killed"])
+        killed += kill_kinds(r)
         out["lost"] += r.get("lost") is True
     out["by_status"], out["models"], out["killed"] = tally(statuses), tally(models), tally(killed)
     out["tokens"] = dict(sorted(out["tokens"].items()))
@@ -214,6 +219,51 @@ def remote(run, gaps):
     if out["runs_without_cost"]:
         gaps.append(f"remote: {out['runs_without_cost']} run(s) without cost")
     return out
+
+
+def kill_kinds(result):
+    """Each kind of kill a remote run had, once: from `capped_kills` (`killed` holds only the last), else `killed`."""
+    kills = result.get("capped_kills")
+    if isinstance(kills, list):
+        return sorted({k["kind"] for k in kills if isinstance(k, dict) and isinstance(k.get("kind"), str)})
+    return [result["killed"]] if isinstance(result.get("killed"), str) else []
+
+
+def decide_entries(log):
+    """(what, when) for each `decide.py` call the log shows recorded: `set`, `clause` or `quote`, and its stamp."""
+    entries, current = [], None
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("== decide "):
+            current = {"stamp": None, "ok": None}
+            entries.append(current)
+        if current is None:
+            continue
+        if current["stamp"] is None:
+            m = STAMP.search(line)  # a multi-line quote's header ends on a later line
+            if m:
+                current["stamp"] = when(m.group(1))
+            continue
+        if current["ok"] is None and line.startswith("OK decisions "):
+            current["ok"] = (line.split() + [""])[2]
+    return [(e["ok"], e["stamp"]) for e in entries if e["ok"]]
+
+
+def approval_end(entries):
+    """How many of `entries` belong up to the end of approval, or None without a clause.
+
+    Approval ends after the first run of clauses and the quotes right after it (no `set` between), each logged
+    within `APPROVAL_GAP` of the entry before it: build-epic step 5 records the clauses, then the approval reply's
+    own decisions."""
+    first = next((i for i, (what, _) in enumerate(entries) if what == "clause"), None)
+    if first is None:
+        return None
+    end = first
+    while end < len(entries) and entries[end][0] == "clause":
+        end += 1
+    while (end < len(entries) and entries[end][0] == "quote" and entries[end][1] and entries[end - 1][1]
+           and entries[end][1] - entries[end - 1][1] <= APPROVAL_GAP):
+        end += 1
+    return end
 
 
 def human_round_trips(run, gaps):
@@ -236,13 +286,12 @@ def human_round_trips(run, gaps):
     if not log.is_file():
         gaps.append("human round trips: no logs/decisions-decide.log to place the approval")
         return None
-    before = 0
-    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("OK decisions clause "):
-            return max(0, quotes - before)
-        before += line.startswith("OK decisions quote ")
-    gaps.append("human round trips: no clause in logs/decisions-decide.log to place the approval")
-    return None
+    entries = decide_entries(log)
+    end = approval_end(entries)
+    if end is None:
+        gaps.append("human round trips: no clause in logs/decisions-decide.log to place the approval")
+        return None
+    return max(0, quotes - sum(1 for what, _ in entries[:end] if what == "quote"))
 
 
 def hand_written_scripts(run):
