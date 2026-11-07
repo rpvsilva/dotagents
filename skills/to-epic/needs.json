@@ -1,0 +1,1 @@
+{"group": "epics", "needs": {"source-reader": "required", "build-epic": "optional"}, "agents": ["source-reader"]}
