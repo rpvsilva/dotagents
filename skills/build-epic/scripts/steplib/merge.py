@@ -10,7 +10,6 @@ the rule's answer and nothing else.
 import json
 import os
 import re
-import shlex
 import time
 
 from . import core, gh, identity
@@ -21,7 +20,7 @@ HEAD_WAIT = 5
 
 def setting(repo, key, log, section="build-epic"):
     """The effective value of Setting `key` for `repo`, through `~/.agents/bin/settings`; None when unset."""
-    tool = os.path.expanduser("~/.agents/bin/settings")
+    tool = os.path.join(core.home(), ".agents", "bin", "settings")
     if not os.path.exists(tool):
         raise core.Fail(f"no-settings: {tool} is missing; run install.sh")
     res = core.run([tool, "--dir", repo, "get", section, key], log)
@@ -46,7 +45,7 @@ def merge_argv(command, pr, sha):
     """The argv of the merge rule for `pr` at `sha`. A command naming neither `{pr}` nor `{sha}` gets the PR appended."""
     if not command:
         return ["gh", "pr", "merge", pr, "--squash", "--delete-branch", "--match-head-commit", sha]
-    words = shlex.split(command)
+    words = core.split(command)
     argv = [w.replace("{pr}", pr).replace("{sha}", sha) for w in words]
     if not any("{pr}" in w or "{sha}" in w for w in words):
         argv.append(pr)

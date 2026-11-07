@@ -5,10 +5,13 @@ Usage: python3 -I verify_tuner.py <run> <TT-tests> [--report <file>] [--timeout 
 
 In the tuning task's worktree `<run>/worktrees/<TT-tests>`, against its fork point from the ticket branch (committed,
 uncommitted and untracked changes alike):
-- only test files changed: a file under a `test`, `tests`, `spec`, `fixtures` (...) folder, or named like `test_*`,
-  `*_test.*`, `*.test.*`, `*.spec.*` or `conftest.py`;
-- no assertion line (`assert...`, `expect(`, `.Fatal(`, ...) is removed unless the diff adds the same line back or a
-  `moved:` entry of the report names it, by its text or by its old `file:line`;
+- only test files changed: a file named like `test_*`, `*_test.*`, `*.test.*`, `*.spec.*` or `conftest.py`, any file
+  under a `fixtures`, `testdata` (...) folder, or a code file under a `test`, `tests`, `spec` (...) folder. A test
+  harness script or config there (`tests/run.sh`, `tests/suites.txt`) is not a test file;
+- no assertion line (`assert...`, `expect(`, `.Fatal(`, a shell `check ...`, `... || fail`, `[ ... ] || exit 1`, ...)
+  is removed unless the diff of tracked files adds the same line back or a `moved:` entry of the report names it, by
+  its text or by its old `file:line`. An untracked file's lines never count as the line added back;
+- the report has at least one `mutations:` entry per `covered:` entry, and no mutation targets a test file;
 - `map.md`'s `Checks` are green;
 - each `mutations:` entry of the report (default `<run>/reports/<TT-tests>.md`), `file:line old -> new`, turns them
   red: the first `old` on that line becomes `new`, the Checks run, and the file gets its bytes and times back on any
@@ -21,7 +24,8 @@ whole at the limit, with `PYTHONDONTWRITEBYTECODE=1` so no stale `.pyc` hides a 
 Report entries are `key: value` lines; indented or `- ` lines under a key add values to it; `none` is no value.
 
 Prints `OK <TT-tests> verified mutations=<n>`, or `FAIL <TT-tests> <reason> (log: ...)`: `no-report`,
-`bad-mutation <file:line>`, `non-test-file <path>`, `assertion-removed <file:line>`, `red <suite>`,
+`bad-mutation <file:line>`, `test-file-mutation <file:line>`, `unproven-covered covered=<n> mutations=<m>`,
+`non-test-file <path>`, `assertion-removed <file:line>`, `red <suite>`,
 `timeout <suite>`, `mutation-survived <file:line>`, `interrupted`. FAIL sends the PR to an agent review.
 """
 import os
@@ -38,10 +42,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from steplib import checks, core, runfolder  # noqa: E402
 
 GREEN_SECS = 600
-TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "testdata", "fixtures", "__fixtures__", "__snapshots__"}
+# Under these folders every file is test data.
+FIXTURE_DIRS = {"testdata", "fixtures", "__fixtures__", "__snapshots__"}
+# Under these folders a code file is a test (a helper included); a shell script, config or data file is harness.
+TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_CODE_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rb", ".java", ".kt", ".rs", ".c",
+                 ".cc", ".cpp", ".cs", ".php", ".swift", ".scala", ".ex", ".exs"}
 TEST_NAME = re.compile(r"^(test_.*|conftest\.py|.*[._-](test|tests|spec)\.[^.]+|.*\.(test|spec)\.[^.]+\.snap"
                        r"|.*Tests?\.[^.]+)$")
-ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.(Fatal|Fatalf|Error|Errorf)\(|\bshould\b")
+ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.(Fatal|Fatalf|Error|Errorf)\(|\bshould\b"
+                       # Shell: a check helper, or a command whose failure fails the test.
+                       r"|^\s*(check|expect|fail_unless|refute)\w*\s"
+                       r"|(\|\||&&)\s*(fail|die|bail|false|exit\s+[1-9]|return\s+[1-9])\b")
 ENTRY = re.compile(r"^(?P<file>[^\s:]+):(?P<line>\d+)\s+(?P<old>.+?)\s+->(?:\s+(?P<new>.*))?$")
 
 Mutation = namedtuple("Mutation", "file line old new")
@@ -81,7 +93,10 @@ def mutation(entry):
 
 def is_test_file(path):
     parts = PurePosixPath(path).parts
-    return bool(TEST_DIRS.intersection(parts[:-1])) or bool(TEST_NAME.match(parts[-1]))
+    dirs, name = set(parts[:-1]), parts[-1]
+    if FIXTURE_DIRS & dirs or TEST_NAME.match(name):
+        return True
+    return bool(TEST_DIRS & dirs) and PurePosixPath(name).suffix.lower() in TEST_CODE_EXT
 
 
 def git(ctx, wt, *args):
@@ -104,7 +119,8 @@ def fork_point(ctx, wt, run, tt):
 
 
 def changes(ctx, wt, base):
-    """(changed paths, removed lines as (file, old line, text), added line texts) of the worktree against `base`."""
+    """(changed paths, removed lines as (file, old line, text), added line texts) of the worktree against `base`.
+    Untracked files are among the paths, but their lines are not added ones: they are in no commit."""
     paths = git(ctx, wt, "diff", "--name-only", "--no-renames", base).split("\n")
     untracked = git(ctx, wt, "ls-files", "--others", "--exclude-standard").split("\n")
     removed, added = [], set()
@@ -121,11 +137,6 @@ def changes(ctx, wt, base):
             old_line += 1
         elif line.startswith("+"):
             added.add(line[1:].strip())
-    for name in filter(None, untracked):
-        try:
-            added.update(s.strip() for s in (wt / name).read_text(errors="replace").splitlines())
-        except OSError:
-            pass
     return [p for p in paths + untracked if p], removed, added
 
 
@@ -253,6 +264,11 @@ def step(ctx):
         if (os.path.isabs(m.file) or (target != wt and wt not in target.parents) or not target.is_file()
                 or mutated(target, m) is None):
             raise core.Fail(f"bad-mutation {m.file}:{m.line}")
+        if is_test_file(target.relative_to(wt).as_posix()):
+            raise core.Fail(f"test-file-mutation {m.file}:{m.line}")
+    covered = len(entries.get("covered", []))
+    if covered > len(mutations):
+        raise core.Fail(f"unproven-covered covered={covered} mutations={len(mutations)}")
 
     base = fork_point(ctx, wt, run, ctx.id.split("-", 1)[0])
     ctx.note(f"base {base}")

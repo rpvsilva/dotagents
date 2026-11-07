@@ -20,6 +20,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from steplib import core
+
 SCRIPTS = Path(__file__).resolve().parent
 
 STUB_GH = r'''#!{python} -IS
@@ -112,7 +114,13 @@ class Kit:
         self.origin = self.clone = None
 
     def close(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
+        def writable(fn, path, *_):  # git's objects are read-only, and Windows will not delete a read-only file
+            os.chmod(path, 0o700)
+            fn(path)
+        try:
+            shutil.rmtree(self.tmp, **{"onexc" if sys.version_info >= (3, 12) else "onerror": writable})
+        except OSError:
+            pass
 
     def __enter__(self):
         return self
@@ -153,7 +161,11 @@ class Kit:
         self.git("update-ref", f"refs/remotes/origin/{branch}", tip, cwd=self.clone)
 
     def _rehome(self, template, path):
-        path.write_text(path.read_text().replace(str(template.tmp), str(self.tmp)))
+        """Points `path`'s text at this sandbox instead of the template's. git's config writes a backslash as `\\\\`,
+        so on Windows a path there reads doubled; both forms are rewritten, or the copy would push to the template."""
+        text, old, new = path.read_text(), str(template.tmp), str(self.tmp)
+        text = text.replace(old.replace("\\", "\\\\"), new.replace("\\", "\\\\")).replace(old, new)
+        path.write_text(text)
 
     def _build_origin(self):
         self.origin = self.tmp / "origin.git"
@@ -197,7 +209,13 @@ class Kit:
                               env=env or self.env, text=True, stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+    def tool(self, *argv):
+        """Runs a program or `#!` script (as Windows can start it) with the sandbox's env; returns the
+        CompletedProcess."""
+        return subprocess.run(core.command(argv, self.env), env=self.env, text=True, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
     def shell(self, shell, command, cwd="/"):
         """Runs `command` under `<shell> -c` (`bash` or `zsh`) from `cwd`; returns the CompletedProcess."""
-        return subprocess.run([shell, "-c", command], cwd=str(cwd), env=self.env, text=True,
+        return subprocess.run(core.command([shell, "-c", command], self.env), cwd=str(cwd), env=self.env, text=True,
                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
