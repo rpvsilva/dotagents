@@ -54,7 +54,7 @@ def set_header(path, key, value, title="# Run"):
             lines.insert(at, line)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.writelines(lines)
             if path.exists():
                 os.chmod(tmp, path.stat().st_mode & 0o777)
