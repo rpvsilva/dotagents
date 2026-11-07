@@ -1,7 +1,7 @@
 // The remote-runs mod: `/remote-runs` opens a pane listing the remote-agent runs of the session's repo, read from
-// `<git dir>/remote-agent/<run>/`, and a timer keeps it current; pressing a run shows its log, which the timer reads
-// on into the `log` atom, and the pane draws a window of. Logic sits in plain .ts files (runs.ts, transcript.ts);
-// this module only calls `$` and draws. Every `$.fs` and `$.process` call is caught and means "no data": a hook that
+// `<common git dir>/remote-agent/<run>/` (and older runs' `worktrees/<name>/remote-agent/<run>/`), and a timer keeps
+// it current; pressing a run shows its log, which the timer reads on into the `log` atom, and the pane draws a window
+// of. Logic sits in plain .ts files (runs.ts, transcript.ts); this module only calls `$` and draws. Every `$.fs` and `$.process` call is caught and means "no data": a hook that
 // throws prints a failed-hook line, and `$.process` fails on surfaces without processes (desktop, VS Code).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, FsEntry, Register, RenderSurface } from 'claude-code'

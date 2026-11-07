@@ -406,33 +406,49 @@ cat >"$HB/stubborn" <<STUBBORN
 #!/bin/sh
 trap '' TERM HUP PIPE
 sleep 60 &
-echo \$! >"$S/stubborn-child.pid"
-echo \$\$ >"$S/stubborn.pid"
-while :; do echo tick 2>/dev/null || : >"$S/stdout-closed"; sleep 0.2; done
+echo \$! >"$S/stubborn\$1-child.pid"
+echo \$\$ >"$S/stubborn\$1.pid"
+while :; do echo tick 2>/dev/null || : >"$S/stdout-closed\$1"; sleep 0.2; done
 STUBBORN
 chmod +x "$HB/stubborn"
 bare_op() {
   env PATH="$SANDBOX/bin:$PATH" REMOTE_SSH_HOST=me@trusted-box REMOTE_SSH_MODE=bare \
     "$REPO/scripts/remote-backends/ssh.sh" "$@"
 }
-for keep in "" 1; do
+# Run i (agent-stubborn<i>) is released without REMOTE_KEEP for i 0, with it for i 1; both releases go at once, as
+# each waits out the TERM its run ignores.
+keeps=("" 1)
+hs=()
+pids=()
+for i in 0 1; do
+  t="bare release${keeps[i]:+ keep}"
+  rm -f "$S/stubborn$i.pid" "$S/stubborn$i-child.pid" "$S/stdout-closed$i"
+  hs[i]="$(bare_op acquire "agent-stubborn$i" 2>/dev/null)" || fail "$t: acquire failed"
+  (bare_op run "agent-stubborn$i" "${hs[i]}" "$HB/stubborn" "$i" </dev/null 2>/dev/null | head -1 >/dev/null) &
+  pids[i]=$!
+done
+rels=()
+for i in 0 1; do
+  t="bare release${keeps[i]:+ keep}"
+  for _ in $(seq 100); do [ -e "$S/stdout-closed$i" ] && break; sleep 0.1; done
+  [ -e "$S/stdout-closed$i" ] || fail "$t: the fake claude did not start or its stdout did not close"
+  (REMOTE_KEEP="${keeps[i]}" bare_op release "agent-stubborn$i" 2>/dev/null) &
+  rels[i]=$!
+done
+for i in 0 1; do
+  keep="${keeps[i]}" h="${hs[i]}" pid="${pids[i]}"
   t="bare release${keep:+ keep}"
-  rm -f "$S/stubborn.pid" "$S/stubborn-child.pid" "$S/stdout-closed"
-  h="$(bare_op acquire agent-stubborn 2>/dev/null)" || fail "$t: acquire failed"
-  (bare_op run agent-stubborn "$h" "$HB/stubborn" </dev/null 2>/dev/null | head -1 >/dev/null) &
-  pid=$!
-  for _ in $(seq 100); do [ -e "$S/stdout-closed" ] && break; sleep 0.1; done
-  [ -e "$S/stdout-closed" ] || fail "$t: the fake claude did not start or its stdout did not close"
-  REMOTE_KEEP="$keep" bare_op release agent-stubborn 2>/dev/null
+  wait "${rels[i]}" || fail "$t: release failed"
   # Once the run ends on the host, the client's call returns; a run left going fails the checks below.
   for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
   kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   for p in stubborn stubborn-child; do
     [ "$p" = stubborn ] || command -v setsid >/dev/null || command -v pkill >/dev/null || continue
-    if alive "$(cat "$S/$p.pid" 2>/dev/null)"; then
+    pf="$S/${p/stubborn/stubborn$i}.pid"
+    if alive "$(cat "$pf" 2>/dev/null)"; then
       fail "$t: $p on the host outlived release"
-      kill -KILL "$(cat "$S/$p.pid")"
+      kill -KILL "$(cat "$pf")"
     fi
   done
   if [ -n "$keep" ]; then
