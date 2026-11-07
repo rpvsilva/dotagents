@@ -9,6 +9,7 @@ Both bodies hold a `## Merge` section before those refs when `<run>/decisions.md
 human's own login), into which branch (a task PR into its ticket's `Branch:`, a ticket PR into `base:` or the run's
 default branch), on what proof (a task PR: a green local run of `map.md`'s Checks, since CI and reviews run on ticket
 PRs only; a ticket PR: `review_before_agent_merge` and `ci`), and each Authorizations row quoted as recorded.
+With `ci: off` it also holds `LOCAL_PROOF`, the line saying no CI runs and the local Checks run is the proof.
 With no `decisions.md` the section is left out.
 
 `<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`),
@@ -17,10 +18,11 @@ With no `decisions.md` the section is left out.
 import json
 import re
 
-from . import core, decisions, runfolder
+from . import ci, core, decisions, runfolder
 from .taskwt import clean, title
 
 NO_RESULT = "Not recorded in the run folder."
+LOCAL_PROOF = "CI is off for this run: the local run of map.md's Checks is the proof."
 
 
 def section(text, name):
@@ -78,10 +80,12 @@ def merge_section(run, into=None):
         review, proof = "", "a green local run of map.md's Checks"
     else:
         review = "a review and " if d.get("review_before_agent_merge") == "yes" else ""
-        proof = "a green local run (CI is off for this run)" if d.get("ci") == "off" else "green CI"
+        proof = "green CI" if ci.enabled(run) else "a green local run (CI is off for this run)"
     rows = [f"- {a.clause} (waived: {a.waived}): {a.quote}" for a in d.authorizations]
     lines = [f"Merges as {who}, into `{into}`, after {review}{proof}.", "",
              "Authorizations:\n" + "\n".join(rows) if rows else "Authorizations: none recorded."]
+    if not ci.enabled(run):
+        lines[1:1] = ["", LOCAL_PROOF]
     return ["## Merge", "\n".join(lines)]
 
 
