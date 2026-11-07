@@ -53,6 +53,18 @@ class RunMetrics(unittest.TestCase):
         expected = json.loads((FIXTURE / "expected.json").read_text())
         self.assertEqual(got, expected)
 
+    def test_pr_times_and_per_ticket_minutes_come_from_github(self):
+        got = self.metrics(FIXTURE / "run", "--gh", self.gh)
+        prs = got["prs"]
+        self.assertEqual((prs["first_created"], prs["last_merged"], prs["wall_minutes_first_pr_to_last_merge"]),
+                         ("2026-11-01T10:00:00+00:00", "2026-11-01T16:00:00+00:00", 360.0))
+        # Ticket 01: its first task PR (#10) opened at 10:00, the ticket PR (#20) merged at 16:00.
+        self.assertEqual(got["per_ticket"]["01"], {"tasks": 4, "fix_tasks": 1, "pr": 20, "state": "MERGED",
+                                                   "minutes_first_task_pr_to_ticket_merge": 360.0})
+        self.assertEqual(got["per_ticket"]["02"]["minutes_first_task_pr_to_ticket_merge"], None)
+        self.assertEqual(got["per_ticket"]["03"], {"tasks": 0, "fix_tasks": 0, "pr": None, "state": None,
+                                                   "minutes_first_task_pr_to_ticket_merge": None})
+
     def test_github_is_read_only_through_the_given_command(self):
         self.metrics(FIXTURE / "run", "--gh", self.gh)
         self.assertFalse((self.tmp / "path-gh-ran").exists(), "the gh on PATH ran")

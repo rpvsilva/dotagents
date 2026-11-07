@@ -179,11 +179,11 @@ class KitSandboxTest(unittest.TestCase):
 
     def test_a_path_git_wrote_with_doubled_backslashes_is_rehomed(self):
         with Kit() as kit:
-            template = mock.Mock(tmp=Path(r"C:\t\steplib-a"))
+            template = mock.Mock(tmp=Path(r"C:\t\old-template"))
             config = kit.tmp / "config"
-            config.write_text('[remote "origin"]\n\turl = C:\\\\t\\\\steplib-a\\\\origin.git\n')
+            config.write_text('[remote "origin"]\n\turl = C:\\\\t\\\\old-template\\\\origin.git\n')
             kit._rehome(template, config)
-            self.assertNotIn("steplib-a", config.read_text())
+            self.assertNotIn("old-template", config.read_text())  # a name no mkdtemp folder can contain
             self.assertIn(str(kit.tmp).replace("\\", "\\\\"), config.read_text())  # git config doubles backslashes
 
 

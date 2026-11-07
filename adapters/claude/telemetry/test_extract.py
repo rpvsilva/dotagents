@@ -376,6 +376,12 @@ class Roles(unittest.TestCase):
         for description in ("review", "Review PR 3", "reviews: PR 3", "implement PR 3", "", None, 7):
             self.assertEqual(extractor.role(description), "other")
 
+    def test_build_epic_starts_its_subagents_with_exactly_these_prefixes(self):
+        skill = (HERE.parents[2] / "skills" / "build-epic" / "SKILL.md").read_text(encoding="utf-8")
+        section = skill.split("\n## Subagents\n", 1)[1].split("\n## ", 1)[0]
+        line = next(line for line in section.splitlines() if "**description**" in line)
+        self.assertEqual(sorted(set(re.findall(r"`([a-z-]+): ", line))), sorted(extractor.ROLES))
+
     def test_a_subagent_saves_its_cost_at_the_repos_prices(self):
         agent = self.agents["review: PR 12"]
         self.assertEqual(agent["tokensByModel"], {"claude-haiku-5-5": {

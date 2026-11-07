@@ -1,0 +1,390 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo review                         # the last 7 days: done, added, overdue, streak, XP gained
++todo stats                          # open, done, overdue and done this week, then shares by priority and tag
++### Stats
++
++`todo stats` prints four counts, then the open list's shares by priority and by tag. It takes no options and writes nothing.
++
++```
++open: 3
++done: 1
++overdue: 1
++done this week: 1
++by priority:
++  high: 33%
++  none: 67%
++by tag:
++  x: 67%
++  y: 33%
++```
++
++- `open` counts open items, `overdue` the open items past their due date (a past due time today counts too). Both follow `todo list`: snoozed items are hidden.
++- `done` counts every done item in the todo file and the archive. Trashed items do not count. `done this week` counts the done items whose done date is within the last 7 days: today and the 6 days before (see Weekly review). An item done before done dates were stored counts on the local date of its last change. A done date after today is ignored.
++- `by priority:` has one line `  NAME: N%` for each priority in use, in the order high, medium, low, none (`none` is an item with no priority). The percent is that priority's share of the open items.
++- `by tag:` has one line per tag on the open items, most used first, ties in alphabetical order. A tag's percent is the share of open items that carry it, so the tag lines can add up to more than 100%. The block is left out when no open item has a tag.
++- Percents are whole numbers, and a half rounds up (1 of 8 is 13%).
++- With no open items, `todo stats` prints only the four counts and leaves out both share blocks.
++
++### Weekly review
++
++`todo review` prints five lines about the last 7 days. It takes no options and writes nothing.
++
++```
++done: 1
++added: 4
++overdue: 1
++current streak: 1 days
++XP gained: 10
++```
++
++- The window is today and the 6 days before it, by local date (7 days in all), the same window as `done this week` in `todo stats`.
++- `done` counts the items marked done in the window, and `XP gained` is the XP they earned (see XP and levels). Both read the todo file and the archive; trashed items do not count.
++- `added` counts the items created in the window, from the todo file and the archive. An item with no creation date (one made before creation dates were stored) is never counted as added.
++- `overdue` counts the open items past their due date today, not only those that became overdue this week. Snoozed items are hidden, as in `todo list`.
++- `current streak` is the figure from `todo streak` (always the word `days`).
++
+diff --git a/tests/cli/test_cli_review.py b/tests/cli/test_cli_review.py
++++ b/tests/cli/test_cli_review.py
++from datetime import date, timedelta
++
++import pytest
++
++from todo.storage import Item, JsonStore
++from todo.storage.side_files import SideFiles
++
++TODAY = date(2026, 11, 10)
++
++
++def day(n):
++    return TODAY - timedelta(days=n)
++
++
++@pytest.fixture
++def setup(cli, tmp_path):
++    path = tmp_path / "todo.json"
++
++    def run(items, archive=()):
++        JsonStore(path).save(list(items))
++        if archive:
++            SideFiles(path).archive.save(list(archive))
++        return lambda *a: cli(*a, today=TODAY)
++
++    return run
++
++
++def figures(lines):
++    return {k: v for k, v in (line.split(": ") for line in lines)}
++
++
++ITEMS = [
++    Item(1, "a", due=day(1), created_on=day(2)),
++    Item(2, "b", done=True, done_on=day(0), done_priority="high", created_on=day(30)),
++    Item(3, "c", done=True, done_on=day(6), done_priority="medium"),
++    Item(4, "d", done=True, done_on=day(7), done_priority="high"),
++    Item(5, "e", created_on=day(6)),
++    Item(6, "f", created_on=day(7)),
++    Item(7, "g", due=day(3), snoozed_until=day(-2)),
++    Item(8, "h", done=True, done_on=day(40), due=day(5)),
++]
++
++
++def test_review_prints_the_five_figures(setup):
++    run = setup(ITEMS)
++    assert run("review") == [
++        "done: 2",
++        "added: 2",
++        "overdue: 1",
++        "current streak: 1 days",
++        "XP gained: 50",
++    ]
++
++
++def total_xp(lines):
++    return int(lines[0].split(": ")[1].split(" XP")[0])
++
++
++def test_figures_match_stats_and_streak(setup):
++    run = setup(ITEMS, archive=[Item(20, "z", done=True, done_on=day(1), done_priority="low")])
++    review = figures(run("review"))
++    stats = figures(run("stats")[:4])
++    streak = figures(run("streak"))
++    assert review["done"] == stats["done this week"] == "3"
++    assert review["overdue"] == stats["overdue"]
++    assert review["current streak"] == streak["current streak"]
++
++
++def test_xp_gained_is_level_total_minus_xp_done_outside_the_window(setup):
++    outside = [
++        Item(1, "old", done=True, done_on=day(7), done_priority="high"),
++        Item(2, "older", done=True, done_on=day(40), done_priority="medium"),
++    ]
++    inside = [Item(3, "now", done=True, done_on=day(0), done_priority="medium")]
++    archived = [Item(4, "arch", done=True, done_on=day(2), done_priority="high")]
++    run = setup(outside)
++    outside_xp = total_xp(run("level"))
++    run = setup(outside + inside, archive=archived)
++    total = total_xp(run("level"))
++    assert outside_xp == 50
++    assert figures(run("review"))["XP gained"] == str(total - outside_xp) == "50"
++
++
++def test_a_future_created_on_is_not_added(setup):
++    run = setup([Item(1, "a", created_on=day(-1)), Item(2, "b", created_on=day(0))])
++    assert figures(run("review"))["added"] == "1"
++
++
++def test_xp_gained_equals_level_total_when_everything_is_this_week(setup):
++    run = setup([Item(1, "a", done=True, done_on=day(0), done_priority="high"), Item(2, "b", done=True, done_on=day(3))])
++    assert figures(run("review"))["XP gained"] == "40"
++    assert run("level")[0].startswith("level 1: 40 XP")
++
++
++def test_items_without_created_on_are_never_added(setup):
++    run = setup([Item(1, "a"), Item(2, "b", done=True, done_on=day(0))])
++    assert figures(run("review"))["added"] == "0"
++
++
++def test_archived_done_items_count_like_in_stats(setup):
++    run = setup([], archive=[Item(9, "x", done=True, done_on=day(0), created_on=day(0))])
++    assert figures(run("review"))["done"] == "1"
++    assert figures(run("review"))["added"] == "1"
++    assert run("stats")[3] == "done this week: 1"
++
++
++def test_empty_list_prints_zeros(setup):
++    run = setup([])
++    assert run("review") == ["done: 0", "added: 0", "overdue: 0", "current streak: 0 days", "XP gained: 0"]
++
++
++def test_review_changes_nothing(setup, tmp_path):
++    run = setup(ITEMS)
++    before = (tmp_path / "todo.json").read_bytes()
++    run("review")
++    assert (tmp_path / "todo.json").read_bytes() == before
+diff --git a/tests/cli/test_cli_stats.py b/tests/cli/test_cli_stats.py
++++ b/tests/cli/test_cli_stats.py
++from datetime import date, datetime, timedelta
++
++import pytest
++
++from todo.insights.stats import week
++from todo.storage import Item, JsonStore
++from todo.storage.side_files import SideFiles
++
++TODAY = date(2026, 11, 10)
++ZEROS = ["open: 0", "done: 0", "overdue: 0", "done this week: 0"]
++
++
++def day(n):
++    return TODAY - timedelta(days=n)
++
++
++@pytest.fixture
++def stats(cli, tmp_path):
++    path = tmp_path / "todo.json"
++
++    def run(items, archive=(), now=None):
++        JsonStore(path).save(list(items))
++        if archive:
++            SideFiles(path).archive.save(list(archive))
++        return cli("stats", today=TODAY, now=now)
++
++    return run
++
++
++def test_week_is_today_and_the_six_days_before():
++    assert week(TODAY) == (day(6), TODAY)
++
++
++def test_empty_list_prints_zeros_and_no_shares(stats):
++    assert stats([]) == ZEROS
++
++
++def test_mixed_list_prints_every_figure(stats):
++    items = [
++        Item(1, "a", priority="high", tags=["work", "home"], due=day(1)),
++        Item(2, "b", priority="high", tags=["work"]),
++        Item(3, "c", priority="low"),
++        Item(4, "d"),
++        Item(5, "e", done=True, done_on=day(2)),
++        Item(6, "f", done=True, done_on=day(30)),
++    ]
++    assert stats(items) == [
++        "open: 4",
++        "done: 2",
++        "overdue: 1",
++        "done this week: 1",
++        "by priority:",
++        "  high: 50%",
++        "  low: 25%",
++        "  none: 25%",
++        "by tag:",
++        "  work: 50%",
++        "  home: 25%",
++    ]
++
++
++def test_snoozed_items_are_hidden_from_open_overdue_and_shares(stats):
++    items = [
++        Item(1, "a", priority="high", tags=["x"]),
++        Item(2, "b", priority="low", tags=["y"], due=day(1), snoozed_until=TODAY + timedelta(days=3)),
++    ]
++    assert stats(items) == [
++        "open: 1",
++        "done: 0",
++        "overdue: 0",
++        "done this week: 0",
++        "by priority:",
++        "  high: 100%",
++        "by tag:",
++        "  x: 100%",
++    ]
++
++
++def test_archived_done_items_count_in_done_and_done_this_week(stats):
++    out = stats([Item(1, "a", done=True, done_on=day(0))], archive=[Item(2, "b", done=True, done_on=day(6))])
++    assert out == ["open: 0", "done: 2", "overdue: 0", "done this week: 2"]
++
++
++def test_done_seven_days_ago_is_outside_the_week(stats):
++    out = stats([Item(1, "a", done=True, done_on=day(7))])
++    assert out[1:4] == ["done: 1", "overdue: 0", "done this week: 0"]
++
++
++def test_overdue_uses_now_for_a_due_time_today(stats):
++    items = [Item(1, "a", due=TODAY, due_time=datetime(2026, 11, 10, 9, 0).time())]
++    assert stats(items, now=datetime(2026, 11, 10, 8, 0))[2] == "overdue: 0"
++    assert stats(items, now=datetime(2026, 11, 10, 10, 0))[2] == "overdue: 1"
++
++
++def test_shares_round_to_whole_percents(stats):
++    out = stats([Item(i, "t", priority="high" if i == 1 else "low") for i in (1, 2, 3)])
++    assert out[5:7] == ["  high: 33%", "  low: 67%"]
+diff --git a/todo/cli/commands/review.py b/todo/cli/commands/review.py
++++ b/todo/cli/commands/review.py
++"""todo review: the last 7 days in five figures."""
++from todo.cli.select import default_filter_args, select_items
++from todo.insights import history_items
++from todo.insights.review import added_in_week, xp_in_week
++from todo.insights.stats import done_in_week
++from todo.insights.streak import done_days, streaks
++from todo.storage import is_overdue
++
++
++def register(parser) -> None:
++    pass
++
++
++def run(args, ctx) -> None:
++    visible = select_items(ctx.store.load(), default_filter_args(), ctx)
++    overdue = sum(1 for i in visible if not i.done and is_overdue(i, ctx.today, ctx.now))
++    history = history_items(ctx)
++    current, _ = streaks(done_days(history, ctx.today), ctx.today)
++    ctx.out(f"done: {done_in_week(history, ctx.today)}")
++    ctx.out(f"added: {added_in_week(history, ctx.today)}")
++    ctx.out(f"overdue: {overdue}")
++    ctx.out(f"current streak: {current} days")
++    ctx.out(f"XP gained: {xp_in_week(history, ctx.today)}")
+diff --git a/todo/cli/commands/stats.py b/todo/cli/commands/stats.py
++++ b/todo/cli/commands/stats.py
++"""todo stats: open, done, overdue, done this week, and the open list's share by priority and tag."""
++from todo.cli.select import default_filter_args, select_items
++from todo.insights import history_items
++from todo.insights.stats import done_in_week, priority_shares, tag_shares
++from todo.storage import is_overdue
++
++
++def register(parser) -> None:
++    pass
++
++
++def run(args, ctx) -> None:
++    visible = select_items(ctx.store.load(), default_filter_args(), ctx)
++    open_items = [i for i in visible if not i.done]
++    history = history_items(ctx)
++    ctx.out(f"open: {len(open_items)}")
++    ctx.out(f"done: {sum(1 for i in history if i.done)}")
++    ctx.out(f"overdue: {sum(1 for i in open_items if is_overdue(i, ctx.today, ctx.now))}")
++    ctx.out(f"done this week: {done_in_week(history, ctx.today)}")
++    if not open_items:
++        return
++    ctx.out("by priority:")
++    for name, pct in priority_shares(open_items):
++        ctx.out(f"  {name}: {pct}%")
++    tags = tag_shares(open_items)
++    if tags:
++        ctx.out("by tag:")
++        for name, pct in tags:
++            ctx.out(f"  {name}: {pct}%")
+diff --git a/todo/insights/review.py b/todo/insights/review.py
++++ b/todo/insights/review.py
++"""Weekly review figures over the window `week(today)`."""
++from datetime import date
++
++from todo.insights.stats import week
++from todo.insights.xp import xp_for
++from todo.storage import Item, done_date
++
++
++def added_in_week(items: list[Item], today: date) -> int:
++    """How many items have a `created_on` within `week(today)`; items without one never count."""
++    start, end = week(today)
++    return sum(1 for i in items if i.created_on is not None and start <= i.created_on <= end)
++
++
++def xp_in_week(items: list[Item], today: date) -> int:
++    """XP earned by the items done within `week(today)`."""
++    start, end = week(today)
++    total = 0
++    for item in items:
++        if item.done:
++            day = done_date(item)
++            if day is not None and start <= day <= end:
++                total += xp_for(item)
++    return total
+diff --git a/todo/insights/stats.py b/todo/insights/stats.py
++++ b/todo/insights/stats.py
++"""Stats figures: counts and shares over the open list and the whole history."""
++from collections import Counter
++from datetime import date, timedelta
++
++from todo.storage import Item, done_date
++
++WEEK_DAYS = 7
++
++
++def week(today: date) -> tuple[date, date]:
++    """The first and last local day of "this week": today and the 6 days before."""
++    return today - timedelta(days=WEEK_DAYS - 1), today
++
++
++def done_in_week(items: list[Item], today: date) -> int:
++    """How many done items were finished within `week(today)`."""
++    start, end = week(today)
++    count = 0
++    for item in items:
++        if item.done:
++            day = done_date(item)
++            if day is not None and start <= day <= end:
++                count += 1
++    return count
++
++
++def percent(part: int, whole: int) -> int:
++    """`part` of `whole` as a whole percent, halves rounding up."""
++    return (200 * part + whole) // (2 * whole)
++
++
++def priority_shares(open_items: list[Item]) -> list[tuple[str, int]]:
++    """(priority, percent of open items) for each priority in use, `none` for unset."""
++    counts = Counter(i.priority or "none" for i in open_items)
++    order = ["high", "medium", "low", "none"]
++    return [(p, percent(counts[p], len(open_items))) for p in order if counts[p]]
++
++
++def tag_shares(open_items: list[Item]) -> list[tuple[str, int]]:
++    """(tag, percent of open items carrying it), most used first; may sum past 100%."""
++    counts = Counter(tag for i in open_items for tag in set(i.tags))
++    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
++    return [(tag, percent(n, len(open_items))) for tag, n in ranked]

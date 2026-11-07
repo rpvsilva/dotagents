@@ -15,7 +15,10 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `remote`: the remote runs' results in `remote/<task>.json`; `cost_usd` sums those with a cost and
   `runs_without_cost` counts the rest.
 - `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
-  folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network.
+  folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network. Also
+  `first_created`, `last_merged` and the minutes between them.
+- `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, and the minutes from its first task PR's
+  opening to its own PR's merge.
 - `gaps`: what could not be measured, one line each.
 """
 import argparse
@@ -237,12 +240,13 @@ def pr_view(gh, pr, cwd, gaps):
 def prs(run, gh, items, gaps):
     repo = header(run / "run.md", "Repo") if (run / "run.md").is_file() else None
     cwd = repo if repo and Path(repo).is_dir() else None
-    rows = []
+    rows, times = [], {}
     for item in items:
         if not item["pr"]:
             continue
         data = pr_view(gh, item["pr"], cwd, gaps) or {}
         created, merged = when(data.get("createdAt")), when(data.get("mergedAt"))
+        times[item["id"]] = (created, merged)
         merged_by = data.get("mergedBy") if isinstance(data.get("mergedBy"), dict) else {}
         rows.append({
             "id": item["id"],
@@ -260,13 +264,36 @@ def prs(run, gh, items, gaps):
     def total(key):
         return sum(r[key] for r in rows if r[key] is not None)
 
+    first = min((c for c, _ in times.values() if c), default=None)
+    last = max((m for _, m in times.values() if m), default=None)
     return {"count": len(rows), "merged": sum(1 for r in rows if r["state"] == "MERGED"),
             "additions": total("additions"), "deletions": total("deletions"),
             "changed_files": total("changed_files"), "reviews": total("reviews"),
             "merged_by": tally(r["merged_by"] for r in rows if r["merged_by"]),
             "hours_to_merge": {"median": round(statistics.median(hours), 2) if hours else None,
                                "max": max(hours) if hours else None},
-            "list": rows}
+            "first_created": first.isoformat() if first else None,
+            "last_merged": last.isoformat() if last else None,
+            "wall_minutes_first_pr_to_last_merge": minutes(first, last),
+            "list": rows}, times
+
+
+def minutes(start, end):
+    return round((end - start).total_seconds() / 60, 1) if start and end else None
+
+
+def per_ticket(tickets, tasks, prs_, times):
+    """Per ticket: its tasks, its PR and the minutes from its first task PR's opening to its own PR's merge."""
+    out = {}
+    for ticket in tickets:
+        mine = [t for t in tasks if t["id"].split("-", 1)[0] == ticket["id"]]
+        row = next((r for r in prs_["list"] if r["id"] == ticket["id"]), {})
+        opened = [times[t["id"]][0] for t in mine if t["id"] in times and times[t["id"]][0]]
+        merged = times.get(ticket["id"], (None, None))[1]
+        out[ticket["id"]] = {"tasks": len(mine), "fix_tasks": sum(1 for t in mine if t["kind"] == "fix"),
+                             "pr": row.get("pr"), "state": row.get("state"),
+                             "minutes_first_task_pr_to_ticket_merge": minutes(min(opened, default=None), merged)}
+    return out
 
 
 def metrics(run, gh):
@@ -274,6 +301,8 @@ def metrics(run, gh):
     tickets, tasks = plan(run)
     if not tickets and not tasks:
         gaps.append("plan: no tickets/*.md or tasks/*.md")
+    suites_, remote_ = suites(run, gaps), remote(run, gaps)
+    prs_, times = prs(run, gh, tickets + tasks, gaps)
     return {
         "schema": SCHEMA,
         "run": run.name,
@@ -283,9 +312,10 @@ def metrics(run, gh):
         "fix_rounds": fix_rounds(run, tasks),
         "reviews": reviews(run),
         "follow_ups": follow_ups(run),
-        "suites": suites(run, gaps),
-        "remote": remote(run, gaps),
-        "prs": prs(run, gh, tickets + tasks, gaps),
+        "suites": suites_,
+        "remote": remote_,
+        "prs": prs_,
+        "per_ticket": per_ticket(tickets, tasks, prs_, times),
         "gaps": gaps,
     }
 
