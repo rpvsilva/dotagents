@@ -68,6 +68,7 @@ echo change >>"$R/scripts/b.sh"
 expect "--files: an uncommitted change" "scripts/b.sh " --files
 
 # python.test.sh, on this repo's own test folders (PYTHON_TEST_LIST=1 prints them without running).
+unset PYTHON_TEST_FILES # CI exports the PR's own list; these cases set their own
 pydirs() { (cd "$REPO" && PYTHON_TEST_FILES="$(printf '%s\n' "$@")" PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' '); }
 pyexpect() {
   local desc="$1" want="$2"; shift 2
