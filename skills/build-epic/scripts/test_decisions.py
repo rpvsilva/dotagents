@@ -67,6 +67,17 @@ class SetTest(DecideCase):
         self.assertIn("bad-value: ci", self.decide("set", "ci", "maybe", ok=False))
         self.assertIsNone(decisions.get(self.run_dir, "ci"))
 
+    def test_a_value_with_a_newline_fails(self):
+        for value in ("main\nci: off", "main\r"):
+            self.assertIn("newline: base", self.decide("set", "base", value, ok=False))
+        self.assertFalse(self.file.exists())
+
+    def test_a_wrong_verb_or_argument_count_is_a_usage_failure(self):
+        for args in ((), ("unset", "base"), ("set", "base"), ("clause", "c", "yes"), ("quote", "a", "b")):
+            with self.subTest(args=args):
+                self.assertIn("usage: decide.py", self.decide(*args, ok=False))
+        self.assertFalse(self.file.exists())
+
     def test_a_missing_run_folder_fails(self):
         p = self.kit.step(DECIDE, self.kit.tmp / "nope", "set", "base", "main")
         self.assertEqual(p.returncode, 1)
@@ -95,6 +106,16 @@ class ClauseTest(DecideCase):
         self.assertIn("bad-value: waived", self.decide("clause", "c", "maybe", "q", ok=False))
         self.assertFalse(self.file.exists())
 
+    def test_a_clause_or_quote_over_several_lines_fails(self):
+        for args in (("a\nb", "yes", "q"), ("c", "yes", "q\r"), ("c", "no", "q\nr")):
+            with self.subTest(args=args):
+                self.assertIn("newline: ", self.decide("clause", *args, ok=False))
+        self.assertFalse(self.file.exists())
+
+    def test_a_blank_clause_fails(self):
+        self.assertIn("empty-clause", self.decide("clause", "  ", "yes", "q", ok=False))
+        self.assertFalse(self.file.exists())
+
     def test_the_table_renders_as_markdown(self):
         self.decide("clause", "a|b", "yes", "q|r")
         self.assertIn("## Authorizations\n\n| clause | waived | quote |\n| --- | --- | --- |\n"
@@ -118,6 +139,11 @@ class QuoteTest(DecideCase):
         text = "Rui said:\n\n  keep going\nthen stop"
         self.decide("quote", text)
         self.assertEqual(decisions.load(self.run_dir).decisions[0].text, text)
+
+
+    def test_a_carriage_return_in_a_quote_fails(self):
+        self.assertIn("carriage-return", self.decide("quote", "one\r\ntwo", ok=False))
+        self.assertFalse(self.file.exists())
 
 
 class ReaderTest(DecideCase):
@@ -144,6 +170,15 @@ class ReaderTest(DecideCase):
         self.assertEqual(decisions.render(decisions.parse(text)), text)
         self.assertEqual(decisions.parse(text), decisions.load(self.run_dir))
         self.assertTrue(text.startswith("# Decisions\nbase: main\nmerge_identity: app\n"), text)
+
+
+    def test_lines_it_does_not_know_are_ignored(self):
+        text = ("# Decisions\nbase: main\ncolour: blue\nnot a header\nci:off\n\n"
+                "## Authorizations\n\n| clause | waived | quote |\n| --- | --- | --- |\n| c | maybe | q |\n"
+                "| short | yes |\n| kept | no | q |\n\n## Decisions\n\n  orphan continuation\n- not-a-date: x\n"
+                "- 2026-11-06: kept\n")
+        self.assertEqual(decisions.parse(text), decisions.Decisions(
+            {"base": "main"}, [decisions.Authorization("kept", "no", "q")], [decisions.Decision("2026-11-06", "kept")]))
 
 
 class TrackerHumanTest(DecideCase):

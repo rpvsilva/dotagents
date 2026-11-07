@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import test_merge_task  # noqa: E402
-from steplib import runfolder  # noqa: E402
+from steplib import core, identity, merge, runfolder  # noqa: E402
+from testkit import Kit  # noqa: E402
 
 
 class IdentityTest(test_merge_task.MergeTaskTest):
@@ -131,6 +132,46 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         self.kit.answer("api-user", out="rui\n")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual(self.calls("api", "user")[-1:], [["api", "user", "--jq", ".login"]])
+
+
+class ModeTest(unittest.TestCase):
+    """`identity.mode` on its own: which identity a run merges as, before any `gh` call."""
+
+    def setUp(self):
+        self.kit = Kit()
+        self.addCleanup(self.kit.close)
+        self.file = self.kit.run_dir / "decisions.md"
+
+    def test_with_nothing_recorded_or_set_it_is_the_app(self):
+        self.assertEqual(identity.mode(self.kit.run_dir, lambda: None), "app")
+        self.file.write_text("# Decisions\nmerge_identity:\n")
+        self.assertEqual(identity.mode(self.kit.run_dir, lambda: "human"), "human")
+
+    def test_any_other_identity_fails_bad_value(self):
+        self.file.write_text("# Decisions\nmerge_identity: rui\n")
+        with self.assertRaises(core.Fail) as caught:
+            identity.mode(self.kit.run_dir, lambda: "app")
+        self.assertEqual(caught.exception.reason, "bad-value: merge_identity is one of app|human")
+        self.file.unlink()
+        with self.assertRaises(core.Fail):
+            identity.mode(self.kit.run_dir, lambda: "bot")
+
+
+class MergeArgvTest(unittest.TestCase):
+    """`merge.merge_argv`: the argv the merge rule runs as, for the identity proven above."""
+
+    def test_no_rule_is_gh_pr_merge_pinned_to_the_head(self):
+        self.assertEqual(merge.merge_argv(None, "5", "abc"),
+                         ["gh", "pr", "merge", "5", "--squash", "--delete-branch", "--match-head-commit", "abc"])
+
+    def test_a_rule_gets_its_placeholders_filled_and_keeps_its_quoting(self):
+        self.assertEqual(merge.merge_argv("'scripts/merge pr.sh' {pr} --head={sha}", "5", "abc"),
+                         ["scripts/merge pr.sh", "5", "--head=abc"])
+        self.assertEqual(merge.merge_argv("merge --sha {sha}", "5", "abc"), ["merge", "--sha", "abc"])
+
+    def test_a_rule_naming_neither_placeholder_gets_the_pr_appended(self):
+        self.assertEqual(merge.merge_argv("scripts/merge-pr.sh --yes", "5", "abc"),
+                         ["scripts/merge-pr.sh", "--yes", "5"])
 
 
 for _name in [n for n in dir(test_merge_task.MergeTaskTest) if n.startswith("test_")]:

@@ -5,10 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import prbody  # noqa: E402
-from testkit import SCRIPTS, Kit  # noqa: E402
+from steplib import decisions, prbody  # noqa: E402
+from testkit import Kit  # noqa: E402
 
-DECIDE = SCRIPTS / "decide.py"
 TICKET = "# Alpha\nStatus: building\nBranch: feat/alpha\nIssue: #42\n"
 TASK = "# 01-02: JSON export\nStatus: in-progress\nTicket: 01\n\n## What to build\nExports JSON.\n\n## Check\n`t`.\n"
 QUOTE = 'Rui: "Merge each PR, use the cli | like it was me"'
@@ -28,9 +27,15 @@ class MergeSectionTest(unittest.TestCase):
         self.task = run / "tasks" / "01-02-json-export.md"
         self.task.write_text(TASK)
 
-    def decide(self, *args):
-        p = self.kit.step(DECIDE, self.kit.run_dir, *args)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+    def decide(self, verb, *args):
+        """What `decide.py <run> set|clause ...` records (its writing is tested in test_decisions.py), in-process."""
+        d = decisions.load(self.kit.run_dir) or decisions.Decisions()
+        if verb == "set":
+            decisions.check_value(*args)
+            d.headers[args[0]] = args[1]
+        else:
+            d.authorizations.append(decisions.Authorization(*args))
+        decisions.save(self.kit.run_dir, d)
 
     def task_body(self):
         return prbody.task_body(self.kit.run_dir, "01-02", self.task, self.ticket)
@@ -54,6 +59,11 @@ class MergeSectionTest(unittest.TestCase):
             self.assertIn("`rpvsilva`", merge)
             self.assertIn("own login", merge)
             self.assertIn(f"Leave merges to the human (waived: yes): {QUOTE}", merge)
+
+    def test_human_merge_with_no_recorded_human_names_no_login(self):
+        self.decide("set", "merge_identity", "human")
+        self.assertIn("Merges as the human's own login, with `GH_TOKEN` unset, into `feat/alpha`",
+                      self.merge(self.task_body()))
 
     def test_task_pr_merges_into_its_ticket_branch_and_ticket_pr_into_the_base(self):
         self.human_run()
