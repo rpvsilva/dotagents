@@ -5,6 +5,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The runner image the `image` Setting defaults to.
+IMAGE="$(jq -r .image.default "$REPO/remote/settings.json" | tr -d '\r')"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 fails=0
@@ -75,8 +77,8 @@ fresh
 setup $'docker\n\n'"$TOKEN"$'\n' || fail "docker: exited non-zero: $(cat "$SANDBOX/out")"
 check_written docker "$TOKEN"
 [ "$(value REMOTE_BACKEND)" = docker ] || fail "docker: REMOTE_BACKEND is $(value REMOTE_BACKEND)"
-[ "$(value REMOTE_IMAGE)" = ghcr.io/rpvsilva/agent-runner:main ] || fail "docker: default image not written"
-grep -q "ghcr.io/rpvsilva/agent-runner:main" "$SANDBOX/out" || fail "docker: default image not shown"
+[ "$(value REMOTE_IMAGE)" = "$IMAGE" ] || fail "docker: default image not written"
+grep -qF "$IMAGE" "$SANDBOX/out" || fail "docker: default image not shown"
 grep -q "claude setup-token" "$SANDBOX/out" || fail "docker: does not say to run claude setup-token"
 
 # SSH, bare mode, from a remote.env written before settings.json: its Settings are the defaults shown and move to
@@ -133,15 +135,18 @@ setup $'ssh\n\n\nagent\n\n\n' || fail "ssh agent: exited non-zero: $(cat "$SANDB
 [ "$(secret SSH_KEY_PASSPHRASE)" = unset ] || fail "ssh agent: passphrase kept"
 check_written "ssh agent" "$TOKEN"
 
-# Cluster: the current kube context by default, then namespace and pool; a token with quotes survives.
+# Cluster: the current kube context by default, then namespace and pool; the pool has no default, so enter asks
+# again; a token with quotes survives.
 fresh
 odd="sk-it's \$x \"y\""
-setup $'\n\nmy-ns\n\n'"$odd"$'\n' || fail "cluster: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'\n\nmy-ns\n\nmy-pool\n'"$odd"$'\n' || fail "cluster: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(grep -o "Warm pool[^:]*:" "$SANDBOX/out" | sort -u)" = "Warm pool:" ] || fail "cluster: the pool prompt offers a default: $(cat "$SANDBOX/out")"
+[ "$(grep -o "Warm pool:" "$SANDBOX/out" | wc -l | tr -d ' ')" = 2 ] || fail "cluster: an empty pool was not asked again: $(cat "$SANDBOX/out")"
 check_written cluster "$odd"
 [ "$(value REMOTE_BACKEND)" = cluster ] || fail "cluster: REMOTE_BACKEND is $(value REMOTE_BACKEND)"
 [ "$(value REMOTE_CONTEXT)" = my-ctx ] || fail "cluster: REMOTE_CONTEXT is $(value REMOTE_CONTEXT), not the current context"
 [ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
-[ "$(value REMOTE_POOL)" = claude-runner ] || fail "cluster: REMOTE_POOL is $(value REMOTE_POOL)"
+[ "$(value REMOTE_POOL)" = my-pool ] || fail "cluster: REMOTE_POOL is $(value REMOTE_POOL)"
 [ "$(value REMOTE_IMAGE)" = unset ] || fail "cluster: an image was written"
 
 # Re-running keeps the saved kube context over the current one (enter through every question).
@@ -149,6 +154,7 @@ XDG_CONFIG_HOME="$SANDBOX/config" "$REPO/scripts/settings.sh" --dir "$SANDBOX" s
 setup $'\n\n\n\n\n' || fail "cluster re-run: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_CONTEXT)" = saved-ctx ] || fail "cluster re-run: REMOTE_CONTEXT is $(value REMOTE_CONTEXT), not the saved one"
 [ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster re-run: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
+[ "$(value REMOTE_POOL)" = my-pool ] || fail "cluster re-run: REMOTE_POOL is $(value REMOTE_POOL), not the saved one"
 [ "$(value CLAUDE_CODE_OAUTH_TOKEN)" = "$odd" ] || fail "cluster re-run: the token with quotes did not survive"
 
 # A bad value in settings.json stops setup before it asks anything, naming the key; neither file changes.

@@ -8,6 +8,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The runner image the `image` Setting defaults to.
+IMAGE="$(jq -r .image.default "$REPO/remote/settings.json" | tr -d '\r')"
 # shellcheck source=lib/remote-stubs.sh disable=SC1091
 . "$REPO/tests/lib/remote-stubs.sh"
 SANDBOX="$(mktemp -d)"
@@ -49,7 +51,7 @@ git -C "$W" diff --quiet HEAD -- tracked.txt || fail "docker: worktree changed b
 [ -z "$(git -C "$W" log --oneline -1 -- hello.txt)" ] || fail "docker: patch committed"
 grep -q "did the thing" "$SANDBOX/out" || fail "docker: summary not printed"
 [ -f "$W/.git/remote-agent/$c/changes.patch" ] || fail "docker: patch not kept under .git/remote-agent/$c"
-grep -q "^run -d --rm --name $c .*ghcr.io/rpvsilva/agent-runner:main sleep 7200\$" "$S/calls" \
+grep -q "^run -d --rm --name $c .*$IMAGE sleep 7200\$" "$S/calls" \
   || fail "docker: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
 grep -q -- "--platform" "$S/calls" && fail "docker: --platform passed though REMOTE_PLATFORM is unset"
 grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
@@ -146,7 +148,7 @@ grep -q "^ssh -T -o BatchMode=yes me@build-box 'docker' 'run' '-d' '--rm' " "$S/
 if ! grep -q "^ssh " "$S/calls" || grep "^ssh " "$S/calls" | grep -qv "^ssh -T -o BatchMode=yes me@build-box "; then
   fail "ssh: an ssh call without -T, BatchMode or the host: $(grep '^ssh' "$S/calls")"
 fi
-grep -q "^run -d --rm --name $c .*ghcr.io/rpvsilva/agent-runner:main sleep 7200\$" "$S/calls" \
+grep -q "^run -d --rm --name $c .*$IMAGE sleep 7200\$" "$S/calls" \
   || fail "ssh: run -d lacks --rm, the default image or sleep 7200: $(grep '^run' "$S/calls")"
 grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
   || fail "ssh: container not labelled with its run: $(grep '^run' "$S/calls")"
@@ -193,6 +195,23 @@ code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=ssh || code=$?
 [ "$code" != 0 ] || fail "ssh no host: exited 0"
 grep -q "set REMOTE_SSH_HOST" "$SANDBOX/out" || fail "ssh no host: message: $(cat "$SANDBOX/out")"
 [ ! -e "$S/calls" ] || fail "ssh no host: something reached the host: $(cat "$S/calls")"
+
+# No runner image (an empty `image` hand-edited into settings.json): the docker backend, and ssh's container mode
+# through it, stop naming it, and no container starts.
+for b in docker ssh; do
+  remote_config "$SANDBOX/config"
+  echo "{\"remote\": {\"backend\": \"$b\", \"ssh_host\": \"me@build-box\", \"image\": \"\"}}" >"$SANDBOX/config/dotagents/settings.json"
+  code=0; run 0 "$HELLO_PATCH" || code=$?
+  [ "$code" != 0 ] || fail "$b no image: exited 0"
+  grep -q "REMOTE_IMAGE not set" "$SANDBOX/out" || fail "$b no image: message: $(cat "$SANDBOX/out")"
+  grep -q "^run -d" "$S/calls" 2>/dev/null && fail "$b no image: a container started: $(cat "$S/calls")"
+done
+# ready says the same on the docker backend, without calling docker.
+echo '{"remote": {"backend": "docker", "image": ""}}' >"$SANDBOX/config/dotagents/settings.json"
+code=0; ready || code=$?
+[ "$code" != 0 ] || fail "docker ready, no image: exited 0"
+grep -q "REMOTE_IMAGE not set" "$SANDBOX/out" || fail "docker ready, no image: message: $(cat "$SANDBOX/out")"
+[ ! -e "$S/calls" ] || fail "docker ready, no image: docker was called: $(cat "$S/calls")"
 
 # ready over ssh: a login with a 5-second connect timeout, then docker info on the host; the host's or the daemon's
 # error on one line when either fails.
