@@ -91,7 +91,7 @@ class SetupCase(unittest.TestCase):
         script = self.kit.tmp / "suite.sh"
         guard = '[ "$1" = --all ] || exit 0\n' if only_with_all else ""
         script.write_text(f"{guard}cat <<'EOF'\n{out}EOF\n", encoding="utf-8")
-        return f"bash {script}"
+        return f"bash {script.as_posix()}"  # a Windows path's backslashes would be escapes in bash
 
 
 class PrintsOneLine(SetupCase):
@@ -160,7 +160,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
-        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env} && echo hi")
+        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
 
     def test_test_command_activates_a_virtualenv_setup_made(self):
         activate = 'mkdir -p "$BUILD_EPIC_ENV/bin" && touch "$BUILD_EPIC_ENV/bin/activate"'
@@ -168,7 +168,15 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertEqual(self.decided("test_command"),
-                         f"export BUILD_EPIC_ENV={env} && . {env}/bin/activate && echo hi")
+                         f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/bin/activate && echo hi")
+
+    def test_test_command_activates_a_windows_virtualenv_setup_made(self):
+        activate = 'mkdir -p "$BUILD_EPIC_ENV/Scripts" && touch "$BUILD_EPIC_ENV/Scripts/activate"'
+        self.write_map("echo hi", setup=f"Setup: `{activate}`")
+        self.setup()
+        env = self.run_dir / "env"
+        self.assertEqual(self.decided("test_command"),
+                         f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/Scripts/activate && echo hi")
 
     def test_a_setup_heading_with_a_note_runs_its_code_spans(self):
         made = 'mkdir -p "$BUILD_EPIC_ENV" && echo ok > "$BUILD_EPIC_ENV/made"'
@@ -176,7 +184,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
-        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env} && echo hi")
+        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
 
     def test_a_setup_heading_with_a_note_runs_its_block_and_the_block_is_no_suite(self):
         made = 'echo ok > "$BUILD_EPIC_ENV/made"'
@@ -184,7 +192,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
-        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env} && echo hi")
+        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
         self.assertEqual(checks.commands(self.run_dir / "map.md"), ["echo hi"])
 
     def test_setup_none_puts_no_env_in_the_test_command(self):
@@ -194,7 +202,7 @@ class RecordsTheRunsFacts(SetupCase):
 
     def test_failing_setup_fails_and_is_run_again_next_time(self):
         count = self.kit.tmp / "count"
-        self.write_map("echo hi", setup=f"Setup: `echo x >> {count} && false`")
+        self.write_map("echo hi", setup=f"Setup: `echo x >> {count.as_posix()} && false`")
         self.assertTrue(self.setup(ok=False).startswith("FAIL run setup-failed"))
         self.setup(ok=False)
         self.assertEqual(count.read_text(encoding="utf-8"), "x\nx\n")
@@ -297,7 +305,8 @@ class ListsSkippedTools(SetupCase):
 
     def test_suites_run_in_a_throwaway_worktree_of_the_base_not_the_checkout(self):
         where = self.kit.tmp / "where"
-        self.write_map(f"pwd > {where}; git rev-parse HEAD >> {where}")
+        # Git Bash's `pwd -W` prints the folder as Windows names it; elsewhere `-W` is refused and `pwd` prints it.
+        self.write_map(f"(pwd -W 2>/dev/null || pwd) > {where.as_posix()}; git rev-parse HEAD >> {where.as_posix()}")
         self.kit.git("commit", "-q", "--allow-empty", "-m", "local only", cwd=self.kit.clone)
         self.setup()
         ran_in, head = where.read_text(encoding="utf-8").split()
@@ -322,7 +331,7 @@ class ListsSkippedTools(SetupCase):
 class Reruns(SetupCase):
     def test_rerun_reuses_env_and_does_not_run_setup_again(self):
         count = self.kit.tmp / "count"
-        self.write_map("echo hi", setup=f"Setup:\n\n```\necho x >> {count}\n```")
+        self.write_map("echo hi", setup=f"Setup:\n\n```\necho x >> {count.as_posix()}\n```")
         first = self.setup()
         second = self.setup()
         self.assertEqual(first, second)

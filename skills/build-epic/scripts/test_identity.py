@@ -45,11 +45,12 @@ class IdentityTest(test_merge_task.MergeTaskTest):
 
     # human
 
-    def test_human_merges_without_gh_token_when_the_login_is_the_recorded_human(self):
+    def test_human_checks_the_login_and_merges_without_gh_token_when_it_is_the_recorded_human(self):
         self.decide("human")
         self.kit.answer("api-user", out="rui\n")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertIn(["api", "user", "--jq", ".login"], self.kit.gh_calls())
+        self.assertEqual(self.tokens("api", "user"), [""])
         self.assertEqual(self.merge_tokens(), [""])
         self.assert_no_auth_token()
 
@@ -58,12 +59,6 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         self.kit.answer("api-user", out="rpvsilva-agent[bot]\n")
         self.assert_wrong_identity(self.merge())
         self.assert_no_auth_token()
-
-    def test_human_checks_the_login_without_gh_token(self):
-        self.decide("human")
-        self.kit.answer("api-user", out="rui\n")
-        self.merge()
-        self.assertEqual(self.tokens("api", "user"), [""])
 
     def test_human_with_no_recorded_human_merges_as_the_gh_login(self):
         self.decide("human", human=None)
@@ -91,7 +86,8 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     # decisions.md only records the Setting
 
     def test_decisions_saying_human_while_the_setting_is_unset_merges_nothing_as_the_human(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n", encoding="utf-8")
+        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nmerge_identity: human\nhuman: rui\n",
+                                                       encoding="utf-8")
         self.kit.answer("api-user", out="rui\n")
         self.kit.answer("api-installation_repositories", out='{"total_count": 1}\n')
         self.assert_wrong_identity(self.merge())

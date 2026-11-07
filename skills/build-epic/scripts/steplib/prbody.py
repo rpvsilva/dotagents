@@ -2,8 +2,14 @@
 
 A task body holds what the task builds (its `## What to build`), its check (`## Check`) and that check's result
 (`<run>/reports/<id>.checks.json` when a step wrote one), then `Part of #n` for each of its ticket's issues, which
-leaves them open. A ticket body is the orchestrator's text (filling the repo's PR template), then its tasks with their
-`PR:` links, then `Closes #n` for each issue. `empty_sections` names the template's sections a body leaves empty.
+leaves them open.
+
+A ticket body holds no prose but the run's. It has one `## ` section per heading of the repo's PR template (with no
+template, `Summary` and `Testing`), each filled by what its name asks for: a summary (the ticket's title, its issues and
+task count), testing (each task's saved suite results), risk (the files the tasks write) and how to revert (the commit
+the PR lands on the base). A heading naming none of those takes the ticket's own section of that name. A section the run
+cannot fill is left empty, so `empty_sections` names it. Then come the tasks with their `PR:` links, their acceptance
+criteria, the skipped tests' reasons under `## Not exercised here`, and `Closes #n` for each issue.
 
 Both bodies hold a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the
 human's own login), into which branch (a task PR into its ticket's `Branch:`, a ticket PR into `base:` or the run's
@@ -12,10 +18,10 @@ PRs only; a ticket PR: `review_before_agent_merge` and `ci`), and each Authoriza
 With `ci: off` it also holds `LOCAL_PROOF`, the line saying no CI runs and the local Checks run is the proof.
 With no `decisions.md` the section is left out.
 
-`<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`),
-`rc` (or, in older files, a boolean `passed`), and optionally `seconds` and `skip_reasons` (a list of strings). A
-ticket body holds a `## Not exercised here` section listing, once each, the skip reasons its tasks' files saved; none,
-no section.
+`<id>.checks.json` is a list of suites, or `{"suites": [...]}`; each suite has `command` (or `suite`, `name`), `rc`
+(or, in older files, a boolean `passed`), and optionally `seconds`, the counts `passed`, `failed` and `skipped`, and
+`skip_reasons`. A suite passed when its `rc` is 0; the counts never decide it. A ticket body holds a
+`## Not exercised here` section listing, once each, the skip reasons its tasks' files saved; none, no section.
 """
 import json
 import re
@@ -44,17 +50,50 @@ def issues(ticket_path):
     return list(dict.fromkeys(found))
 
 
+def _count(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _suite_line(s):
+    name = s.get("command") or s.get("suite") or s.get("name") or "?"
+    if "rc" in s:
+        passed = s["rc"] == 0
+    elif isinstance(s.get("passed"), bool):
+        passed = s["passed"]
+    else:
+        passed = _count(s.get("failed")) and s["failed"] == 0
+    secs = f" in {s['seconds']:g}s" if isinstance(s.get("seconds"), (int, float)) else ""
+    counts = ", ".join(f"{s[k]} {k}" for k in ("passed", "failed", "skipped") if _count(s.get(k)))
+    return f"- `{name}`: {'passed' if passed else 'failed'}{secs}" + (f" ({counts})" if counts else "")
+
+
+def _skips(s):
+    """The suite's skip reasons as text lines."""
+    reasons = s.get("skip_reasons") or []
+    if isinstance(reasons, dict):
+        reasons = [f"{k}: {v}" for k, v in reasons.items()]
+    out = []
+    for r in reasons if isinstance(reasons, list) else [reasons]:
+        if isinstance(r, dict):
+            r = ": ".join(str(v) for v in (r.get("test") or r.get("name"), r.get("reason")) if v)
+        if str(r).strip():
+            out.append(str(r).strip())
+    return out
+
+
 def _result(run, ident):
-    lines = []
-    for s in _suites(core.resolve(run) / "reports" / f"{ident}.checks.json"):
-        name = s.get("command") or s.get("suite") or s.get("name") or "?"
-        passed = s["rc"] == 0 if "rc" in s else s.get("passed") is True
-        secs = f" in {s['seconds']:g}s" if isinstance(s.get("seconds"), (int, float)) else ""
-        lines.append(f"- `{name}`: {'passed' if passed else 'failed'}{secs}")
-    return "\n".join(lines) or NO_RESULT
+    suites = _suites(core.resolve(run) / "reports" / f"{ident}.checks.json")
+    return "\n".join(_suite_line(s) for s in suites) or NO_RESULT
+
+
+def base_branch(run, d=None):
+    """The branch a ticket PR merges into: `decisions.md`'s `base:`, else the run's default branch."""
+    d = d or decisions.load(run)
+    return (d and d.get("base")) or runfolder.run_info(run)["Default"]
 
 
 def _suites(path):
+    """The suites saved in a `.checks.json` file; [] when it is missing or unreadable."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -71,9 +110,7 @@ def skip_reasons(run, ticket_path):
         if runfolder.norm(f.name.split("-", 1)[0]) != number:
             continue
         for s in _suites(f):
-            listed = s.get("skip_reasons")
-            if isinstance(listed, list):
-                reasons += [r.strip() for r in listed if isinstance(r, str) and r.strip()]
+            reasons += _skips(s)
     return list(dict.fromkeys(reasons))
 
 
@@ -89,7 +126,7 @@ def merge_section(run, into=None):
     d = decisions.load(run)
     if d is None:
         return []
-    base = d.get("base") or runfolder.run_info(run)["Default"]
+    base = base_branch(run, d)
     task = bool(into) and into != base
     into = into or base
     if d.get("merge_identity") == "human":
@@ -157,16 +194,101 @@ def empty_sections(template_text, body):
     return [n for n in names if _empty(section(body, n))]
 
 
-def ticket_body(run, ticket_path, lead=""):
-    """`lead` (the orchestrator's text), then the ticket's tasks with their PR links, then `Closes #n`."""
-    rows = []
-    for f in ticket_tasks(run, ticket_path):
-        pr = clean(runfolder.get(f, "PR"))
-        rows.append(f"- {title(f)}: {pr or 'no PR'}")
-    parts = ([lead.strip()] if lead.strip() else []) + ["## Tasks", "\n".join(rows) or "None."]
+def _reports(run, task_path):
+    """The ids a step may have saved the task's results under: `TT-NN` (or `TT-<name>`) and any spelling that names
+    the same task file (`7-2` for `07-02`)."""
+    reports = core.resolve(run) / "reports"
+    found = []
+    for f in sorted(reports.glob("*.checks.json")) if reports.is_dir() else ():
+        ident = f.name[:-len(".checks.json")]
+        try:
+            if runfolder.task_file(run, ident) == task_path:
+                found.append(f)
+        except core.Fail:
+            continue
+    return found
+
+
+def _ident(task_path):
+    parts = task_path.stem.split("-", 2)
+    return "-".join(parts[:2])
+
+
+def _testing(run, tasks):
+    """Each task's saved suite results; "" when no task saved any. Skip reasons go under `## Not exercised here`."""
+    rows, any_saved = [], False
+    for f in tasks:
+        suites = [s for path in _reports(run, f) for s in _suites(path)]
+        rows.append(f"- {_ident(f)} {title(f)}:" + ("" if suites else " no saved result."))
+        rows += ["  " + _suite_line(s) for s in suites]
+        any_saved = any_saved or bool(suites)
+    if not any_saved:
+        return ""
+    return "Each task's local run of map.md's Checks before its merge:\n\n" + "\n".join(rows)
+
+
+def _writes(tasks):
+    files = []
+    for f in tasks:
+        value = clean(runfolder.get(f, "Writes"))
+        files += [w.strip().strip("`") for w in value.split(",") if w.strip() and w.strip().lower() != "none"]
+    return list(dict.fromkeys(files))
+
+
+def _ticket_title(ticket_path):
+    for line in ticket_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            return re.sub(r"^\d+:\s*", "", line[2:].strip())
+    return ticket_path.stem
+
+
+def _fill(name, run, ticket_path, tasks):
+    """The text for the template heading `name`, or "" when the run holds nothing for it."""
+    key = name.lower()
+    if "test" in key or "verif" in key:
+        return _testing(run, tasks)
+    if "risk" in key or "impact" in key:
+        files = _writes(tasks)
+        return ("Touches the files its tasks write:\n" + "\n".join(f"- `{w}`" for w in files)) if files else ""
+    if "revert" in key or "roll" in key:
+        return f"Revert the commit this PR lands on `{base_branch(run)}`: `git revert <commit>`."
+    if re.search(r"summary|description|overview|what|why|change|motivation", key):
+        refs = ", ".join(f"#{n}" for n in issues(ticket_path))
+        count = f"{len(tasks)} task{'s' if len(tasks) != 1 else ''}"
+        return f"{_ticket_title(ticket_path)}: delivers {refs} in {count}." if refs else \
+            f"{_ticket_title(ticket_path)}, in {count}."
+    return section(ticket_path.read_text(encoding="utf-8"), name)
+
+
+def _criteria(tasks):
+    out = []
+    for f in tasks:
+        lines = [re.sub(r"^(\s*[-*+]\s*)\[[ xX]\]\s*", r"\1", line)
+                 for line in section(f.read_text(encoding="utf-8"), "Acceptance criteria").splitlines() if line.strip()]
+        if lines:
+            out.append(f"### {_ident(f)} {title(f)}\n\n" + "\n".join(lines))
+    return "\n\n".join(out)
+
+
+def ticket_body(run, ticket_path, *, template=None):
+    """The ticket PR body: one section per heading of `template` (the repo's PR template text, or None), then the
+    tasks with their PR links and acceptance criteria, `## Not exercised here`, the `## Merge` section, and
+    `Closes #n`."""
+    tasks = ticket_tasks(run, ticket_path)
+    names = re.findall(r"^##[ \t]+(.+?)[ \t]*$", template, re.MULTILINE) if template is not None else \
+        ["Summary", "Testing"]
+    parts = []
+    for name in names:
+        text = _fill(name, run, ticket_path, tasks)
+        parts += [f"## {name}", text or ("" if template is not None else NO_RESULT)]
+    rows = [f"- {title(f)}: {clean(runfolder.get(f, 'PR')) or 'no PR'}" for f in tasks]
+    parts += ["## Tasks", "\n".join(rows) or "None."]
+    criteria = _criteria(tasks)
+    if criteria:
+        parts += ["## Acceptance criteria", criteria]
     parts += not_exercised(run, ticket_path)
     parts += merge_section(run)
     refs = [f"Closes #{n}" for n in issues(ticket_path)]
     if refs:
         parts.append("\n".join(refs))
-    return "\n\n".join(parts) + "\n"
+    return "\n\n".join(p for p in parts if p) + "\n"

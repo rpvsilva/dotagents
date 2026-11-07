@@ -41,7 +41,7 @@ class MergeSectionTest(unittest.TestCase):
         return prbody.task_body(self.kit.run_dir, "01-02", self.task, self.ticket)
 
     def ticket_body(self):
-        return prbody.ticket_body(self.kit.run_dir, self.ticket, "## Testing\nRan it.")
+        return prbody.ticket_body(self.kit.run_dir, self.ticket)
 
     def merge(self, body):
         return prbody.section(body, "Merge")
