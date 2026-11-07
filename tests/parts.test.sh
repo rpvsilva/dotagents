@@ -29,6 +29,7 @@ mk skills/configure/needs.json '{"group": "core", "needs": {"beta": "optional"}}
 mk skills/alpha/SKILL.md
 mk skills/alpha/alpha-agent-brief.md
 mk skills/alpha/scripts/run.py
+mk adapters/claude/alpha/extract.py
 mk skills/alpha/needs.json '{"group": "a", "needs": {"gamma": "required", "beta": "optional"}, "agents": ["alpha-agent"]}'
 mk skills/gamma/SKILL.md
 mk skills/gamma/needs.json '{"group": "a", "needs": {"alpha": "required"}}'
@@ -40,6 +41,7 @@ mk adapters/claude/agents/other-agent.md
 mk scripts/hooks/guard.sh
 mk scripts/hooks/guard.needs.json '{"group": "b", "needs": {}}'
 mk scripts/hooks/lib.sh
+mk scripts/hooks/secret-patterns.txt
 mk adapters/claude/hooks/guard.json '{}'
 mk adapters/claude/mods/runs/.claude-plugin/plugin.json '{"name": "runs"}'
 mk adapters/claude/mods/runs/hooks/runs.ts
@@ -150,8 +152,13 @@ done
 same "$(parts files alpha)" "skills/alpha/SKILL.md
 skills/alpha/alpha-agent-brief.md
 skills/alpha/needs.json
-skills/alpha/scripts/run.py" "files alpha: wrong skill folder files"
-same "$(parts files _shared)" "skills/_shared/conventions.md" "files _shared: wrong"
+skills/alpha/scripts/run.py
+adapters/claude/alpha/extract.py" "files alpha: wrong skill folder or tool helper files"
+# _shared stands for core: its folder, Settings and the hooks library.
+same "$(parts files _shared)" "skills/_shared/conventions.md
+scripts/settings.sh
+scripts/hooks/lib.sh
+scripts/hooks/secret-patterns.txt" "files _shared: wrong core files"
 same "$(parts files runs)" "adapters/claude/mods/runs/.claude-plugin/plugin.json
 adapters/claude/mods/runs/hooks/runs.ts
 adapters/claude/mods/runs/needs.json" "files runs: wrong mod folder files"
@@ -182,6 +189,12 @@ mkdir -p "$SANDBOX/bin"
 ln -s "$PARTS" "$SANDBOX/bin/parts-abs"
 ln -s parts-abs "$SANDBOX/bin/parts"
 same "$(cd "$SANDBOX" && bin/parts groups | cut -f1 | head -1)" "core" "through a symlink: did not find its repo"
+# Every file a part runs is shipped: the files of every group's closure hold core and the telemetry extractor.
+shipped="$(for g in $("$PARTS" groups | cut -f1); do "$PARTS" closure "$g"; done | sort -u \
+  | while read -r p; do "$PARTS" files "$p"; done)"
+for f in scripts/settings.sh scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt adapters/claude/telemetry/extract.py; do
+  grep -qxF "$f" <<<"$shipped" || fail "real repo: no part ships $f"
+done
 "$PARTS" groups | awk -F'\t' 'NF != 2 || $2 == "" { bad = 1 } END { exit bad || NR != 8 }' || fail "real repo: a group has no about line"
 
 [ "$fails" -eq 0 ] || { echo "parts.test.sh: $fails failure(s)"; exit 1; }

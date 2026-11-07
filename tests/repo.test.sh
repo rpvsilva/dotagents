@@ -94,7 +94,7 @@ for f in skills/*/settings.json remote/settings.json; do
 done
 
 # Needs declarations (scripts/parts.sh): each a JSON object with a group from groups.json, needs naming a part as
-# required or optional, and agents as a list of names. Every skill, mod and hook has one; skills/_shared is core and
+# required or optional (never a core part: _shared or one of group core), and agents as a list of names. Every skill, mod and hook has one; skills/_shared is core and
 # has none. Every subagent wrapper's stem is owned by exactly one skill, the one holding the brief it names, and every
 # owned agent has a wrapper. No part or group takes a tool word install.sh reserves.
 parts_list="$(scripts/parts.sh list 2>&1 | tr -d '\r')" || { fail "scripts/parts.sh list: $parts_list"; parts_list=""; }
@@ -115,14 +115,17 @@ if [ ${#decls[@]} -gt 0 ] && ! jq -en '[inputs | type == "object"] | all' "${dec
   decls=(${good[@]+"${good[@]}"})
 fi
 if [ ${#decls[@]} -gt 0 ]; then
-  while read -r bad; do fail "$bad"; done < <(jq -r --slurpfile g groups.json --arg parts "$part_names" '
-    ($parts | split("\n")) as $names | input_filename as $f
+  core_names="$(awk -F'\t' '$3 == "core" {print $1}' <<<"$parts_list")"
+  while read -r bad; do fail "$bad"; done < <(jq -r --slurpfile g groups.json --arg parts "$part_names" --arg core "_shared
+$core_names" '
+    ($parts | split("\n")) as $names | ($core | split("\n")) as $core | input_filename as $f
     | [(if (.group | type) != "string" then "no group"
         elif (.group as $grp | $g[0] | has($grp) | not) then "group \(.group) is not in groups.json"
         else empty end),
       (if (.needs | type) != "object" then "needs is not an object"
        else .needs | to_entries[]
-         | .key as $k | if $parts != "" and (any($names[]; . == $k) | not) then "need \(.key) is not a part (scripts/parts.sh list)"
+         | .key as $k | if any($core[]; . == $k) then "need \(.key) is core, which no part declares"
+           elif $parts != "" and (any($names[]; . == $k) | not) then "need \(.key) is not a part (scripts/parts.sh list)"
            elif .value != "required" and .value != "optional" then "need \(.key): \(.value | tojson) is not required or optional"
            else empty end end),
       (if has("agents") and ((.agents | type) != "array" or any(.agents[]; type != "string")) then "agents is not a list of names"
@@ -197,7 +200,8 @@ for a in adapters/*/agents/*; do
 done
 
 # Couplings: a part's files (scripts/parts.sh files, minus tests and fixtures) refer to another part only as a declared
-# need. References: a markdown link into skills/<x>/, ~/.agents/skills/<x> or $HOME/.agents/skills/<x>,
+# need. References: a markdown link into skills/<x>/ or to a file or folder another part ships (scripts/parts.sh files,
+# core's through _shared), ~/.agents/skills/<x> or $HOME/.agents/skills/<x>,
 # ~/.agents/bin/remote-agent (part remote), .agents/hooks/<x>, and a subagent's name in backticks in a skill's *.md.
 # Never needs: the part itself, a skill's own agents, an agent's own skill, and core (_shared, configure,
 # ~/.agents/bin/settings, the hooks library).
@@ -206,17 +210,20 @@ agent_names="$(awk -F'\t' '$2 == "agent" {print $1}' <<<"$parts_list" | paste -s
 refs_re='\]\([^)[:space:]]+\)|(~|\$HOME)/\.agents/(skills|bin)/[A-Za-z0-9_-]+|\.agents/hooks/[A-Za-z0-9_.-]+'
 [ -z "$agent_names" ] || refs_re="$refs_re|\`($agent_names)\`"
 # One awk reads tagged lines: P (part, kind, declaration), O (agent, owning skill), N (declaration, its needs and
-# agents), F (part, file), then R (file:reference, from one grep over every part's files).
+# agents), S (part, a file it ships), F (part, a file of it scanned), then R (file:reference, from one grep over the
+# scanned files).
 part_files=""
 files=()
 while IFS=$'\t' read -r p _; do
   [ -n "$p" ] || continue
   while read -r f; do
+    part_files="$part_files"$'S\t'"$p"$'\t'"$f"$'\n'
+    [ "$p" != _shared ] || continue
     case "/$f" in */fixtures/* | */test_* | *.test.*) continue ;; esac
     part_files="$part_files"$'F\t'"$p"$'\t'"$f"$'\n'
     files+=("$f")
   done < <(scripts/parts.sh files "$p" | tr -d '\r')
-done <<<"$parts_list"
+done < <(printf '%s\n_shared\n' "$parts_list")
 while IFS=$'\t' read -r f n p decl; do
   fail "$f: refers to $n, not a need of $p in $decl"
 done < <({
@@ -230,6 +237,12 @@ done < <({
   $1 == "P" { kind[$2] = $3; decl[$2] = $5; next }
   $1 == "O" { owner[$2] = $3; next }
   $1 == "N" { k = index($2, " "); needs[k ? substr($2, 1, k - 1) : $2] = k ? substr($2, k) : ""; next }
+  # ships: the part shipping a file, or every file under a folder; "*" when several parts share the folder.
+  $1 == "S" {
+    ships[$3] = $2; d = $3
+    while (sub(/\/[^\/]*$/, "", d)) { if (!(d in ships)) ships[d] = $2; else if (ships[d] != $2) ships[d] = "*" }
+    next
+  }
   $1 == "F" { parts[$3] = parts[$3] " " $2; next }
   {
     r = substr($0, 3); i = index(r, ":"); f = substr(r, 1, i - 1); m = substr(r, i + 1); n = ""
@@ -245,6 +258,10 @@ done < <({
         out[++top] = seg[j]
       }
       if (top >= 2 && out[1] == "skills") n = out[2]
+      else if (top >= 1) {
+        t = out[1]; for (j = 2; j <= top; j++) t = t "/" out[j]
+        if (t in ships && ships[t] != "*") n = ships[t]
+      }
     } else if (m ~ /agents\/skills\//) { n = m; sub(/.*agents\/skills\//, "", n) }
     else if (m ~ /agents\/bin\//) { n = m; sub(/.*agents\/bin\//, "", n); n = (n == "remote-agent") ? "remote" : "settings" }
     else if (m ~ /agents\/hooks\//) { n = m; sub(/.*agents\/hooks\//, "", n); sub(/\.[a-z]+$/, "", n) }
