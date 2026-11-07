@@ -117,7 +117,7 @@ class ReviewPromptTest(unittest.TestCase):
                 args = [a.replace("@FINDINGS@", str(self.findings)) for a in ARGS[mode]]
                 got = run(mode, *args, "--report", "reviews/42-abc1234.md", cwd=self.tmp)
                 self.assertEqual(got.returncode, 0, got.stderr)
-                report = str(Path(self.tmp, "reviews", "42-abc1234.md"))
+                report = str(Path(os.path.realpath(self.tmp), "reviews", "42-abc1234.md"))  # macOS tmp is under a /var symlink
                 self.assertTrue(got.stdout.endswith(
                     f"\nWrite your report to {report}, the only file you may write, then return the block alone, "
                     "as the brief's Report says.\n"), got.stdout)
