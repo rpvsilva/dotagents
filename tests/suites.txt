@@ -8,7 +8,7 @@ repo.test.sh *
 python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/* scripts/hooks/secret-patterns.txt
 install.test.sh install.sh scripts/ui.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
 uninstall.test.sh uninstall.sh scripts/ui.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/settings.sh remote/settings.json
-affected.test.sh
+affected.test.sh tests/python.test.sh
 claude-plugins.test.sh scripts/claude-plugins.sh adapters/claude/plugins.txt
 mod.test.sh adapters/claude/mods/*
 gh-app-token.test.sh scripts/gh-app-token.sh

@@ -1,11 +1,12 @@
 # The tests on Windows (Git Bash), only when a change can behave differently there.
-# PRs into main only, as ci.yml. Skill and doc changes run on Linux alone (ci.yml). macOS is covered by tests/run.sh, which every
+# PRs into main only, as ci.yml, and not while the PR is a draft. Skill and doc changes run on Linux alone (ci.yml). macOS is covered by tests/run.sh, which every
 # change passes locally before pushing (AGENTS.md); hosted macOS runners queued for a long time here.
 name: portability
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - install.sh
       - scripts/**
@@ -23,6 +24,7 @@ concurrency:
 
 jobs:
   test-windows:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
