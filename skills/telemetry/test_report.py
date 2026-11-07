@@ -232,6 +232,17 @@ class ByRole(unittest.TestCase):
         self.assertNotIn("remote", role_rows(out))
         self.assertNotIn("without cost", out)
 
+    def test_an_unreadable_remote_result_counts_as_a_run_without_cost(self):
+        with tempfile.TemporaryDirectory() as folder:
+            remote = Path(folder) / "remote"
+            remote.mkdir()
+            (remote / "01-01.json").write_text("{not json")
+            (remote / "01-02.json").write_text('["a list"]')
+            (remote / "01-03.json").write_text('{"num_turns": 3, "total_cost_usd": 0.5}')
+            out = report(RUN_ROLES, "--by-role", "--run-folder", folder)
+        self.assertEqual(role_rows(out)["remote"], ["3", "3", "$0.50", ""])
+        self.assertIn("\n2 remote runs without cost\n", out)
+
     def test_a_schema_3_run_without_roles_falls_back_to_type_and_keywords(self):
         run = schema_3(Path(RUN_ROLES).read_text(),
                        ["Implement 01-01", "Implement 01-02", "Re-review PR 12", "Look around", "Fix PR 12"])
@@ -289,6 +300,15 @@ class PriceCheckHint(unittest.TestCase):
 
     def test_stays_quiet_when_prices_are_recent(self):
         self.assertNotIn("update_pricing.py", report(RUN, "--today", "2026-01-15"))
+
+    def test_offers_a_check_when_prices_have_no_date(self):
+        undated = json.loads(Path(PRICING).read_text())
+        del undated["asOf"]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "pricing.json"
+            path.write_text(json.dumps(undated))
+            out = report(RUN, "--today", "2026-01-15", "--pricing", str(path))
+        self.assertIn("Prices have no date; check with: update_pricing.py model-a", out)
 
     def test_offers_a_check_for_a_model_with_no_price(self):
         out = report("-", "--today", "2026-01-15", stdin=unpriced(Path(RUN).read_text()))

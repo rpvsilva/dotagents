@@ -59,6 +59,28 @@ class FinishRemoteTest(StepCase):
         self.finish()
         self.assertEqual(self.copied().read_bytes(), want)
 
+    def test_unreadable_and_resultless_records_are_passed_over(self):
+        common = self.common_dir()
+        want = self.record(common, "agent-20261106-100000-1", "01-02", 1000, b'{"by": "id"}\n')
+        self.record(common, "agent-20261106-120000-1", NAME, 9000, b'{"no": "result"}\n')
+        (common / "remote-agent" / "agent-20261106-120000-1" / "result.json").unlink()
+        for run, text in (("agent-20261106-130000-1", "{not json"), ("agent-20261106-140000-1", '["01-02"]')):
+            (common / "remote-agent" / run).mkdir()
+            (common / "remote-agent" / run / "run.json").write_text(text)
+            (common / "remote-agent" / run / "result.json").write_text('{"wrong": true}\n')
+        (common / "remote-agent" / "agent-20261106-150000-1").mkdir()
+        self.write(self.wt, "a.txt", "a\n")
+        self.assertEqual(self.finish(), "OK 01-02 committed files=1")
+        self.assertEqual(self.copied().read_bytes(), want)
+
+    def test_a_run_named_with_the_task_id_and_a_suffix_matches_and_an_undated_run_counts_as_oldest(self):
+        common = self.common_dir()
+        self.record(common, "agent-20261106-100000-1", "01-02", "late", b'{"started": "not a number"}\n')
+        want = self.record(common, "agent-20261106-090000-1", "01-02-retry", 2000, b'{"try": 2}\n')
+        self.write(self.wt, "a.txt", "a\n")
+        self.finish()
+        self.assertEqual(self.copied().read_bytes(), want)
+
     def test_without_a_record_finish_succeeds_and_logs_no_remote_result(self):
         self.record(self.common_dir(), "agent-20261106-130000-1", "01-03-other", 3000, b'{"other": 1}\n')
         self.write(self.wt, "a.txt", "a\n")
