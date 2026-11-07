@@ -5,21 +5,26 @@ Usage: python3 -I merge_task.py <run> <task>
 
 In the task's worktree `<run>/worktrees/<task>`: reads the ticket PR's checks (waiting on pending ones), fetches and
 merges the ticket branch's tip forward when the branch lacks it (never a reset or a checkout, so an earlier conflict
-resolution is kept), runs `map.md`'s `Checks` timing each suite, inside the run's environment as `test_command:` runs
-them (`<run>/env`, `steplib/checks.py`'s `in_env`), pushes, and merges the task's `PR:` by the merge rule
-(`merge_command` Setting), reading the PR back. Then sets the task `done`, removes its worktree and branch, opens the
-draft ticket PR when the ticket has none, and, when this was the ticket's last implementer task and a suite ran at
-least `tune_min_seconds`, writes the tuning task `tasks/TT-tests.md`.
+resolution is kept), runs the merge guard on `origin/<ticket branch>...HEAD` (`steplib/guard.py`: rules read from the
+ticket branch on origin, a hit passing only when `decisions.md` waives its rule `yes`), runs `map.md`'s `Checks`
+timing each suite, inside the run's environment as `test_command:` runs them (`<run>/env`, `steplib/checks.py`'s
+`in_env`), pushes, and merges the task's `PR:` by the merge rule (`merge_command` Setting), reading the PR back. Then
+sets the task `done`, removes its worktree and branch, opens the draft ticket PR when the ticket has none, and, when
+this was the ticket's last implementer task and a suite ran at least `tune_min_seconds`, writes the tuning task
+`tasks/TT-tests.md`.
 
 Prints `OK <task> done suites=<n> <secs>s`, or `FAIL <task> <reason> (log: ...)`: `red <suite>`, `conflict <files>`,
-`ticket-ci-red <run-id>`, `wrong-base <branch>` (a PR into anything but the task's own ticket branch), `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task `in-progress`.
+`guarded <file:line rule>; ...`, `guard-no-base: <ref>`, `guard-bad-range: <range>`, `bad-rule: <why>`, `git-<cmd>` (a
+git call of the guard failed), `ticket-ci-red <run-id>`, `wrong-base <branch>` (a PR into anything but the task's own
+ticket branch), `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task
+`in-progress`.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, ci, core, gitops, merge, runfolder  # noqa: E402
+from steplib import checks, ci, core, gitops, guard, merge, runfolder  # noqa: E402
 
 
 def git_in(ctx, where, *args):
@@ -95,6 +100,7 @@ def step(ctx):
     ci.gate(run, ticket, ctx.log, repo)
     gitops.Git(wt, ctx.log).fetch()
     catch_up(ctx, wt, f"origin/{ticket_branch}")
+    guard.check(wt, f"origin/{ticket_branch}...HEAD", run, ctx.log)
     suites = checks.run_all(checks.commands(run / "map.md"), wt, ctx.log, run)
     checks.save(run, ctx.id, suites)
     if suites[-1].rc != 0:
