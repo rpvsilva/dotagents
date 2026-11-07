@@ -27,7 +27,7 @@ def issues(value):
 
 def setting(section, key, repo, log):
     """A Setting's effective value through `~/.agents/bin/settings`, or None when unset or the tool is missing."""
-    tool = os.path.join(os.path.expanduser("~"), ".agents", "bin", "settings")
+    tool = os.path.join(core.home(), ".agents", "bin", "settings")
     if not os.path.exists(tool):
         log.write(f"no {tool}: {section}.{key} taken as unset\n")
         return None
