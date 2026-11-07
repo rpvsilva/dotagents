@@ -52,6 +52,7 @@ mk scripts/remote-agent.sh
 mk scripts/remote-agent-setup.sh
 mk scripts/remote-backends/docker.sh
 mk scripts/settings.sh
+mk scripts/capped
 mk mcp/needs.json '{"group": "b", "needs": {}}'
 mk mcp/servers.json '{}'
 mk global/needs.json '{"group": "b", "needs": {}}'
@@ -154,9 +155,10 @@ skills/alpha/alpha-agent-brief.md
 skills/alpha/needs.json
 skills/alpha/scripts/run.py
 adapters/claude/alpha/extract.py" "files alpha: wrong skill folder or tool helper files"
-# _shared stands for core: its folder, Settings and the hooks library.
+# _shared stands for core: its folder, Settings, capped and the hooks library.
 same "$(parts files _shared)" "skills/_shared/conventions.md
 scripts/settings.sh
+scripts/capped
 scripts/hooks/lib.sh
 scripts/hooks/secret-patterns.txt" "files _shared: wrong core files"
 same "$(parts files runs)" "adapters/claude/mods/runs/.claude-plugin/plugin.json
