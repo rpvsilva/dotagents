@@ -24,7 +24,7 @@ Input: nothing for the current repo, or `owner/name` for another. Optional: `--p
 
 Start and limit them as in [Subagents](../_shared/conventions.md#subagents): at most **N** at once (the **slots**).
 
-The `epic-implementer` is **remote-capable** ([Remote subagents](../remote-subagents/SKILL.md)): name it after its task's file, `--name NN-<scope>`, attach its task, `map.md`, `findings.md` and `reports/`, and dispatch it with the command build-epic's [Remote dispatcher](../build-epic/SKILL.md#remote-dispatcher) names. When it returns, commit its changes on its task branch and catch it up with the fix branch for it, as build-epic's [Subagents](../build-epic/SKILL.md#subagents) section does with the ticket branch. The mapper and reviewers write into the run folder, so they always run here.
+Which subagents may run remotely, and when, is [Remote subagents](../remote-subagents/SKILL.md)' rule. When the `epic-implementer` runs remotely, name it after its task's file, `--name NN-<scope>`, attach its task, `map.md`, `findings.md` and `reports/`, and dispatch it with the command build-epic's [Remote dispatcher](../build-epic/SKILL.md#remote-dispatcher) names. When it returns, commit its changes on its task branch and catch it up with the fix branch for it, as build-epic's [Subagents](../build-epic/SKILL.md#subagents) section does with the ticket branch.
 
 ## Steps
 
