@@ -341,6 +341,27 @@ if grep -q '^## Remote subagents' skills/_shared/conventions.md; then
   fail "skills/_shared/conventions.md: restates Remote subagents; link ../remote-subagents/SKILL.md instead"
 fi
 
+# Public groups name no one: the files a part outside group personal ships (and core's, through _shared) never name
+# Rui, his accounts, the company org or his cluster. The image default is the one documented Setting value, so xgeekshq
+# may appear in remote/settings.json and remote/README.md. Tests and fixtures are sample data, skipped on purpose.
+personal_files=()
+while IFS=$'\t' read -r p _ g _; do
+  [ -n "$p" ] && [ "$g" != personal ] || continue
+  while read -r f; do
+    case "/$f" in */fixtures/* | */test_* | *.test.*) continue ;; esac
+    [ -f "$f" ] && personal_files+=("$f")
+  done < <(scripts/parts.sh files "$p" | tr -d '\r')
+done < <(printf '%s\n_shared\t\tcore\n' "$parts_list")
+if [ ${#personal_files[@]} -gt 0 ]; then
+  while IFS=: read -r f t; do
+    case "$t:$f" in xgeekshq:remote/settings.json | xgeekshq:remote/README.md) continue ;; esac
+    fail "$f: names $t"
+  done < <({
+    grep -oHE 'rpvsilva|maxibombo|0xgui|xgeekshq' "${personal_files[@]}" || true
+    grep -oHw 'Rui' "${personal_files[@]}" || true
+  } | sort -u)
+fi
+
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"
