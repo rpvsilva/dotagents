@@ -12,7 +12,7 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `follow_ups`: the list lines of `followups.md` and the reports in `reports/<id>.md` with a `follow-up:`.
 - `suites`: the suites of `reports/<id>.checks.json` (a count may be `null`: output it could not read), or, for an id
   without one, the old `reports/<id>.checks` whose last line says `N passed` and `N failed`.
-- `remote`: the remote runs' results in `remote/<task>.json`; `cost_usd` sums those with a cost and
+- `remote`: the remote runs' results in `remote/<task>-<remote run>.json`; `cost_usd` sums those with a cost and
   `runs_without_cost` counts the rest.
 - `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
   folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network. Also

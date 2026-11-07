@@ -290,6 +290,14 @@ class ByRole(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("--run-folder needs --by-role", proc.stderr)
 
+    def test_by_role_with_save_is_refused_and_saves_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = subprocess.run([sys.executable, str(HERE / "report.py"), RUN_ROLES, "--by-role", "--save", "x",
+                                   "--dir", folder], capture_output=True, encoding="utf-8")
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("--save cannot be used with --by-role", proc.stderr)
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
 
 class PriceCheckHint(unittest.TestCase):
     """Fixture pricing.json is dated 2026-01-01."""

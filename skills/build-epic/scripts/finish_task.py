@@ -11,9 +11,11 @@ implementer and prints `FAIL TT-NN conflict <files>`; a rerun after the markers 
 `plan-wrong`, the changes are committed and the step fails with that status and its `why`, touching nothing else.
 `--title` is the commit's subject (default: the task's title).
 
-For a remote task, first copies its run's `result.json` to `<run>/remote/<TT-NN>.json`: the newest run whose `run.json`
-`name` is the task's file name (or starts with `TT-NN-`), under the common git dir's `remote-agent/`, or under the
-worktree's own git dir for records made before they moved. With none, the log says so and the step goes on.
+For a remote task, first copies the `result.json` of each of its runs (a retried task has several) to
+`<run>/remote/<TT-NN>-<remote run>.json`: every run whose `run.json` `name` is the task's file name and whose `worktree`
+is the task's worktree (task ids and names repeat across epics; the worktree is under this run folder), under the
+common git dir's `remote-agent/`, or under the worktree's own git dir for records made before they moved. With none,
+the log says so and the step goes on.
 """
 import fnmatch
 import json
@@ -72,30 +74,30 @@ def remote_records(ctx, task):
 
 
 def copy_remote_result(ctx, task):
-    """Copies the newest matching run's `result.json` to `<run>/remote/<id>.json`; returns the run folder or None."""
+    """Copies every matching run's `result.json` to `<run>/remote/<id>-<remote run>.json`; returns the run folders."""
     found = []
     for folder in remote_records(ctx, task):
         try:
             info = json.loads((folder / "run.json").read_text())
         except (OSError, ValueError):
             continue
-        name = info.get("name") if isinstance(info, dict) else None
-        if not isinstance(name, str) or not (name == task.path.stem or name == ctx.id or name.startswith(ctx.id + "-")):
+        if not isinstance(info, dict) or info.get("name") != task.path.stem:
+            continue
+        worktree = info.get("worktree")
+        if not isinstance(worktree, str) or not worktree or core.resolve(worktree) != core.resolve(task.worktree):
             continue
         if (folder / "result.json").is_file():
-            started = info.get("started")
-            found.append((started if isinstance(started, (int, float)) else 0, folder.name, folder))
+            found.append(folder)
     if not found:
         ctx.note(f"no remote result found for {ctx.id}")
-        return None
-    folder = max(found)[2]
-    dest = ctx.run_dir / "remote" / f"{ctx.id}.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(f".{dest.name}.tmp")
-    shutil.copyfile(str(folder / "result.json"), str(tmp))
-    os.replace(str(tmp), str(dest))
-    ctx.note(f"remote result {folder / 'result.json'} copied to {dest}")
-    return folder
+    for folder in found:
+        dest = ctx.run_dir / "remote" / f"{ctx.id}-{folder.name}.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.tmp")
+        shutil.copyfile(str(folder / "result.json"), str(tmp))
+        os.replace(str(tmp), str(dest))
+        ctx.note(f"remote result {folder / 'result.json'} copied to {dest}")
+    return found
 
 
 def amend_writes(task, changed):

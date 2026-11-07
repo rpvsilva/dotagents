@@ -174,7 +174,7 @@ ROLE_HEADERS = ["Role", "Runs", "Turns", "Cost", "Avg context"]
 ROLE_KEY = ("Runs = subagents of that role · orchestrator = the spans minus their subagents · "
             "Avg context = its cache-read tokens per turn")
 # Before schema 4 a subagent had no role: read it from its type, else (a pr-reviewer, an unknown type) from its
-# description's keywords, as compare_runs.role() does. A conflict resolver is any type told to resolve.
+# description's keywords. compare_runs.py imports this rule. A conflict resolver is any type told to resolve.
 KEYWORD_ROLES = (("re-review", "re-review"), ("ticket", "ticket-review"), ("tuner", "review"),
                  ("security", "security"))
 TYPE_ROLES = {"security-reviewer": "security", "pr-reviewer": "review", "epic-implementer": "implement",
@@ -282,6 +282,8 @@ def main():
     args = parser.parse_args()
     if args.run_folder and not args.by_role:
         parser.error("--run-folder needs --by-role")
+    if args.save and args.by_role:
+        parser.error("--save cannot be used with --by-role: save the run without it, then show it --by-role")
     # The table uses non-ASCII characters; Windows consoles default to a legacy code page.
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")

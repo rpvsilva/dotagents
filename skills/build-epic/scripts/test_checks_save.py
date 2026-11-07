@@ -1,8 +1,8 @@
 """Tests for the saved suite results: `<run>/reports/<id>.checks.json`, written by `merge_task.py` on every merge.
 
 Per suite it holds `passed`, `failed`, `skipped`, `seconds` and `skip_reasons`, counted from pytest's `-rs` summary,
-unittest's `Ran N tests` / `OK (skipped=N)`, or this repo's `<suite>: ok` and `skipped` lines, and `null` counts with
-the exit code when the output says none of these.
+unittest's `Ran N tests` / `OK (skipped=N)`, Jest's `Tests:` line, or this repo's `<suite>: ok` and `skipped` lines
+(only inside its runners' `== ` framing), and `null` counts with the exit code when the output says none of these.
 """
 import json
 import sys
@@ -79,6 +79,29 @@ class SaveTest(unittest.TestCase):
     def test_repo_failed_suite_counts_as_failed(self):
         [suite] = self.saved(shell_echo("a.test.sh: ok\n== tests/b.test.sh: FAILED (exit 1)") + "; exit 1")
         self.assertEqual((suite["passed"], suite["failed"], suite["skipped"]), (1, 1, 0))
+
+    def test_a_stray_ok_line_above_a_pytest_failure_saves_the_failure(self):
+        out = "\n".join(["log: ok", "cache: skipped, stale", "==== 1 failed, 9 passed in 0.50s ===="])
+        [suite] = self.saved(shell_echo(out) + "; exit 1")
+        self.assertEqual((suite["passed"], suite["failed"], suite["skipped"]), (9, 1, 0))
+
+    def test_a_stray_ok_line_above_a_unittest_summary_saves_the_unittest_counts(self):
+        [suite] = self.saved(shell_echo("setup: ok\nRan 4 tests in 0.1s\n\nOK"))
+        self.assertEqual((suite["passed"], suite["failed"], suite["skipped"]), (4, 0, 0))
+
+    def test_jest_summary_counts(self):
+        out = "\n".join([
+            "PASS src/a.test.js", "FAIL src/b.test.js",
+            "Test Suites: 1 failed, 1 passed, 2 total",
+            "Tests:       1 failed, 2 skipped, 40 passed, 43 total",
+            "Snapshots:   0 total", "Time:        1.2 s",
+        ])
+        [suite] = self.saved(shell_echo(out) + "; exit 1")
+        self.assertEqual((suite["passed"], suite["failed"], suite["skipped"]), (40, 1, 2))
+
+    def test_jest_summary_without_failures(self):
+        [suite] = self.saved(shell_echo("Tests: 2 skipped, 1 todo, 40 passed, 43 total"))
+        self.assertEqual((suite["passed"], suite["failed"], suite["skipped"]), (40, 0, 3))
 
     def test_unparseable_suite_saves_null_counts_with_its_exit_code(self):
         green, red = self.saved("echo suite two", shell_echo("make: *** [all] Error 3") + "; exit 3")

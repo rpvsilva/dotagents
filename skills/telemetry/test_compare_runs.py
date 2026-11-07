@@ -175,6 +175,38 @@ class Runs(unittest.TestCase):
         self.assertIsNone(out["runs"]["local"]["finalBranch"])
         self.assertIsNone(out["comparison"]["finalBranch"]["testsPassed"]["local"])
 
+    def test_a_model_missing_from_the_pricing_compares_with_null_cost(self):
+        pricing = json.loads((GH35 / "pricing.json").read_text(encoding="utf-8"))
+        del pricing["models"]["claude-sonnet-5-5"]
+        path = self.tmp / "pricing.json"
+        path.write_text(json.dumps(pricing), encoding="utf-8")
+        out = compare(gh35_args(pricing=path))
+        cost = out["runs"]["local"]["cost"]
+        self.assertIsNone(cost["byModelUSD"]["claude-sonnet-5-5"])
+        self.assertGreater(cost["byModelUSD"]["claude-opus-5-5"], 0)
+        self.assertIsNone(cost["recomputedSessionUSD"])
+        self.assertIsNone(cost["totalEstimateUSD"])
+        self.assertIsNone(cost["byTokenKindUSD"]["output"])
+        subs = out["runs"]["local"]["subagentList"]
+        self.assertTrue(all(s["costUSD"] is None for s in subs if "claude-sonnet-5-5" in s["models"]))
+        self.assertTrue(all(s["costUSD"] > 0 for s in subs if s["models"] == ["claude-opus-5-5"]))
+        self.assertIsNone(out["comparison"]["cost"]["measuredUSD"]["local"])
+        self.assertNotIn("better", out["comparison"]["cost"]["measuredUSD"])
+        self.assertIsNone(out["pricing"]["models"]["claude-sonnet-5-5"])
+
+    def test_roles_without_a_saved_role_follow_the_report_rule(self):
+        run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))
+        span = next(s for s in run["spans"] if s["skill"] == "build-epic")
+        extra = [("test-tuner", "Tune 01 tests"), ("pr-fixer", "Fix PR 12 checks"),
+                 ("general-purpose", "Security review of PR 12")]
+        template = next(a for a in span["subagents"] if a["type"] == "epic-implementer")
+        for t, d in extra:
+            span["subagents"].append({**template, "type": t, "description": d})
+        path = self.tmp / "local.json"
+        path.write_text(json.dumps(run), encoding="utf-8")
+        roles = compare(gh35_args(b=path))["runs"]["local"]["subagents"]["byRole"]
+        self.assertEqual((roles["tune"]["count"], roles["fix"]["count"], roles["security"]["count"] - 4), (1, 1, 1))
+
     def test_the_same_name_twice_is_refused(self):
         res = subprocess.run([sys.executable, "-I", str(SCRIPT), *gh35_args(**{"b-name": "remote"})],
                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
