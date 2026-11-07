@@ -2,9 +2,11 @@
 
 A repo declares its rules in a fenced `agent-merge-guard` block of its `AGENTS.md` (else `CLAUDE.md`), one named rule
 per line, `<name> path <glob>` or `<name> added <regex> [in <glob>]` (the format: `../../merge-guard.md`). They are read
-from the merge's base on `origin`, never from the PR head, so a PR cannot delete its own rules. A hit passes only when
-the run's `decisions.md` Authorizations waive its rule `yes` (the rule name is the clause); a file several rules match
-needs each one waived.
+from the run's default branch on `origin` (`Default:` in `run.md`), which no agent merges into during a run, never from
+the merge's base or the PR head: agents merge into those themselves, so one merged diff could drop the rules for every
+later merge. A diff that changes the block itself hits the built-in rule `merge-guard`. A hit passes only when the
+run's `decisions.md` Authorizations waive its rule `yes` (the rule name is the clause); a file several rules match needs
+each one waived.
 """
 import os
 import posixpath
@@ -12,10 +14,11 @@ import re
 import subprocess
 from collections import namedtuple
 
-from . import core, decisions
+from . import core, decisions, runfolder
 
 FENCE = "```agent-merge-guard"
 FILES = ("AGENTS.md", "CLAUDE.md")
+BLOCK_RULE = "merge-guard"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 KINDS = ("path", "added")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -80,7 +83,7 @@ def _rule(line):
 
 def parse(text):
     """The rules of every `agent-merge-guard` block in `text`, in order; [] when it holds none. Blank lines and lines
-    starting with `#` are skipped. An unreadable line, a name used twice or an unclosed block raises
+    starting with `#` are skipped. An unreadable line, a name used twice or reserved (`merge-guard`) or an unclosed block raises
     `core.Fail("bad-rule: ...")`."""
     rules, inside = [], False
     for number, line in enumerate(text.splitlines(), 1):
@@ -92,7 +95,7 @@ def parse(text):
             inside = False
         elif stripped and not stripped.startswith("#"):
             rule = _rule(stripped)
-            if rule is None or any(r.name == rule.name for r in rules):
+            if rule is None or rule.name == BLOCK_RULE or any(r.name == rule.name for r in rules):
                 raise core.Fail(f"bad-rule: line {number}: {stripped}")
             rules.append(rule)
     if inside:
@@ -114,7 +117,8 @@ def _git(repo, log, *args, check=True):
 
 
 def _blob(repo, ref, path, log):
-    """The text of `path` at `ref`, following one symlink inside the tree; None when there is no such file."""
+    """`(path, text)` of the file `path` names at `ref`, following one symlink inside the tree (`path` is then the
+    link's target); None when there is no such file."""
     for _ in range(2):
         rc, out = _git(repo, log, "ls-tree", "-z", ref, "--", path, check=False)
         entry = out.split("\0")[0]
@@ -125,7 +129,7 @@ def _blob(repo, ref, path, log):
             return None
         text = _git(repo, log, "cat-file", "blob", sha)[1]
         if mode != "120000":
-            return text
+            return path, text
         path = posixpath.normpath(posixpath.join(posixpath.dirname(path), text.strip()))
         if path.startswith("../"):
             return None
@@ -138,12 +142,36 @@ def load(repo, ref, log):
     if _git(repo, log, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)[0] != 0:
         raise core.Fail(f"guard-no-base: {ref}")
     for name in FILES:
-        text = _blob(repo, ref, name, log)
-        if text is not None and any(line.strip() == FENCE for line in text.splitlines()):
+        found = _blob(repo, ref, name, log)
+        if found is not None and any(line.strip() == FENCE for line in found[1].splitlines()):
             log.write(f"guard rules from {ref}:{name}\n")
-            return parse(text)
+            return parse(found[1])
     log.write(f"guard: no {FENCE} block at {ref}\n")
     return []
+
+
+def _block(text):
+    """The lines of every `agent-merge-guard` block in `text`, fences included, stripped; () without one."""
+    out, inside = [], False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if inside or stripped == FENCE:
+            out.append(stripped)
+            inside = not (inside and stripped.startswith("```"))
+    return tuple(out)
+
+
+def _block_changes(repo, old, new, log):
+    """The files whose `agent-merge-guard` block differs between commits `old` and `new`, each of `FILES` read as
+    `load` reads it (a symlink followed to its target), in `FILES` order without repeats."""
+    changed = []
+    for name in FILES:
+        before, after = _blob(repo, old, name, log), _blob(repo, new, name, log)
+        blocks = [_block(found[1]) if found else () for found in (before, after)]
+        path = (after or before or (name,))[0]
+        if blocks[0] != blocks[1] and path not in changed:
+            changed.append(path)
+    return changed
 
 
 ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13}
@@ -170,10 +198,12 @@ def _unquote(path):
 
 
 def scan(repo, range_, rules, log):
-    """Every hit of `rules` in `git diff <range_>`, in diff order: `Hit(file, line, rule)`. A path rule hits each
-    changed path (a deleted file by its old path; renames are a delete and an add) at the new side's first changed
-    line (0 when there is none); an added rule hits each `+` line at its number from the hunk header."""
-    flags = ["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv"]
+    """Every hit of `rules` in `git diff <range_>` (`<base>...<head>`), in diff order: `Hit(file, line, rule)`. A path
+    rule hits each changed path (a deleted file by its old path; renames are a delete and an add) at the new side's
+    first changed line (0 when there is none); an added rule hits each `+` line at its number from the hunk header, the
+    line without one trailing `\r`, every file read as text whatever `.gitattributes` says. A file whose
+    `agent-merge-guard` block differs from the merge base's hits `merge-guard` the way a path rule does."""
+    flags = ["diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--text"]
     names = _git(repo, log, *flags, "--name-status", "-z", range_, "--")[1].split("\0")
     paths = [p for status, p in zip(names[::2], names[1::2]) if status]
     order = {p: i for i, p in enumerate(paths)}
@@ -189,27 +219,32 @@ def scan(repo, range_, rules, log):
             line = int(HUNK.match(text).group(1))
             first.setdefault(new, line)
         elif text.startswith("+") and new:
-            added.append((new, line, text[1:]))
+            added.append((new, line, text[1:-1] if text.endswith("\r") else text[1:]))
             line += 1
     hits = []
     for path in paths:
         hits += [Hit(path, first.get(path, 0), r.name) for r in rules if r.kind == "path" and r.matches_path(path)]
     for path, number, text in added:
         hits += [Hit(path, number, r.name) for r in rules if r.kind == "added" and r.matches_line(path, text)]
-    names = [r.name for r in rules]
+    base, _, head = range_.partition("...")
+    merge_base = _git(repo, log, "merge-base", base, head or "HEAD")[1].strip()
+    hits += [Hit(path, first.get(path, 0), BLOCK_RULE)
+             for path in _block_changes(repo, merge_base, head or "HEAD", log)]
+    names = [BLOCK_RULE] + [r.name for r in rules]
     return sorted(hits, key=lambda h: (order.get(h.file, len(order)), h.line, names.index(h.rule)))
 
 
 def check(repo, range_, run, log):
     """Refuses the merge of `range_` (`origin/<base>...<head>`) in `repo` with `core.Fail("guarded <file:line rule>;
     ...")`, naming every hit whose rule `<run>/decisions.md` does not waive `yes`; returns quietly otherwise. The
-    rules come from `origin/<base>`. A range in another form raises `guard-bad-range`."""
+    rules come from `origin/<default branch>` (`run.md`'s `Default:`). A range in another form raises
+    `guard-bad-range`; a base that is no commit, `guard-no-base: <base>`."""
     base, sep, _ = range_.partition("...")
     if not sep or not base:
         raise core.Fail(f"guard-bad-range: {range_}")
-    rules = load(repo, base, log)
-    if not rules:
-        return
+    if _git(repo, log, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False)[0] != 0:
+        raise core.Fail(f"guard-no-base: {base}")
+    rules = load(repo, f"origin/{runfolder.run_info(run)['Default']}", log)
     d = decisions.load(run)
     refused = []
     for hit in scan(repo, range_, rules, log):

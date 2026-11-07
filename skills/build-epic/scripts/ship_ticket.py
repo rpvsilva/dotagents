@@ -23,7 +23,7 @@ approval, a required review or a code owner), it sets the ticket `in-review` and
 
 A PR whose base is not the run's base fails `wrong-base <branch>` before anything else, so nothing is pushed. Then,
 whatever the base, the merge guard (`steplib/guard.py`, the format in `../merge-guard.md`) checks
-`origin/<base>...<ticket head>` against the rules on `origin/<base>`: a hit whose rule `decisions.md` does not waive
+`origin/<base>...<ticket head>` against the rules on `origin/<default branch>`: a hit whose rule `decisions.md` does not waive
 `yes` fails `guarded <file:line rule>; ...` before `no-merge-rule`, the Checks or any push.
 
 Into any other base than the default branch, which the repo's gate does not judge, it first runs `map.md`'s Checks on
@@ -40,7 +40,7 @@ Prints `OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (
 into anything but the run's base), `red <suite>`, `merge`, `head-moved`,
 `no-pr`, `no-merge-rule`, `no-review`, `reviewed-unknown`, `reviewed-head-lacks-base`, `tree-mismatch`, `pr-view`,
 `pr-edit`, `pr-ready`, `pr-create`, `empty-template-section <sections>`, `guarded <file:line rule>; ...` (a hit not
-waived), `guard-no-base: <ref>` (no `origin/<base>`), `guard-bad-range: <range>`, `bad-rule: <line>` (an unreadable
+waived), `guard-no-base: <ref>` (no `origin/<base>` or `origin/<default branch>`), `guard-bad-range: <range>`, `bad-rule: <line>` (an unreadable
 guard rule) and `git-<cmd>` (a git command of the guard failed).
 """
 import json

@@ -363,6 +363,24 @@ class ShipGuardTest(Base):
         self.assertFalse(ran.exists())
         self.assertEqual(self.calls("pr", "merge"), [])
 
+    def test_a_ticket_into_an_integration_branch_that_lost_the_block_is_judged_by_the_default_branch(self):
+        # An earlier ticket merged into `integ` with its block deletion waived; this ticket forks from there.
+        clone = self.kit.clone
+        self.kit.git("checkout", "-q", "-B", "integ", "origin/integ", cwd=clone)
+        (clone / "AGENTS.md").write_text("# Rules\n", encoding="utf-8")
+        self.kit.git("commit", "-qam", "drop the rules", cwd=clone)
+        (clone / "tests").mkdir()
+        (clone / "tests" / "conftest.py").write_text("import os\n", encoding="utf-8")
+        self.kit.git("add", "tests/conftest.py", cwd=clone)
+        self.kit.git("commit", "-qm", "conftest", cwd=clone)
+        self.kit.git("push", "-q", "origin", "HEAD~1:integ", "+HEAD:feat/t", cwd=clone)
+        self.kit.git("checkout", "-q", "main", cwd=clone)
+        self.waive("tests", base="integ")
+        (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
+        before = self.head()
+        self.assertRegex(self.ship("--reviewed", before), r"^FAIL 01 guarded tests/conftest.py:1 conftest \(log: ")
+        self.assertEqual(self.calls("pr", "merge"), [])
+
 
 class IdentityTest(Base):
     """The run's identity, decided by `init_run.py` from the `identity_command` Setting, mints a token per gh call."""
