@@ -15,12 +15,25 @@ def ticket(run, name, blocked="none"):
     (run / "tickets" / name).write_text(f"# T\nStatus: ready\nIssue: #1\nBranch: feat/x\nBlocked by: {blocked}\n")
 
 
-def task(run, name, ticket_no, writes, blocked="none"):
+def task(run, name, ticket_no, writes, blocked="none", interactions=None, env=None, status="ready"):
+    """A task file. A hub task (a `ticket NN` blocker) gets an `## Interactions` line unless `interactions` is given."""
     (run / "tasks").mkdir(exist_ok=True)
-    lines = ["# T", "Status: ready", f"Ticket: {ticket_no}", f"Blocked by: {blocked}"]
+    lines = ["# T", f"Status: {status}", f"Ticket: {ticket_no}", f"Blocked by: {blocked}"]
     if writes is not None:
         lines.append(f"Writes: {writes}")
-    (run / "tasks" / name).write_text("\n".join(lines) + "\n\n## What to build\nx\n")
+    if env is not None:
+        lines.append(f"Env: {env}")
+    if interactions is None and plan_check.blockers(blocked)[1]:
+        interactions = "- undo: not touched"
+    body = "\n\n## What to build\nx\n"
+    if interactions is not None:
+        body += f"\n## Interactions\n{interactions}\n"
+    (run / "tasks" / name).write_text("\n".join(lines) + body + "\n## Acceptance criteria\n- [ ] y\n")
+
+
+def map_md(run, isolation="- `TODO_HOME`: set per test in `conftest.py`.", matrix=""):
+    (run / "map.md").write_text(f"# Map\n\n## Invariants\n\n- x\n\n## Field matrix\n\n{matrix}\n\n"
+                                f"## Test isolation\n\n{isolation}\n\n## Checks\n\n```\nmake test\n```\n")
 
 
 class PlanCheck(unittest.TestCase):
@@ -120,6 +133,92 @@ class PlanCheck(unittest.TestCase):
             self.assertEqual(plan_check.main(["plan_check.py", str(self.run)]), 1)
             self.assertEqual(plan_check.main(["plan_check.py"]), 2)
         self.assertIn("plan ok: 1 tasks, 1 lanes", out.getvalue())
+
+
+    def test_hub_task_without_interactions_fails(self):
+        ticket(self.run, "01-a.md")
+        ticket(self.run, "02-b.md")
+        task(self.run, "01-01-x.md", "01", "a.py")
+        task(self.run, "02-01-hub.md", "02", "b.py", blocked="ticket 01", interactions="")
+        self.assertEqual(self.check()[0], ["02-01-hub.md: hub task has no ## Interactions section"])
+
+    def test_hub_task_with_interactions_passes(self):
+        ticket(self.run, "01-a.md")
+        ticket(self.run, "02-b.md")
+        task(self.run, "01-01-x.md", "01", "a.py")
+        task(self.run, "02-01-hub.md", "02", "b.py", blocked="ticket 01", interactions="- sync: copies the flag")
+        self.assertEqual(self.check(), ([], 2, 2))
+
+    def test_hub_task_with_blank_interactions_section_fails(self):
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-hub.md", "01", "b.py", blocked="ticket 01", interactions="   \n")
+        self.assertIn("01-01-hub.md: hub task has no ## Interactions section", self.check()[0])
+
+    def test_done_hub_task_needs_no_interactions(self):
+        ticket(self.run, "01-a.md")
+        ticket(self.run, "02-b.md")
+        task(self.run, "02-01-hub.md", "02", "b.py", blocked="ticket 01", interactions="", status="done")
+        self.assertEqual(self.check()[0], [])
+
+    def test_non_hub_task_needs_no_interactions(self):
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py", blocked="none", interactions=None)
+        self.assertEqual(self.check()[0], [])
+
+    def test_env_without_test_isolation_line_fails(self):
+        map_md(self.run)
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py", env="`TODO_HOME`, TODO_COLOR")
+        self.assertEqual(self.check()[0], ["01-01-x.md: Env TODO_COLOR has no Test isolation line"])
+
+    def test_env_name_must_match_whole_word(self):
+        map_md(self.run, isolation="- `TODO_HOME_DIR`: set per test.")
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py", env="TODO_HOME")
+        self.assertEqual(self.check()[0], ["01-01-x.md: Env TODO_HOME has no Test isolation line"])
+
+    def test_env_listed_in_test_isolation_passes(self):
+        map_md(self.run, isolation="- `TODO_HOME`: set per test.\n- `<run>/side.json`: tempdir per test.")
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py", env="TODO_HOME, <run>/side.json")
+        task(self.run, "01-02-y.md", "01", "b.py", env="none")
+        self.assertEqual(self.check(), ([], 2, 1))
+
+    def test_env_is_not_found_outside_test_isolation(self):
+        map_md(self.run, isolation="None.", matrix="TODO_HOME is mentioned here only.")
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py", env="TODO_HOME")
+        self.assertEqual(self.check()[0], ["01-01-x.md: Env TODO_HOME has no Test isolation line"])
+
+    def test_bad_field_matrix_cell_fails(self):
+        map_md(self.run, matrix="| field | copy | `bulk done` |\n|---|---|---|\n| due_time | keep | ? |\n"
+                                "| parent | maybe | reset |")
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py")
+        self.assertEqual(self.check()[0], ["map.md: Field matrix cell parent x copy is maybe"])
+
+    def test_field_matrix_of_allowed_cells_passes(self):
+        map_md(self.run, matrix="| Field | copy | import |\n| :--- | :---: | --- |\n| `due_time` | keep | drop |\n"
+                                "| parent | reset | ? |")
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py")
+        self.assertEqual(self.check(), ([], 1, 1))
+
+    def test_field_matrix_without_table_passes(self):
+        map_md(self.run, matrix="None: this epic adds no item model.")
+        ticket(self.run, "01-a.md")
+        task(self.run, "01-01-x.md", "01", "a.py")
+        self.assertEqual(self.check()[0], [])
+
+    def test_no_map_skips_map_checks(self):
+        task(self.run, "01-auth.md", "none", "auth.py", env="AUDIT_TOKEN")
+        self.assertEqual(self.check(), ([], 1, 1))
+
+    def test_section_returns_body_or_none(self):
+        text = "# T\n\n## Interactions\n- a\n### sub\n- b\n\n## Acceptance criteria\n- [ ] c\n"
+        self.assertEqual(plan_check.section(text, "Interactions"), "- a\n### sub\n- b\n\n")
+        self.assertEqual(plan_check.section(text, "Acceptance criteria"), "- [ ] c\n")
+        self.assertIsNone(plan_check.section(text, "Field matrix"))
 
 
 if __name__ == "__main__":
