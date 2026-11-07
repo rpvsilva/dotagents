@@ -28,7 +28,7 @@ def step(ctx):
     info = runfolder.run_info(ctx.run_dir)
     sha_file = ctx.run_dir / "dispatcher.sha"
     if not sha_file.exists():
-        link = Path(os.path.expanduser("~")) / ".agents" / "bin" / "remote-agent"
+        link = Path(core.home()) / ".agents" / "bin" / "remote-agent"
         ours = Path(info["Repo"]) / "scripts" / "remote-agent.sh"
         ctx.note(f"dispatcher {link} -> {core.resolve(link)}; repo's {core.resolve(ours)}")
         if not link.exists() or not ours.exists() or core.resolve(link) != core.resolve(ours):

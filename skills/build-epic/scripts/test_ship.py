@@ -21,7 +21,10 @@ import os, sys
 d = os.environ["GH_STUB_DIR"]
 args = sys.argv[1:]
 if args[:2] != ["pr", "view"]:
-    os.execv({kit_gh!r}, [{kit_gh!r}, *args])
+    if os.name == "nt":  # Windows starts no `#!` script, and its os.execv returns before the child ends
+        import subprocess
+        sys.exit(subprocess.run([sys.executable, "-IS", {kit_gh!r}, *args]).returncode)
+    os.execv(sys.executable, [sys.executable, "-IS", {kit_gh!r}, *args])
 import json, subprocess
 with open(os.path.join(d, "gh.log"), "a") as f:
     f.write(json.dumps(args) + "\n")
@@ -115,8 +118,7 @@ class Base(unittest.TestCase):
         self.kit.git("fetch", "-q", "origin", cwd=clone)
 
     def set_setting(self, key, value):
-        p = subprocess.run([str(self.kit.home / ".agents/bin/settings"), "set", "build-epic", key, value, "--machine"],
-                           env=self.kit.env, text=True, capture_output=True)
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "set", "build-epic", key, value, "--machine")
         self.assertEqual(p.returncode, 0, p.stderr)
 
 
@@ -287,8 +289,8 @@ class ShipMergeTest(Base):
         path = self.kit.tmp / "merge-rule.sh"
         path.write_text(f"#!/usr/bin/env bash\n{script}\n")
         path.chmod(0o755)
-        p = subprocess.run([str(self.kit.home / ".agents/bin/settings"), "set", "build-epic", "merge_command",
-                            f"{path} {{pr}}", "--machine"], env=self.kit.env, text=True, capture_output=True)
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "set", "build-epic", "merge_command",
+                            f"{path} {{pr}}", "--machine")
         self.assertEqual(p.returncode, 0, p.stderr)
 
     def test_merges_closes_the_issues_and_removes_the_worktree(self):

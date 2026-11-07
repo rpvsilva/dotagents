@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prints the checks that cover the changed files, one per line, as mapped in tests/suites.txt.
-# Usage: tests/affected.sh [--all | --base <ref> | -- <path>...]
+# Usage: tests/affected.sh [--files] [--all | --base <ref> | -- <path>...]
+#   --files      print the changed files, one per line, instead of the checks (`--all` when every check runs)
 #   (none)       files changed since the merge base with origin/main: committed, uncommitted and untracked
 #   --base <ref> the same, against <ref>
 #   -- <path>... exactly these files (e.g. the ones a merge conflict touched)
@@ -19,8 +20,12 @@ while read -r check rest; do
   patterns+=("${rest:-}")
 done <tests/suites.txt
 
+mode=checks
+if [ "${1:-}" = --files ]; then mode=files; shift; fi
+
 all() {
   local c
+  if [ "$mode" = files ]; then echo --all; exit 0; fi
   for c in "${checks[@]}"; do [ "$c" = all ] || echo "$c"; done
   exit 0
 }
@@ -31,12 +36,17 @@ case "${1:-}" in
   --base) base="${2:?--base needs a ref}" ;;
   --) shift; files=("$@") given=1 ;;
   '') ;;
-  *) echo "usage: tests/affected.sh [--all | --base <ref> | -- <path>...]" >&2; exit 2 ;;
+  *) echo "usage: tests/affected.sh [--files] [--all | --base <ref> | -- <path>...]" >&2; exit 2 ;;
 esac
 
 if [ -z "$given" ]; then
   since="$(git merge-base "$base" HEAD 2>/dev/null)" || all
   while IFS= read -r f; do files+=("$f"); done < <(git diff --name-only "$since"; git ls-files --others --exclude-standard)
+fi
+
+if [ "$mode" = files ]; then
+  for f in ${files[@]+"${files[@]}"}; do echo "$f"; done
+  exit 0
 fi
 
 # Patterns are split unquoted below; no filename expansion, or `*.sh` would match files in the repo root.

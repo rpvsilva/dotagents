@@ -1,11 +1,13 @@
 name: CI
 
-# Runs on PRs into main only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run.
+# Runs on PRs into main only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run. Draft PRs
+# run nothing; marking one ready for review (ready_for_review) starts the run.
 # PRs into other branches (build-epic's task PRs into a ticket branch) run their checks locally, to save runners.
 # macOS and Windows run in portability.yml, only when shell code changes.
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +19,7 @@ concurrency:
 
 jobs:
   lint:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,6 +49,7 @@ jobs:
           args: -color
 
   test:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,11 +75,17 @@ jobs:
           CHECKS: ${{ steps.affected.outputs.checks }}
         # At once, through tests/parallel.sh, as tests/run.sh runs them.
         run: |
+          # python.test.sh runs only the test folders holding a changed file, as under tests/run.sh.
+          if [ -n "$GITHUB_BASE_REF" ]; then
+            PYTHON_TEST_FILES="$(tests/affected.sh --files --base "origin/$GITHUB_BASE_REF")"
+            export PYTHON_TEST_FILES
+          fi
           suites=()
           for t in tests/*.test.sh; do case " $CHECKS " in *" ${t##*/} "*) suites+=("$t") ;; esac; done
           tests/parallel.sh ${suites[@]+"${suites[@]}"}
 
   secrets:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     permissions:
       contents: read
