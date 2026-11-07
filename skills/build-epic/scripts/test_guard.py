@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, decisions, guard  # noqa: E402
+from steplib import core, decisions, guard, runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
 GUARD_RULES = SCRIPTS / "guard_rules.py"
@@ -126,15 +126,64 @@ class CheckTest(GuardCase):
         self.commit({'pkg/a "b"\tü.py': "sys.exit(1)\n", "pkg/c d.py": "sys.exit(1)\n"})
         self.assertEqual(self.refused(), 'guarded pkg/a "b"\tü.py:1 process-exit; pkg/c d.py:1 process-exit')
 
-    def test_a_rule_deleted_on_the_pr_head_still_applies(self):
+    def test_a_rule_deleted_on_the_pr_head_still_applies_and_the_deletion_is_a_hit(self):
         self.base({"AGENTS.md": AGENTS})
         self.commit({"AGENTS.md": "# Rules\n", "pkg/run.py": "sys.exit(1)\n"})
-        self.assertEqual(self.refused(), "guarded pkg/run.py:1 process-exit")
+        self.assertEqual(self.refused(), "guarded AGENTS.md:1 merge-guard; pkg/run.py:1 process-exit")
 
-    def test_a_rule_added_on_the_pr_head_does_not_apply_yet(self):
+    def test_a_rule_added_on_the_pr_head_does_not_apply_yet_but_the_block_change_is_a_hit(self):
         self.base({"AGENTS.md": "# Rules\n"})
         self.commit({"AGENTS.md": AGENTS, "pkg/run.py": "sys.exit(1)\n"})
+        self.assertEqual(self.refused(), "guarded AGENTS.md:2 merge-guard")
+        self.waive("merge-guard", "yes")
         self.check()
+
+    def test_an_edit_outside_the_block_is_no_hit(self):
+        self.base({"AGENTS.md": AGENTS})
+        self.commit({"AGENTS.md": "# More rules\n" + AGENTS[len("# Rules\n"):]})
+        self.check()
+
+    def test_an_empty_block_added_to_agents_md_while_the_rules_live_in_claude_md_is_a_hit(self):
+        self.base({"AGENTS.md": "# Rules\n", "CLAUDE.md": AGENTS})
+        self.commit({"AGENTS.md": "# Rules\n```agent-merge-guard\n```\n", "tests/test_a.py": "x = 1\n"})
+        self.assertEqual(self.refused(), "guarded AGENTS.md:2 merge-guard; tests/test_a.py:1 tests")
+
+    def test_a_waived_block_deletion_merged_into_a_ticket_branch_leaves_the_rules_for_the_next_merge(self):
+        self.base({"AGENTS.md": AGENTS})
+        self.commit({"AGENTS.md": "# Rules\n"})
+        self.waive("merge-guard", "yes")
+        self.check()
+        self.kit.git("push", "-q", "origin", "pr:feat/t", cwd=self.repo)
+        self.kit.git("checkout", "-qb", "pr2", cwd=self.repo)
+        self.commit({"pkg/run.py": "sys.exit(1)\n"})
+        with self.assertRaises(core.Fail) as caught:
+            guard.check(self.repo, "origin/feat/t...HEAD", self.run_dir, self.log)
+        self.assertEqual(caught.exception.reason, "guarded pkg/run.py:1 process-exit")
+
+    def test_rules_come_from_the_default_branch_even_when_the_merge_base_lost_them(self):
+        self.base({"AGENTS.md": AGENTS})
+        self.commit({"AGENTS.md": "# Rules\n"})  # an earlier merge into the integration branch, block gone
+        self.kit.git("push", "-q", "origin", "pr:feat/integration", cwd=self.repo)
+        self.kit.git("checkout", "-qb", "ticket", cwd=self.repo)
+        self.commit({"tests/test_a.py": "x = 1\n"})
+        with self.assertRaises(core.Fail) as caught:
+            guard.check(self.repo, "origin/feat/integration...HEAD", self.run_dir, self.log)
+        self.assertEqual(caught.exception.reason, "guarded tests/test_a.py:1 tests")
+
+    def test_a_gitattributes_turning_diffs_off_still_shows_added_lines(self):
+        for attributes in ("* -diff\n", "pkg/** binary\n"):
+            with self.subTest(attributes=attributes):
+                self.setUp()
+                self.base({"AGENTS.md": AGENTS})
+                self.commit({".gitattributes": attributes, "pkg/run.py": "import sys\nsys.exit(1)\n"})
+                self.assertEqual(self.refused(), "guarded pkg/run.py:2 process-exit")
+
+    def test_an_added_line_of_a_crlf_file_matches_a_rule_ending_in_dollar(self):
+        self.base({"AGENTS.md": "```agent-merge-guard\nexit-one added sys\\.exit\\(1\\)$\n```\n"})
+        (self.repo / "run.py").write_bytes(b"import sys\r\nsys.exit(1)\r\n")
+        self.kit.git("add", "run.py", cwd=self.repo)
+        self.kit.git("commit", "-qm", "crlf", cwd=self.repo)
+        self.assertEqual(self.refused(), "guarded run.py:2 exit-one")
 
     def test_a_repo_with_no_block_has_no_rules(self):
         self.base({"AGENTS.md": "# Rules\n\n```sh\ntests path tests/**\n```\n"})
@@ -145,6 +194,16 @@ class CheckTest(GuardCase):
         self.base({"AGENTS.md": "# Rules\n", "CLAUDE.md": AGENTS})
         self.commit({"tests/test_a.py": "x = 1\n"})
         self.assertEqual(self.refused(), "guarded tests/test_a.py:1 tests")
+
+    def test_a_block_change_through_a_symlinked_claude_md_is_one_hit(self):
+        self.base({"AGENTS.md": AGENTS})
+        (self.repo / "CLAUDE.md").symlink_to("AGENTS.md")
+        self.kit.git("add", "CLAUDE.md", cwd=self.repo)
+        self.kit.git("commit", "-qm", "link", cwd=self.repo)
+        self.kit.git("push", "-q", "origin", "pr:main", cwd=self.repo)
+        self.kit.git("fetch", "-q", "origin", cwd=self.repo)
+        self.commit({"AGENTS.md": "# Rules\n"})
+        self.assertEqual(self.refused(), "guarded AGENTS.md:1 merge-guard")
 
     def test_the_block_is_read_through_a_symlinked_agents_md(self):
         self.base({"docs/rules.md": AGENTS})
@@ -209,7 +268,7 @@ class ParseTest(unittest.TestCase):
 
     def test_unreadable_lines_fail_with_their_line(self):
         for line in ("tests tests/**", "tests glob tests/**", "tests path", "tests path a b", "-x path a",
-                     "bad added (", "x added a in", "dup path a\ndup path b"):
+                     "bad added (", "x added a in", "dup path a\ndup path b", "merge-guard path a"):
             with self.subTest(line=line), self.assertRaises(core.Fail) as caught:
                 guard.parse("intro\n```agent-merge-guard\n" + line + "\n```\n")
             self.assertTrue(caught.exception.reason.startswith("bad-rule: line "), caught.exception.reason)
@@ -250,13 +309,13 @@ class GuardRulesTest(GuardCase):
             "rule conftest path **/conftest.py",
         ])
 
-    def test_reads_the_recorded_base_branch(self):
+    def test_reads_the_default_branch_not_the_recorded_base(self):
         self.base({"AGENTS.md": "# Rules\n"})
         self.commit({"AGENTS.md": AGENTS})
         self.kit.git("push", "-q", "origin", "pr:feat/integration", cwd=self.repo)
         d = decisions.Decisions(headers={"base": "feat/integration"})
         decisions.save(self.run_dir, d)
-        self.assertEqual(len(self.guard_rules()), 3)
+        self.assertEqual(self.guard_rules(), [])
 
     def test_prints_nothing_without_a_block(self):
         self.base({"AGENTS.md": "# Rules\n"})
@@ -266,8 +325,8 @@ class GuardRulesTest(GuardCase):
         self.base({"AGENTS.md": "```agent-merge-guard\ntests tests/**\n```\n"})
         self.assertEqual(self.guard_rules(ok=False), ["FAIL run bad-rule: line 2: tests tests/**"])
 
-    def test_a_base_missing_on_origin_fails_git_fetch(self):
-        decisions.save(self.run_dir, decisions.Decisions(headers={"base": "feat/nope"}))
+    def test_a_default_branch_missing_on_origin_fails_git_fetch(self):
+        runfolder.set_header(self.run_dir / "run.md", "Default", "nope")
         self.assertEqual(self.guard_rules(ok=False), ["FAIL run git-fetch"])
 
     def test_a_missing_run_folder_or_argument_fails(self):

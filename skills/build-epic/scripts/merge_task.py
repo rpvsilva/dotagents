@@ -6,7 +6,7 @@ Usage: python3 -I merge_task.py <run> <task>
 In the task's worktree `<run>/worktrees/<task>`: reads the ticket PR's checks (waiting on pending ones), fetches and
 merges the ticket branch's tip forward when the branch lacks it (never a reset or a checkout, so an earlier conflict
 resolution is kept), runs the merge guard on `origin/<ticket branch>...HEAD` (`steplib/guard.py`: rules read from the
-ticket branch on origin, a hit passing only when `decisions.md` waives its rule `yes`), runs `map.md`'s `Checks`
+run's default branch on origin, a hit passing only when `decisions.md` waives its rule `yes`), runs `map.md`'s `Checks`
 timing each suite, inside the run's environment as `test_command:` runs them (`<run>/env`, `steplib/checks.py`'s
 `in_env`), pushes, and merges the task's `PR:` by the merge rule (`merge_command` Setting), reading the PR back. Then
 sets the task `done`, removes its worktree and branch, opens the draft ticket PR when the ticket has none, and, when
