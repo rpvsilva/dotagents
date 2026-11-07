@@ -1,0 +1,1 @@
+{"group": "epics", "needs": {"build-epic": "required", "ship-pr": "optional", "remote-subagents": "optional", "remote": "optional"}, "agents": ["test-tuner"]}

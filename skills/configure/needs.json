@@ -1,0 +1,1 @@
+{"group": "core", "needs": {"remember": "optional", "ship-pr": "optional", "remote": "optional"}}
