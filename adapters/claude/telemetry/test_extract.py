@@ -639,6 +639,25 @@ class RepoAndDate(unittest.TestCase):
             self.assertEqual(run_["date"], "2026-10-23")
 
 
+class Prices(unittest.TestCase):
+    def test_a_pricing_file_of_the_wrong_shape_gives_no_prices(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "pricing.json"
+            for text in ('["models"]', '{"models": []}', '{"asOf": "2030-01-01"}'):
+                path.write_text(text)
+                self.assertIsNone(extractor.load_pricing(path), text)
+            path.write_text('{"models": {}}')
+            self.assertEqual(extractor.load_pricing(path), {"models": {}})
+
+    def test_cost_is_none_when_a_model_or_one_of_its_kinds_has_no_price(self):
+        prices = {kind: 1 for kind in extractor.TOKEN_KINDS}
+        tokens = {"m": dict.fromkeys(extractor.TOKEN_KINDS, 1_000_000)}
+        self.assertEqual(extractor.cost(tokens, {"models": {"m": prices}}), 5.0)
+        self.assertIsNone(extractor.cost(tokens, None))
+        for models in ({}, {"m": 1}, {"m": {**prices, "cacheWrite1h": None}}, {"m": {**prices, "output": True}}):
+            self.assertIsNone(extractor.cost(tokens, {"models": models}), models)
+
+
 class DamagedLog(unittest.TestCase):
     def test_a_half_written_last_line_is_skipped(self):
         text = (FIXTURES / "spans.jsonl").read_text()

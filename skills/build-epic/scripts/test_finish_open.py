@@ -145,6 +145,14 @@ class FinishTaskTest(StepCase):
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
         self.assertEqual((self.kit.run_dir / "reports" / "01-02.md").read_text(), report.read_text())
 
+    def test_an_unknown_flag_or_a_missing_report_fails_before_touching_the_task(self):
+        self.write(self.wt, "a.txt", "a\n")
+        for args, prefix in ((["--force", "x"], "FAIL 01-02 usage: finish_task.py "), (["--title"], "FAIL 01-02 usage: "),
+                             (["--report", "nowhere.md"], f"FAIL 01-02 no-report: {self.kit.tmp / 'nowhere.md'} ")):
+            self.assert_fail(self.kit.step(FINISH, self.kit.run_dir, "01-02", *args, cwd=self.kit.tmp), prefix)
+        self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "?? a.txt")
+        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+
 
 class OpenPrTest(StepCase):
     def finished(self, subject="JSON export"):
@@ -279,6 +287,17 @@ class PrBodyTest(StepCase):
     def test_task_body_says_when_no_result_was_recorded(self):
         body = prbody.task_body(self.kit.run_dir, "01-02", self.task, self.kit.run_dir / "tickets" / "01-alpha.md")
         self.assertIn(prbody.NO_RESULT, body)
+
+    def test_task_body_reads_older_results_and_says_when_none_is_readable(self):
+        reports = self.kit.run_dir / "reports"
+        reports.mkdir()
+        ticket = self.kit.run_dir / "tickets" / "01-alpha.md"
+        for text, want in (("{not json", prbody.NO_RESULT), ('{"suites": "x"}', prbody.NO_RESULT),
+                           ('{"suites": ["x", {"suite": "make", "passed": false}, {"name": "lint", "passed": true}]}',
+                            "- `make`: failed\n- `lint`: passed\n")):
+            (reports / "01-02.checks.json").write_text(text)
+            body = prbody.task_body(self.kit.run_dir, "01-02", self.task, ticket)
+            self.assertIn(f"## Result\n\n{want}", body, text)
 
     def test_ticket_body_lists_tasks_with_pr_links_and_closes_the_issue(self):
         runfolder.set_header(self.task, "PR", URL)

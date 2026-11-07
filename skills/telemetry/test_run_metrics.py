@@ -100,6 +100,40 @@ class RunMetrics(unittest.TestCase):
         got = self.metrics(run, "--gh", self.gh)["suites"]
         self.assertEqual((got["merges"], got["runs"], got["passed"]), (2, 4, 63))
 
+    def test_unreadable_results_are_named_as_gaps_and_counted_without_cost(self):
+        run = self.tmp / "broken"
+        for d in ("reports", "remote", "tasks"):
+            (run / d).mkdir(parents=True)
+        (run / "reports" / "01-01.checks.json").write_text("{not json")
+        (run / "reports" / "01-02.checks.json").write_text('[{"command": "true", "rc": 0, "passed": 3, '
+                                                           '"failed": 0, "skipped": 0, "seconds": 1.5}]')
+        (run / "remote" / "01-01.json").write_text("{not json")
+        (run / "remote" / "01-02.json").write_text("[1]")
+        (run / "remote" / "01-03.json").write_text('{"status": "done", "total_cost_usd": 1.25}')
+        (run / "tasks" / "01-01-a.md").write_text("# 01-01: a\nStatus: done\nTicket: 01\nPR: https://x/o/r/pull/7\n")
+        answers = self.tmp / "answers"
+        answers.mkdir()
+        (answers / "7.json").write_text("not json\n")
+        gh = shlex.join([sys.executable, "-I", str(self.tmp / "gh_stub.py"), str(answers), str(self.calls)])
+        got = self.metrics(run, "--gh", gh)
+        self.assertEqual(got["gaps"], ["suite results: 01-01.checks.json is not JSON",
+                                       "remote: 01-01.json is not a result", "remote: 01-02.json is not a result",
+                                       "remote: 2 run(s) without cost", "github: https://x/o/r/pull/7: no JSON"])
+        self.assertEqual((got["suites"]["merges"], got["suites"]["runs"], got["suites"]["passed"]), (1, 1, 3))
+        remote = got["remote"]
+        self.assertEqual((remote["runs"], remote["runs_without_cost"], remote["cost_usd"], remote["by_status"]),
+                         (3, 2, 1.25, {"done": 1, "unreadable": 2}))
+        self.assertEqual([(r["pr"], r["state"]) for r in got["prs"]["list"]], [("https://x/o/r/pull/7", None)])
+
+    def test_cli_refuses_a_missing_run_folder_and_an_empty_gh(self):
+        for run, extra, message in ((self.tmp / "nowhere", [], "no run folder"), (self.tmp, ["--gh", " "],
+                                                                                  "--gh is empty")):
+            res = subprocess.run([sys.executable, "-I", str(SCRIPT), str(run), *extra], capture_output=True,
+                                 text=True, env=self.env, cwd=str(self.tmp), stdin=subprocess.DEVNULL)
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertIn(message, res.stderr)
+            self.assertEqual(res.stdout, "")
+
     def test_no_gh35_specifics_remain_in_the_code(self):
         code = SCRIPT.read_text()
         for pattern in (r"gh-35", r"\b31-", r"'31'", r'"31"', r"-hub\b", r"agents-feature", r"into int/", r"\bint/"):
