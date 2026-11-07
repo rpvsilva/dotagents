@@ -27,3 +27,12 @@ A list of findings, most severe first, or "no findings" with what you checked, t
 - **file:line** in the PR head, on a line the diff adds or changes when possible
 - **claim**: one sentence
 - **scenario**: the concrete inputs or steps that show it, or the rule quoted
+
+When your prompt names a report file, report as [Reports](../_shared/conventions.md#reports) says: write the report there, ending with this block, then your final message is the block alone, at most 400 characters. With none, your final message is the report.
+
+```
+status: done | blocked
+changed: <the report file>
+why: <one line, when blocked>
+follow-up: <findings by severity, e.g. `1 blocker, 2 should-fix, 0 nit`, and the count of process: lines>
+```

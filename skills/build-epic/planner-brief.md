@@ -1,12 +1,12 @@
 # Epic planner brief
 
-You plan an epic for `build-epic`. You read the repo and the tracker, and write **only** inside the run folder; the repo stays untouched. Whoever started you gave you: the **pass** (`A`, `B` or `revise`), the run folder, the repo's notes file path, and per pass the inputs below.
+You plan an epic for `build-epic`. You read the repo and the tracker, and write **only** inside the run folder; the repo stays untouched. Whoever started you gave you one line per input: the **pass** (`A`, `B` or `revise`), the run folder, the repo's notes file path, your report file, and per pass the inputs below.
 
 First, every pass: read the repo's rules (`AGENTS.md` or `CLAUDE.md`, the notes file) and any glossary, ADRs or architecture docs. Use the repo's own domain words in everything you write.
 
 ## Pass A: spec and areas
 
-Input: the epic (link or ID on a tracker, or plain text), and optionally `explore: always`.
+Input: the epic (link or ID on a tracker, or a file holding plain text), and optionally `explore: always`.
 
 1. **Read the epic.** Use the tool's connector for that tracker; for GitHub, `gh issue view <n> --comments` plus its sub-issues (`gh api repos/<owner>/<repo>/issues/<n>/sub_issues`) and any issue its body links. Read every child issue in full, comments included. When no connector reaches the tracker, report `blocked` naming the missing one. Done when every child issue is read.
 2. **Write `spec.md`**: `Goal` (one paragraph), `Behaviours` (numbered, each observable from outside and naming the issue it came from), `Out of scope`, `Open questions`. Done when every child issue maps to a behaviour or to out of scope.
@@ -37,6 +37,7 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
    Ticket: TT
    Blocked by: <task numbers of the same ticket, and `ticket NN` for a ticket that must merge first; or none>
    Writes: <every repo path this task creates or edits, comma-separated>
+   Tier: <optional: high or low>
 
    ## What to build
    <the behaviour, from the user's side>
@@ -53,6 +54,8 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
 
    The `Writes` line is the task's **write set**, taken from `map.md`'s files to change; the orchestrator runs two tasks at once only when their write sets are disjoint. `Blocked by` names a real dependency (the task needs the other one's behaviour or code) and every write-set overlap: of two tasks sharing a file, the later one is blocked by the earlier, so it is cut from a branch that already holds the earlier one's change.
 
+   The optional `Tier` line is your estimate of the task's review risk, which `review_plan.py` turns into the review cost shown at approval: `high` gets the task its own review and its ticket a security review. Leave it out to let the script guess: `high` when `Writes` touch a storage format (`.json`, `.yml`, `.toml`, `.sql` and the like), else `low`. Set it when you know better, e.g. `high` for auth, permissions or a merge gate, `low` for a test-only change to a fixture. The true tier comes from the diff at review time.
+
    A **hub file** is one most tickets append to: a README table, a command registry, a changelog, an index of exports. Left in every feature task, it chains the whole epic into one lane. Shrink it first: when the repo's design allows, a prefactor task makes the hub load its entries (one file per command, a generated table), so each feature writes only its own file. What stays goes into each ticket's **hub task**: its last task, holding every hub edit of the ticket, blocked by the ticket's other tasks and by `ticket NN` for the ticket before it in the hub's order. Feature tasks keep hub files out of their write sets, so tickets build in parallel and only their hub tasks wait, each one for the merge before it.
 
    Done when every behaviour in `spec.md` belongs to a task of the ticket for the issue it came from, every ticket has a task, every task has a `Writes` line, and neither blocker graph has a cycle.
@@ -60,16 +63,17 @@ Input: the epic (link or ID on a tracker, or plain text), and optionally `explor
 
 ## Pass revise
 
-Input: the reason (the human's words, or a task path plus an implementer's `why`).
+Input: the reason: a file holding the human's words verbatim or `plan_check.py`'s output, or a task path plus its implementer's report file.
 
 Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`, give each task you add a `Writes` line, and update `map.md`'s `Lanes`. Done when the plan answers the reason and `plan_check.py` prints `plan ok` as in pass B.
 
 ## Report
 
-Your final message is this block and nothing else; details belong in the files you wrote or the commits you made.
+Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to your report file (the files written, and for pass B each ticket with its tasks and lanes in one line; for revise, what changed and why), ending with this block; then your final message is the block alone, at most 400 characters. Details belong in the files you wrote.
 
 ```
 status: done | blocked
 changed: <files written; for revise, the tickets and tasks changed or added>
 why: <one line, when blocked>
+follow-up:
 ```
