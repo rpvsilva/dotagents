@@ -87,6 +87,15 @@ expect allow gated 'cd ../plain; gh pr merge 7'
 expect block gated 'cd ../on-main && git push'
 expect block gated "cd $SANDBOX/plain && cd - && gh pr merge 7"
 
+# Block messages name no person and no private gate; approval is left to a human.
+messages=""
+for c in 'gh pr merge 7' 'gh pr review 7 --approve' 'git push origin main'; do
+  messages+="$(cd "$SANDBOX/gated" && "$HOOK" "$c" 2>&1 || true)"$'\n'
+done
+messages+="$(cd "$SANDBOX/on-main" && "$HOOK" 'git push' 2>&1 || true)"
+grep -qE 'Rui|agent-pr-gate' <<<"$messages" && fail "a block message names a person or a private gate: $messages"
+grep -qF "approving a PR is a human's call; an agent never approves" <<<"$messages" || fail "approval message: $messages"
+
 # The command as an argument works too, from the current directory.
 (cd "$SANDBOX/gated" && "$HOOK" 'gh pr merge 7' 2>/dev/null) && fail "argument form did not block"
 

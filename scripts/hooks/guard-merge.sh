@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Blocks shell commands that would bypass the merge gate: `gh pr merge`, merging through `gh api`,
 # approving a PR (`gh pr review`, or `gh api` with APPROVE in the command), and pushing to main/master. Only in repos with a .review-gate.yml at their root,
-# where scripts/merge-pr.sh is the only way to merge (GitHub Free enforces nothing on private repos).
+# where the repo's merge script is the only way to merge (GitHub Free enforces nothing on private repos).
 # Input: the command as $1, or a hook's JSON on stdin with .tool_input.command (and optional .cwd).
 # Exit 2 with the reason on stderr blocks the command; exit 0 lets it run.
 set -euo pipefail
@@ -38,11 +38,11 @@ block() {
 }
 
 if [[ "$cmd" =~ ${start}gh$s+pr$s+merge$end ]] || [[ "$cmd" =~ ${start}gh$s+api$s.*pulls/[^[:space:]]+/merge ]]; then
-  block "merge with scripts/merge-pr.sh <number>, which runs agent-pr-gate first."
+  block "merge through the repo's merge script, which checks the PR first; never merge directly."
 fi
 if [[ "$cmd" =~ ${start}gh$s+pr$s+review$s.*(--approve|-a)$end ]] ||
   { [[ "$cmd" =~ ${start}gh$s+api$s.*pulls/[^[:space:]]+/reviews ]] && [[ "$cmd" =~ APPROVE ]]; }; then
-  block "approving a PR is Rui's call; an agent never approves."
+  block "approving a PR is a human's call; an agent never approves."
 fi
 if [[ "$cmd" =~ ${start}git$s+push$end ]]; then
   if [[ "$cmd" =~ ${start}git$s+push$s$same($s|:|\+|refs/heads/)(main|master)$end ]]; then

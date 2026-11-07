@@ -10,7 +10,7 @@ The file is header lines, an Authorizations table and dated verbatim Decisions:
 
     | clause | waived | quote |
     | --- | --- | --- |
-    | Leave merges to the human | yes | Rui: "merge them as the App" |
+    | Leave merges to the human | yes | "merge them as the App" |
 
     ## Decisions
 
