@@ -3,35 +3,56 @@
 
 Usage:
   python3 -I followups.py <run> record <report> --ticket TT [--pr N]
+  python3 -I followups.py <run> report
 
 `record` reads the `## Follow-ups` section of `<report>` (an implementer's or a reviewer's report file), one row per
 line:
 
     - <severity> <kind> <path[:line]>: <claim>
 
-`severity` is `blocker`, `should-fix` or `nit`; `kind` is `follow-up` or `interaction`; blank lines are skipped. The
+`severity` is `blocker`, `should-fix` or `nit`; `kind` is `follow-up` or `interaction`; blank lines are skipped. A
+change to a file only the human edits is an `owner-doc` row, followed by a fenced `diff` block, its ready-to-apply
+patch:
+
+    - <severity> owner-doc <path>#<item>: <claim>
+    ```diff
+    <patch>
+    ```
+
+`<item>` names the part of the file the patch changes; a later `owner-doc` row for the same `<path>#<item>` replaces
+the earlier one, whatever its ticket. The
 section ends at the next `## ` heading or the first other line that is not a row (the report's block, `process:`
 lines), so only a bullet that is not a row, or a first line that is not a row, is malformed. Each
 row is recorded with ticket `TT`, PR `N` (null without `--pr`) and the report's path as its `source`, unless a row
 with the same ticket, kind, file and claim is already there. Prints `OK TT recorded <n> new=<m>`: `n` rows in the
 section, `m` of them new. A report with no section records 0.
 
+`followups.py <run> report` prints the run's follow-ups for the final report, several stdout lines: `follow-ups: <n>`
+(`follow-ups: 0` and nothing else for a run with none), then `<area>: <n> <severity>, ...` per area (a row's first path
+segment), a blank line, the rows under `## <area>` and `### <severity>` headings, and `## Owner-only files`: per file
+an `owner-doc` row or a guard `path` rule names (the repo's leave-for-human rules, read as `guard_rules.py` reads
+them), its rows and one `diff` block joining its latest patch per item. Git's output goes to
+`<run>/logs/run-followups.log`. It exits 0, or prints `FAIL run <reason>` and exits 1: `no-run-folder`, or the
+reasons of `guard_rules.py` (`no-run-md`, `run-md-missing`, `git-fetch`, `guard-no-base`, `bad-rule`) when the guard
+rules cannot be read; `FAIL run usage: ...` exits 2.
+
 FAIL reasons:
-- `usage: ...`: not `record <report> --ticket TT [--pr N]`.
+- `usage: ...`: not `record <report> --ticket TT [--pr N]` or `report`.
 - `bad-ticket: <value>`: `TT` is not a ticket number.
 - `bad-pr: <value>`: `N` is not a PR number.
 - `no-report: <path>`: the report file does not exist.
-- `bad-followup <line>`: the section's first line, or a bullet in it, is not a row; nothing from that report is
-  recorded.
+- `bad-followup <line>`: the section's first line, or a bullet in it, is not a row, or an `owner-doc` row has no
+  `#<item>` or no non-empty `diff` block; nothing from that report is recorded.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import guard_rules  # noqa: E402
 from steplib import core, followups  # noqa: E402
 
-USAGE = "usage: followups.py <run> record <report> --ticket TT [--pr N]"
+USAGE = "usage: followups.py <run> record <report> --ticket TT [--pr N] | report"
 
 
 def options(args):
@@ -85,5 +106,31 @@ def argv_with_id(argv):
     return argv[:1] + [ident] + rest if argv else argv
 
 
+def report(argv):
+    """`<run> report`: prints the report's lines; returns the exit code."""
+    if len(argv) != 2:
+        print(f"FAIL run {USAGE}")
+        return 2
+    run = core.resolve(argv[0])
+    if not run.is_dir():
+        print(f"FAIL run no-run-folder: {run}")
+        return 1
+    rows = followups.load(run)
+    paths = []
+    if rows:
+        try:
+            (run / "logs").mkdir(exist_ok=True)
+            with open(run / "logs" / "run-followups.log", "a", encoding="utf-8") as log:
+                paths = [r for r in guard_rules.rules(run, log) if r.kind == "path"]
+        except core.Fail as e:
+            print(f"FAIL run {e.reason}")
+            return 1
+    for line in followups.report(rows, lambda path: any(r.matches_path(path) for r in paths)):
+        print(line)
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[2:3] == ["report"]:
+        sys.exit(report(sys.argv[1:]))
     core.main("followups", step, usage="record <report> --ticket TT [--pr N]", argv=argv_with_id(sys.argv[1:]))

@@ -177,6 +177,163 @@ class RecordTest(FollowupsCase):
         self.assertEqual(sorted(r["id"] for r in rows), list(range(1, 161)))
 
 
+OWNER = """## Follow-ups
+
+- should-fix owner-doc AGENTS.md#checks: name the new suite
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1 +1 @@
+-old checks
++new checks
+```
+- nit follow-up skills/a.py:3: typo
+"""
+
+GUARD = "# Rules\n\n```agent-merge-guard\nowner path AGENTS.md\nhooks path hooks/**\n```\n"
+
+
+def owner_doc(item, claim, patch, severity="should-fix", path="AGENTS.md"):
+    return f"- {severity} owner-doc {path}#{item}: {claim}\n```diff\n{patch}```\n"
+
+
+class OwnerDocTest(FollowupsCase):
+    def test_an_owner_doc_row_records_its_item_and_its_patch(self):
+        self.assertEqual(self.record(self.report(OWNER), "--ticket", "04"), "OK 04 recorded 2 new=2")
+        doc = self.rows()[0]
+        self.assertEqual((doc["kind"], doc["file"], doc["item"], doc["line"], doc["claim"]),
+                         ("owner-doc", "AGENTS.md", "checks", None, "name the new suite"))
+        self.assertEqual(doc["patch"], "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1 @@\n-old checks\n+new checks\n")
+        self.assertEqual(self.rows()[1]["file"], "skills/a.py")
+
+    def test_a_later_row_for_the_same_item_replaces_the_earlier_one(self):
+        self.record(self.report("## Follow-ups\n" + owner_doc("checks", "first", "-a\n+b\n")), "--ticket", "03")
+        later = self.report("## Follow-ups\n" + owner_doc("checks", "second", "-a\n+c\n", "nit"), "b.md")
+        self.assertEqual(self.record(later, "--ticket", "04"), "OK 04 recorded 1 new=1")
+        self.assertEqual([(r["ticket"], r["claim"], r["patch"]) for r in self.rows()], [("04", "second", "-a\n+c\n")])
+
+    def test_recording_the_same_owner_doc_again_changes_nothing(self):
+        report = self.report(OWNER)
+        self.record(report, "--ticket", "04")
+        before = (self.run_dir / "followups.jsonl").read_bytes()
+        self.assertEqual(self.record(report, "--ticket", "04"), "OK 04 recorded 2 new=0")
+        self.assertEqual((self.run_dir / "followups.jsonl").read_bytes(), before)
+
+    def test_an_owner_doc_without_its_diff_block_fails(self):
+        for text in ("- nit owner-doc AGENTS.md#x: claim\n- nit follow-up a.py: b\n",
+                     "- nit owner-doc AGENTS.md#x: claim\nthe patch:\n```diff\n-a\n```\n",
+                     "- nit owner-doc AGENTS.md#x: claim\n```diff\n-a\n",
+                     "- nit owner-doc AGENTS.md#x: claim\n```diff\n```\n",
+                     "- nit owner-doc AGENTS.md: claim\n```diff\n-a\n```\n"):
+            with self.subTest(text=text):
+                line = self.record(self.report("## Follow-ups\n" + text), "--ticket", "04", ok=False)
+                self.assertTrue(line.startswith(f"FAIL 04 bad-followup {text.splitlines()[0]} (log: "), line)
+                self.assertEqual(self.rows(), [])
+
+
+class ReportTest(FollowupsCase):
+    def setUp(self):
+        super().setUp()
+        self.repo = self.kit.make_origin()
+        self.kit.init_run()
+
+    def rules(self, agents_md):
+        """Puts `agents_md` as `AGENTS.md` on origin's `main`, the run's default branch."""
+        (self.repo / "AGENTS.md").write_text(agents_md, encoding="utf-8")
+        self.kit.git("add", "AGENTS.md", cwd=self.repo)
+        self.kit.git("commit", "-qm", "rules", cwd=self.repo)
+        self.kit.git("push", "-q", "origin", "main", cwd=self.repo)
+
+    def printed(self, ok=True):
+        p = self.kit.step(RECORD, self.run_dir, "report")
+        self.assertEqual(p.returncode == 0, ok, p.stdout + p.stderr)
+        return p.stdout
+
+    def test_an_empty_run_prints_no_follow_ups(self):
+        self.assertEqual(self.printed(), "follow-ups: 0\n")
+
+    def test_counts_and_groups_rows_by_area_then_severity(self):
+        self.record(self.report(REPORT), "--ticket", "03", "--pr", "41")
+        self.record(self.report("## Follow-ups\n- nit follow-up src/b.py: two\n- blocker follow-up README.md: three\n",
+                                "b.md"), "--ticket", "04")
+        self.assertEqual(self.printed(), "\n".join([
+            "follow-ups: 5",
+            "README.md: 1 blocker",
+            "docs: 1 nit",
+            "src: 1 blocker, 1 should-fix, 1 nit",
+            "",
+            "## README.md",
+            "### blocker",
+            "- follow-up README.md: three (ticket 04)",
+            "## docs",
+            "### nit",
+            '- follow-up docs/x.md:3: typo: "teh" (ticket 03, PR #41)',
+            "## src",
+            "### blocker",
+            "- interaction src/undo.py: undo must restore the due time (ticket 03, PR #41)",
+            "### should-fix",
+            "- follow-up src/app.py:12: the flag is not in the README (ticket 03, PR #41)",
+            "### nit",
+            "- follow-up src/b.py: two (ticket 04)",
+            "",
+        ]))
+
+    def test_the_counts_match_the_rows(self):
+        self.record(self.report(REPORT), "--ticket", "03")
+        out = self.printed().splitlines()
+        self.assertEqual(out[0], f"follow-ups: {len(self.rows())}")
+        counted = sum(int(n) for line in out[1:out.index("")] for n in re.findall(r"(\d+) ", line))
+        self.assertEqual(counted, len([line for line in out if line.startswith("- ")]))
+
+    def test_owner_only_files_get_one_combined_patch_with_the_latest_per_item(self):
+        self.rules(GUARD)
+        self.record(self.report("## Follow-ups\n" + owner_doc("checks", "first", "-a\n+b\n")
+                                + owner_doc("usage", "usage", "-u\n+v\n")), "--ticket", "03")
+        self.record(self.report("## Follow-ups\n" + owner_doc("checks", "second", "-a\n+c\n"), "b.md"), "--ticket",
+                    "04")
+        out = self.printed()
+        owner = out[out.index("## Owner-only files"):]
+        self.assertEqual(owner, "\n".join([
+            "## Owner-only files",
+            "### AGENTS.md",
+            "- should-fix owner-doc AGENTS.md#usage: usage (ticket 03)",
+            "- should-fix owner-doc AGENTS.md#checks: second (ticket 04)",
+            "```diff",
+            "-u",
+            "+v",
+            "-a",
+            "+c",
+            "```",
+            "",
+        ]))
+        self.assertEqual(out.count("```diff"), 1)
+        self.assertNotIn("first", out)
+
+    def test_a_follow_up_on_a_guarded_path_is_listed_under_its_owner_only_file(self):
+        self.rules(GUARD)
+        self.record(self.report("## Follow-ups\n- should-fix follow-up hooks/pre.sh:4: quote the path\n"
+                                "- nit follow-up src/a.py: not guarded\n"), "--ticket", "03")
+        out = self.printed()
+        owner = out[out.index("## Owner-only files"):]
+        self.assertEqual(owner, "## Owner-only files\n### hooks/pre.sh\n"
+                                "- should-fix follow-up hooks/pre.sh:4: quote the path (ticket 03)\n")
+
+    def test_without_guarded_rows_there_is_no_owner_only_section(self):
+        self.rules(GUARD)
+        self.record(self.report(REPORT), "--ticket", "03")
+        self.assertNotIn("Owner-only", self.printed())
+
+    def test_unreadable_guard_rules_fail(self):
+        self.rules("```agent-merge-guard\nowner AGENTS.md\n```\n")
+        self.record(self.report(REPORT), "--ticket", "03")
+        self.assertEqual(self.printed(ok=False), "FAIL run bad-rule: line 2: owner AGENTS.md\n")
+
+    def test_report_takes_no_other_argument(self):
+        p = self.kit.step(RECORD, self.run_dir, "report", "extra")
+        self.assertEqual(p.returncode, 2, p.stdout)
+        self.assertRegex(p.stdout, r"^FAIL run usage: ")
+
+
 class LibraryTest(FollowupsCase):
     def add(self, ticket, kind, claim, **kw):
         return followups.add(self.run_dir, [{"ticket": ticket, "pr": None, "severity": "should-fix", "kind": kind,
@@ -218,6 +375,10 @@ class DocstringTest(unittest.TestCase):
         self.assertIn("- <severity> <kind> <path[:line]>: <claim>", doc)
         for word in followups.SEVERITIES + followups.KINDS:
             self.assertIn(f"`{word}`", doc)
+        self.assertIn("owner-doc", followups.KINDS)
+        self.assertIn("- <severity> owner-doc <path>#<item>: <claim>", doc)
+        self.assertIn("followups.py <run> report", doc)
+        self.assertIn("follow-ups: 0", doc)
         reasons = set(re.findall(r'core\.Fail\(f?"([a-z-]+)', source)) | {"usage"}
         self.assertEqual(reasons, {"usage", "bad-ticket", "bad-pr", "no-report", "bad-followup"})
         for reason in reasons:
