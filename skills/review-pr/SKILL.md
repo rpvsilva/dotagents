@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Give a PR its first review before a human looks: a fresh reviewer finds problems, you **verify** each one, and only the ones that hold up get posted. The review is always comment-only: approval belongs to a human.
 
-Input: the PR number. Optional: `--dry-run` to show the findings without posting.
+Input: the PR number. Optional: `--dry-run` to show the findings without posting; `--decisions <path>`, the run's decisions file (a `build-epic` run's `decisions.md`: which of the repo's leave-for-human rules the human waived, and their verbatim decisions).
 
 ## Steps
 
@@ -18,7 +18,7 @@ Input: the PR number. Optional: `--dry-run` to show the findings without posting
    - **PR reviewer**, always: the PR reviewer agent if your harness defines one, otherwise a general-purpose subagent told to follow [reviewer-brief.md](reviewer-brief.md).
    - **Security reviewer**, unless `gh pr diff <n> --name-only` lists only prose and images (`.md`, `.txt`, image files): the security reviewer agent if your harness defines one, otherwise a general-purpose subagent told to follow [security-brief.md](../security-audit/security-brief.md).
 
-   Give each the PR number, the worktree path and the rule files from step 1. Hand over **only** those: no opinion of the PR, no summary of it, so its read is not anchored on yours. If your harness has no subagents, follow each brief yourself in turn, before reading anything else about the PR. Done when every reviewer started has returned its findings.
+   Give each the PR number, the worktree path, the rule files from step 1 and, with `--decisions`, the decisions file's path; without one, the briefs apply every rule as written. Hand over **only** those: no opinion of the PR, no summary of it, so its read is not anchored on yours. If your harness has no subagents, follow each brief yourself in turn, before reading anything else about the PR. Done when every reviewer started has returned its findings.
 
 4. **Verify.** Merge the findings, keeping one per file:line and claim. For each finding, open the code it cites and confirm the failure scenario really happens: trace the inputs, or run the code or a test. Drop what does not hold; keep what you could not settle as **plausible**. Done when every finding is **confirmed**, **plausible** or dropped.
 

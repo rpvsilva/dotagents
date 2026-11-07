@@ -12,6 +12,9 @@ yes|no, `test_command`) and prints `OK decisions set <key>`; an unknown key or v
 Authorizations row for `<clause>`, or updates it, keeping the quote byte for byte, and prints
 `OK decisions clause waived=<yes|no|ask>`. `quote` appends `<verbatim>` unchanged under Decisions, dated today, and
 prints `OK decisions quote <date>`. A missing file is created.
+
+Every merge reads its identity from `merge_identity:` here, falling back to the `merge_identity` Setting (default
+`app`); see `steplib/identity.py`.
 """
 import datetime
 import sys
