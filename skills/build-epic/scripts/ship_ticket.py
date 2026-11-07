@@ -21,7 +21,10 @@ its worktree and local branch, and, when the PR's base is the default branch, cl
 base they stay open). When the `merge_command` rule refuses for want of a human approval (its own output names an
 approval, a required review or a code owner), it sets the ticket `in-review` and removes the worktree instead.
 
-A PR whose base is not the run's base fails `wrong-base <branch>` before anything else, so nothing is pushed.
+A PR whose base is not the run's base fails `wrong-base <branch>` before anything else, so nothing is pushed. Then,
+whatever the base, the merge guard (`steplib/guard.py`, the format in `../merge-guard.md`) checks
+`origin/<base>...<ticket head>` against the rules on `origin/<default branch>`: a hit whose rule `decisions.md` does not waive
+`yes` fails `guarded <file:line rule>; ...` before `no-merge-rule`, the Checks or any push.
 
 Into any other base than the default branch, which the repo's gate does not judge, it first runs `map.md`'s Checks on
 the ticket head in a scratch worktree (`red <suite>` stops it). Then, with the `task_merge_method` Setting `squash`
@@ -36,7 +39,9 @@ into such a base labels its issues `merged-to-<base>`.
 Prints `OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `wrong-base <branch>` (a PR
 into anything but the run's base), `red <suite>`, `merge`, `head-moved`,
 `no-pr`, `no-merge-rule`, `no-review`, `reviewed-unknown`, `reviewed-head-lacks-base`, `tree-mismatch`, `pr-view`,
-`pr-edit`, `pr-ready`, `pr-create`, `empty-template-section <sections>`.
+`pr-edit`, `pr-ready`, `pr-create`, `empty-template-section <sections>`, `guarded <file:line rule>; ...` (a hit not
+waived), `guard-no-base: <ref>` (no `origin/<base>` or `origin/<default branch>`), `guard-bad-range: <range>`, `bad-rule: <line>` (an unreadable
+guard rule) and `git-<cmd>` (a git command of the guard failed).
 """
 import json
 import re
@@ -45,7 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ancestry, checks, ci, core, gh, gitops, merge, prbody, runfolder, tracker  # noqa: E402
+from steplib import ancestry, checks, ci, core, gh, gitops, guard, merge, prbody, runfolder, tracker  # noqa: E402
 
 USAGE = "ship_ticket.py <run> <TT> open | merge [--reviewed <sha>]"
 GATE = ".review-gate.yml"
@@ -163,6 +168,7 @@ class Ship:
         if not into:
             raise core.Fail("pr-view")
         merge.check_base(number, into, self.base, self.ctx.log)  # before anything is pushed
+        guard.check(self.repo, f"origin/{self.base}...{sha}", self.run, self.ctx.log)
         if not command and into == self.default and self.gated():
             self.ctx.note(f"{GATE} gates {into}, and the merge_command Setting is unset: set it to the repo's merge rule")
             raise core.Fail("no-merge-rule")
