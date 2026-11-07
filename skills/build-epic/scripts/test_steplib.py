@@ -357,10 +357,12 @@ class RunFolderFilesTest(KitCase):
         run = self.kit.run_dir
         (run / "tickets").mkdir()
         (run / "tasks").mkdir()
-        (run / "tickets" / "01-core.md").write_text("# 01: Core\nStatus: ready\nBranch: feat/core\n\nBody.\n", encoding="utf-8")
+        (run / "tickets" / "01-core.md").write_text("# 01: Core\nStatus: ready\nBranch: feat/core\n\nBody.\n",
+                                                    encoding="utf-8")
         (run / "tickets" / "02-more.md").write_text("# 02: More\nStatus: ready\n", encoding="utf-8")
         (run / "tasks" / "01-01-lib.md").write_text(
-            "# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: 03, ticket 02\n\n## What\nStatus: not a header\n", encoding="utf-8")
+            "# 01-01: Lib\nStatus: ready\nTicket: 01\nBlocked by: 03, ticket 02\n\n## What\nStatus: not a header\n",
+encoding="utf-8")
         (run / "tasks" / "01-10-other.md").write_text("# 01-10\nStatus: ready\n", encoding="utf-8")
         (run / "tasks" / "01-tests.md").write_text("# 01-tests\nStatus: ready\n", encoding="utf-8")
 
