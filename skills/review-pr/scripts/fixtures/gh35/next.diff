@@ -1,0 +1,167 @@
+diff --git a/README.md b/README.md
++++ b/README.md
++todo next                           # the one open item to do now, as a todo list line
++### Next
++
++`todo next` prints the one open item to do now, as a `todo list` line, or `nothing to do` when there is none. It takes no options, writes nothing and exits 0 either way.
++
++```
++[ ] 6: file taxes (due 2026-10-01) ↻ every month !
++```
++
++The best item is the first by this ranking; each rule only breaks ties left by the one before it:
++
++1. Due date, earliest first. An overdue item has the earliest dates, so it comes before everything else. An item with no due date comes last.
++2. Due time, on one due date: an item with a due time comes before one without, and earlier times come first.
++3. Priority: high, then medium, then low, then none.
++4. Id, lowest first.
++
++- Done items are never picked. The candidates follow `todo list`: snoozed items are hidden.
++- Items marked as doing are candidates like any other open item.
++- The line is the one `todo list` shows, with the priority marker, tags and recurrence rule.
++
+diff --git a/tests/cli/test_cli_next.py b/tests/cli/test_cli_next.py
++++ b/tests/cli/test_cli_next.py
++import json
++from datetime import date, datetime
++
++TODAY = date(2026, 11, 6)
++
++
++def write(tmp_path, *rows):
++    items = [{"id": i + 1, "title": "t", "done": False, **row} for i, row in enumerate(rows)]
++    (tmp_path / "todo.json").write_text(json.dumps(items))
++
++
++def test_next_prints_nothing_to_do_when_the_list_is_empty(cli):
++    assert cli("next", today=TODAY) == ["nothing to do"]
++
++
++def test_next_prints_the_best_item_as_a_list_line(cli):
++    cli("add", "milk", "--due", "2026-11-10", "--priority", "high", "--tag", "home", today=TODAY)
++    assert cli("next", today=TODAY) == cli("list", today=TODAY)
++
++
++def test_next_picks_an_overdue_item_before_one_due_later(cli):
++    cli("add", "later", "--due", "2026-11-20", "--priority", "high", today=TODAY)
++    cli("add", "late", "--due", "2026-11-01", today=TODAY)
++    assert cli("next", today=TODAY)[0].startswith("[ ] 2: late")
++
++
++def test_next_picks_the_soonest_due_date(cli):
++    cli("add", "b", "--due", "2026-11-12", today=TODAY)
++    cli("add", "a", "--due", "2026-11-09", today=TODAY)
++    assert cli("next", today=TODAY)[0].startswith("[ ] 2: a")
++
++
++def test_next_picks_an_item_with_a_due_date_before_one_without(cli):
++    cli("add", "none", "--priority", "high", today=TODAY)
++    cli("add", "dated", "--due", "2026-12-31", today=TODAY)
++    assert cli("next", today=TODAY)[0].startswith("[ ] 2: dated")
++
++
++def test_next_picks_the_earlier_time_on_the_same_day(tmp_path, cli):
++    write(tmp_path, {"title": "pm", "due": "2026-11-06", "due_time": "15:00"},
++          {"title": "am", "due": "2026-11-06", "due_time": "09:00"})
++    now = datetime(2026, 11, 6, 8, 0)
++    assert cli("next", today=TODAY, now=now)[0].startswith("[ ] 2: am")
++
++
++def test_next_treats_an_item_overdue_by_time_as_overdue(tmp_path, cli):
++    write(tmp_path, {"title": "dated", "due": "2026-11-07"},
++          {"title": "passed", "due": "2026-11-06", "due_time": "07:00"})
++    now = datetime(2026, 11, 6, 8, 0)
++    assert cli("next", today=TODAY, now=now)[0].startswith("[ ] 2: passed")
++
++
++def test_next_breaks_a_due_tie_by_highest_priority(tmp_path, cli):
++    write(tmp_path, {"title": "low", "due": "2026-11-09", "priority": "low"},
++          {"title": "none", "due": "2026-11-09"},
++          {"title": "high", "due": "2026-11-09", "priority": "high"},
++          {"title": "med", "due": "2026-11-09", "priority": "medium"})
++    assert cli("next", today=TODAY)[0].startswith("[ ] 3: high")
++
++
++def test_next_breaks_a_full_tie_by_lowest_id(cli):
++    cli("add", "first", "--priority", "low", today=TODAY)
++    cli("add", "second", "--priority", "low", today=TODAY)
++    assert cli("next", today=TODAY)[0].startswith("[ ] 1: first")
++
++
++def test_next_never_picks_a_done_item(tmp_path, cli):
++    write(tmp_path, {"title": "finished", "done": True, "due": "2026-11-01", "priority": "high"},
++          {"title": "open", "due": "2026-12-01"})
++    assert cli("next", today=TODAY)[0].startswith("[ ] 2: open")
++
++
++def test_next_says_nothing_to_do_when_every_item_is_done(tmp_path, cli):
++    write(tmp_path, {"title": "finished", "done": True})
++    assert cli("next", today=TODAY) == ["nothing to do"]
++
++
++def test_next_skips_a_snoozed_item(tmp_path, cli):
++    write(tmp_path, {"title": "asleep", "due": "2026-11-01", "snoozed_until": "2026-11-09"},
++          {"title": "awake", "due": "2026-12-01"})
++    assert cli("next", today=TODAY)[0].startswith("[ ] 2: awake")
++
++
++def test_next_picks_a_snoozed_item_again_once_the_snooze_ends(tmp_path, cli):
++    write(tmp_path, {"title": "asleep", "due": "2026-11-01", "snoozed_until": "2026-11-09"},
++          {"title": "awake", "due": "2026-12-01"})
++    assert cli("next", today=date(2026, 11, 9))[0].startswith("[ ] 1: asleep")
++
++
++def test_next_skips_an_item_waiting_on_an_open_blocker(tmp_path, cli):
++    write(tmp_path, {"title": "blocker", "due": "2026-12-01"},
++          {"title": "waiting", "due": "2026-11-01", "blocked_on": [1]})
++    assert cli("next", today=TODAY)[0].startswith("[ ] 1: blocker")
++
++
++def test_next_picks_an_item_whose_blocker_is_done(tmp_path, cli):
++    write(tmp_path, {"title": "blocker", "done": True},
++          {"title": "freed", "due": "2026-11-01", "blocked_on": [1]})
++    assert cli("next", today=TODAY)[0].startswith("[ ] 2: freed")
++
++
++def test_next_says_nothing_to_do_when_only_waiting_items_remain(tmp_path, cli):
++    write(tmp_path, {"title": "a", "blocked_on": [2]}, {"title": "b", "blocked_on": [1]})
++    assert cli("next", today=TODAY) == ["nothing to do"]
++
++
++def test_next_includes_a_doing_item(tmp_path, cli):
++    write(tmp_path, {"title": "busy", "due": "2026-11-01", "doing": True},
++          {"title": "idle", "due": "2026-12-01"})
++    assert cli("next", today=TODAY)[0].startswith("[ ] 1: busy")
++
++
++def test_next_does_not_change_the_todo_file(tmp_path, cli):
++    write(tmp_path, {"title": "a"})
++    before = (tmp_path / "todo.json").read_bytes()
++    cli("next", today=TODAY)
++    assert (tmp_path / "todo.json").read_bytes() == before
+diff --git a/todo/cli/commands/next_cmd.py b/todo/cli/commands/next_cmd.py
++++ b/todo/cli/commands/next_cmd.py
++"""todo next: the single best open item, as a `todo list` line, or `nothing to do`."""
++from todo.cli.format import format_list_item
++from todo.cli.select import default_filter_args, rank_key, select_items
++from todo.storage import is_waiting
++
++NAME = "next"
++
++
++def register(parser) -> None:
++    pass
++
++
++def run(args, ctx) -> None:
++    items = ctx.store.load()
++    open_ids = {i.id for i in items if not i.done}
++    candidates = [
++        i
++        for i in select_items(items, default_filter_args(), ctx)
++        if not i.done and not is_waiting(i, open_ids)
++    ]
++    if not candidates:
++        ctx.out("nothing to do")
++        return
++    ctx.out(format_list_item(min(candidates, key=lambda i: rank_key(i, ctx))))

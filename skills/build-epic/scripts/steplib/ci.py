@@ -71,7 +71,7 @@ def gate(run, ticket, log, repo):
 def title(ticket):
     """The ticket PR's title: the ticket's title, in the commit convention (`feat: ` unless it already has a type).
     The title's own case is kept."""
-    m = re.search(r"^# *[^:\n]*: *(.+)$", ticket.read_text(), re.MULTILINE)
+    m = re.search(r"^# *[^:\n]*: *(.+)$", ticket.read_text(encoding="utf-8"), re.MULTILINE)
     text = m.group(1).strip() if m else ticket.stem
     return text if CONVENTIONAL.match(text) else f"feat: {text}"
 

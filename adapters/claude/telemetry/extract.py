@@ -81,16 +81,33 @@ def parse_time(stamp):
     return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
 
 
+# Claude Code's tools, keyed by lowercase name: a log can hold "bash" beside "Bash", and both count as "Bash".
+TOOLS = {name.lower(): name for name in (
+    "Agent", "AskUserQuestion", "Bash", "BashOutput", "Edit", "ExitPlanMode", "Glob", "Grep", "KillShell",
+    "NotebookEdit", "Read", "Skill", "SlashCommand", "Task", "TodoWrite", "WebFetch", "WebSearch", "Write")}
+
+
+def tool_name(name):
+    """The tool's canonical name; None for a placeholder call (bash_placeholder), which did no work."""
+    if not isinstance(name, str) or name.endswith("_placeholder"):
+        return None
+    return TOOLS.get(name.lower(), name)
+
+
 def measure(entries):
     turns = {}
     tool_ids = {}
+    started = set()
     for entry in entries:
         if entry.get("type") != "assistant" or not entry.get("requestId"):
             continue
         turns[entry["requestId"]] = entry["message"]
         for block in blocks(entry):
             if block.get("type") == "tool_use":
-                tool_ids[block["id"]] = block["name"]
+                started.add(block["id"])
+                name = tool_name(block.get("name"))
+                if name:
+                    tool_ids[block["id"]] = name
 
     tokens = {}
     for message in turns.values():
@@ -114,7 +131,50 @@ def measure(entries):
         "toolCalls": len(tool_ids),
         "tools": tools,
         "tokensByModel": tokens,
-    }, set(tool_ids)
+    }, started
+
+
+# Role names a subagent's description starts with ("review: PR 12"); build-epic starts its subagents with them.
+ROLES = ("implement", "review", "re-review", "ticket-review", "security", "fix", "resolve", "tune", "plan", "explore")
+
+
+def role(description):
+    """The role a description's prefix names; "other" when it names none."""
+    prefix, colon, _ = description.partition(":") if isinstance(description, str) else ("", "", "")
+    return prefix if colon and prefix in ROLES else "other"
+
+
+# Today's prices, from the repo the extractor sits in; none in a sandbox holding only this script.
+PRICING = Path(__file__).resolve().parents[3] / "skills" / "telemetry" / "pricing.json"
+TOKEN_KINDS = ("input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h")
+
+
+def load_pricing(path=PRICING):
+    """The price table, or None when it is missing or not the expected shape."""
+    try:
+        pricing = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(pricing, dict) or not isinstance(pricing.get("models"), dict):
+        return None
+    return pricing
+
+
+def cost(tokens_by_model, pricing):
+    """USD for these tokens; None without prices or when one model, or one of its kinds, has no price."""
+    if pricing is None:
+        return None
+    total = 0.0
+    for model, tokens in tokens_by_model.items():
+        prices = pricing["models"].get(model)
+        if not isinstance(prices, dict):
+            return None
+        for kind in TOKEN_KINDS:
+            price = prices.get(kind)
+            if not isinstance(price, (int, float)) or isinstance(price, bool):
+                return None
+            total += tokens[kind] * price
+    return round(total / 1_000_000, 6)
 
 
 # The repo's secret rules (see its header); label lines apply only here, case-insensitive.
@@ -195,7 +255,9 @@ def steps(entries, done, rules, subagent=None, subagent_id=None):
         for block in blocks(entry):
             if block.get("type") != "tool_use" or block.get("id") in found:
                 continue
-            tool = block.get("name", "")
+            tool = tool_name(block.get("name", ""))
+            if tool is None:
+                continue
             given = block.get("input") if isinstance(block.get("input"), dict) else {}
             end, failed = done.get(block.get("id"), (None, False))
             step = {
@@ -277,7 +339,7 @@ def segment(entries, skills):
     return [[skill, start, end] for (skill, start), end in zip(spans, ends)]
 
 
-def span(entries, skill, pool, done, rules):
+def span(entries, skill, pool, done, rules, pricing):
     """Numbers for one span, its subagents included, with its steps; None when nothing happened in it."""
     totals, tool_ids = measure(entries)
     agents = linked_subagents(pool, tool_ids)
@@ -296,7 +358,9 @@ def span(entries, skill, pool, done, rules):
         "end": stamp(end),
         "wallClockSeconds": round((end - start).total_seconds()),
         **totals,
-        "subagents": [{"type": meta.get("agentType"), "description": meta.get("description"), **numbers}
+        "subagents": [{"type": meta.get("agentType"), "description": meta.get("description"),
+                       "role": role(meta.get("description")), **numbers,
+                       "cost": cost(numbers["tokensByModel"], pricing)}
                       for meta, numbers, _, _ in agents],
         "steps": own,
     }
@@ -349,6 +413,7 @@ def main():
     # Results are looked up across the whole session: one can land in the next span.
     done = results([entries] + [log for _, log, _ in pool])
     rules = secret_rules()
+    pricing = load_pricing()
     skills = {loaded_skill(e) for e in entries} - {None}
     stretches = segment(entries, skills)
     # The last telemetry stretch is this request; everything before it is measurable.
@@ -371,7 +436,7 @@ def main():
 
     spans = []
     for skill, first, last in chosen:
-        numbers = span(entries[first:last], skill, pool, done, rules)
+        numbers = span(entries[first:last], skill, pool, done, rules, pricing)
         if numbers:
             spans.append(numbers)
     if not spans:
@@ -395,7 +460,7 @@ def main():
     start = parse_time(spans[0]["start"] if args.skill else next(e["timestamp"] for e in window if e.get("timestamp")))
     end = max(parse_time(s["end"]) for s in spans)
     json.dump({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "tool": "claude-code",
         "sessionId": Path(args.session).stem,
         "skill": args.skill,
@@ -405,6 +470,7 @@ def main():
         "start": stamp(start),
         "end": stamp(end),
         "wallClockSeconds": round((end - start).total_seconds()),
+        "pricingAsOf": pricing.get("asOf") if pricing else None,
         "spans": spans,
         "steps": all_steps,
     }, sys.stdout, indent=2)

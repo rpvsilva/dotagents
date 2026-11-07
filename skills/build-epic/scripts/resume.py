@@ -85,7 +85,7 @@ class Resume:
         pin = self.run / "dispatcher.sha"
         if not pin.exists():
             return
-        sha = pin.read_text().strip()
+        sha = pin.read_text(encoding="utf-8").strip()
         if not re.fullmatch(r"[0-9a-f]{7,64}", sha):
             raise core.Fail(f"bad-dispatcher-sha {sha.split()[0] if sha.split() else 'empty'}")
         git = self.git()

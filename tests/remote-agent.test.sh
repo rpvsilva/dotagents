@@ -863,8 +863,10 @@ code=0; wait "$pid" || code=$?
 [ "$code" = 143 ] || fail "TERM: wanted exit 143, got $code: $(cat "$SANDBOX/out")"
 [ $((SECONDS - start)) -lt 10 ] || fail "TERM: waited for the sandbox run to end"
 grep -q "delete sandboxclaim agent-" "$SANDBOX/calls" || fail "TERM: claim not deleted"
+# The kill reaches the backend at once, but a slow runner (Git Bash on Windows) can take a moment to reap it.
+for _ in $(seq 50); do alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)" || break; sleep 0.1; done
 if alive "$(cat "$SANDBOX/backend.pid" 2>/dev/null)"; then
-  fail "TERM: the backend's kubectl exec outlived remote-agent"
+  fail "TERM: the backend's kubectl exec outlived remote-agent by 5s"
   kill "$(cat "$SANDBOX/backend.pid")"
 fi
 jq -e '.state == "failed" and .exit_code == 143 and (.ended | type) == "number"' "$(kept)/run.json" >/dev/null 2>&1 \
@@ -1171,8 +1173,8 @@ grep -q "remote-agent result <name|run>" "$REPO/scripts/remote-agent.sh" || fail
 # live run. Records made by hand in a repo of their own.
 P="$SANDBOX/prune"
 git init -q "$P"
-# Physical, as prune prints it: on macOS mktemp gives /var/..., a link to /private/var/....
-P="$(cd -P "$P" && pwd -P)"
+# As prune prints it, from git: physical on macOS (mktemp gives /var/..., a link to /private/var/...), C:/... in Git Bash.
+P="$(git -C "$P" rev-parse --path-format=absolute --show-toplevel)"
 now="$(date +%s)"
 # Makes record folder $1 (under $P/.git) with run.json $2 (none when empty), its mtime in 2020.
 rec() {
@@ -1214,8 +1216,10 @@ make_records() {
   rec remote-agent/-x "{\"state\":\"done\",\"started\":$old,\"ended\":$old}"
   mkdir -p "$SANDBOX/outside/agent-out"
   printf '{"state":"done","started":%s,"ended":%s}\n' "$old" "$old" >"$SANDBOX/outside/agent-out/run.json"
-  ln -s "$SANDBOX/outside/agent-out" "$P/.git/remote-agent/agent-link"
-  ln -s "$SANDBOX/outside" "$P/.git/remote-agent/agent-done/inside-link"
+  # Git Bash copies on a plain `ln -s`: ask for a native link, and skip the link cases where there can be none.
+  haslink=1
+  MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$SANDBOX/outside/agent-out" "$P/.git/remote-agent/agent-link" 2>/dev/null || haslink=
+  MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$SANDBOX/outside" "$P/.git/remote-agent/agent-done/inside-link" 2>/dev/null || haslink=
   touch -t 202001010000 "$P/.git/remote-agent/agent-done"
 }
 gone="agent-done agent-stopped agent-reused agent-nojson"
@@ -1225,7 +1229,7 @@ prune --older-than 1d --dry-run || fail "prune --dry-run: exited non-zero: $(cat
 for r in $gone $kept agent-oldplace; do
   [ -d "$P/.git/remote-agent/$r" ] || [ -d "$P/.git/worktrees/wt/remote-agent/$r" ] || fail "prune --dry-run: removed $r"
 done
-[ "$(grep -c '^would remove /' "$SANDBOX/prune.out")" = 5 ] || fail "prune --dry-run: not one line per run that would go: $(cat "$SANDBOX/prune.out")"
+[ "$(grep -c '^would remove .*/' "$SANDBOX/prune.out")" = 5 ] || fail "prune --dry-run: not one line per run that would go: $(cat "$SANDBOX/prune.out")"
 tail -1 "$SANDBOX/prune.out" | grep -q '^would remove 5 runs$' || fail "prune --dry-run: no count last: $(cat "$SANDBOX/prune.out")"
 prune --older-than 1d || fail "prune: exited non-zero: $(cat "$SANDBOX/prune.err")"
 for r in $gone; do
@@ -1236,7 +1240,7 @@ done
 for r in $kept; do [ -d "$P/.git/remote-agent/$r" ] || fail "prune: removed $r"; done
 [ "$(tail -1 "$SANDBOX/prune.out")" = "removed 5 runs" ] || fail "prune: no count last: $(cat "$SANDBOX/prune.out")"
 grep -q -- '-x' "$SANDBOX/prune.err" || fail "prune: a folder that is no run name not named on stderr: $(cat "$SANDBOX/prune.err")"
-if [ ! -L "$P/.git/remote-agent/agent-link" ] || [ ! -f "$SANDBOX/outside/agent-out/run.json" ]; then
+if [ -n "$haslink" ] && { [ ! -L "$P/.git/remote-agent/agent-link" ] || [ ! -f "$SANDBOX/outside/agent-out/run.json" ]; }; then
   fail "prune: followed or removed a link out of the folder"
 fi
 # Hours: a run that ended an hour ago stays under 2h, and goes once it ended 3 hours ago.
