@@ -1,0 +1,25 @@
+{
+ "branch": "origin/remote-agents-feature",
+ "headSha": "363ef1089843df13c82fdbaf232a547dfdbee532",
+ "mergeBaseWithMain": "46b4cb8c6a9414382314bb0a822f42719f4122de",
+ "commitsSinceMergeBase": 35,
+ "diffVsMergeBase": "107 files changed, 10645 insertions(+), 211 deletions(-)",
+ "sourceFiles": 65,
+ "sourceLines": 3967,
+ "testFiles": 54,
+ "testLines": 10058,
+ "testToSourceLineRatio": 2.54,
+ "readmeLines": 296,
+ "suite": {
+  "command": "python -I -m pytest -q -c pyproject.toml -p no:cacheprovider",
+  "exitCode": 0,
+  "summary": "1442 passed in 29.66s",
+  "passed": 1442,
+  "failed": 0,
+  "skipped": 0,
+  "errors": 0,
+  "wallSeconds": 29.9,
+  "measuredAt": "2026-11-06T18:49:13+00:00",
+  "python": "Python 3.15.2"
+ }
+}
