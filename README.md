@@ -160,7 +160,7 @@ git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
 ~/Desktop/Projects/dotagents/install.sh          # everything, for every tool
 ```
 
-`install.sh [tool] [<group>|<part>...]` and `uninstall.sh [tool] [<group>|<part>...]` take the same words, in any order: a tool (`claude`, `codex`, `cursor`) and any groups or parts (`scripts/parts.sh list`).
+`install.sh [tool] [<group>|<part>...]` and `uninstall.sh [--dry-run] [--purge] [tool] [<group>|<part>...]` take their words in any order: at most one tool word and any groups or parts (`scripts/parts.sh list`). `install.sh` takes the tool words `all`, `shared`, `claude`, `codex` and `cursor`; `uninstall.sh` takes `all`, `claude`, `codex` and `cursor`, not `shared` (the shared `~/.agents` links go only with `all`). A second tool word or an unknown word prints the usage and exits 1.
 
 - A bare `./install.sh` installs every group, `personal` included. To install one feature only, name it: `./install.sh remote`, or for Claude Code only, `./install.sh claude pr-loop`.
 - A selection brings core and every part it requires. An optional need comes only when you name it too.

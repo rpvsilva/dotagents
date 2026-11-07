@@ -96,6 +96,27 @@ out="$(uninstall "$home" nope 2>&1)" && rc=0 || rc=$?
 out="$(uninstall "$home" --nope 2>&1)" && rc=0 || rc=$?
 { [ "$rc" -eq 1 ] && grep -q "^usage:" <<<"$out"; } || fail "unknown option: want usage and exit 1, got $rc: $out"
 
+# A second tool word: usage, exit 1, nothing removed.
+home="$SANDBOX/twotools"
+mkdir -p "$home/.claude" "$home/.codex"
+install "$home" claude
+install "$home" codex
+before="$(state "$home")"
+out="$(uninstall "$home" claude codex 2>&1)" && rc=0 || rc=$?
+{ [ "$rc" -eq 1 ] && grep -q "^usage:" <<<"$out"; } || fail "two tool words: want usage and exit 1, got $rc: $out"
+[ "$before" = "$(state "$home")" ] || fail "uninstall claude codex changed files"
+
+# A home from before per-file hook links, with telemetry: the hooks reachable through the folder link count as
+# installed, so telemetry, which telemetry-save requires, stays.
+home="$SANDBOX/oldsel"
+mkdir -p "$home/.claude"
+install "$home" claude small-tools
+rm -rf "$home/.agents/hooks"
+ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
+out="$(uninstall "$home" telemetry)"
+[ -L "$home/.agents/skills/telemetry" ] || fail "uninstall telemetry under the old folder link removed it while telemetry-save requires it"
+grep -q "^kept telemetry:" <<<"$out" || fail "uninstall telemetry under the old folder link did not say why it kept it: $out"
+
 # Every link under $1 whose target is gone.
 dangling() { find "$1" -type l ! -exec test -e {} \; -print; }
 

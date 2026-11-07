@@ -3,20 +3,25 @@
 # the lines worth reading kept (backups, restores, warnings, failures, dry-run plans) and a summary at the end.
 # Usage: <plain output> | scripts/ui.sh <install|uninstall> [the script's arguments]
 # The scripts pipe through it only when stdout is a terminal; DOTAGENTS_PLAIN=1 keeps the plain lines. NO_COLOR drops
-# the colours. It never changes the exit code: the scripts return their own.
+# the colours. It never changes the exit code: the scripts return their own. Like them, it refuses a second tool word
+# with its usage and exit 1.
 set -uo pipefail
 
 mode="${1:-install}"
 shift || true
-target=all dry=0 picked=""
+target="" dry=0 picked=""
 for a in "$@"; do
   case "$a" in
-    all | shared | claude | codex | cursor) target="$a" ;;
+    all | shared | claude | codex | cursor)
+      [ -z "$target" ] || { echo "usage: $0 <install|uninstall> [the script's arguments, one tool word at most]" >&2; exit 1; }
+      target="$a"
+      ;;
     --dry-run) dry=1 ;;
     -*) ;;
     *) picked+=" $a" ;; # a group or part: it picks what to install, not the tools
   esac
 done
+target="${target:-all}"
 # How many tool sections the run prints, for the progress bar.
 case "$mode:$target" in
   *:all) total=4 ;;

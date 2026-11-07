@@ -84,6 +84,10 @@ grep -q "✓ Installed .* 2 linked$" <<<"$out" || fail "selective run not summed
 out="$(view install epics claude <<<"shared")"
 grep -q "install · claude · epics" <<<"$out" || fail "tool and selection not both in the title: $out"
 
+# A second tool word: the usage and exit 1, as the scripts refuse it.
+out="$(view install claude codex remote </dev/null 2>&1)" && rc=0 || rc=$?
+{ [ "$rc" -eq 1 ] && grep -q "^usage: " <<<"$out"; } || fail "ui with two tool words: want usage and exit 1, got $rc: $out"
+
 # Off a terminal both scripts print the plain lines the other tests read.
 out="$(HOME="$SANDBOX" DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" shared)"
 grep -qx shared <<<"$out" || fail "install.sh off a terminal did not print plain lines: $out"
