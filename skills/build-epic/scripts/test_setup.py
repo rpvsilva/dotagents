@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import setup as setup_step  # noqa: E402
 from steplib import checks, decisions  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
@@ -97,6 +98,20 @@ class PrintsOneLine(SetupCase):
         (self.run_dir / "map.md").write_text("# Map\n\n## Checks\n\nSetup: none\n", encoding="utf-8")
         self.assertTrue(self.setup(ok=False).startswith("FAIL run no-checks"))
 
+    def test_without_map_md_fails(self):
+        (self.run_dir / "map.md").unlink()
+        self.assertTrue(self.setup(ok=False).startswith("FAIL run no-map: "))
+
+    def test_an_extra_argument_is_a_usage_failure(self):
+        p = self.kit.step(SETUP, self.run_dir, "extra")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertTrue(p.stdout.startswith("FAIL run usage: setup.py <run>"), p.stdout)
+        self.assertFalse((self.run_dir / "env").exists())
+
+    def test_a_setup_line_that_is_no_command_fails_unclear(self):
+        self.write_map("echo hi", setup="Setup: make a venv first.")
+        self.assertTrue(self.setup(ok=False).startswith("FAIL run unclear-setup: "))
+
 
 class RecordsTheRunsFacts(SetupCase):
     def test_records_test_command_human_and_identity(self):
@@ -162,22 +177,54 @@ class DetectsCI(SetupCase):
         self.workflows({"ci.yml": "on:\n  push:\n    branches: [main]\njobs: {}\n"})
         self.assertIn(" ci=off ", self.setup())
 
+    def test_a_yaml_workflow_counts_and_other_files_do_not(self):
+        self.workflows({"ci.yaml": PR_INTO_MAIN, "notes.md": PR_INTO_MAIN})
+        self.assertIn(" ci=on ", self.setup())
+        self.kit.git("rm", "-q", ".github/workflows/ci.yaml", cwd=self.kit.clone)
+        self.workflows({})
+        self.assertIn(" ci=off ", self.setup())
+
+    def test_an_unreadable_actions_setting_lets_the_workflows_decide(self):
+        self.kit.answer(PERMISSIONS, err="HTTP 403\n", rc=1)
+        self.workflows({"ci.yml": PR_INTO_MAIN})
+        self.assertIn(" ci=on ", self.setup())
+
+    def test_a_base_origin_lacks_fails_recording_no_ci(self):
+        (self.run_dir / "decisions.md").write_text("# Decisions\nbase: nowhere\n", encoding="utf-8")
+        self.setup(ok=False)
+        self.assertIsNone(self.decided("ci"))
+
+
+class TriggerForms(unittest.TestCase):
+    """The workflow parser alone: `DetectsCI` drives it through `setup.py` and git; these are its YAML forms."""
+
     def test_trigger_forms(self):
         for name, text, want in [
-            ("bare", "on: pull_request\n", "on"),
-            ("list", "on: [push, pull_request]\n", "on"),
-            ("quoted key", '"on":\n  pull_request:\n', "on"),
-            ("types only", "on:\n  pull_request:\n    types: [opened]\n", "on"),
-            ("block list", "on:\n  pull_request:\n    branches:\n      - 'main'\n", "on"),
-            ("other branch", "on:\n  pull_request:\n    branches:\n      - dev\n", "off"),
-            ("glob", "on:\n  pull_request:\n    branches: ['ma*']\n", "on"),
-            ("ignored", "on:\n  pull_request:\n    branches-ignore: [main]\n", "off"),
-            ("negated", "on:\n  pull_request:\n    branches: ['*', '!main']\n", "off"),
-            ("commented", "# on: pull_request\non:\n  push: # pull_request\n", "off"),
+            ("bare", "on: pull_request\n", True),
+            ("list", "on: [push, pull_request]\n", True),
+            ("quoted key", '"on":\n  pull_request:\n', True),
+            ("types only", "on:\n  pull_request:\n    types: [opened]\n", True),
+            ("block list", "on:\n  pull_request:\n    branches:\n      - 'main'\n", True),
+            ("other branch", "on:\n  pull_request:\n    branches:\n      - dev\n", False),
+            ("glob", "on:\n  pull_request:\n    branches: ['ma*']\n", True),
+            ("ignored", "on:\n  pull_request:\n    branches-ignore: [main]\n", False),
+            ("negated", "on:\n  pull_request:\n    branches: ['*', '!main']\n", False),
+            ("commented", "# on: pull_request\non:\n  push: # pull_request\n", False),
+            ("target", "on:\n  pull_request_target:\n    branches: [main]\n", True),
+            ("flow mapping", "on: {pull_request: {branches: [dev]}}\n", True),
+            ("flow event", "on:\n  pull_request: {branches: [dev]}\n", True),
+            ("double star", "on:\n  pull_request:\n    branches: ['**']\n", True),
+            ("question mark", "on:\n  pull_request:\n    branches: ['mai?']\n", True),
+            ("no on", "name: ci\njobs: {}\n", False),
         ]:
             with self.subTest(name):
-                self.workflows({"ci.yml": text})
-                self.assertIn(f" ci={want} ", self.setup())
+                self.assertIs(setup_step.triggers_on_pr(text, "main"), want)
+
+    def test_a_star_stays_within_a_path_segment(self):
+        text = "on:\n  pull_request:\n    branches: ['release/*']\n"
+        self.assertTrue(setup_step.triggers_on_pr(text, "release/1"))
+        self.assertFalse(setup_step.triggers_on_pr(text, "release/1/x"))
+        self.assertTrue(setup_step.triggers_on_pr(text.replace("/*", "/**"), "release/1/x"))
 
 
 class ListsSkippedTools(SetupCase):
@@ -210,6 +257,14 @@ class Reruns(SetupCase):
         second = self.setup()
         self.assertEqual(first, second)
         self.assertEqual(count.read_text(encoding="utf-8"), "x\n")
+
+    def test_rerun_keeps_skips_md_until_it_is_deleted(self):
+        self.write_map("echo 'zsh.test.sh: skipped (zsh is not installed)'")
+        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.write_map("echo all ran")
+        self.assertTrue(self.setup().endswith(" skips=1"))
+        (self.run_dir / "skips.md").unlink()
+        self.assertTrue(self.setup().endswith(" skips=0"))
 
 
 class SkipReasons(unittest.TestCase):
