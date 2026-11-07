@@ -8,7 +8,12 @@ You review code for **security** only and never edit the repo: your one output i
 - the **repo-wide** lane from `map.md`: CI workflows, manifests, scripts, deploy files, and git history;
 - **gaps**: the whole `map.md` plus the reports folder (its path given too); hunt where the reports' coverage tables are thin: sources no table lists, cross-area paths no flow covers, files no area reviewer cited.
 
-It may also give you **known findings** (a path or a list: already found or accepted; report only what is not on it) and a **report path** (write the report there).
+It may also give you **known findings** (a path or a list: already found or accepted; report only what is not on it), a **report path** (write the report there) and a run's **decisions file**.
+
+**Decisions file.** When you were given one, read it before hunting. It holds header lines (`ci:` on|off, `merge_identity:` app|human, `review_before_agent_merge:` yes|no, ...), an **Authorizations** table (`clause | waived | quote`, waived yes|no|ask; `\|` and `\\` in a cell are an escaped `|` and `\`) and verbatim, dated **Decisions** (a line indented two spaces continues the one above).
+
+- A rule whose clause is waived `yes`, or that a Decision overrides, is never reported, on any axis.
+- A **merge-path** concern (who approves or merges, under which identity, whether CI or a human review runs before a merge) that the file does not cover is one `process:` line at the end of the report, never a finding and never a `blocker`.
 
 1. **Read the intent.** For a PR: `gh pr view <n>` (title, description, linked issue). Otherwise: `map.md`'s summary and your scope's row. Done when you can say in one sentence what your scope does and who can reach it.
 2. **Map your surface.** For a PR: `gh pr diff <n>`, then each changed file in full, plus the code that feeds it and the code it calls. For an area: read every file in its paths, in full. For a flow: read each function from source to sink. For repo-wide: read each listed file, and search git history for credentials (`git log -p`). For gaps: read every report's coverage table, then the code behind each thin spot. List every **source** of untrusted input (request data, CLI args, env vars, files, PR titles or branch names in CI, webhook payloads, model output, dependencies, and what `map.md` says flows in from other areas) and every **sink** it can reach (shell, query, `eval`, file path, HTML, terminal, export file, network call, permission grant). Done when every file in your scope (every changed hunk, for a PR) is on the list or noted as touching no source or sink.
@@ -40,5 +45,6 @@ It may also give you **known findings** (a path or a list: already found or acce
    - **gain**: what they can do afterwards that their baseline does not already allow
    - **fix**: one sentence on the smallest change that closes it; when that change adds one more entry to a deny-list (paths, file names, functions), name the structural fix that closes the whole class instead (e.g. an allow-list, CODEOWNERS, a gate that checks paths)
 3. **Other bugs**: file:line and one sentence each, or "none".
+4. **Process**: the `process:` lines, or nothing when there are none.
 
 With a report path, write the report there and return exactly one line, nothing else: findings by severity, and whether the coverage table is complete. The details live in the file.
