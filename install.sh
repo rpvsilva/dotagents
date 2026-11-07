@@ -49,12 +49,15 @@ mcp() { "$REPO/scripts/mcp-servers.sh" "$1" "$REPO/mcp/servers.json" "$BACKUP" |
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
-# Hook scripts go to ~/.agents/hooks, the one path every adapter's hook config calls.
+# Hook scripts go to ~/.agents/hooks, the one path every adapter's hook config calls: a real folder of one link per
+# file (lib.sh, secret-patterns.txt, each hook), so the links show which hooks are installed.
 # Commands skills run from any project go to ~/.agents/bin (remote-agent: subagents on a cluster, Docker or an SSH host, remote/README.md; settings: reads and writes Settings; capped: runs a command under a memory and time cap).
 install_shared() {
   echo "shared"
   for s in $(skills); do link "$REPO/skills/$s" "$SHARED_SKILLS/$s"; done
-  link "$REPO/scripts/hooks" "$HOME/.agents/hooks"
+  # An older install linked the whole folder: linking into that link would write into the repo, so it goes first.
+  [ ! -L "$HOME/.agents/hooks" ] || rm "$HOME/.agents/hooks"
+  for f in "$REPO"/scripts/hooks/*.sh "$REPO/scripts/hooks/secret-patterns.txt"; do link "$f" "$HOME/.agents/hooks/${f##*/}"; done
   link "$REPO/scripts/remote-agent.sh" "$HOME/.agents/bin/remote-agent"
   link "$REPO/scripts/settings.sh" "$HOME/.agents/bin/settings"
   link "$REPO/scripts/capped" "$HOME/.agents/bin/capped"
