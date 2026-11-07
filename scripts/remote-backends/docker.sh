@@ -13,8 +13,8 @@
 # image's architecture differs from the machine's (it would run emulated).
 # ping runs `docker info` (`remote-agent ready`): exit 0 when the daemon answers, else one line on stdout with its error
 # and exit 1.
-# Settings: REMOTE_IMAGE (ghcr.io/xgeekshq/agent-runner:main), REMOTE_PLATFORM (passed as --platform when set;
-# otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
+# Settings: REMOTE_IMAGE (the runner image, required; the `image` Setting supplies its default), REMOTE_PLATFORM
+# (passed as --platform when set; otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
 # ssh.sh runs this script with DOCKER_SSH_HOST set: every docker command then runs on that host, one ssh call each,
 # its words quoted for the remote shell and its streams through the connection; as `sudo -n docker` under
 # REMOTE_SSH_SUDO (an SSH user outside the docker group, with passwordless sudo). check names that fix when plain
@@ -24,7 +24,7 @@ set -euo pipefail
 # shellcheck source=lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-image="${REMOTE_IMAGE:-ghcr.io/xgeekshq/agent-runner:main}"
+image="${REMOTE_IMAGE:-}"
 hours="${REMOTE_HOURS:-2}"
 
 # Sets cmd to the command line for `docker <args>`: here, or on DOCKER_SSH_HOST.
@@ -55,6 +55,15 @@ arch_name() {
 untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
 
 op="${1:-}"
+case "$op" in
+  acquire|check|ping)
+    if [ -z "$image" ]; then
+      problem="REMOTE_IMAGE not set: the runner image (remote.image; \`remote-agent setup\`)"
+      if [ "$op" = acquire ]; then say "$problem"; else echo "$problem"; fi
+      exit 1
+    fi
+    ;;
+esac
 case "$op" in
   acquire)
     name="$2"
