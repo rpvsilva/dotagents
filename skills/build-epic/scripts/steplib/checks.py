@@ -1,18 +1,28 @@
 """`map.md`'s `Checks`: the suite commands a merge runs in the task's worktree, each timed.
 
 The commands are the lines inside the fenced code blocks of the `## Checks` section, blank lines and `#` comments
-skipped. Each runs under `bash -c` in the worktree, its output in the step's log. `save` keeps the results in
-`<run>/reports/<id>.checks.json`: a list of `{command, rc, passed, failed, skipped, seconds, skip_reasons}`, the counts
-read from the suite's output by `counts`, `null` when it says none.
+skipped, except the block right after a `Setup:` or `Setup (<anything>):` line (the one-time Setup `setup.py` runs).
+Each runs under `bash -c` in the worktree, inside the run's environment (`in_env`), its output in the step's log.
+`save` keeps the results in `<run>/reports/<id>.checks.json`: a list of `{command, rc, passed, failed, skipped,
+seconds, skip_reasons}`, the counts and reasons read from the suite's output by `counts`, `null` when it says none.
+`skip_reasons` is those reasons, each once, with the tool it names (what `setup.py` lists in `skips.md`).
 """
 import json
 import re
+import shlex
 import time
 from collections import namedtuple
 
 from . import core
 
+ENV_VAR = "BUILD_EPIC_ENV"
+SETUP_DONE = ".setup-done"
+# A line about the one-time Setup, and the forms `setup.py` reads: `Setup: ...` and `Setup (<anything>): ...`.
+SETUP_LINE = re.compile(r"^Setup\b.*$", re.MULTILINE)
+SETUP_HEADING = re.compile(r"^Setup(?:[ \t]*\([^()\n]*\))?:[ \t]*(.*)$")
+
 Suite = namedtuple("Suite", "command rc seconds out", defaults=("",))
+Skip = namedtuple("Skip", "tool reason")
 
 # This repo's runners: `<suite>: ok`, `<suite>: skipped (why)` or `== <tool>: why, skipped (how)`, `== <suite>: FAILED`,
 # read only inside their framing (`tests/parallel.sh`'s `== tests/a.test.sh (3s)`, `tests/run.sh`'s `== <step>`).
@@ -27,6 +37,35 @@ UNITTEST_END = re.compile(r"^(OK|FAILED)(?: \((.*)\))?\s*$")
 UNITTEST_SKIP = re.compile(r"\.\.\. skipped '(.*)'$")
 # Jest: `Tests:       1 failed, 2 skipped, 40 passed, 43 total`.
 JEST_SUMMARY = re.compile(r"^Tests:\s+((?:\d+ \w+, )*)\d+ total\s*$")
+SKIPPED = re.compile(r"\bskipped\b", re.IGNORECASE)
+# A tool name: a letter, then at least one more name character, not ending in punctuation. An optional version may
+# follow it before the verb (`node 22.6+ is missing`, `shellcheck: 0.11.0 not installed`).
+TOOL_NAME = r"[A-Za-z][\w.+-]*[\w+]"
+TOOL_BEFORE = re.compile(rf"\b({TOOL_NAME})(?:\W+v?\d[\w.+-]*)?\W*\s(?:is |are )?"
+                         r"(?:not (?:installed|found|available|on PATH)|missing)\b", re.IGNORECASE)
+TOOL_AFTER = re.compile(rf"\b(?:requires|needs|without|missing|install|no) ({TOOL_NAME})", re.IGNORECASE)
+# Words the patterns above catch that name no tool (`no such file`, `install a newer one`, `tests not found`).
+NOT_TOOLS = {"a", "an", "the", "such", "any", "some", "this", "that", "these", "those", "it", "its", "them", "one",
+             "more", "longer", "other", "network", "access", "permission", "support", "test", "tests", "file", "files",
+             "module", "modules", "package", "packages", "dependency", "dependencies", "is", "are", "be", "and", "or",
+             "to", "for", "with", "in", "on", "of", "not", "run", "running", "need", "needed", "needs", "yet"}
+
+
+def env_prefix(run):
+    """The shell commands that put a suite in the run's environment, as `setup.py` made it: `export BUILD_EPIC_ENV=
+    <run>/env` once its Setup succeeded (`env/.setup-done`), then `. <run>/env/bin/activate` when that exists."""
+    env = core.resolve(run) / "env"
+    if not (env / SETUP_DONE).is_file():
+        return []
+    parts = [f"export {ENV_VAR}={shlex.quote(str(env))}"]
+    if (env / "bin" / "activate").is_file():
+        parts.append(f". {shlex.quote(str(env / 'bin' / 'activate'))}")
+    return parts
+
+
+def in_env(run, command):
+    """`command` run inside the run's environment (`env_prefix`), as one `bash -c` line."""
+    return " && ".join(env_prefix(run) + [command])
 
 
 def commands(map_md):
@@ -35,20 +74,25 @@ def commands(map_md):
     if not path.is_file():
         raise core.Fail(f"no-map: {path}")
     m = re.search(r"^## Checks[ \t]*\n(.*?)(?=^## |\Z)", path.read_text(encoding="utf-8"), re.MULTILINE | re.DOTALL)
-    found = []
-    for block in re.findall(r"^```[^\n]*\n(.*?)^```", m.group(1) if m else "", re.MULTILINE | re.DOTALL):
-        found += [line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith("#")]
+    found, section = [], m.group(1) if m else ""
+    for block in re.finditer(r"^```[^\n]*\n(.*?)^```", section, re.MULTILINE | re.DOTALL):
+        before = section[:block.start()].rstrip().rsplit("\n", 1)[-1]
+        if SETUP_LINE.match(before):  # the one-time Setup's block (`setup.py`), not a suite
+            continue
+        found += [line.strip() for line in block.group(1).splitlines()
+                  if line.strip() and not line.strip().startswith("#")]
     if not found:
         raise core.Fail("no-checks: map.md has no command in a Checks code block")
     return found
 
 
-def run_all(cmds, cwd, log):
-    """Runs each command in `cwd`, timing it; stops at the first red one. Returns the `Suite` results so far."""
+def run_all(cmds, cwd, log, run=None):
+    """Runs each command in `cwd`, timing it, inside run `run`'s environment when given; stops at the first red one.
+    Returns the `Suite` results so far."""
     done = []
     for cmd in cmds:
         start = time.monotonic()
-        res = core.run(["bash", "-c", cmd], log, cwd=cwd)
+        res = core.run(["bash", "-c", in_env(run, cmd) if run else cmd], log, cwd=cwd)
         done.append(Suite(cmd, res.rc, time.monotonic() - start, res.out + res.err))
         log.write(f"suite {cmd!r}: rc {res.rc} in {done[-1].seconds:.1f}s\n")
         log.flush()
@@ -57,26 +101,45 @@ def run_all(cmds, cwd, log):
     return done
 
 
+def _summary(line):
+    """True for a count summary (pytest's `N skipped in Xs`, Jest's `Tests: N skipped, ...`): never a skip row."""
+    return bool(PYTEST_SUMMARY.match(line) or JEST_SUMMARY.match(line))
+
+
+def _repo_skip(line):
+    """The reason of one of this repo's `<suite>: skipped (why)` lines, or None."""
+    m = REPO_LINE.match(line)
+    if not m or _summary(line) or m.group(2).startswith(("ok", "FAILED")):
+        return None
+    name, rest = m.groups()
+    why = re.sub(r",?\s*\bskipped\b[,:]?\s*", " ", rest).strip()
+    if why.startswith("(") and why.endswith(")"):
+        why = why[1:-1]
+    return f"{name}: {why}" if why else name
+
+
+def _reasons(lines):
+    """Every skip reason in a suite's output, in order: this repo's skip lines (inside its framing only), pytest's
+    `-rs` lines and unittest's verbose `... skipped 'reason'` lines. Count summaries name no reason."""
+    framed = any(map(FRAMING.match, lines))
+    found = []
+    for line in lines:
+        m = PYTEST_SKIP.match(line) or UNITTEST_SKIP.search(line)
+        reason = m.group(1) if m else _repo_skip(line) if framed else None
+        if reason:
+            found.append(reason)
+    return found
+
+
 def _repo(lines):
     if not any(map(FRAMING.match, lines)):
         return None
-    found = [m for m in map(REPO_LINE.match, lines) if m]
+    found = [m for m in map(REPO_LINE.match, lines) if m and not _summary(m.group(0))]
     if not found:
         return None
-    passed = failed = 0
-    reasons = []
-    for m in found:
-        name, rest = m.groups()
-        if rest.startswith("ok"):
-            passed += 1
-        elif rest.startswith("FAILED"):
-            failed += 1
-        else:
-            why = re.sub(r",?\s*\bskipped\b[,:]?\s*", " ", rest).strip()
-            if why.startswith("(") and why.endswith(")"):
-                why = why[1:-1]
-            reasons.append(f"{name}: {why}" if why else name)
-    return passed, failed, len(reasons), reasons
+    passed = sum(m.group(2).startswith("ok") for m in found)
+    failed = sum(m.group(2).startswith("FAILED") for m in found)
+    return passed, failed, len(found) - passed - failed
 
 
 def _pytest(lines):
@@ -87,9 +150,8 @@ def _pytest(lines):
             totals[word] = totals.get(word, 0) + int(n)
     if not seen:
         return None
-    reasons = [m.group(1) for m in map(PYTEST_SKIP.match, lines) if m]
     failed = totals.get("failed", 0) + totals.get("error", 0) + totals.get("errors", 0)
-    return totals.get("passed", 0), failed, totals.get("skipped", 0), reasons
+    return totals.get("passed", 0), failed, totals.get("skipped", 0)
 
 
 def _unittest(lines):
@@ -107,7 +169,7 @@ def _unittest(lines):
         passed += int(m.group(1)) - bad - n.get("skipped", 0)
     if not ran:
         return None
-    return passed, failed, skipped, [m.group(1) for m in map(UNITTEST_SKIP.search, lines) if m]
+    return passed, failed, skipped
 
 
 def _jest(lines):
@@ -118,22 +180,23 @@ def _jest(lines):
             totals[word] = totals.get(word, 0) + int(n)
     if not seen:
         return None
-    return totals.get("passed", 0), totals.get("failed", 0), totals.get("skipped", 0) + totals.get("todo", 0), []
+    return totals.get("passed", 0), totals.get("failed", 0), totals.get("skipped", 0) + totals.get("todo", 0)
 
 
 def counts(out):
-    """`(passed, failed, skipped, skip_reasons)` read from a suite's output, or `(None, None, None, [])`.
+    """`(passed, failed, skipped, skip_reasons)` read from a suite's output; the counts `None` when it says none.
 
     Inside this repo's runner framing its suite lines win, since `tests/run.sh` also prints the unittest output of the
     suites it runs; elsewhere a `<word>: ok` line is any program's log, and pytest's summary, then unittest's, then
-    Jest's count. Several summaries of one kind (one per folder) are summed.
+    Jest's count. Several summaries of one kind (one per folder) are summed. The reasons are `_reasons`: one per
+    skipped test, so a reason shared by two tests is there twice.
     """
     lines = out.splitlines()
     for parse in (_repo, _pytest, _unittest, _jest):
         found = parse(lines)
         if found:
-            return found
-    return None, None, None, []
+            return found + (_reasons(lines),)
+    return None, None, None, _reasons(lines)
 
 
 def save(run, ident, suites):
@@ -146,3 +209,21 @@ def save(run, ident, suites):
         rows.append({"command": s.command, "rc": s.rc, "passed": passed, "failed": failed, "skipped": skipped,
                      "seconds": round(s.seconds, 1), "skip_reasons": reasons})
     path.write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")
+
+
+def tool(reason):
+    """The tool a skip reason names as missing (`zsh is not installed`, `requires docker`), or None: a word that
+    names no tool (`no such file`, `install a newer one`) is not one."""
+    for pattern in (TOOL_BEFORE, TOOL_AFTER):
+        for m in pattern.finditer(reason):
+            if m.group(1).lower() not in NOT_TOOLS:
+                return m.group(1)
+    return None
+
+
+def skip_reasons(text):
+    """The skips in a suite's output as `Skip(tool, reason)`, in order: `counts`'s reasons, each reason once."""
+    found = []
+    for reason in dict.fromkeys(counts(text)[3]):
+        found.append(Skip(tool(reason), reason))
+    return found

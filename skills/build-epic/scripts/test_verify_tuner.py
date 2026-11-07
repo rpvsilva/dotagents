@@ -1,15 +1,11 @@
 """Tests for `verify_tuner.py`: a tuning task's worktree holding a tiny unittest suite, checked against its report."""
-import os
-import signal
-import subprocess
 import sys
-import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from testkit import SCRIPTS, Kit  # noqa: E402
+from testkit import SCRIPTS, Kit, env_tool_setup  # noqa: E402
 
 VERIFY = SCRIPTS / "verify_tuner.py"
 
@@ -47,24 +43,26 @@ TASK = "# 01-tests: tune Calc\nStatus: in-progress\nTicket: 01\nRange: a..b\n"
 CAPPED = '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n'
 
 
-class VerifyTunerTest(unittest.TestCase):
+class VerifyTunerCase(unittest.TestCase):
+    """The sandbox and helpers; `test_verify_tuner_limits.py` shares them."""
+
     def setUp(self):
         self.kit = kit = Kit()
         self.addCleanup(kit.close)
         clone = kit.make_origin()
-        (clone / "calc.py").write_text(CALC)
-        (clone / "test_calc.py").write_text(TESTS)
+        (clone / "calc.py").write_text(CALC, encoding="utf-8")
+        (clone / "test_calc.py").write_text(TESTS, encoding="utf-8")
         kit.git("add", ".", cwd=clone)
         kit.git("commit", "-qm", "calc", cwd=clone)
         kit.git("update-ref", "refs/remotes/origin/feat/t", "HEAD", cwd=clone)
         kit.init_run()
         for d in ("tickets", "tasks", "worktrees", "reports"):
             (kit.run_dir / d).mkdir()
-        (kit.run_dir / "tickets" / "01-calc.md").write_text(TICKET)
-        (kit.run_dir / "tasks" / "01-tests.md").write_text(TASK)
+        (kit.run_dir / "tickets" / "01-calc.md").write_text(TICKET, encoding="utf-8")
+        (kit.run_dir / "tasks" / "01-tests.md").write_text(TASK, encoding="utf-8")
         self.wt = kit.run_dir / "worktrees" / "01-tests"
         kit.git("worktree", "add", "-q", "-b", "task/t/tests", str(self.wt), "origin/feat/t", cwd=clone)
-        (kit.bin / "capped").write_text(CAPPED)
+        (kit.bin / "capped").write_text(CAPPED, encoding="utf-8")
         (kit.bin / "capped").chmod(0o755)
         self.checks("capped --mb 2000 --secs 8 -- python3 -m unittest -q")
         self.report = kit.run_dir / "reports" / "01-tests.md"
@@ -72,17 +70,18 @@ class VerifyTunerTest(unittest.TestCase):
 
     def checks(self, *cmds):
         body = "\n".join(cmds)
-        (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\n{body}\n```\n\n## Gaps\n")
+        (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\n{body}\n```\n\n## Gaps\n",
+                                                encoding="utf-8")
 
     def tune(self, added, commit=True):
         """The tuner's change: `added` appended to the test file, committed on the tuning branch."""
         test = self.wt / "test_calc.py"
-        test.write_text(test.read_text() + added)
+        test.write_text(test.read_text(encoding="utf-8") + added, encoding="utf-8")
         if commit:
             self.kit.git("commit", "-qam", "test: more", cwd=self.wt)
 
     def write_report(self, *lines):
-        self.report.write_text("status: done\nchanged: abc\n" + "\n".join(lines) + "\n")
+        self.report.write_text("status: done\nchanged: abc\n" + "\n".join(lines) + "\n", encoding="utf-8")
 
     def verify(self, *extra):
         p = self.kit.step(VERIFY, self.kit.run_dir, "01-tests", "--report", self.report, *extra)
@@ -103,6 +102,8 @@ class VerifyTunerTest(unittest.TestCase):
         log = p.stdout.rsplit("(log: ", 1)[1].rstrip(")\n")
         self.assertTrue(Path(log).is_file(), log)
 
+
+class VerifyTunerTest(VerifyTunerCase):
     def test_a_mutation_that_turns_the_suite_red_passes(self):
         self.write_report("mutations: calc.py:6 a - b -> a + b", "moved: none")
         before = self.snapshot()
@@ -110,6 +111,18 @@ class VerifyTunerTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
         self.assertEqual(self.snapshot(), before)
+
+    def test_checks_calling_a_tool_setup_installed_in_the_env_run_green(self):
+        suite = "capped --mb 2000 --secs 8 -- python3 -m unittest -q"
+        (self.kit.run_dir / "map.md").write_text(
+            f"# Map\n\n## Checks\n\n```\nenvtool\n{suite}\n```\n\n" + env_tool_setup("envtool", "from the env")
+            + "\n## Gaps\n", encoding="utf-8")
+        p = self.kit.step(SCRIPTS / "setup.py", self.kit.run_dir)
+        self.assertTrue(p.stdout.startswith("OK run set up "), p.stdout + p.stderr)
+        self.write_report("mutations: calc.py:6 a - b -> a + b", "moved: none")
+        p = self.verify()
+        self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
+        self.assertIn("from the env", (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text(encoding="utf-8"))
 
     def test_mutations_listed_under_one_key_are_each_applied(self):
         self.tune("\n    def test_mul(self):\n        self.assertEqual(calc.mul(2, 3), 6)\n")
@@ -138,14 +151,18 @@ class VerifyTunerTest(unittest.TestCase):
 
     def test_a_removed_assertion_without_a_moved_line_fails_naming_it(self):
         test = self.wt / "test_calc.py"
-        test.write_text(test.read_text().replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"))
+        text = test.read_text(encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b", "moved: none")
         self.assertFails(self.verify(), "assertion-removed test_calc.py:8")
 
     def test_a_removed_assertion_named_in_a_moved_line_passes(self):
         test = self.wt / "test_calc.py"
-        test.write_text(test.read_text().replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"))
+        text = test.read_text(encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b",
                           "moved: `self.assertEqual(calc.add(2, 3), 5)`: covered by test_sub's setup")
@@ -153,21 +170,23 @@ class VerifyTunerTest(unittest.TestCase):
 
     def test_an_assertion_moved_within_the_diff_needs_no_moved_line(self):
         test = self.wt / "test_calc.py"
-        test.write_text(test.read_text().replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"))
-        (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"))
+        text = test.read_text(encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
+        (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"), encoding="utf-8")
         self.kit.git("add", ".", cwd=self.wt)
         self.kit.git("commit", "-qm", "test: move", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b")
         self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=1\n")
 
     def test_a_changed_non_test_file_fails_naming_it(self):
-        (self.wt / "calc.py").write_text(CALC + "\n# faster\n")
+        (self.wt / "calc.py").write_text(CALC + "\n# faster\n", encoding="utf-8")
         self.kit.git("commit", "-qam", "perf", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b")
         self.assertFails(self.verify(), "non-test-file calc.py")
 
     def test_an_uncommitted_new_non_test_file_fails_naming_it(self):
-        (self.wt / "helper.py").write_text("X = 1\n")
+        (self.wt / "helper.py").write_text("X = 1\n", encoding="utf-8")
         self.write_report("mutations: calc.py:6 a - b -> a + b")
         self.assertFails(self.verify(), "non-test-file helper.py")
 
@@ -178,50 +197,6 @@ class VerifyTunerTest(unittest.TestCase):
         self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=1\n")
         self.assertEqual(self.snapshot(), before)
 
-    # The looping cases wait out their whole limit, so they cap the Checks line low; 2 s still lets the green run pass.
-    def test_a_looping_mutation_is_stopped_by_the_checks_time_limit_and_counts_as_red(self):
-        self.checks("capped --mb 2000 --secs 2 -- python3 -m unittest -q")
-        self.write_report("mutations: calc.py:6 return a - b -> while True: pass")
-        before = self.snapshot()
-        start = time.monotonic()
-        p = self.verify()
-        self.assertLess(time.monotonic() - start, 10)
-        self.assertEqual(p.stdout, "OK 01-tests verified mutations=1\n")
-        self.assertEqual(self.snapshot(), before)
-        log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text()
-        self.assertIn("timeout after 2s", log)
-
-    def test_a_looping_green_suite_fails_on_the_time_limit(self):
-        self.checks("capped --mb 2000 --secs 1 -- python3 -m unittest -q")
-        self.tune("\n    def test_slow(self):\n        while True:\n            pass\n")
-        self.write_report("mutations: calc.py:6 a - b -> a + b")
-        p = self.verify()
-        self.assertFails(p, "timeout capped --mb 2000 --secs 1 -- python3 -m unittest -q")
-        log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text()
-        self.assertIn("timeout after 1s", log)
-
-    # Windows delivers neither signal to a handler: `send_signal(SIGTERM)` ends the process outright, and SIGINT is
-    # refused. Nothing there can restore the file.
-    @unittest.skipIf(os.name == "nt", "Windows sends no SIGTERM or SIGINT a process can catch")
-    def test_an_interrupted_mutation_restores_the_worktree(self):
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            with self.subTest(sig=sig):
-                self.write_report("mutations: calc.py:6 return a - b -> while True: pass")
-                before = self.snapshot()
-                p = subprocess.Popen([sys.executable, "-I", str(VERIFY), str(self.kit.run_dir), "01-tests",
-                                      "--report", str(self.report), "--timeout", "60"], env=self.kit.env, text=True,
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                calc = self.wt / "calc.py"
-                deadline = time.monotonic() + 15
-                while "while True" not in calc.read_text() and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                self.assertIn("while True", calc.read_text())
-                p.send_signal(sig)
-                out, err = p.communicate(timeout=15)
-                self.assertEqual(p.returncode, 1, out + err)
-                self.assertTrue(out.startswith("FAIL 01-tests interrupted (log: "), out)
-                self.assertEqual(self.snapshot(), before)
-
     def test_a_report_with_no_mutations_still_checks_files_and_suite(self):
         self.write_report("covered: none")
         self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=0\n")
@@ -230,7 +205,7 @@ class VerifyTunerTest(unittest.TestCase):
         """Adds `files` to the ticket branch, under the tuning branch's fork point."""
         for name, text in files.items():
             (self.wt / name).parent.mkdir(parents=True, exist_ok=True)
-            (self.wt / name).write_text(text)
+            (self.wt / name).write_text(text, encoding="utf-8")
         self.kit.git("add", ".", cwd=self.wt)
         self.kit.git("commit", "-qm", "base", cwd=self.wt)
         self.kit.git("update-ref", "refs/remotes/origin/feat/t", "HEAD", cwd=self.wt)
@@ -243,11 +218,11 @@ class VerifyTunerTest(unittest.TestCase):
         for n, line in enumerate(lines, start=3):
             with self.subTest(line):
                 test = self.wt / "tests" / "guard.test.sh"
-                original = test.read_text()
-                test.write_text(original.replace(line + "\n", ""))
+                original = test.read_text(encoding="utf-8")
+                test.write_text(original.replace(line + "\n", ""), encoding="utf-8")
                 self.write_report("mutations: calc.py:6 a - b -> a + b")
                 self.assertFails(self.verify(), f"assertion-removed tests/guard.test.sh:{n}")
-                test.write_text(original)
+                test.write_text(original, encoding="utf-8")
 
     def test_a_mutation_on_a_test_file_fails(self):
         self.write_report("mutations: test_calc.py:8 5 -> 6")
@@ -263,29 +238,47 @@ class VerifyTunerTest(unittest.TestCase):
         for name in ("tests/run.sh", "tests/suites.txt", "tests/affected.sh"):
             with self.subTest(name):
                 (self.wt / "tests").mkdir(exist_ok=True)
-                (self.wt / name).write_text("x\n")
+                (self.wt / name).write_text("x\n", encoding="utf-8")
                 self.write_report("mutations: calc.py:6 a - b -> a + b")
                 self.assertFails(self.verify(), f"non-test-file {name}")
                 (self.wt / name).unlink()
 
     def test_fixtures_and_test_helpers_count_as_test_files(self):
         self.base_commit({"tests/fixtures/in.json": "{}\n", "tests/helpers.py": "X = 1\n"})
-        (self.wt / "tests" / "fixtures" / "in.json").write_text('{"a": 1}\n')
-        (self.wt / "tests" / "helpers.py").write_text("X = 2\n")
+        (self.wt / "tests" / "fixtures" / "in.json").write_text('{"a": 1}\n', encoding="utf-8")
+        (self.wt / "tests" / "helpers.py").write_text("X = 2\n", encoding="utf-8")
         self.kit.git("commit", "-qam", "test: data", cwd=self.wt)
         self.write_report("mutations: calc.py:6 a - b -> a + b")
         self.assertEqual(self.verify().stdout, "OK 01-tests verified mutations=1\n")
 
     def test_an_assertion_copied_into_an_untracked_file_still_counts_as_removed(self):
         test = self.wt / "test_calc.py"
-        test.write_text(test.read_text().replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"))
+        text = test.read_text(encoding="utf-8")
+        test.write_text(text.replace("        self.assertEqual(calc.add(2, 3), 5)\n", "        pass\n"),
+                        encoding="utf-8")
         self.kit.git("commit", "-qam", "test: drop", cwd=self.wt)
-        (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"))
+        (self.wt / "test_more.py").write_text(TESTS.replace("CalcTest", "MoreTest"), encoding="utf-8")
         self.write_report("mutations: calc.py:6 a - b -> a + b")
         self.assertFails(self.verify(), "assertion-removed test_calc.py:8")
 
     def test_a_missing_report_fails(self):
         self.assertFails(self.verify(), f"no-report {self.report}")
+
+    def test_an_unknown_argument_fails_before_any_suite_runs(self):
+        self.write_report("mutations: calc.py:6 a - b -> a + b")
+        self.assertFails(self.verify("--fast"), "usage: unknown argument --fast")
+        log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text(encoding="utf-8")
+        self.assertNotIn("$ capped", log)
+
+    def test_a_task_without_a_worktree_fails(self):
+        self.write_report("mutations: calc.py:6 a - b -> a + b")
+        p = self.kit.step(VERIFY, self.kit.run_dir, "02-tests", "--report", self.report)
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertTrue(p.stdout.startswith("FAIL 02-tests no-worktree: "), p.stdout)
+
+    def test_a_mutation_entry_without_an_arrow_fails(self):
+        self.write_report("mutations: calc.py:6 a - b")
+        self.assertFails(self.verify(), "bad-mutation calc.py:6")
 
 
 if __name__ == "__main__":

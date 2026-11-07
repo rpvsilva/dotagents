@@ -12,7 +12,7 @@ uncommitted and untracked changes alike):
   is removed unless the diff of tracked files adds the same line back or a `moved:` entry of the report names it, by
   its text or by its old `file:line`. An untracked file's lines never count as the line added back;
 - the report has at least one `mutations:` entry per `covered:` entry, and no mutation targets a test file;
-- `map.md`'s `Checks` are green;
+- `map.md`'s `Checks` are green, run inside the run's environment as `test_command:` runs them;
 - each `mutations:` entry of the report (default `<run>/reports/<TT-tests>.md`), `file:line old -> new`, turns them
   red: the first `old` on that line becomes `new`, the Checks run, and the file gets its bytes and times back on any
   exit, SIGTERM and SIGINT included. A suite killed by its time limit counts as red.
@@ -162,7 +162,7 @@ def run_suite(ctx, wt, command, limit):
     ctx.note(f"$ {command}  (in {wt}, limit {limit}s)")
     posix = os.name == "posix"
     # `core.command` finds `bash` on `PATH`: a bare `bash` on Windows is WSL's, which runs no Git Bash command line.
-    p = subprocess.Popen(core.command(["bash", "-c", command], env), cwd=str(wt), env=env, stdin=subprocess.DEVNULL,
+    p = subprocess.Popen(core.command(["bash", "-c", checks.in_env(ctx.run_dir, command)], env), cwd=str(wt), env=env, stdin=subprocess.DEVNULL,
                          stdout=ctx.log, stderr=subprocess.STDOUT, start_new_session=posix,
                          creationflags=0 if posix else subprocess.CREATE_NEW_PROCESS_GROUP)
     try:
