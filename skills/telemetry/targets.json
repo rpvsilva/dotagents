@@ -1,0 +1,30 @@
+{
+  "source": "#181 Targets table, plus spec behaviour 24 (suite results saved per merged task, mid-run human round trips)",
+  "ops": "lt: value < threshold, le: value <= threshold, eq: value == threshold",
+  "targets": [
+    {"id": "total-cost", "metric": "totalCostUSD", "op": "lt", "threshold": 90, "unit": "USD",
+     "source": "#181: total cost, remote included"},
+    {"id": "orchestrator-context", "metric": "orchestratorAvgContextTokens", "op": "lt", "threshold": 80000,
+     "unit": "tokens", "source": "#181: orchestrator average context per turn"},
+    {"id": "orchestrator-turns-per-ticket", "metric": "orchestratorTurnsPerTicket", "op": "lt", "threshold": 10,
+     "unit": "turns", "source": "#181: orchestrator turns per ticket"},
+    {"id": "orchestrator-cost", "metric": "orchestratorUSD", "op": "lt", "threshold": 15, "unit": "USD",
+     "source": "#181: orchestrator cost"},
+    {"id": "reviewer-runs-per-ticket", "metric": "reviewerRunsPerTicket", "op": "le", "threshold": 2.5,
+     "unit": "runs", "source": "#181: reviewer runs per ticket"},
+    {"id": "opus-reviewer-runs-per-ticket", "metric": "opusReviewerRunsPerTicket", "op": "le", "threshold": 1,
+     "unit": "runs", "source": "#181: reviewer runs on Opus per ticket"},
+    {"id": "conflict-resolvers", "metric": "conflictResolverAgents", "op": "eq", "threshold": 0, "unit": "agents",
+     "source": "#181: conflict-resolver agents"},
+    {"id": "hand-written-scripts", "metric": "handWrittenScripts", "op": "eq", "threshold": 0, "unit": "scripts",
+     "source": "#181: hand-written run scripts"},
+    {"id": "remote-memory-kills", "metric": "remoteKilledByMemory", "op": "eq", "threshold": 0, "unit": "runs",
+     "source": "#181: remote runs killed by memory"},
+    {"id": "remote-cost-measured", "metric": "remoteCostMeasured", "op": "eq", "threshold": true, "unit": "bool",
+     "source": "#181: remote-run cost measured"},
+    {"id": "suites-per-merge", "metric": "suitesPerMergedTask", "op": "eq", "threshold": 1.0, "unit": "ratio",
+     "source": "spec behaviour 24: suite results saved per merged task"},
+    {"id": "human-round-trips", "metric": "humanRoundTrips", "op": "eq", "threshold": 0, "unit": "round trips",
+     "source": "spec behaviour 24: mid-run human round trips"}
+  ]
+}
