@@ -1,6 +1,7 @@
 """A task as the finish, open-PR and fix-round steps see it: its file, its ticket's branch and its worktree.
 
-Git runs in the task's worktree (`<run>/worktrees/TT-NN`, or `TT-tests`) under the repo's lock. A merge of the ticket
+Git runs in the task's worktree (`<run>/worktrees/TT-NN`, or `TT-tests`) without the repo's lock: these commands edit
+only the worktree and its own branch. A merge of the ticket
 branch that conflicts raises `core.Fail("conflict <files>")` and is left in progress, so whoever resolves it keeps
 the markers; `conclude_merge` commits it once they are gone.
 """
@@ -37,9 +38,8 @@ class Task:
         self.upstream = f"origin/{self.ticket_branch}"
 
     def git(self, *args, check=True):
-        """`git <args>` in the worktree under the repo lock; a failure raises `Fail("git-<subcommand>")`."""
-        with gitops.lock(self.repo):
-            res = core.run(["git", "-C", self.worktree, *args], self.ctx.log)
+        """`git <args>` in the worktree; a failure raises `Fail("git-<subcommand>")`."""
+        res = core.run(["git", "-C", self.worktree, *args], self.ctx.log)
         if check and res.rc != 0:
             raise core.Fail(f"git-{args[0]}")
         return res
