@@ -11,7 +11,9 @@ new base's tip on origin. Without `--apply` it changes nothing and prints
 With `--apply` it records `base: <new-base>` in `decisions.md`, then, for each started ticket listed, merges
 `origin/<new-base>` into its branch in a scratch worktree and pushes it (a fast-forward, never a force). Every started
 ticket whose branch holds the new base's tip, merged now or before, then has its open PR (its `PR:` line) moved to the
-new base when it is on another one. Prints `OK run caught-up base=<new-base> <n> unstarted <m> started ...`. A
+new base when it is on another one. Prints `OK run caught-up base=<new-base> <n> unstarted <m> started ...`, adding
+`union=<TT>:<file>,..[;<TT>:...]` for the merges whose conflicts, all in hub files, `steplib/union.py` settled (both
+sides kept, `decisions.md`'s `test_command:` green); those are pushed like the others. Any other
 conflicted merge is aborted and leaves that branch and its PR as they were; the others still merge, and it prints
 `FAIL run conflict <TT>: <files>[; <TT>: <files>]`. A PR that will not move fails `pr-edit <TT>`. Rerun it once those
 are resolved: a branch already holding the tip is not merged again, and a PR still on the old base is moved then. A
@@ -22,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ci, core, decisions, gh, gitops, merge, runfolder  # noqa: E402
+from steplib import ci, core, decisions, gh, gitops, merge, runfolder, union  # noqa: E402
 
 USAGE = "usage: catch_up.py <run> <new-base> [--apply]"
 STARTED = ("building", "in-review")
@@ -63,22 +65,24 @@ def record(run, base):
 
 
 def catch_up(ctx, git, repo, tt, branch, base):
-    """Merges `origin/<base>` into the ticket branch and pushes it; returns the conflicted files, or None."""
+    """Merges `origin/<base>` into the ticket branch and pushes it; returns (the conflicted files or None, the files a
+    union settled)."""
     wt = ctx.run_dir / "worktrees" / f"catch-up-{tt}"
     wt.parent.mkdir(parents=True, exist_ok=True)
     git.worktree_add(wt, f"refs/remotes/origin/{branch}", detach=True)
     try:
         with gitops.lock(repo):
             merged = ctx.run(["git", "-C", wt, "merge", "--no-edit", f"refs/remotes/origin/{base}"])
-        if merged.rc != 0:
+        unioned = union.resolve(ctx.run_dir, wt, ctx.log) if merged.rc != 0 else None
+        if merged.rc != 0 and not unioned:
             with gitops.lock(repo):  # the worktree's removal below drops the half-done merge
                 files = ctx.run(["git", "-C", wt, "diff", "--name-only", "--diff-filter=U"]).out.split()
-            return files or ["(merge failed)"]
+            return files or ["(merge failed)"], []
         if git.push("origin", f"{_head(ctx, repo, wt)}:refs/heads/{branch}").rc != 0:
             raise core.Fail(f"push {tt}")
     finally:
         git.worktree_remove(wt)
-    return None
+    return None, unioned or []
 
 
 def retarget(ctx, repo, tt, path, base):
@@ -117,16 +121,18 @@ def step(ctx):
     if not apply:
         return "catch-up", counts
     record(ctx.run_dir, base)
-    conflicts = []
+    conflicts, unions = [], []
     for tt, path, branch in started:
-        files = catch_up(ctx, git, repo, tt, branch, base) if (tt, path, branch) in behind else None
+        files, unioned = catch_up(ctx, git, repo, tt, branch, base) if (tt, path, branch) in behind else (None, [])
+        if unioned:
+            unions.append(f"{tt}:{','.join(unioned)}")
         if files:
             conflicts.append(f"{tt}: {' '.join(files)}")
         else:
             retarget(ctx, repo, tt, path, base)
     if conflicts:
         raise core.Fail(f"conflict {'; '.join(conflicts)}")
-    return "caught-up", f"base={base} {counts}"
+    return "caught-up", f"base={base} {counts}" + (f" union={';'.join(unions)}" if unions else "")
 
 
 if __name__ == "__main__":

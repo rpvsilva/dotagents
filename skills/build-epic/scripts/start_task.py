@@ -5,7 +5,9 @@ Usage: python3 -I start_task.py <run> <TT-NN|TT-tests>
 Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from `origin/<ticket-branch>` and sets the task
 `in-progress`. Prints `OK TT-NN in-progress wt=<path> tip=<sha7>`. A hub task (one `ticket NN` blocker) also merges
 `origin/<base>` there (`decisions.md`'s `base:`, else the default branch), adding `synced=<sha7>` (the tip it merged);
-on a conflict it removes the worktree and branch, leaves the task `ready` and prints `FAIL TT-NN sync-conflict <files>`.
+a conflict only in hub files that `steplib/union.py` settles (both sides kept, `decisions.md`'s `test_command:` green)
+is committed and adds `union=<file>,..`; any other conflict removes the worktree and branch, leaves the task `ready` and
+prints `FAIL TT-NN sync-conflict <files>`.
 After the sync, it copies each `interaction` row of its ticket in `<run>/followups.jsonl` not yet carried into its
 `## Acceptance criteria` as `- [ ] <file[:line]>: <claim> (from <source>)`, marks those rows carried by TT-NN and adds
 `carried=<n>`.
@@ -16,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ci, core, followups, gitops, runfolder  # noqa: E402
+from steplib import ci, core, followups, gitops, runfolder, union  # noqa: E402
 
 
 def names(task):
@@ -77,13 +79,15 @@ def step(ctx):
         base = f"refs/remotes/origin/{ci.base(ctx.run_dir, info['Default'])}"
         synced = git.tip(base)
         merge = git_in(ctx, info["Repo"], wt, "merge", "--no-edit", base)
-        if merge.rc != 0:
+        unioned = union.resolve(ctx.run_dir, wt, ctx.log) if merge.rc != 0 else None
+        if merge.rc != 0 and not unioned:
             conflicted = git_in(ctx, info["Repo"], wt, "diff", "--name-only", "--diff-filter=U").out.split()
             git_in(ctx, info["Repo"], wt, "merge", "--abort")
             git.worktree_remove(wt)
             git.branch_delete(branch)
             raise core.Fail(f"sync-conflict {' '.join(conflicted)}" if conflicted else "sync-failed")
-        details = f" synced={synced[:7]} carried={carry(ctx.run_dir, task, tt, f'{tt}-{nn}')}"
+        details = f" synced={synced[:7]}" + (f" union={','.join(unioned)}" if unioned else "")
+        details += f" carried={carry(ctx.run_dir, task, tt, f'{tt}-{nn}')}"
         tip = git.tip(f"refs/heads/{branch}")
     runfolder.set_header(task, "Status", "in-progress")
     return "in-progress", f"wt={wt} tip={tip[:7]}{details}"
