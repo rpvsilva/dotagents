@@ -219,6 +219,44 @@ class OwnerDocTest(FollowupsCase):
         self.assertEqual(self.record(report, "--ticket", "04"), "OK 04 recorded 2 new=0")
         self.assertEqual((self.run_dir / "followups.jsonl").read_bytes(), before)
 
+    def test_a_patch_headed_with_another_path_fails_and_records_nothing(self):
+        other = "--- a/.review-gate.yml\n+++ b/.review-gate.yml\n@@ -1 +1 @@\n-a\n+b\n"
+        both = "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1 @@\n-a\n+b\n" + other
+        for patch in (other, both, "--- a/AGENTS.md\n+++ b/CODEOWNERS\n@@ -1 +1 @@\n-a\n+b\n",
+                      "diff --git a/AGENTS.md b/.review-gate.yml\n@@ -1 +1 @@\n-a\n+b\n"):
+            with self.subTest(patch=patch):
+                text = owner_doc("checks", "claim", patch)
+                line = self.record(self.report("## Follow-ups\n" + text), "--ticket", "04", ok=False)
+                self.assertTrue(line.startswith(f"FAIL 04 bad-followup {text.splitlines()[0]} (log: "), line)
+                self.assertEqual(self.rows(), [])
+
+    def test_a_patch_naming_only_the_rows_path_passes(self):
+        for patch in ("--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1 @@\n-a\n+b\n",
+                      "diff --git a/AGENTS.md b/AGENTS.md\n--- AGENTS.md\n+++ AGENTS.md\t2026-01-01\n@@ -1 +1 @@\n-a\n+b\n",
+                      "--- /dev/null\n+++ b/AGENTS.md\n@@ -0,0 +1 @@\n+b\n", "-a\n+b\n"):
+            with self.subTest(patch=patch):
+                text = owner_doc("checks", "claim", patch)
+                self.assertEqual(self.record(self.report("## Follow-ups\n" + text), "--ticket", "04"),
+                                 "OK 04 recorded 1 new=1")
+                (self.run_dir / "followups.jsonl").unlink()
+
+    def test_a_context_line_that_is_a_code_fence_does_not_end_the_patch(self):
+        patch = "--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,3 @@\n ```sh\n-old\n+new\n ```\n tail\n"
+        text = owner_doc("usage", "claim", patch, path="README.md")
+        self.assertEqual(self.record(self.report("## Follow-ups\n" + text), "--ticket", "04"), "OK 04 recorded 1 new=1")
+        self.assertEqual(self.rows()[0]["patch"], patch)
+
+    def test_the_report_prints_a_patch_in_a_fence_it_does_not_close(self):
+        patch = "--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,3 @@\n ```sh\n-old\n+new\n ```\n"
+        rows = [{"id": 1, "ticket": "04", "pr": None, "severity": "nit", "kind": "owner-doc", "file": "README.md",
+                 "item": "usage", "line": None, "claim": "c", "patch": patch, "source": "r.md"}]
+        out = followups.report(rows, lambda path: True)
+        start = next(i for i, line in enumerate(out) if line.endswith("diff"))
+        fence = out[start][:-4]
+        self.assertGreater(len(fence), 3)
+        self.assertEqual(set(fence), {"`"})
+        self.assertEqual(out[start + 1:], patch.splitlines() + [fence])
+
     def test_an_owner_doc_without_its_diff_block_fails(self):
         for text in ("- nit owner-doc AGENTS.md#x: claim\n- nit follow-up a.py: b\n",
                      "- nit owner-doc AGENTS.md#x: claim\nthe patch:\n```diff\n-a\n```\n",
@@ -248,6 +286,14 @@ class ReportTest(FollowupsCase):
         p = self.kit.step(RECORD, self.run_dir, "report")
         self.assertEqual(p.returncode == 0, ok, p.stdout + p.stderr)
         return p.stdout
+
+    def test_a_fixed_row_is_not_listed_as_open_in_the_report(self):
+        self.record(self.report(REPORT), "--ticket", "03")
+        self.assertEqual(self.kit.step(RECORD, self.run_dir, "fixed", "1", "--task", "03-04").returncode, 0)
+        p = self.kit.step(RECORD, self.run_dir, "report")
+        self.assertIn("follow-ups: 2\n", p.stdout)
+        self.assertNotIn("the flag is not in the README", p.stdout)
+        self.assertIn("undo must restore the due time", p.stdout)
 
     def test_an_empty_run_prints_no_follow_ups(self):
         self.assertEqual(self.printed(), "follow-ups: 0\n")
@@ -340,6 +386,33 @@ class ReportTest(FollowupsCase):
         self.assertRegex(p.stdout, r"^FAIL run usage: ")
 
 
+class FixedTest(FollowupsCase):
+    def setUp(self):
+        super().setUp()
+        self.record(self.report(REPORT), "--ticket", "03")
+
+    def fixed(self, *args, ok=True):
+        p = self.kit.step(RECORD, self.run_dir, "fixed", *args)
+        self.assertEqual(p.stdout.count("\n"), 1, p.stdout + p.stderr)
+        self.assertEqual(p.returncode == 0, ok, p.stdout + p.stderr)
+        return p.stdout.rstrip("\n")
+
+    def test_fixed_records_the_fixing_task_on_the_rows(self):
+        self.assertEqual(self.fixed("1", "3", "--task", "03-04"), "OK run fixed 2")
+        self.assertEqual([r.get("fixed") for r in self.rows()], ["03-04", None, "03-04"])
+
+    def test_fixed_without_a_task_still_marks_the_row(self):
+        self.assertEqual(self.fixed("2"), "OK run fixed 1")
+        self.assertTrue(self.rows()[1]["fixed"])
+
+    def test_an_unknown_id_or_a_bad_argument_fails_and_marks_nothing(self):
+        self.assertRegex(self.fixed("1", "9", ok=False), r"^FAIL run no-row: 9 ")
+        self.assertRegex(self.fixed("x", ok=False), r"^FAIL run usage: ")
+        self.assertRegex(self.fixed(ok=False), r"^FAIL run usage: ")
+        self.assertRegex(self.fixed("1", "--task", ok=False), r"^FAIL run usage: ")
+        self.assertEqual([r.get("fixed") for r in self.rows()], [None, None, None])
+
+
 class LibraryTest(FollowupsCase):
     def add(self, ticket, kind, claim, **kw):
         return followups.add(self.run_dir, [{"ticket": ticket, "pr": None, "severity": "should-fix", "kind": kind,
@@ -370,6 +443,12 @@ class LibraryTest(FollowupsCase):
         self.assertEqual([r["id"] for r in self.add("03", "follow-up", "one")], [1])
         self.assertEqual(self.add("03", "follow-up", "one"), [])
 
+    def test_open_rows_leave_out_the_fixed_ones(self):
+        self.add("03", "follow-up", "one")
+        self.add("03", "follow-up", "two")
+        followups.mark(self.run_dir, [1], "fixed", "03-02")
+        self.assertEqual([r["claim"] for r in followups.open_rows(self.run_dir)], ["two"])
+
     def test_load_of_a_run_with_no_file_is_empty(self):
         self.assertEqual(followups.load(self.run_dir), [])
 
@@ -386,7 +465,8 @@ class DocstringTest(unittest.TestCase):
         self.assertIn("followups.py <run> report", doc)
         self.assertIn("follow-ups: 0", doc)
         reasons = set(re.findall(r'core\.Fail\(f?"([a-z-]+)', source)) | {"usage"}
-        self.assertEqual(reasons, {"usage", "bad-ticket", "bad-pr", "no-report", "bad-followup"})
+        self.assertEqual(reasons, {"usage", "bad-ticket", "bad-pr", "no-report", "bad-followup",
+                                   "no-row"})
         for reason in reasons:
             self.assertIn(f"`{reason}", doc)
 

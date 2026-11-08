@@ -151,6 +151,14 @@ class ShipOpenDocsTest(Base):
         self.readme("# Tool\n")  # the main checkout's README is not the ticket's
         self.assertEqual(self.ship(), "OK 01 open pr=20")
 
+    def test_a_rerun_after_the_docs_fix_lands_checks_the_fixed_readme(self):
+        self.register(REGISTERED + ["--verbose"])
+        self.assertRegex(self.ship(), r"^FAIL 01 docs-drift missing=--verbose \(log: ")
+        self.readme(README.replace("`run --force <task>`", "`run --force --verbose <task>`"))
+        self.kit.git("commit", "-qam", "docs fix", cwd=self.clone)
+        self.kit.git("push", "-q", "origin", "main:feat/t", cwd=self.clone)
+        self.assertEqual(self.ship(), "OK 01 open pr=20")
+
     def test_open_passes_with_docs_commands_unset(self):
         self.assertEqual(self.ship(), "OK 01 open pr=20")
         self.assertEqual([c[:3] for c in self.sent()], [["pr", "edit", "20"], ["pr", "ready", "20"]])
