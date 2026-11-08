@@ -6,7 +6,8 @@ Usage: python3 -I ship_batch.py <run>
 Integration-branch mode only: when the run's base (`decisions.md`'s `base:`) is the default branch it fails
 `FAIL run not-integration` and touches nothing, since the repo's gate judges each PR into the default branch.
 
-A ticket is ready when its `Status:` is `building`, its `PR:` reads OPEN, its review is saved (the reviewed head
+A ticket is ready when its `Status:` is `building`, every task of it is `done` (a blocked `TT-tests` tuning task
+counts as done, as in `status.py`; a review's `TT-NN-review-fixes` task still open keeps it out), its `PR:` reads OPEN, its review is saved (the reviewed head
 `ship_ticket.py merge` reads, `<run>/logs/PR<n>-review.json`), Ticket CI shows no red check (unless `decisions.md`
 says `ci: off`), and `queue.json` does not hold it `red` at the same head. Ready tickets go in ticket-number order.
 Each is first checked against the base tip the batch starts from (`steplib/ancestry.py`'s guards, pushing nothing): a
@@ -18,7 +19,8 @@ The rest are merged as they are (`git merge --no-ff`, no rebase) in that order i
 `<run>/worktrees/batch` on the start tip, and `map.md`'s Checks run once on the combined tree. A ticket whose head
 conflicts with the ones before it is a **conflict** and ends the batch there. Green: each ticket lands through
 `ship_ticket.py`'s `merge` (its guard and merge rule unchanged), with the batch's suite results saved as its
-`reports/<TT>.checks.json` and its ancestry recorded against the start tip. Red: a linear prefix search reruns the
+`reports/<TT>.checks.json` and its ancestry recorded against the start tip; a ticket whose branch moved on origin
+since the batch read its head fails `head-moved`, so only the tested head lands. Red: a linear prefix search reruns the
 Checks on the first 1, 2, ... tickets until the first red one; the green prefix lands, that ticket is marked `red`
 with its suite output in `<run>/logs/batch-<TT>-red.log`, and the tickets after it wait for the next batch.
 
@@ -97,6 +99,10 @@ class Batch:
             branch = runfolder.get(path, "Branch")
             if runfolder.get(path, "Status") != "building" or not number or not branch:
                 continue
+            busy = self.open_tasks(tt)
+            if busy:
+                self.ctx.note(f"{tt}: tasks not done ({', '.join(busy)}); not batched")
+                continue
             if merge.view(number, self.ctx.log, self.repo).get("state") != "OPEN":
                 continue
             if not (self.run / "logs" / f"PR{number}-review.json").is_file():
@@ -113,6 +119,17 @@ class Batch:
                 continue
             found.append({"ticket": tt, "pr": number, "branch": branch, "head": head, "status": "queued"})
         return found, held
+
+    def open_tasks(self, tt):
+        """The ids of ticket `tt`'s tasks not `done`; a blocked tuning task (`TT-tests`) counts as done."""
+        found = []
+        for path in sorted((self.run / "tasks").glob(f"{tt}-*.md")):
+            parts = path.stem.split("-", 2)
+            ident = f"{parts[0]}-{parts[1]}" if len(parts) > 1 and parts[1].isdigit() else path.stem
+            status = runfolder.get(path, "Status")
+            if status != "done" and not (ident.endswith("-tests") and status == "blocked"):
+                found.append(ident)
+        return found
 
     def write(self, state=None):
         if state:
@@ -223,7 +240,7 @@ class Batch:
             e["status"] = "landing"
             self.write()
             try:
-                state, _ = self.ship(e["ticket"]).merge(batch=(start_tip, suites))
+                state, _ = self.ship(e["ticket"]).merge(batch=(start_tip, suites, e["head"]))
             except core.Fail as f:
                 e.update(status="failed", reason=f.reason)
                 for later in batch[i + 1:]:
