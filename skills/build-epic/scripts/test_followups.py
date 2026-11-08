@@ -328,6 +328,12 @@ class ReportTest(FollowupsCase):
         self.record(self.report(REPORT), "--ticket", "03")
         self.assertEqual(self.printed(ok=False), "FAIL run bad-rule: line 2: owner AGENTS.md\n")
 
+    def test_a_missing_run_folder_fails_with_no_run_folder(self):
+        gone = self.run_dir.parent / "no-such-run"
+        p = self.kit.step(RECORD, gone, "report")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertRegex(p.stdout, r"^FAIL run no-run-folder: ")
+
     def test_report_takes_no_other_argument(self):
         p = self.kit.step(RECORD, self.run_dir, "report", "extra")
         self.assertEqual(p.returncode, 2, p.stdout)
