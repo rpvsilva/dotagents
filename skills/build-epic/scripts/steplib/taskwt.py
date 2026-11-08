@@ -1,13 +1,14 @@
 """A task as the finish, open-PR and fix-round steps see it: its file, its ticket's branch and its worktree.
 
 Git runs in the task's worktree (`<run>/worktrees/TT-NN`, or `TT-tests`) without the repo's lock: these commands edit
-only the worktree and its own branch. A merge of the ticket
-branch that conflicts raises `core.Fail("conflict <files>")` and is left in progress, so whoever resolves it keeps
-the markers; `conclude_merge` commits it once they are gone.
+only the worktree and its own branch. A merge of the ticket branch whose conflicts `union.resolve` settles (hub files
+only, `test_command:` green) is committed and its files kept in `Task.union`; any other conflict raises
+`core.Fail("conflict <files>")` and is left in progress, so whoever resolves it keeps the markers; `conclude_merge`
+commits it once they are gone.
 """
 import re
 
-from . import core, gitops, runfolder
+from . import core, gitops, runfolder, union
 
 
 def title(path):
@@ -36,6 +37,7 @@ class Task:
         name = f"{parts[0]}-{parts[1]}" if len(parts) > 1 and parts[1].isdigit() else self.path.stem
         self.worktree = ctx.run_dir / "worktrees" / name
         self.upstream = f"origin/{self.ticket_branch}"
+        self.union = []
 
     def git(self, *args, check=True):
         """`git <args>` in the worktree; a failure raises `Fail("git-<subcommand>")`."""
@@ -81,6 +83,9 @@ class Task:
             return False
         res = self.git("merge", "--no-edit", self.upstream, check=False)
         if res.rc != 0:
+            self.union = union.resolve(self.ctx.run_dir, self.worktree, self.ctx.log) or []
+            if self.union:
+                return True
             files = self.unmerged()
             if files:
                 raise core.Fail(f"conflict {' '.join(files)}")
