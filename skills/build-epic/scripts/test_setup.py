@@ -1,5 +1,6 @@
 """Tests for `setup.py`: the run's test environment, test command, CI fact, identity and skipped tools, once."""
 import io
+import os
 import re
 import sys
 import unittest
@@ -55,6 +56,7 @@ class SetupCase(unittest.TestCase):
         (self.kit.home / ".agents" / "bin").mkdir(parents=True)
         (self.kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
         self.write_map("echo suite ok")
+        self.setting("max_parallel", "4")  # a Level sets it: no `parallel=`, but in the tests of the default
 
     def write_map(self, checks_block, setup="Setup: none."):
         (self.run_dir / "map.md").write_text(MAP.format(checks=checks_block, setup=setup), encoding="utf-8")
@@ -92,6 +94,54 @@ class SetupCase(unittest.TestCase):
         guard = '[ "$1" = --all ] || exit 0\n' if only_with_all else ""
         script.write_text(f"{guard}cat <<'EOF'\n{out}EOF\n", encoding="utf-8")
         return f"bash {script.as_posix()}"  # a Windows path's backslashes would be escapes in bash
+
+
+class ParallelFollowsTheMachine(SetupCase):
+    def default_level(self):
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "unset", "build-epic", "max_parallel", "--machine")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def parallel_for(self, machine):
+        self.kit.env["BUILD_EPIC_MACHINE"] = machine
+        return self.setup()
+
+    def test_ten_cores_and_16_gb_give_four(self):
+        self.default_level()
+        self.assertTrue(self.parallel_for("10,16").endswith(" parallel=4 (10 cores, 16 GB)"))
+
+    def test_plenty_of_memory_leaves_the_cores_minus_two(self):
+        self.default_level()
+        self.assertIn(" parallel=2 (4 cores, 64 GB)", self.parallel_for("4,64"))
+
+    def test_a_small_machine_still_gets_one(self):
+        self.default_level()
+        self.assertIn(" parallel=1 (2 cores, 4 GB)", self.parallel_for("2,4"))
+
+    def test_a_big_machine_is_capped_at_six(self):
+        self.default_level()
+        self.assertIn(" parallel=6 (64 cores, 512 GB)", self.parallel_for("64,512"))
+
+    def test_the_real_machine_is_probed_without_an_override(self):
+        self.default_level()
+        m = re.search(r" parallel=([1-6]) \((\d+) cores, (\d+) GB\)$", self.setup())
+        self.assertTrue(m)
+        self.assertEqual(int(m.group(2)), os.cpu_count())
+        self.assertGreater(int(m.group(3)), 0)  # the memory was read, not left at 0
+
+    def test_a_malformed_override_fails_bad_machine(self):
+        self.default_level()
+        self.kit.env["BUILD_EPIC_MACHINE"] = "lots"
+        self.assertIn("bad-machine", self.setup(ok=False))
+
+    def test_a_machine_level_max_parallel_prints_nothing(self):
+        self.assertNotIn("parallel=", self.parallel_for("10,16"))
+
+    def test_a_repo_level_max_parallel_prints_nothing(self):
+        self.default_level()
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "--dir", str(self.kit.clone), "set", "build-epic",
+                          "max_parallel", "3", "--repo")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("parallel=", self.parallel_for("10,16"))
 
 
 class PrintsOneLine(SetupCase):

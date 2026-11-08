@@ -36,7 +36,9 @@ the ticket head in a scratch worktree (`red <suite>` stops it). Then, with the `
 when the ticket's tree is the reviewed tree (`tree-mismatch`) and that tree already holds the base's content
 (`reviewed-head-lacks-base`: merging the base into it would change it); either refusal merges and pushes nothing. The
 reviewed head is the commit the ticket PR's review was posted on (`<run>/logs/PR<n>-review.json`), else
-`--reviewed <sha>`, which overrides it, else it fails `no-review`. With `merge`, no ancestry step runs. A ticket merged
+`--reviewed <sha>`, which overrides it, else it fails `no-review`. With `merge`, no ancestry step runs. `ship_batch.py` lands a batch of tickets through this same `merge`, with the
+Checks it ran once on their combined tree and the ancestry recorded against the tip it started from; a branch tip other than the head the batch tested fails
+`head-moved` before anything is pushed. A ticket merged
 into such a base labels its issues `merged-to-<base>`.
 
 Prints `OK TT merged pr=<n>` or `OK TT in-review pr=<n>`, or `FAIL TT <reason> (log: ...)`: `wrong-base <branch>` (a PR
@@ -166,7 +168,11 @@ class Ship:
         if suites[-1].rc != 0:
             raise core.Fail(f"red {suites[-1].command}")
 
-    def merge(self, reviewed=None):
+    def merge(self, reviewed=None, batch=None):
+        """Merges the ticket's PR. `batch` is `(start_tip, suites, head)` from `ship_batch.py`: the Checks ran once on
+        the batch's combined tree with the ticket at `head`, so they are saved for this ticket instead of run again, a
+        branch tip other than `head` fails `head-moved`, and the ancestry is recorded against the tip the batch
+        started from."""
         line = runfolder.get(self.ticket, "PR")
         number = ci.pr_number(line)
         if not number:
@@ -174,6 +180,9 @@ class Ship:
         command = merge.setting(self.repo, "merge_command", self.ctx.log)
         self.git.fetch()
         sha = self.git.tip(f"origin/{self.branch}")
+        if batch and sha != batch[2]:
+            self.ctx.note(f"origin/{self.branch} is at {sha}; the batch tested {batch[2]}")
+            raise core.Fail("head-moved")
         into = merge.view(number, self.ctx.log, self.repo).get("baseRefName")
         if not into:
             raise core.Fail("pr-view")
@@ -183,9 +192,13 @@ class Ship:
             self.ctx.note(f"{GATE} gates {into}, and the merge_command Setting is unset: set it to the repo's merge rule")
             raise core.Fail("no-merge-rule")
         if into != self.default:
-            self.run_checks(sha)
+            if batch:
+                checks.save(self.run, self.ctx.id, batch[1])
+            else:
+                self.run_checks(sha)
             if (merge.setting(self.repo, "task_merge_method", self.ctx.log) or "squash") == "squash":
-                sha = ancestry.record(self.git, self.branch, self.base, self.reviewed(number, reviewed))
+                sha = ancestry.record(self.git, self.branch, self.base, self.reviewed(number, reviewed),
+                                      base_tip=batch[0] if batch else None)
         try:
             merge.merge(number, sha, self.repo, self.ctx.log, self.base, command)
         except core.Fail as e:

@@ -526,12 +526,12 @@ class GitOpsTest(KitCase):
         self.assertEqual(e.exception.reason, "git-rev-parse")
         self.assertIn("no-such-ref", self.log.getvalue())
 
-    def test_git_waits_while_another_step_holds_the_repo_lock(self):
+    def test_a_shared_metadata_edit_waits_while_another_step_holds_the_repo_lock(self):
         wt, released = self.kit.tmp / "wt", self.kit.tmp / "released"
         self.g.worktree_add(wt, "HEAD", detach=True)
         code = ("import io, os, sys; sys.path.insert(0, %r); from steplib import gitops\n"
                 "print('ready', flush=True)\n"
-                "tip = gitops.Git(%r, io.StringIO()).tip()\n"
+                "g = gitops.Git(%r, io.StringIO()); g.fetch(); tip = g.tip()\n"
                 "print(tip, os.path.exists(%r))" % (str(SCRIPTS), str(wt), str(released)))
         with gitops.lock(self.kit.clone):  # the main checkout's lock also covers its worktrees
             p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
