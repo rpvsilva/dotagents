@@ -1,7 +1,10 @@
-"""The git operations steps share, each under a per-repo lock so two steps never run git in one repo at once.
+"""The git operations steps share, with a per-repo lock around the commands that edit git's shared metadata.
 
-The lock is `<git common dir>/build-epic.lock`, shared by the main checkout and all its worktrees. A failed command
-raises `core.Fail("git-<subcommand>")`, its output in the step's log.
+The lock is `<git common dir>/build-epic.lock`, shared by the main checkout and all its worktrees. It is held only for
+one command that edits what every worktree shares (`fetch`, `worktree add|remove|prune`, `branch -d|-D`, each try of a
+push), never across a retry's sleep; read-only and in-worktree commands (`rev-parse`, `status`, `diff`, `merge`) take
+none, so steps in different worktrees run at once. A failed command raises `core.Fail("git-<subcommand>")`, its output
+in the step's log.
 """
 import contextlib
 import subprocess
@@ -25,6 +28,16 @@ def lock(repo):
         yield
 
 
+def shared(args):
+    """True when `git <args>` edits the metadata every worktree shares, so it runs under the repo lock."""
+    cmd, rest = (args[0], args[1:]) if args else ("", [])
+    if cmd == "fetch":
+        return True
+    if cmd == "worktree":
+        return bool(rest) and rest[0] in ("add", "remove", "prune", "move")
+    return cmd == "branch" and any(a in ("-d", "-D", "--delete") for a in rest)
+
+
 class Git:
     """Git in one repo (any of its worktrees), logging to `log`."""
 
@@ -32,7 +45,7 @@ class Git:
         self.repo, self.log = core.resolve(repo), log
 
     def _git(self, *args, check=True, cwd=None):
-        with lock(self.repo):
+        with lock(self.repo) if shared(args) else contextlib.nullcontext():
             res = core.run(["git", "-C", cwd or self.repo, *args], self.log)
         if check and res.rc != 0:
             raise core.Fail(f"git-{args[0]}")
@@ -80,6 +93,5 @@ class Git:
         return res.rc == 0
 
     def push(self, *args):
-        """`git push <args>` with the retry on transient failures, under the lock. Returns the `Result`."""
-        with lock(self.repo):
-            return gh.push(list(args), self.log, cwd=self.repo)
+        """`git push <args>` with the retry on transient failures, each try under the lock. Returns the `Result`."""
+        return gh.push(list(args), self.log, cwd=self.repo, hold=lambda: lock(self.repo))

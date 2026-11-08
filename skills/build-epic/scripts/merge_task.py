@@ -28,9 +28,8 @@ from steplib import checks, ci, core, gitops, guard, merge, runfolder  # noqa: E
 
 
 def git_in(ctx, where, *args):
-    """git in `where` (a worktree or the repo) under the repo's lock; returns the `Result`."""
-    with gitops.lock(where):
-        return ctx.run(["git", "-C", where, *args])
+    """git in `where` (a worktree or the repo); returns the `Result`. Its commands edit no shared metadata, so no lock."""
+    return ctx.run(["git", "-C", where, *args])
 
 
 def catch_up(ctx, wt, ticket_ref):
