@@ -10,10 +10,14 @@ is committed and adds `union=<file>,..`; any other conflict removes the worktree
 prints `FAIL TT-NN sync-conflict <files>`.
 After the sync, it copies each `interaction` row of its ticket in `<run>/followups.jsonl` not yet carried into its
 `## Acceptance criteria` as `- [ ] <file[:line]>: <claim> (from <source>)`, marks those rows carried by TT-NN and adds
-`carried=<n>`.
+`carried=<n>`. It then appends `{task, waited_on, ready_at, started_at, minutes}` to `<run>/waits.jsonl`: `waited_on`
+its `ticket NN` blockers, `ready_at` the latest `Done:` of its task blockers (null, and `minutes` null, when one has none,
+as in a run from before `merge_task.py` wrote it), times in UTC ISO; `status.py --report` reads it.
 A task not `ready`, or whose worktree or branch already exists, is refused.
 """
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,6 +44,41 @@ def carry(run, task, tt, task_id):
         f"- [ ] {r['file']}{'' if r.get('line') is None else ':' + str(r['line'])}: {r['claim']} (from {r['source']})"
         for r in rows])
     return followups.mark(run, [r["id"] for r in rows], "carried", task_id)
+
+
+STAMP = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def ticket_name(run, n, width):
+    """Ticket number `n` as its file names it (`02`), else zero-padded to `width`."""
+    try:
+        return runfolder.ticket_file(run, n).stem.split("-", 1)[0]
+    except core.Fail:
+        return n.zfill(width)
+
+
+def done_at(run, task_id):
+    """The task's `Done:` time, or None when it has no task file or no readable `Done:`."""
+    try:
+        return datetime.strptime(runfolder.get(runfolder.task_file(run, task_id), "Done") or "", STAMP).replace(
+            tzinfo=timezone.utc)
+    except (core.Fail, ValueError):
+        return None
+
+
+def record_wait(run, task, tt, task_id):
+    """Appends the hub task's wait row to `<run>/waits.jsonl`."""
+    on_tasks, on_tickets = runfolder.task_blockers(task)
+    done = [done_at(run, f"{tt}-{n}") for n in sorted(on_tasks)]
+    started = datetime.now(timezone.utc).replace(microsecond=0)
+    ready = max(done) if done and all(done) else None
+    row = {"task": task_id,
+           "waited_on": [ticket_name(run, n, len(tt)) for n in sorted(on_tickets, key=lambda n: (len(n), n))],
+           "ready_at": ready and ready.strftime(STAMP), "started_at": started.strftime(STAMP),
+           "minutes": ready and round((started - ready).total_seconds() / 60)}
+    with core.file_lock(run / ".waits.lock"):
+        with open(run / "waits.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
 
 
 def git_in(ctx, repo, where, *args):
@@ -88,6 +127,7 @@ def step(ctx):
             raise core.Fail(f"sync-conflict {' '.join(conflicted)}" if conflicted else "sync-failed")
         details = f" synced={synced[:7]}" + (f" union={','.join(unioned)}" if unioned else "")
         details += f" carried={carry(ctx.run_dir, task, tt, f'{tt}-{nn}')}"
+        record_wait(ctx.run_dir, task, tt, f"{tt}-{nn}")
         tip = git.tip(f"refs/heads/{branch}")
     runfolder.set_header(task, "Status", "in-progress")
     return "in-progress", f"wt={wt} tip={tip[:7]}{details}"

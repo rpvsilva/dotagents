@@ -9,9 +9,9 @@ resolution is kept; a conflict only in hub files that `steplib/union.py` settles
 run's default branch on origin, a hit passing only when `decisions.md` waives its rule `yes`), runs `map.md`'s `Checks`
 timing each suite, inside the run's environment as `test_command:` runs them (`<run>/env`, `steplib/checks.py`'s
 `in_env`), pushes, and merges the task's `PR:` by the merge rule (`merge_command` Setting), reading the PR back. Then
-sets the task `done`, removes its worktree and branch, opens the draft ticket PR when the ticket has none, and, when
-this was the ticket's last implementer task and a suite ran at least `tune_min_seconds`, writes the tuning task
-`tasks/TT-tests.md`.
+sets the task `done` with a `Done: <UTC ISO>` header (`start_task.py` times hub waits from it), removes its worktree
+and branch, opens the draft ticket PR when the ticket has none, and, when this was the ticket's last implementer task
+and a suite ran at least `tune_min_seconds`, writes the tuning task `tasks/TT-tests.md`.
 
 Prints `OK <task> done suites=<n> <secs>s [union=<file>,..]`, or `FAIL <task> <reason> (log: ...)`: `red <suite>`, `conflict <files>`,
 `guarded <file:line rule>; ...`, `guard-no-base: <ref>`, `guard-bad-range: <range>`, `bad-rule: <why>`, `git-<cmd>` (a
@@ -20,6 +20,7 @@ ticket branch), `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before
 `in-progress`.
 """
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -114,6 +115,7 @@ def step(ctx):
     merge.merge(pr, git.tip(), repo, ctx.log, ticket_branch, command)
 
     runfolder.set_header(task, "Status", "done")
+    runfolder.set_header(task, "Done", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     root = gitops.Git(repo, ctx.log)
     root.worktree_remove(wt)
     root.branch_delete(branch)
