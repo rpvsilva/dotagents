@@ -85,6 +85,16 @@ class FileFollowupsTest(FileFollowupsCase):
         self.assertEqual(self.filed(), {"the parser drops tabs": 12, "rename the flag": 13, "a nit": None,
                                         "a blocker": None})
 
+    def test_a_fixed_should_fix_row_is_not_filed(self):
+        self.row("already fixed in the fix round")
+        self.row("still open")
+        followups.mark(self.kit.run_dir, [1], "fixed", "01-05")
+        self.creates(1, 12)
+        p = self.file()
+        self.assertEqual(self.line(p), "OK followups filed 1 issues #12")
+        self.assertEqual(len(self.calls("issue", "create")), 1)
+        self.assertEqual(self.filed(), {"already fixed in the fix round": None, "still open": 12})
+
     def test_a_second_run_files_nothing(self):
         self.row("the parser drops tabs")
         self.creates(1, 12)

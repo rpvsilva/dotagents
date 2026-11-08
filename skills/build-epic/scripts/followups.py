@@ -3,6 +3,7 @@
 
 Usage:
   python3 -I followups.py <run> record <report> --ticket TT [--pr N]
+  python3 -I followups.py <run> fixed <id>... [--task <task>]
   python3 -I followups.py <run> report
 
 `record` reads the `## Follow-ups` section of `<report>` (an implementer's or a reviewer's report file), one row per
@@ -27,7 +28,11 @@ row is recorded with ticket `TT`, PR `N` (null without `--pr`) and the report's 
 with the same ticket, kind, file and claim is already there. Prints `OK TT recorded <n> new=<m>`: `n` rows in the
 section, `m` of them new. A report with no section records 0.
 
-`followups.py <run> report` prints the run's follow-ups for the final report, several stdout lines: `follow-ups: <n>`
+`fixed` marks the rows with those ids (the `id` of each row in `followups.jsonl`) as fixed, recording the task whose
+fix round fixed them (`true` without `--task`): a review finding sorted Fix is recorded as a row too, and a fixed row
+is neither listed by `report` nor filed by `tracker_cmd.py file-followups`. Prints `OK run fixed <n>`.
+
+`followups.py <run> report` prints the run's open follow-ups (fixed rows left out) for the final report, several stdout lines: `follow-ups: <n>`
 (`follow-ups: 0` and nothing else for a run with none), then `<area>: <n> <severity>, ...` per area (a row's first path
 segment), a blank line, the rows under `## <area>` and `### <severity>` headings, and `## Owner-only files`: per file
 an `owner-doc` row or a guard `path` rule names (the repo's leave-for-human rules, read as `guard_rules.py` reads
@@ -37,12 +42,14 @@ reasons of `guard_rules.py` (`no-run-md`, `run-md-missing`, `git-fetch`, `guard-
 rules cannot be read; `FAIL run usage: ...` exits 2.
 
 FAIL reasons:
-- `usage: ...`: not `record <report> --ticket TT [--pr N]` or `report`.
+- `usage: ...`: not `record <report> --ticket TT [--pr N]`, `fixed <id>... [--task <task>]` or `report`.
+- `no-row: <id> ...`: no row has that id; nothing is marked.
 - `bad-ticket: <value>`: `TT` is not a ticket number.
 - `bad-pr: <value>`: `N` is not a PR number.
 - `no-report: <path>`: the report file does not exist.
 - `bad-followup <line>`: the section's first line, or a bullet in it, is not a row, or an `owner-doc` row has no
-  `#<item>` or no non-empty `diff` block; nothing from that report is recorded.
+  `#<item>`, no non-empty `diff` block (closed by an unindented fence), or a patch whose `---`/`+++` headers name
+  another path than the row's; nothing from that report is recorded.
 """
 import sys
 from pathlib import Path
@@ -52,7 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import guard_rules  # noqa: E402
 from steplib import core, followups  # noqa: E402
 
-USAGE = "usage: followups.py <run> record <report> --ticket TT [--pr N] | report"
+USAGE = "usage: followups.py <run> record <report> --ticket TT [--pr N] | fixed <id>... [--task <task>] | report"
 
 
 def options(args):
@@ -68,8 +75,30 @@ def options(args):
     return (report, opts) if "--ticket" in opts else None
 
 
+def fixed(ctx):
+    """`fixed <id>... [--task <task>]`: marks the rows `fixed`."""
+    args = ctx.args[1:]
+    task = True
+    if "--task" in args:
+        i = args.index("--task")
+        if i != len(args) - 2 or not core.ID.match(args[-1]):
+            raise core.Fail(USAGE)
+        task, args = args[-1], args[:i]
+    if not args or not all(a.isdigit() for a in args):
+        raise core.Fail(USAGE)
+    ids = [int(a) for a in args]
+    have = {r["id"] for r in followups.load(ctx.run_dir)}  # rows are only ever added, so ids stay valid
+    missing = [str(i) for i in ids if i not in have]
+    if missing:
+        raise core.Fail(f"no-row: {' '.join(missing)} (ids are those in followups.jsonl)")
+    n = followups.mark(ctx.run_dir, ids, "fixed", task)
+    return "fixed", str(n)
+
+
 def step(ctx):
     args = ctx.args
+    if args and args[0] == "fixed":
+        return fixed(ctx)
     parsed = options(args[1:]) if args and args[0] == "record" else None
     if parsed is None:
         raise core.Fail(USAGE)
@@ -115,7 +144,7 @@ def report(argv):
     if not run.is_dir():
         print(f"FAIL run no-run-folder: {run}")
         return 1
-    rows = followups.load(run)
+    rows = followups.open_rows(run)
     paths = []
     if rows:
         try:
@@ -133,4 +162,5 @@ def report(argv):
 if __name__ == "__main__":
     if sys.argv[2:3] == ["report"]:
         sys.exit(report(sys.argv[1:]))
-    core.main("followups", step, usage="record <report> --ticket TT [--pr N]", argv=argv_with_id(sys.argv[1:]))
+    core.main("followups", step, usage="record <report> --ticket TT [--pr N] | fixed <id>... [--task <task>]",
+              argv=argv_with_id(sys.argv[1:]))

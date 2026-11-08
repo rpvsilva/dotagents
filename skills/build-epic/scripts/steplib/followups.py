@@ -10,15 +10,19 @@ proposes a change to a file only the human edits: `- <severity> owner-doc <path>
 Blank lines in the section are skipped. The section ends at the next `## ` heading or at the first other line that is
 not a row, so the report's block or a reviewer's `process:` lines after it are not read; a bullet (`- `, `* `, `+ `)
 that is not a row, or a first line that is not a row, makes the section malformed, as does an `owner-doc` row with no
-`#<item>` or no non-empty `diff` block closed by its fence. A recorded row holds `id` (1, 2, ... in file order),
+`#<item>` or no non-empty `diff` block closed by its fence, an unindented line of exactly three backticks (a context line
+` ``` ` of a Markdown patch does not close it), or a patch whose `---`/`+++` headers (or `diff --git` line) name another
+path than the row's `<path>`. A recorded row holds `id` (1, 2, ... in file order),
 `ticket`, `pr` (a number or null), `severity`, `kind`, `file`, `line` (a number or null), `claim` and `source` (the
-report's path), plus any key `mark` set (`carried`, `issue`); an `owner-doc` row also holds `item` and `patch` (the
+report's path), plus any key `mark` set (`carried`, `issue`, `fixed`: the task whose fix round fixed it, or `true`); an `owner-doc` row also holds `item` and `patch` (the
 block's lines, each ending in a newline). Rows are unique on (ticket, kind, file, claim). An `owner-doc` row is unique
 on its `<path>#<item>` whatever its ticket: a later one with another claim, severity or patch replaces the earlier row,
-which is dropped, and takes the next `id`. The carry file is the `interaction` rows not yet `carried`.
+which is dropped, and takes the next `id`. The carry file is the `interaction` rows not yet `carried`. A row marked `fixed` is not open: `open_rows` leaves it out,
+so it is neither filed as an issue nor listed by `report`.
 
 `report` groups the rows for the run's final report: counts by area (a row's first path segment) and severity, the
-rows grouped the same way, then one section per owner-only file with its rows and one combined patch.
+rows grouped the same way, then one section per owner-only file with its rows and one combined patch, in a fence longer
+than any run of backticks the patch holds.
 
 Every change rewrites the file atomically (temp file in the run folder, then rename) under `<run>/.followups.lock`,
 so a reader never sees half a file and two writers never lose each other's rows.
@@ -64,8 +68,8 @@ def parse(text):
             continue
         doc = DOC_ROW.match(raw)
         if doc:
-            patch, i = _patch(lines, i, raw)
             severity, kind, path, item, claim = doc.groups()
+            patch, i = _patch(lines, i, raw, path)
             rows.append({"severity": severity, "kind": kind, "file": path, "item": item, "line": None,
                          "claim": claim, "patch": patch})
             continue
@@ -80,17 +84,40 @@ def parse(text):
     return rows
 
 
-def _patch(lines, i, row):
+def _names(header):
+    """The path a `---`/`+++` header line or a `diff --git` line names, as a set (`/dev/null` is no path)."""
+    if header.startswith("diff --git "):
+        words = header[len("diff --git "):].split(" ")
+    else:
+        words = [header[4:].split("\t")[0].rstrip()]
+    return {re.sub(r"^[ab]/", "", w) for w in words if w and w != "/dev/null"}
+
+
+def _only_path(body, path):
+    """True when no header in the patch `body` (`diff --git` lines, and a `---` line followed by a `+++` line) names a
+    path other than `path`."""
+    for n, line in enumerate(body):
+        header = line.startswith("diff --git ") or (line.startswith("--- ") and body[n + 1:n + 2] and
+                                                    body[n + 1].startswith("+++ "))
+        if header and not _names(line) <= {path}:
+            return False
+        if line.startswith("+++ ") and n and body[n - 1].startswith("--- ") and not _names(line) <= {path}:
+            return False
+    return True
+
+
+def _patch(lines, i, row, path):
     """The non-empty `diff` block starting at `lines[i]` (blank lines before it skipped) and the index after its
-    closing fence; raises `BadRow(row)` when there is none."""
+    closing fence, which is a line that is exactly the fence, unindented (a context line ` ``` ` of a Markdown patch
+    does not end it); raises `BadRow(row)` when there is none or its headers name a path other than `path`."""
     while i < len(lines) and not lines[i].strip():
         i += 1
     if i >= len(lines) or lines[i].strip() != FENCE:
         raise BadRow(row.strip())
     body = []
     for j in range(i + 1, len(lines)):
-        if lines[j].strip() == END:
-            if not body:
+        if lines[j].rstrip() == END:
+            if not body or not _only_path(body, path):
                 break
             return "".join(line + "\n" for line in body), j + 1
         body.append(lines[j])
@@ -184,6 +211,11 @@ def mark(run, ids, key, value):
         return len(hit)
 
 
+def open_rows(run):
+    """Every recorded row not marked `fixed`: the ones still to file or report."""
+    return [r for r in load(run) if not r.get("fixed")]
+
+
 def _where(row):
     if row["kind"] == OWNER_DOC:
         return f"{row['file']}#{row['item']}"
@@ -227,5 +259,6 @@ def report(rows, owner_only):
         out += [f"- {r['severity']} {r['kind']} {_where(r)}: {r['claim']} {_origin(r)}" for r in owned[path]]
         patch = "".join(r["patch"] for r in owned[path] if r["kind"] == OWNER_DOC)
         if patch:
-            out += ["```diff", *patch.splitlines(), "```"]
+            fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", patch)), default=0))
+            out += [f"{fence}diff", *patch.splitlines(), fence]
     return out
