@@ -8,6 +8,9 @@ Usage: python3 -I resume.py <run>
 - A task not `done` whose PR merged becomes `done`, its worktree and branch removed, then Ticket CI: the draft ticket
   PR is opened when the ticket has none (unless `decisions.md` says `ci: off`).
 - A task with an open PR is left as it is, for the orchestrator to take to Merge.
+- A `queue.json` batch (`ship_batch.py`) that stopped before `done` is settled: its scratch worktree is removed, each
+  ticket it was `landing` or held `queued` whose PR merged becomes `landed` (its ticket file `merged`), every other one
+  `waiting`, so the next batch picks it up; the queue's `state` becomes `interrupted`.
 - When `dispatcher.sha` exists, `worktrees/dispatcher/` is re-created at that SHA if it is gone (or moved back to it),
   never at a newer commit.
 
@@ -20,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import ship_batch  # noqa: E402
 from steplib import ci, core, gitops, merge, runfolder  # noqa: E402
 from start_task import names, slug  # noqa: E402
 
@@ -53,6 +57,27 @@ class Resume:
             pr = ci.pr_number(runfolder.get(path, "PR"))
             if runfolder.get(path, "Status") == "in-review" and pr and self.merged(pr):
                 self.set_status(path, "merged")
+
+    def queue(self):
+        queue = ship_batch.load(self.run)
+        if not queue or queue.get("state") in ("done", "interrupted"):
+            return
+        self.git().worktree_remove(self.run / "worktrees" / "batch")
+        for e in queue.get("tickets", []):
+            if e.get("status") not in ("landing", "queued"):
+                continue
+            if self.merged(e["pr"]):
+                e["status"] = "landed"
+                ticket = runfolder.ticket_file(self.run, e["ticket"])
+                if runfolder.get(ticket, "Status") != "merged":
+                    self.set_status(ticket, "merged")
+                    continue
+            else:
+                e["status"] = "waiting"
+            self.ctx.note(f"queue.json: {e['ticket']} -> {e['status']}")
+            self.actions += 1
+        queue["state"] = "interrupted"
+        ship_batch.save(self.run, queue)
 
     def drop_worktree(self, task):
         """Removes the task's worktree and its `task/<ticket-slug>/<NN>` branch, either already gone being fine."""
@@ -112,6 +137,7 @@ def step(ctx):
         raise core.Fail("usage: resume.py <run>")
     r = Resume(ctx)
     r.tickets()
+    r.queue()
     r.tasks()
     r.dispatcher()
     return "resumed", f"{r.actions} actions"
