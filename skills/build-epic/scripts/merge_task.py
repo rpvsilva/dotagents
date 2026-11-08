@@ -5,40 +5,44 @@ Usage: python3 -I merge_task.py <run> <task>
 
 In the task's worktree `<run>/worktrees/<task>`: reads the ticket PR's checks (waiting on pending ones), fetches and
 merges the ticket branch's tip forward when the branch lacks it (never a reset or a checkout, so an earlier conflict
-resolution is kept), runs the merge guard on `origin/<ticket branch>...HEAD` (`steplib/guard.py`: rules read from the
+resolution is kept; a conflict only in hub files that `steplib/union.py` settles is committed, any other aborted), runs the merge guard on `origin/<ticket branch>...HEAD` (`steplib/guard.py`: rules read from the
 run's default branch on origin, a hit passing only when `decisions.md` waives its rule `yes`), runs `map.md`'s `Checks`
 timing each suite, inside the run's environment as `test_command:` runs them (`<run>/env`, `steplib/checks.py`'s
 `in_env`), pushes, and merges the task's `PR:` by the merge rule (`merge_command` Setting), reading the PR back. Then
-sets the task `done`, removes its worktree and branch, opens the draft ticket PR when the ticket has none, and, when
-this was the ticket's last implementer task and a suite ran at least `tune_min_seconds`, writes the tuning task
-`tasks/TT-tests.md`.
+sets the task `done` with a `Done: <UTC ISO>` header (`start_task.py` times hub waits from it), removes its worktree
+and branch, opens the draft ticket PR when the ticket has none, and, when this was the ticket's last implementer task
+and a suite ran at least `tune_min_seconds`, writes the tuning task `tasks/TT-tests.md`.
 
-Prints `OK <task> done suites=<n> <secs>s`, or `FAIL <task> <reason> (log: ...)`: `red <suite>`, `conflict <files>`,
+Prints `OK <task> done suites=<n> <secs>s [union=<file>,..]`, or `FAIL <task> <reason> (log: ...)`: `red <suite>`, `conflict <files>`,
 `guarded <file:line rule>; ...`, `guard-no-base: <ref>`, `guard-bad-range: <range>`, `bad-rule: <why>`, `git-<cmd>` (a
 git call of the guard failed), `ticket-ci-red <run-id>`, `wrong-base <branch>` (a PR into anything but the task's own
 ticket branch), `merge-method`, `head-moved`, `merge`, `push`. Every FAIL before the merge leaves the task
 `in-progress`.
 """
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, ci, core, gitops, guard, merge, runfolder  # noqa: E402
+from steplib import checks, ci, core, gitops, guard, merge, runfolder, union  # noqa: E402
 
 
 def git_in(ctx, where, *args):
-    """git in `where` (a worktree or the repo) under the repo's lock; returns the `Result`."""
-    with gitops.lock(where):
-        return ctx.run(["git", "-C", where, *args])
+    """git in `where` (a worktree or the repo); returns the `Result`. Its commands edit no shared metadata, so no lock."""
+    return ctx.run(["git", "-C", where, *args])
 
 
 def catch_up(ctx, wt, ticket_ref):
-    """Merges `ticket_ref` into the worktree's branch when the branch lacks it. Fails `conflict <files>`."""
+    """Merges `ticket_ref` into the worktree's branch when the branch lacks it; returns the files a union settled.
+    Fails `conflict <files>`."""
     if gitops.Git(wt, ctx.log).is_ancestor(ticket_ref):
-        return
+        return []
     if git_in(ctx, wt, "merge", "--no-edit", ticket_ref).rc == 0:
-        return
+        return []
+    unioned = union.resolve(ctx.run_dir, wt, ctx.log)
+    if unioned:
+        return unioned
     files = git_in(ctx, wt, "diff", "--name-only", "--diff-filter=U").out.split()
     git_in(ctx, wt, "merge", "--abort")
     raise core.Fail("conflict " + (" ".join(files) or "?"))
@@ -99,7 +103,7 @@ def step(ctx):
 
     ci.gate(run, ticket, ctx.log, repo)
     gitops.Git(wt, ctx.log).fetch()
-    catch_up(ctx, wt, f"origin/{ticket_branch}")
+    unioned = catch_up(ctx, wt, f"origin/{ticket_branch}")
     guard.check(wt, f"origin/{ticket_branch}...HEAD", run, ctx.log)
     suites = checks.run_all(checks.commands(run / "map.md"), wt, ctx.log, run)
     checks.save(run, ctx.id, suites)
@@ -111,6 +115,7 @@ def step(ctx):
     merge.merge(pr, git.tip(), repo, ctx.log, ticket_branch, command)
 
     runfolder.set_header(task, "Status", "done")
+    runfolder.set_header(task, "Done", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     root = gitops.Git(repo, ctx.log)
     root.worktree_remove(wt)
     root.branch_delete(branch)
@@ -119,7 +124,8 @@ def step(ctx):
         write_tuning_task(ctx, repo, tt, ticket, default, suites)
     if ci.enabled(run):
         ci.open_draft(ticket, default, ctx.log, repo)
-    return "done", f"suites={len(suites)} {sum(s.seconds for s in suites):.0f}s"
+    return "done", (f"suites={len(suites)} {sum(s.seconds for s in suites):.0f}s"
+                    + (f" union={','.join(unioned)}" if unioned else ""))
 
 
 if __name__ == "__main__":

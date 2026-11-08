@@ -5,7 +5,9 @@ Usage: python3 -I status.py <run> [--report | --line <TT> | --write]
 
 Each line is `<id> <status> <PR> <blocked by> <title>`, columns aligned, tasks indented under their ticket; `-` marks
 no PR or no blocker. `--report` adds, for the final report, a `## Not exercised here` section listing each ticket's
-saved skip reasons under `<id> <title>`, as its ticket PR body does; a run with none prints no such section. The one
+saved skip reasons under `<id> <title>`, as its ticket PR body does, then a `## Hub waits` section, one line per hub
+task in `<run>/waits.jsonl` (`start_task.py` writes it; its last row wins): `- <id>: <minutes> min on ticket(s) <TT>, ..`,
+`unknown` for the minutes when its start had no `Done:` to time from. A run with none prints no such section. The one
 step that prints several stdout lines. Exits 0, or prints
 `FAIL run no-run-folder: <path>` and exits 1.
 
@@ -19,6 +21,7 @@ A report counts only when it is not older than its task file, which `start_task.
 from before the task's last dispatch or re-plan is stale. A `blocked` tuning task (`TT-tests`) counts as done for
 shipping: the ticket ships without it.
 """
+import json
 import os
 import re
 import sys
@@ -77,6 +80,23 @@ def not_exercised(run):
             name = f"{f.stem.split('-', 1)[0]} {title(f.read_text(encoding='utf-8'))}"
             lines += ["", name] + [f"- {r}" for r in reasons]
     return ["", "## Not exercised here"] + lines if lines else []
+
+
+def hub_waits(run):
+    """The `## Hub waits` lines for the final report, one per hub task (its last row), in task order; [] when none."""
+    path = run / "waits.jsonl"
+    rows = {}
+    for line in (path.read_text(encoding="utf-8").splitlines() if path.is_file() else ()):
+        if line.strip():
+            row = json.loads(line)
+            rows[row["task"]] = row
+    lines = []
+    for ident in sorted(rows, key=lambda i: [(not p.isdigit(), int(p) if p.isdigit() else 0, p) for p in i.split("-")]):
+        row = rows[ident]
+        minutes = "unknown" if row.get("minutes") is None else f"{row['minutes']} min"
+        tickets = row.get("waited_on") or []
+        lines.append(f"- {ident}: {minutes} on ticket{'s' if len(tickets) > 1 else ''} {', '.join(tickets)}")
+    return ["", "## Hub waits", ""] + lines if lines else []
 
 
 MAX_LINE = 160
@@ -271,7 +291,7 @@ def main(argv):
     elif len(argv) == 2 and argv[1] == "--write":
         print(f"OK run state {write_state(run)}")
     else:
-        for line in table(run) + (not_exercised(run) if len(argv) == 2 else []):
+        for line in table(run) + (not_exercised(run) + hub_waits(run) if len(argv) == 2 else []):
             print(line.rstrip())
     return 0
 
