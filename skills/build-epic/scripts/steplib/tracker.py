@@ -4,8 +4,9 @@ Before every update, `gh api user` names the active login (an App installation t
 `app-installation` when `gh api installation/repositories` answers). The first update of a run records that login as
 the run's identity in `<run>/tracker.json`. When a later one finds another login, the update is held in that file and
 `core.Fail("identity-changed")` is raised; the next update made under the run's identity applies the held ones first,
-in order. The same file records the human's login (learned once with the tokens unset, never from `decisions.md`)
-and the labels this run has created, so `gh label create --force` runs once per label per run.
+in order. The same file records the human's login (learned once with the tokens unset, never from `decisions.md`),
+the labels this run has created, so `gh label create --force` runs once per label per run, and the issues it has
+opened under `created`, one per key, so a held issue replayed later is never opened twice.
 """
 import json
 import os
@@ -142,6 +143,16 @@ class Tracker:
         """Closes the issue as completed, with `comment`."""
         self._update("close", int(issue), comment)
 
+    def created(self, key):
+        """`{"issue": <n>, "linked": <bool>}` for the issue `create_issue` opened under `key`, or None."""
+        return self._load().get("created", {}).get(key)
+
+    def create_issue(self, key, title, body, parent):
+        """Opens one issue per `key` and links it to issue `parent` as a sub-issue; returns what `created(key)` does.
+        A refused link leaves the issue open and unlinked (`linked` false): its body names the parent."""
+        self._update("create_issue", key, title, body, int(parent))
+        return self.created(key)
+
     def _do_nothing(self, state):
         pass
 
@@ -174,3 +185,28 @@ class Tracker:
 
     def _do_close(self, state, issue, comment):
         self._gh(["issue", "close", str(issue), "--reason", "completed", "--comment", comment], "close")
+
+    def _do_create_issue(self, state, key, title, body, parent):
+        created = state.setdefault("created", {})
+        if key in created:
+            return
+        out = self._gh(["issue", "create", "--title", title, "--body", body], "issue-create")
+        m = re.search(r"/issues/(\d+)\s*$", out.strip())
+        if not m:
+            self.log.write(f"no issue number in: {out!r}\n")
+            raise core.Fail("gh-issue-create")
+        created[key] = {"issue": int(m.group(1)), "linked": False}
+        self._save(state)
+        created[key]["linked"] = self._link(parent, created[key]["issue"])
+
+    def _link(self, parent, issue):
+        """Links `issue` to `parent` as a sub-issue (the API takes the issue's database id); False when refused."""
+        res = gh.gh(["api", f"repos/{{owner}}/{{repo}}/issues/{issue}", "--jq", ".id"], self.log, cwd=self.repo)
+        db_id = res.out.strip()
+        if res.rc == 0 and db_id.isdigit():
+            res = gh.gh(["api", f"repos/{{owner}}/{{repo}}/issues/{parent}/sub_issues", "-X", "POST",
+                         "-F", f"sub_issue_id={db_id}"], self.log, cwd=self.repo)
+            if res.rc == 0:
+                return True
+        self.log.write(f"#{issue} not linked to #{parent}: its body names it\n")
+        return False
