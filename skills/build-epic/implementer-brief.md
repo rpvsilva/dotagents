@@ -30,8 +30,20 @@ Your worktree is `~/work`: a snapshot of the task worktree, already holding the 
 
 Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with a `## Follow-ups` section (omitted when empty) and then this block; then your final message is the block alone, at most 400 characters. With no report file named, or running remotely, your final message is the full report, ending with the block as its last four lines, unfenced.
 
-The `## Follow-ups` section holds one row per line for work a later task must pick up or a feature the task's change interacts with: `- <severity> <kind> <path[:line]>: <claim>`, severity `blocker`, `should-fix` or `nit`, kind `follow-up` or `interaction` (a cross-cutting feature the change touches that no task of the plan names). The orchestrator records the rows with `followups.py record`; the block's `follow-up:` line stays one line each as below.
+The `## Follow-ups` section holds one row per line for work a later task must pick up or a feature the task's change interacts with: `- <severity> <kind> <path[:line]>: <claim>`. Severity is `blocker` (the build is wrong without it), `should-fix` (likely trouble, a missing test) or `nit`; kind is `follow-up` or `interaction` (a cross-cutting feature the change touches that no task of the plan names). Every item of your block's `follow-up:` line is also a row here, so the run records it as data.
 
+A change the task needs in a file only the human edits (one a `path` rule of the repo's [merge guard](merge-guard.md) names) is never made in the worktree: the guard would refuse the merge. Propose it as an `owner-doc` row, `- <severity> owner-doc <path>#<item>: <claim>`, `<item>` naming the part of the file it changes (e.g. a heading), followed at once by its ready-to-apply patch in a fenced `diff` block:
+
+````
+- should-fix owner-doc AGENTS.md#Checks: name the new suite
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ ...
+```
+````
+
+The orchestrator records the rows with `followups.py record`; the final report holds each owner-only file's patch for the human. The block's `follow-up:` line stays one line each as below.
 ```
 status: done | blocked | plan-wrong
 changed: <the last commit SHA and the files changed>

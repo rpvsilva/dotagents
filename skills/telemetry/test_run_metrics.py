@@ -178,6 +178,20 @@ class RunMetrics(unittest.TestCase):
                                                                "killed": "timeout"}), encoding="utf-8")
         self.assertEqual(self.metrics(run, "--gh", self.gh)["remote"]["killed"], {"memory": 1, "timeout": 2})
 
+    def test_follow_ups_are_counted_from_the_followups_jsonl_rows(self):
+        run = self.tmp / "followups"
+        run.mkdir()
+        rows = [{"id": 1, "severity": "blocker", "kind": "interaction"},
+                {"id": 2, "severity": "nit", "kind": "follow-up"}]
+        (run / "followups.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "\nnot json\n",
+                                             encoding="utf-8")
+        (run / "followups.md").write_text("- 01: an old free-text line, no longer read\n", encoding="utf-8")
+        got = self.metrics(run, "--gh", self.gh)
+        self.assertEqual(got["follow_ups"], {"rows": 2, "by_severity": {"blocker": 1, "nit": 1},
+                                             "by_kind": {"follow-up": 1, "interaction": 1},
+                                             "reports_with_follow_up": 0})
+        self.assertIn("follow-ups: followups.jsonl line 4 is not a JSON row", got["gaps"])
+
     def test_docstring_names_both_new_fields(self):
         doc = SCRIPT.read_text(encoding="utf-8").split('"""')[1]
         for field in ("human_round_trips", "hand_written_scripts"):

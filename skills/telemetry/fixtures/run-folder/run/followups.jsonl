@@ -1,0 +1,3 @@
+{"id": 1, "ticket": "01", "pr": 20, "severity": "should-fix", "kind": "follow-up", "file": "src/io.py", "line": 12, "claim": "handle CRLF input", "source": "reviews/20-abc1234.md"}
+{"id": 2, "ticket": "02", "pr": null, "severity": "nit", "kind": "follow-up", "file": "src/export.py", "line": null, "claim": "stream large exports", "source": "reports/02-01.md"}
+{"id": 4, "ticket": "02", "pr": 21, "severity": "should-fix", "kind": "owner-doc", "file": "AGENTS.md", "item": "checks", "line": null, "claim": "name the export suite", "patch": "-a\n+b\n", "source": "reviews/21-def5678.md"}

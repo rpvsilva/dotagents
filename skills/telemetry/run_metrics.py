@@ -9,7 +9,8 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `fix_rounds`: the `OK <id> pushed` lines in `logs/<id>-push_fix.log`, one per fix pushed to an open PR, the red
   merges (`FAIL <id> red` in `logs/<id>-merge_task.log`) and the fix tasks.
 - `reviews`: the reviewer reports in `reviews/<PR>-<sha7>.md`; each after a PR's first is a re-review.
-- `follow_ups`: the list lines of `followups.md` and the reports in `reports/<id>.md` with a `follow-up:`.
+- `follow_ups`: the rows of `followups.jsonl` (build-epic's `followups.py record` writes them), counted by `severity`
+  and `kind`, and the reports in `reports/<id>.md` with a `follow-up:`. A line that is not a JSON row is a gap.
 - `suites`: the suites of `reports/<id>.checks.json` (a count may be `null`: output it could not read), or, for an id
   without one, the old `reports/<id>.checks` whose last line says `N passed` and `N failed`.
 - `remote`: the remote runs' results in `remote/<task>-<remote run>.json`; `cost_usd` sums those with a cost and
@@ -123,17 +124,28 @@ def reviews(run):
     return {"reports": total, "prs": len(per_pr), "re_reviews": total - len(per_pr)}
 
 
-def follow_ups(run):
-    path = run / "followups.md"
-    lines = 0
+def follow_ups(run, gaps):
+    path = run / "followups.jsonl"
+    rows = []
     if path.is_file():
-        lines = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if re.match(r"^\s*[-*] \S", line))
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                row = None
+            if isinstance(row, dict):
+                rows.append(row)
+            else:
+                gaps.append(f"follow-ups: followups.jsonl line {number} is not a JSON row")
     reported = 0
     for report in sorted((run / "reports").glob("*.md")):
         value = header(report, "follow-up")
         if value is not None and value.strip().lower() not in NO_FOLLOW_UP:
             reported += 1
-    return {"followups_md": lines, "reports_with_follow_up": reported}
+    return {"rows": len(rows), "by_severity": tally(str(r.get("severity")) for r in rows),
+            "by_kind": tally(str(r.get("kind")) for r in rows), "reports_with_follow_up": reported}
 
 
 def suites(run, gaps):
@@ -402,7 +414,7 @@ def metrics(run, gh):
                   "by_kind": tally(t["kind"] for t in tasks)},
         "fix_rounds": fix_rounds(run, tasks),
         "reviews": reviews(run),
-        "follow_ups": follow_ups(run),
+        "follow_ups": follow_ups(run, gaps),
         "suites": suites_,
         "remote": remote_,
         "prs": prs_,

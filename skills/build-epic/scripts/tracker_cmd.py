@@ -2,7 +2,7 @@
 """The run's tracker updates outside starting a ticket: the plan comment, the `blocked` label, claims, held updates.
 
 Usage: python3 -I tracker_cmd.py <run> planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush
-                                      | close-epic [<n>]
+                                      | close-epic [<n>] | file-followups
 
 - `planned` puts the plan in one comment on every ticket's issue, claimed ones included, editing the comment that
   starts with `<!-- build-epic-plan -->` when there is one. The comment holds `<run>/plan/TT.md` when the orchestrator
@@ -16,6 +16,12 @@ Usage: python3 -I tracker_cmd.py <run> planned | blocked <TT|TT-NN> <why> | unbl
 - `flush` applies the updates held while the identity was away. Prints `OK tracker flushed <n> held`.
 - `close-epic` closes the epic's issue (`<n>`, else `run.md`'s `Epic:` line from `init_run.py --epic`) once every
   ticket's issue is closed. Prints `OK epic closed #<n>`, or `OK epic open #<a> #<b>` naming the issues still open.
+- `file-followups` files each `should-fix` row of `<run>/followups.jsonl` with no `issue` yet and not `fixed` as one issue: titled by
+  its claim, its body naming the ticket, the PR, the file and the claim, then `Part of #<epic>` (`run.md`'s `Epic:`).
+  Each is linked to the epic as a sub-issue when the API allows; when it refuses, the body line stands. The issue's
+  number is written to the row, so a second run files nothing. Run it on the human's say-so after the final report.
+  Prints `OK followups filed <n> issues [#<a> ...] [not-linked #<b> ...]`. FAIL reasons: `no-epic`,
+  `gh-issue-create`, `identity-changed` (the filing is held, and replayed once, by the next command).
 
 Every command applies held updates first. When the `tracker` Setting names another tracker, nothing is touched and
 the line ends `manual tracker=<name>`: the orchestrator makes the update through that tracker's connector.
@@ -25,9 +31,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gh, identity, runfolder, tracker  # noqa: E402
+from steplib import core, followups, gh, identity, runfolder, tracker  # noqa: E402
 
-USAGE = "planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush | close-epic [<n>]"
+USAGE = "planned | blocked <TT|TT-NN> <why> | unblocked <TT> | claims | flush | close-epic [<n>] | file-followups"
 BLOCKED = "blocked"
 
 
@@ -166,11 +172,7 @@ def flush(ctx):
 def close_epic(ctx):
     if len(ctx.args) > 1:
         raise core.Fail(f"usage: tracker_cmd.py <run> {USAGE}")
-    given = ctx.args[0] if ctx.args else runfolder.get(ctx.run_dir / "run.md", "Epic")
-    found = tracker.issues(given)
-    if len(found) != 1:
-        raise core.Fail("no-epic: name it, or record it with init_run.py --epic <n>")
-    epic = found[0]
+    epic = epic_of(ctx, ctx.args[0] if ctx.args else None)
     t, other = open_tracker(ctx)
     if other:
         return "manual", f"tracker={other}"
@@ -190,6 +192,39 @@ def close_epic(ctx):
     return "closed", f"#{epic}"
 
 
+def epic_of(ctx, given=None):
+    """The epic's issue number: `given`, else `run.md`'s `Epic:` line."""
+    found = tracker.issues(given or runfolder.get(ctx.run_dir / "run.md", "Epic"))
+    if len(found) != 1:
+        raise core.Fail("no-epic: name it, or record it with init_run.py --epic <n>")
+    return found[0]
+
+
+def followup_body(row, epic):
+    where = row["file"] + (f":{row['line']}" if row.get("line") else "")
+    origin = f"ticket {row['ticket']}" + (f", PR #{row['pr']}" if row.get("pr") else "")
+    return (f"A should-fix follow-up from {origin}, left by the build-epic run.\n\nFile: `{where}`\n\n"
+            f"{row['claim']}\n\nPart of #{epic}\n")
+
+
+def file_followups(ctx):
+    epic = epic_of(ctx)
+    t, other = open_tracker(ctx)
+    if other:
+        return "manual", f"tracker={other}"
+    filed, unlinked = [], []
+    for row in followups.open_rows(ctx.run_dir):
+        if row["severity"] != "should-fix" or row.get("issue"):
+            continue
+        # One key per row: a filing held while the identity was away and replayed since is recorded, not refiled.
+        done = t.create_issue(f"followup-{row['id']}", row["claim"][:200], followup_body(row, epic), epic)
+        followups.mark(ctx.run_dir, [row["id"]], "issue", done["issue"])
+        filed.append(f"#{done['issue']}")
+        if not done["linked"]:
+            unlinked.append(f"#{done['issue']}")
+    return "filed", " ".join([f"{len(filed)} issues", *filed, *(["not-linked", *unlinked] if unlinked else [])])
+
+
 def no_args(fn):
     def step(ctx):
         if ctx.args:
@@ -200,7 +235,8 @@ def no_args(fn):
 
 # The commands that act on the run: the id on their output line and their step.
 RUN_COMMANDS = {"planned": ("plan", no_args(planned)), "claims": ("claims", no_args(claims)),
-                "flush": ("tracker", no_args(flush)), "close-epic": ("epic", close_epic)}
+                "flush": ("tracker", no_args(flush)), "close-epic": ("epic", close_epic),
+                "file-followups": ("followups", no_args(file_followups))}
 # The commands that act on one ticket, named by its number or a task's id: `fn(ctx, target)`.
 TICKET_COMMANDS = {"blocked": blocked, "unblocked": unblocked}
 
