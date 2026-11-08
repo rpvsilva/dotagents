@@ -1,24 +1,29 @@
 """Tests for the repo lock: task merges into different tickets run in parallel, and the lock covers only the git
 commands that edit shared metadata, never a retry's sleep."""
-import datetime
 import os
-import re
 import subprocess
 import sys
 import threading
 import time
+import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gitops, runfolder  # noqa: E402
+from steplib import core, gh, gitops, runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
 MERGE_TASK = SCRIPTS / "merge_task.py"
 REPO = SCRIPTS.parents[2]
-SUITE_SECONDS = 4
 N = 5
+BARRIER_SECONDS = 30
+# The Checks: each merge's suite marks its arrival, then waits until all N merges are inside their suites at once. Merges
+# that queue never fill the barrier, so the first one's suite fails after BARRIER_SECONDS; merges in parallel pass at once.
+BARRIER = ('touch {d}/$$; i=0; until [ "$(ls {d} | wc -l)" -ge {n} ]; do i=$((i+1)); '
+           '[ $i -le {tries} ] || {{ echo "only $(ls {d} | wc -l) of {n} merges reached the Checks"; exit 1; }}; '
+           'sleep 0.05; done')
 
 # `gh pr view N` answers like GitHub for PR 10+i: head is task branch `task/t<i>/01` on origin, base `feat/t<i>`, MERGED.
 PR_VIEW = r'''#!{python} -IS
@@ -48,11 +53,13 @@ class ParallelMergeTest(unittest.TestCase):
         kit.init_run()
         for d in ("tickets", "tasks", "worktrees"):
             (kit.run_dir / d).mkdir()
-        (kit.run_dir / "map.md").write_text(
-            f"# Map\n\n## Checks\n\n```\nsleep {SUITE_SECONDS}\n```\n\n## Gaps\n", encoding="utf-8")
+        self.barrier = kit.tmp / "barrier"
+        self.barrier.mkdir()
+        check = BARRIER.format(d=self.barrier.as_posix(), n=N, tries=BARRIER_SECONDS * 20)
+        (kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\n{check}\n```\n\n## Gaps\n", encoding="utf-8")
         kit.answer("pr-list", out="[]")
         kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
-        for i in range(1, N + 2):  # ticket N+1 is the lone merge the others are timed against
+        for i in range(1, N + 1):
             self.ticket(i)
 
     def ticket(self, i):
@@ -78,26 +85,11 @@ class ParallelMergeTest(unittest.TestCase):
         out, err = p.communicate()
         self.assertTrue(out.startswith("OK "), out + err)
 
-    def stamp(self, i):
-        log = (self.kit.run_dir / "logs" / f"0{i}-01-merge_task.log").read_text(encoding="utf-8")
-        m = re.search(r"^== merge_task \S+  at (\S+)$", log, re.MULTILINE)
-        return datetime.datetime.fromisoformat(m.group(1))
-
-    def test_five_merges_into_five_tickets_take_about_one_merges_time(self):
-        t0 = time.monotonic()
-        self.finish(self.start(N + 1))
-        one = time.monotonic() - t0
-
-        t0 = time.monotonic()
+    def test_five_merges_into_five_tickets_run_their_checks_at_once(self):
         procs = [self.start(i) for i in range(1, N + 1)]
         for p in procs:
             self.finish(p)
-        wall = time.monotonic() - t0
-
-        self.assertLessEqual(wall, 1.5 * one, f"5 merges took {wall:.1f}s, one took {one:.1f}s")
-        starts = [self.stamp(i) for i in range(1, N + 1)]
-        spread = (max(starts) - min(starts)).total_seconds()
-        self.assertLess(spread, SUITE_SECONDS - 1, f"the merges started {spread}s apart: they queued")
+        self.assertEqual(len(list(self.barrier.iterdir())), N, "each merge ran its Checks once")
         for i in range(1, N + 1):
             self.assertEqual(runfolder.get(self.kit.run_dir / "tasks" / f"0{i}-01-a.md", "Status"), "done")
 
@@ -117,13 +109,21 @@ class LockScopeTest(unittest.TestCase):
             os.environ[k] = v
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.env)))
 
-    def within(self, seconds, fn):
-        """True when `fn` returns in `seconds` while another holder has the repo lock."""
+    def started(self, fn):
+        """`fn` started on a thread; returns the event it sets when it returns."""
         done = threading.Event()
         t = threading.Thread(target=lambda: (fn(), done.set()), daemon=True)
         self.threads.append(t)
         t.start()
-        return done.wait(seconds)
+        return done
+
+    def within(self, seconds, fn):
+        """True when `fn` returns in `seconds` while another holder has the repo lock."""
+        return self.started(fn).wait(seconds)
+
+    def take_lock(self):
+        with gitops.lock(self.clone):
+            pass
 
     def test_read_only_commands_and_commands_in_a_worktree_take_no_lock(self):
         wt = self.kit.tmp / "wt"
@@ -143,33 +143,43 @@ class LockScopeTest(unittest.TestCase):
 
     def test_fetch_and_worktree_and_branch_edits_wait_for_the_lock(self):
         with gitops.lock(self.clone):
-            for name, fn in {"fetch": lambda: self.git.fetch(),
-                             "worktree add": lambda: self.git.worktree_add(self.kit.tmp / "w2", "origin/main", branch="b2"),
-                             "branch -D": lambda: self.git._git("branch", "-D", "nope", check=False)}.items():
-                self.assertFalse(self.within(0.5, fn), f"{name} ran while the repo lock was held")
+            calls = {"fetch": lambda: self.git.fetch(),
+                     "worktree add": lambda: self.git.worktree_add(self.kit.tmp / "w2", "origin/main", branch="b2"),
+                     "branch -D": lambda: self.git._git("branch", "-D", "nope", check=False)}
+            done = {name: self.started(fn) for name, fn in calls.items()}  # all wait at once: one 0.5 s wait, not three
+            time.sleep(0.5)
+            for name, ev in done.items():
+                self.assertFalse(ev.is_set(), f"{name} ran while the repo lock was held")
+        for name, ev in done.items():
+            self.assertTrue(ev.wait(20), f"{name} never ran once the lock was free")
 
     def test_push_retry_sleeps_with_the_lock_released(self):
         hook = self.kit.origin / "hooks" / "pre-receive"
         count = self.kit.tmp / "count"
         hook.write_text(f'#!/bin/sh\nn=$(cat {count} 2>/dev/null || echo 0)\necho $((n+1)) > {count}\n'
-                        'if [ "$n" -lt 2 ]; then echo "error: HTTP 502 Bad Gateway" >&2; exit 1; fi\n', encoding="utf-8")
+                        'if [ "$n" -lt 1 ]; then echo "error: HTTP 502 Bad Gateway" >&2; exit 1; fi\n', encoding="utf-8")
         hook.chmod(0o755)
-        os.environ["BUILD_EPIC_RETRY_SLEEP"] = "1"  # waits of 2 s and 4 s
+        sleeping, wake, waits = threading.Event(), threading.Event(), []
+
+        def sleep(seconds):  # the retry's wait, held open until the test has tried the lock
+            waits.append(seconds)
+            sleeping.set()
+            wake.wait(20)
+
+        os.environ["BUILD_EPIC_RETRY_SLEEP"] = "1"
         self.kit.git("commit", "-q", "--allow-empty", "-m", "x", cwd=self.clone)
         result = []
-        pusher = threading.Thread(target=lambda: result.append(self.git.push("origin", "HEAD:refs/heads/pushed")))
-        pusher.start()
-        deadline = time.monotonic() + 10
-        while not (self.kit.tmp / "count").exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        time.sleep(0.5)  # the first try has failed and the push sleeps
-        t0 = time.monotonic()
-        with gitops.lock(self.clone):
-            waited = time.monotonic() - t0
-        pusher.join()
-        self.assertLess(waited, 1.0, "the lock stayed held across the retry sleep")
+        with mock.patch.object(gh, "time", types.SimpleNamespace(sleep=sleep)):
+            pusher = threading.Thread(target=lambda: result.append(self.git.push("origin", "HEAD:refs/heads/pushed")))
+            pusher.start()
+            self.assertTrue(sleeping.wait(20), "the push never waited to retry")
+            free = self.within(5, self.take_lock)
+            wake.set()
+            pusher.join(20)
+        self.assertTrue(free, "the lock stayed held across the retry sleep")
+        self.assertEqual(waits, [2])
+        self.assertEqual(count.read_text(encoding="utf-8").strip(), "2")
         self.assertEqual(result[0].rc, 0)
-
 
 if __name__ == "__main__":
     unittest.main()

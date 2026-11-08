@@ -153,6 +153,14 @@ class FinishTaskTest(StepCase):
         self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "?? a.txt")
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
 
+    def test_a_ticket_with_no_branch_fails_before_touching_the_task(self):
+        (self.kit.run_dir / "tickets" / "01-alpha.md").write_text(TICKET.replace("Branch: feat/alpha\n", ""),
+                                                                  encoding="utf-8")
+        self.write(self.wt, "a.txt", "a\n")
+        self.assert_fail(self.kit.step(FINISH, self.kit.run_dir, "01-02", cwd=self.kit.tmp), "FAIL 01-02 no-ticket-branch ")
+        self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "?? a.txt")
+        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+
 
 class OpenPrTest(StepCase):
     def finished(self, subject="JSON export"):
@@ -239,6 +247,14 @@ class OpenPrTest(StepCase):
         self.finished()
         self.write(self.wt, "b.txt", "b\n")
         self.assert_fail(self.kit.step(OPEN_PR, self.kit.run_dir, "01-02"), "FAIL 01-02 uncommitted")
+        self.assertEqual(self.kit.gh_calls(), [])
+
+    def test_a_clean_merge_left_in_progress_fails_before_pushing(self):
+        self.finished()
+        self.advance_ticket("c.txt", "c\n")
+        self.kit.git("fetch", "-q", "origin", cwd=self.wt)
+        self.kit.git("merge", "-q", "--no-commit", "--no-ff", "origin/feat/alpha", cwd=self.wt)
+        self.assert_fail(self.kit.step(OPEN_PR, self.kit.run_dir, "01-02"), "FAIL 01-02 conflict merge-in-progress ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_branch_with_no_commits_of_its_own_fails_before_pushing(self):

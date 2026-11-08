@@ -128,6 +128,11 @@ class ParallelFollowsTheMachine(SetupCase):
         self.assertEqual(int(m.group(2)), os.cpu_count())
         self.assertGreater(int(m.group(3)), 0)  # the memory was read, not left at 0
 
+    def test_a_malformed_override_fails_bad_machine(self):
+        self.default_level()
+        self.kit.env["BUILD_EPIC_MACHINE"] = "lots"
+        self.assertIn("bad-machine", self.setup(ok=False))
+
     def test_a_machine_level_max_parallel_prints_nothing(self):
         self.assertNotIn("parallel=", self.parallel_for("10,16"))
 
