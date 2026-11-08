@@ -6,7 +6,8 @@ Usage: python3 -I finish_task.py <run> <TT-NN> [--report <file>] [--title <commi
 
 Prints `OK TT-NN committed files=<n>`; or, when the task changed nothing, sets it `done`, removes its worktree and
 branch and prints `OK TT-NN no-change`. A merge conflict with the ticket branch is left in the worktree for the
-implementer and prints `FAIL TT-NN conflict <files>`; a rerun after the markers are resolved commits the merge.
+implementer and prints `FAIL TT-NN conflict <files>`; a rerun after the markers are resolved commits the merge. A
+conflict only in hub files that `steplib/union.py` settles is committed instead, adding `union=<file>,..`.
 `--report` copies the implementer's report to `<run>/reports/<TT-NN>.md`; when its status is `blocked` or
 `plan-wrong`, the changes are committed and the step fails with that status and its `why`, touching nothing else.
 `--title` is the commit's subject (default: the task's title).
@@ -151,7 +152,7 @@ def step(ctx):
     extra = amend_writes(task, changed)
     if extra:
         ctx.note(f"Writes amended with: {', '.join(extra)}")
-    return "committed", f"files={len(changed)}"
+    return "committed", f"files={len(changed)}" + (f" union={','.join(task.union)}" if task.union else "")
 
 
 if __name__ == "__main__":
