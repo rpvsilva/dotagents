@@ -3,7 +3,9 @@
 tools its suite skips without.
 
 Usage: python3 -I setup.py <run>
-Prints `OK run set up ci=<on|off> env=<run>/env skips=<n>`.
+Prints `OK run set up ci=<on|off> env=<run>/env skips=<n>`, then ` parallel=<n> (<cpus> cores, <gb> GB)` when no
+Level sets `max_parallel` (`steplib/machine.py`: `max(1, min(6, cpus - 2, GB // 4))`; `BUILD_EPIC_MACHINE=<cpus>,<gb>`
+overrides the probe).
 
 - **Environment**: `map.md`'s `Setup` runs once, each command under `bash -c` in the repo with `BUILD_EPIC_ENV` set
   to `<run>/env/`, where it puts what it makes (e.g. `python3 -m venv "$BUILD_EPIC_ENV"`). The line is `Setup:` or
@@ -37,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, core, decisions, gh, gitops, identity, runfolder, tracker  # noqa: E402
+from steplib import checks, core, decisions, gh, gitops, identity, machine, runfolder, tracker  # noqa: E402
 
 ENV_VAR = checks.ENV_VAR
 DONE = checks.SETUP_DONE
@@ -332,7 +334,7 @@ def step(ctx):
         decisions.save(ctx.run_dir, d)
 
     skips = list_skips(ctx, repo, base, map_md, suites)
-    return "set up", f"ci={ci} env={env_dir} skips={skips}"
+    return "set up", f"ci={ci} env={env_dir} skips={skips}{machine.note(repo, ctx.log)}"
 
 
 if __name__ == "__main__":
