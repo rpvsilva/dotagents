@@ -8,6 +8,7 @@ Every `gh` call runs as the run's identity: `run.md`'s `Identity:` line, written
 `identity_command` Setting. When it names a command (e.g. `scripts/gh-app-token.sh`), each call gets a fresh token from
 it in `GH_TOKEN`, so no wait outlives the token; `login` (or no line) leaves the current `gh` login.
 """
+import contextlib
 import os
 import re
 import subprocess
@@ -74,16 +75,18 @@ def identity_env(log, env=None):
     return {**(os.environ if env is None else env), "GH_TOKEN": token}
 
 
-def retry(argv, log, identity=True, **kw):
+def retry(argv, log, identity=True, hold=None, **kw):
     """Runs `argv` through `core.run`, again after a wait while it fails transiently. Returns the last `Result`.
 
-    A `gh` call runs as the run's identity, with a fresh token each try, unless `identity` is False.
+    A `gh` call runs as the run's identity, with a fresh token each try, unless `identity` is False. `hold`, when
+    given, returns a context manager held around each try and released for the wait (a repo lock).
     """
     scale = float(os.environ.get("BUILD_EPIC_RETRY_SLEEP", "1"))
     base_env = kw.pop("env", None)
     for attempt in range(1, TRIES + 1):
         env = identity_env(log, base_env) if identity and argv[0] == "gh" else base_env
-        res = core.run(argv, log, env=env, **kw)
+        with hold() if hold else contextlib.nullcontext():
+            res = core.run(argv, log, env=env, **kw)
         if attempt == TRIES or not transient(res):
             return res
         wait = WAITS[attempt - 1] * scale
@@ -99,5 +102,5 @@ def gh(args, log, **kw):
 
 
 def push(args, log, **kw):
-    """`git push <args>` with the retry. Run it through `gitops.Git.push` to hold the repo's lock."""
+    """`git push <args>` with the retry. Run it through `gitops.Git.push` to hold the repo's lock around each try."""
     return retry(["git", "push", *args], log, **kw)
