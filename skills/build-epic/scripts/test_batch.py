@@ -208,6 +208,87 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(self.status("03"), "building")
         self.assertEqual(self.queue()["03"]["status"], "sent-back")
 
+    def task(self, ident, status):
+        name = ident if ident.endswith("-tests") else f"{ident}-x"  # a tuning task's file has no slug
+        (self.kit.run_dir / "tasks" / f"{name}.md").write_text(
+            f"# {ident}: x\nStatus: {status}\nTicket: {ident.split('-')[0]}\nBlocked by: none\n", encoding="utf-8")
+
+    def test_a_ticket_with_a_task_not_done_is_not_batched(self):
+        for tt in ("01", "02", "03"):
+            self.ticket(tt, f"{tt}.txt")
+        self.task("01-01", "done")
+        self.task("01-tests", "blocked")  # a blocked tuning task counts as done, as in status.py
+        self.task("02-01", "done")
+        self.task("02-02", "in-progress")  # e.g. its review-fixes task, posted after the review
+        self.task("03-01", "ready")
+        self.assertEqual(self.batch(), "OK batch landed 01 suites=1")
+        self.assertEqual(self.merged_prs(), ["21"])
+        self.assertEqual([self.status(tt) for tt in ("01", "02", "03")], ["merged", "building", "building"])
+        self.assertEqual(set(self.queue()), {"01"})
+
+    def test_a_push_after_the_checks_fails_head_moved_and_lands_nothing_for_that_ticket(self):
+        self.ticket("01", "01.txt")
+        second = self.ticket("02", "02.txt")
+        third = self.ticket("03", "03.txt")
+        # Same tree, new commit: only the head pin can tell it from the tested head. The suite pushes it.
+        self.git("checkout", "-q", "--detach", second)
+        self.git("commit", "-q", "--allow-empty", "-m", "late")
+        late = self.git("rev-parse", "HEAD")
+        self.push(late, "late")
+        (self.kit.run_dir / "map.md").write_text(
+            f"# Map\n\n## Checks\n\n```\ngit --git-dir {self.kit.origin} update-ref refs/heads/feat/02 late\n```\n",
+            encoding="utf-8")
+        self.assertRegex(self.batch(), r"^FAIL batch head-moved 02 \(log: .+\)$")
+        self.assertEqual(self.merged_prs(), ["21"])
+        self.assertEqual([self.status(tt) for tt in ("01", "02", "03")], ["merged", "building", "building"])
+        self.assertEqual({tt: t["status"] for tt, t in self.queue().items()},
+                         {"01": "landed", "02": "failed", "03": "waiting"})
+        self.assertEqual((self.tip("feat/02"), self.tip("feat/03")), (late, third))
+        self.assertFalse((self.kit.run_dir / "reports" / "02.checks.json").exists())
+
+    def test_a_conflict_with_an_earlier_ticket_lands_the_tickets_before_it(self):
+        self.ticket("01", "same.txt", "one\n")
+        second = self.ticket("02", "same.txt", "two\n")
+        self.ticket("03", "03.txt")
+        self.assertRegex(self.batch(), r"^FAIL batch conflict 02 \(log: .+\)$")
+        self.assertEqual(self.suite_runs(), 1)
+        self.assertEqual(self.merged_prs(), ["21"])
+        self.assertEqual([self.status(tt) for tt in ("01", "02", "03")], ["merged", "building", "building"])
+        self.assertEqual({tt: t["status"] for tt, t in self.queue().items()},
+                         {"01": "landed", "02": "conflict", "03": "waiting"})
+        self.assertEqual(self.tip("feat/02"), second)
+
+    def test_a_landing_waiting_on_a_human_stops_the_tickets_after_it(self):
+        for tt in ("01", "02", "03"):
+            self.ticket(tt, f"{tt}.txt")
+        rule = self.kit.tmp / "merge-rule.sh"
+        rule.write_text('#!/usr/bin/env bash\nif [ "$1" = 22 ]; then echo "an approval is required"; exit 1; fi\n'
+                        'exec gh pr merge "$1"\n', encoding="utf-8")
+        rule.chmod(0o755)
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "set", "build-epic", "merge_command",
+                          f"{rule} {{pr}}", "--machine")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(self.batch(), r"^FAIL batch in-review 02 \(log: .+\)$")
+        self.assertEqual(self.merged_prs(), ["21"])
+        self.assertEqual([self.status(tt) for tt in ("01", "02", "03")], ["merged", "in-review", "building"])
+        self.assertEqual({tt: t["status"] for tt, t in self.queue().items()},
+                         {"01": "landed", "02": "in-review", "03": "waiting"})
+
+    def test_with_the_last_red_the_ones_before_it_land(self):
+        self.ticket("01", "01.txt")
+        self.ticket("02", "02.txt")
+        self.ticket("03", "red.txt", "the suite fails on me\n")
+        self.assertRegex(self.batch(), r"^FAIL batch red 03 \(log: .+\)$")
+        self.assertEqual(self.suite_runs(), 3)  # the whole batch, then the prefixes 01 and 01,02
+        self.assertEqual(self.merged_prs(), ["21", "22"])
+        self.assertEqual([self.status(tt) for tt in ("01", "02", "03")], ["merged", "merged", "building"])
+        queue = self.queue()
+        self.assertEqual({tt: t["status"] for tt, t in queue.items()}, {"01": "landed", "02": "landed", "03": "red"})
+        self.assertIn("rc 1", Path(queue["03"]["log"]).read_text(encoding="utf-8"))
+        for tt in ("01", "02"):
+            saved = json.loads((self.kit.run_dir / "reports" / f"{tt}.checks.json").read_text())
+            self.assertEqual([s["rc"] for s in saved], [0])
+
     def test_the_default_branch_is_refused(self):
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\n", encoding="utf-8")
         self.ticket("01", "01.txt")

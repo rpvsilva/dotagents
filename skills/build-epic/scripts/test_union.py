@@ -68,6 +68,10 @@ class UnionCase(unittest.TestCase):
         for name, text in files.items():
             path = work / name
             path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(text, Path):  # a symlink to that path
+                path.unlink()
+                path.symlink_to(text)
+                continue
             if text.startswith("+"):
                 text = path.read_text(encoding="utf-8") + text[1:]
             path.write_text(text, encoding="utf-8")
@@ -109,6 +113,41 @@ class HubSyncTest(UnionCase):
         self.assertEqual(self.read(wt, "docs/table.md"), TABLE + "| add | adds |\n| done | dones |\n")
         self.assertEqual(self.kit.git("status", "--porcelain", cwd=wt), "")
         self.assertEqual(self.kit.git("rev-list", "--count", "--merges", "origin/feat/t..HEAD", cwd=wt), "1")
+
+    def test_a_crlf_hub_file_keeps_its_carriage_returns(self):
+        crlf = TABLE.replace("\n", "\r\n")
+        self.commit("main", {"docs/table.md": crlf})
+        self.kit.git("push", "-q", "-f", "origin", "refs/remotes/origin/main:refs/heads/feat/t", cwd=self.clone)
+        self.commit(TICKET, {"docs/table.md": crlf + "| add | adds |\r\n"})
+        self.commit("main", {"docs/table.md": crlf + "| done | dones |\r\n"})
+        line = self.start()
+        self.assertIn(" union=docs/table.md ", line)
+        wt = self.kit.run_dir / "worktrees" / "01-02"
+        self.assertEqual((wt / "docs" / "table.md").read_bytes(),
+                         (crlf + "| add | adds |\r\n| done | dones |\r\n").encode())
+
+    def test_a_symlink_side_is_refused_and_nothing_is_written_through_it(self):
+        outside, other = self.kit.tmp / "outside.md", self.kit.tmp / "other.md"
+        for path in (outside, other):
+            path.write_text("outside\n", encoding="utf-8")
+        self.commit(TICKET, {"docs/table.md": outside})
+        self.commit("main", {"docs/table.md": other})
+        line = self.start()
+        self.assertTrue(line.startswith("FAIL 01-02 sync-conflict docs/table.md (log: "), line)
+        self.assertEqual([outside.read_text(encoding="utf-8"), other.read_text(encoding="utf-8")], ["outside\n"] * 2)
+        self.assertIn("not a regular file", Path(line.rsplit("(log: ", 1)[1][:-1]).read_text(encoding="utf-8"))
+
+    def test_a_test_command_rewriting_a_tracked_file_leaves_a_clean_tree(self):
+        p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "set", "test_command",
+                          f"{sys.executable} -I check.py && echo regenerated >> README.md")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.commit(TICKET, {"docs/table.md": self.row("add")})
+        self.commit("main", {"docs/table.md": self.row("done")})
+        line = self.start()
+        self.assertIn(" union=docs/table.md ", line)
+        wt = self.kit.run_dir / "worktrees" / "01-02"
+        self.assertEqual(self.kit.git("status", "--porcelain", cwd=wt), "")
+        self.assertEqual(self.read(wt, "README.md"), "hello\n")
 
     def test_a_union_leaving_an_import_unregistered_is_refused(self):
         self.commit(TICKET, {"cli.py": self.register("add")})
@@ -162,6 +201,25 @@ class FinishTest(UnionCase):
         self.assertEqual(self.kit.git("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=self.wt),
                          self.kit.git("rev-parse", f"origin/{TICKET}", cwd=self.clone))
         self.assertEqual(self.kit.git("log", "-1", "--format=%P", cwd=self.wt).count(" "), 0)
+
+
+    def test_a_failing_commit_hook_leaves_the_merge_as_git_left_it(self):
+        hooks = Path(self.kit.git("rev-parse", "--git-common-dir", cwd=self.wt))
+        hooks = (hooks if hooks.is_absolute() else self.wt / hooks) / "hooks"
+        hooks.mkdir(exist_ok=True)
+        (hooks / "pre-commit").write_text(  # refuses merge commits only, so the task's own commit goes through
+            '#!/usr/bin/env bash\ntest ! -e "$(git rev-parse --git-path MERGE_HEAD)" || { echo no merges; exit 1; }\n',
+            encoding="utf-8")
+        (hooks / "pre-commit").chmod(0o755)
+        self.commit(TICKET, {"docs/table.md": self.row("done")})
+        (self.wt / "docs" / "table.md").write_text(TABLE + "| add | adds |\n", encoding="utf-8")
+        line = self.finish()
+        self.assertTrue(line.startswith("FAIL 01-01 conflict docs/table.md (log: "), line)
+        self.assertIn("<<<<<<<", self.read(self.wt, "docs/table.md"))
+        stages = [l.split()[2] for l in self.kit.git("ls-files", "-u", "--", "docs/table.md", cwd=self.wt).splitlines()]
+        self.assertEqual(stages, ["1", "2", "3"])
+        self.assertEqual(self.kit.git("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=self.wt),
+                         self.kit.git("rev-parse", f"origin/{TICKET}", cwd=self.clone))
 
 
 class MergeTaskTest(UnionCase):
