@@ -10,23 +10,22 @@ parent), made with `git commit-tree` so no checkout is touched, and pushes it. I
   ticket needs a real catch-up and a new review. It is proven by content, not ancestry, since squash merges drop the
   base tip from the ticket's history: `git merge-tree --write-tree origin/<base> <head>` must give the head's own tree.
 
-Either refusal pushes nothing. A reviewed head git does not know fails `reviewed-unknown`; a ticket branch that moved
+Either refusal pushes nothing (`check` is the guards alone, for a caller that wants them before any push). A reviewed head git does not know fails `reviewed-unknown`; a ticket branch that moved
 while pushing fails `head-moved`.
 """
 from . import core
 
 
-def record(git, branch, base, reviewed):
-    """Returns the ticket branch's head on origin after recording `origin/<base>` as its ancestor (the head itself when
-    it already contains it). `git` is a `gitops.Git` whose remote refs are fetched; `reviewed` is a commit."""
+def check(git, base_tip, head, reviewed, base):
+    """Fails `reviewed-unknown`, `tree-mismatch` or `reviewed-head-lacks-base` unless `head` is the reviewed tree and
+    already holds the content of `base_tip`; pushes nothing. `reviewed` is a commit; `base` names the branch in the log."""
     try:
         reviewed = git.tip(reviewed)
     except core.Fail:
         raise core.Fail("reviewed-unknown")
-    base_tip, head = git.tip(f"refs/remotes/origin/{base}"), git.tip(f"refs/remotes/origin/{branch}")
     tree = git.tree(head)
     if tree != git.tree(reviewed):
-        git.log.write(f"origin/{branch} at {head} has tree {tree}; the reviewed head {reviewed} has {git.tree(reviewed)}\n")
+        git.log.write(f"{head} has tree {tree}; the reviewed head {reviewed} has {git.tree(reviewed)}\n")
         raise core.Fail("tree-mismatch")
     merged = git._git("merge-tree", "--write-tree", base_tip, head, check=False)
     if merged.rc not in (0, 1):  # 1 is a conflict; anything else is git failing (before 2.38: no --write-tree)
@@ -35,6 +34,17 @@ def record(git, branch, base, reviewed):
         git.log.write(f"merging origin/{base} at {base_tip} into {head} changes its tree: the base holds content the "
                       f"reviewed head {reviewed} lacks\n")
         raise core.Fail("reviewed-head-lacks-base")
+    return tree
+
+
+def record(git, branch, base, reviewed, base_tip=None):
+    """Returns the ticket branch's head on origin after recording `origin/<base>` as its ancestor (the head itself when
+    it already contains it). `git` is a `gitops.Git` whose remote refs are fetched; `reviewed` is a commit.
+    `base_tip` is the commit to record instead of `origin/<base>`'s tip: a batch (`ship_batch.py`) passes the tip it
+    started from, since each ticket it lands moves the base on."""
+    base_tip = base_tip or git.tip(f"refs/remotes/origin/{base}")
+    head = git.tip(f"refs/remotes/origin/{branch}")
+    tree = check(git, base_tip, head, reviewed, base)
     if git.is_ancestor(base_tip, head):
         return head
     message = f"Merge origin/{base} into {branch}\n\nRecords the integration ancestry; the tree is the reviewed one.\n"
