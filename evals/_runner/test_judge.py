@@ -1,9 +1,12 @@
 """Tests for `judge.py`: a saved run scored against its case's rubric by a fake `claude` judge on `PATH`, printing a
 good answer, an out-of-range score, prose or nothing."""
+import errno
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -109,6 +112,46 @@ class PromptTest(JudgeSandbox):
         self.assertIn("huge.txt", prompt)
         self.assertLess(prompt.count("H" * 100) * 100, judge.SCRATCH_CAP + 100)
         self.assertLess(len(prompt.encode()), 128 * 1024)
+
+    def assert_fits_and_scores(self):
+        self.judge_says(json.dumps(GOOD))
+        got = self.judge()
+        self.assertLess(len(self.prompt().encode()), 128 * 1024)
+        self.assertNotIn("\0", self.prompt())
+        self.assertEqual(set(got.get("scores", {})), {"correctness", "clarity"}, got)
+
+    def test_invalid_utf8_in_scratch_and_work_stays_under_the_argument_limit(self):
+        junk = b"\xff" * (judge.DIFF_CAP * 3)
+        (self.run_dir / "scratch" / "junk.txt").write_bytes(junk)
+        (self.run_dir / "work" / "junk.txt").write_bytes(junk.replace(b"\xff" * 100, b"\xff" * 99 + b"\n"))
+        self.assert_fits_and_scores()
+        self.assertIn("junk.txt", self.prompt())
+
+    def test_binary_files_in_scratch_and_work_are_named_without_their_content(self):
+        blob = (b"BINARY-CONTENT\0" + b"\xff\0" * 1000) * 20
+        (self.run_dir / "scratch" / "blob.bin").write_bytes(blob)
+        (self.run_dir / "work" / "blob.bin").write_bytes(blob)
+        (self.run_dir / "work" / "late.txt").write_bytes(b"x\n" * 10_000 + b"LATE\0NUL\n")
+        self.assert_fits_and_scores()
+        prompt = self.prompt()
+        self.assertIn("blob.bin", prompt)
+        self.assertNotIn("BINARY-CONTENT", prompt)
+
+    def test_a_judge_that_cannot_start_gives_an_error(self):
+        # E2BIG raised by the start itself: Linux refuses one argument over 128 KiB, macOS only a total over ~1 MiB.
+        real_run = subprocess.run
+
+        def run(argv, *args, **kwargs):
+            if "--max-turns" in argv:
+                raise OSError(errno.E2BIG, "Argument list too long")
+            return real_run(argv, *args, **kwargs)
+
+        self.judge_says(json.dumps(GOOD))
+        with mock.patch.object(judge.subprocess, "run", side_effect=run):
+            got = self.judge()
+        self.assertNotIn("scores", got)
+        self.assertIn("could not start", got["error"])
+        self.assertEqual(got["judge_model"], "claude-haiku-5-5")
 
     def test_the_judge_runs_on_the_judge_model_with_small_caps_in_a_throwaway_home(self):
         self.judge_says(json.dumps(GOOD))

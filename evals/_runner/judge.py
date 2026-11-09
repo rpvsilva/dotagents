@@ -60,11 +60,14 @@ def criteria(rubric):
 
 
 def _cut(data, cap):
-    """`data` (bytes) as text, cut to `cap` bytes with a note saying how much was left out."""
-    text = data[:cap].decode("utf-8", "replace")
-    if len(data) > cap:
-        text += f"\n[... {len(data) - cap} more bytes cut]"
-    return text
+    """`data` (bytes) as text, its UTF-8 cut to `cap` bytes with a note saying how much was left out. Invalid bytes
+    and NULs become U+FFFD (3 bytes each), so the cap counts the text's bytes, not `data`'s."""
+    # Decoding never shrinks: the first `cap` bytes give at least `cap` bytes of text.
+    text = data[:cap].decode("utf-8", "replace").replace("\0", "\ufffd").encode()
+    kept = text[:cap].decode("utf-8", "ignore")
+    if len(data) > cap or len(text) > cap:
+        kept += f"\n[... cut to {cap} bytes of text; {len(data)} bytes in all]"
+    return kept
 
 
 def diff(work):
@@ -88,7 +91,7 @@ def diff(work):
 
 def scratch(folder):
     """The files under `folder`, each as a `### <path>` heading and its text, till `SCRATCH_CAP` bytes are used;
-    the files past it are named only."""
+    the files past it, and binary ones (holding a NUL), are named only."""
     folder = Path(folder)
     files = sorted(p for p in folder.rglob("*") if p.is_file() and not p.is_symlink()) if folder.is_dir() else []
     if not files:
@@ -97,11 +100,15 @@ def scratch(folder):
     for path in files:
         data = path.read_bytes()
         rel = path.relative_to(folder).as_posix()
+        if b"\0" in data:
+            parts.append(f"### {rel}\n[{len(data)} bytes left out: a binary file]")
+            continue
         if left <= 0:
             parts.append(f"### {rel}\n[{len(data)} bytes left out: over the size cap]")
             continue
-        parts.append(f"### {rel}\n{_cut(data, left)}")
-        left -= len(data)
+        text = _cut(data, left)
+        parts.append(f"### {rel}\n{text}")
+        left -= len(text.encode())
     return "\n\n".join(parts)
 
 
@@ -212,7 +219,7 @@ def judge(run_dir, case, checkout, tool="claude"):
                   scratch(run_dir / "scratch"))
     try:
         said = _ask(adapters.load(tool), text, model, checkout)
-    except ValueError as err:
+    except (OSError, ValueError) as err:
         return {"error": f"the judge could not start: {err}", **base}
     if not said:
         return {"error": "the judge gave no answer", **base}
