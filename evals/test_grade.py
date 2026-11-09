@@ -230,6 +230,32 @@ class PickTest(GradeSandbox):
         self.assertIn("no case", self.printed())
 
 
+    def test_a_result_json_kept_inside_a_runs_state_is_not_taken_as_a_run(self):
+        self.judging_claude(SCORES)
+        case = self.case()
+        d = self.ran(case)
+        for sub in ("work", "home", "scratch"):
+            (d / sub).mkdir(exist_ok=True)
+            (d / sub / results.RESULT).write_text("[1, 2]\n")
+        (case / "checks" / "settings-written.sh").write_text(FAILING)
+        got = self.grade("configure/quick")
+        self.assertEqual([r for r, _ in got["graded"]], [d])
+        self.assertEqual(got["skipped"], [])
+        self.assertFalse(results.read(d)["passed"])
+
+    def test_a_saved_result_that_does_not_read_is_named_and_skipped(self):
+        self.judging_claude(SCORES)
+        a, b = self.case("configure/a"), self.case("configure/b")
+        da, db = self.ran(a), self.ran(b)
+        (db / results.RESULT).write_text("not json\n")
+        (a / "checks" / "settings-written.sh").write_text(FAILING)
+        got = self.grade(every=True)
+        self.assertEqual([r for r, _ in got["graded"]], [da])
+        self.assertEqual([r for r, _ in got["skipped"]], [db])
+        self.assertFalse(results.read(da)["passed"])
+        self.assertIn(str(db / results.RESULT), self.printed())
+
+
 class CliTest(GradeSandbox):
     def cli(self, *args):
         return subprocess.run([sys.executable, "-I", str(HERE / "grade.py"), *args], capture_output=True, text=True,

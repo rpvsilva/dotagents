@@ -11,12 +11,15 @@ its tool, model or case hash, is checked again by the case's current `checks/` a
 own tool's adapter) only when the case's rubric or `judge_model` differs from the saved one, or with `--rejudge`; a
 case with no rubric now gets `rubric: null`. The judge is the only tool ever called. Every other field is kept.
 
-A run saved with `error: install` has no state to check and is left as it is; a saved run whose case folder is gone
-is named and skipped. `--evals` points at another cases folder (default: this repo's `evals/`). Prints one line per
+A run saved with `error: install` has no state to check and is left as it is; a saved run whose case folder is gone,
+or whose `result.json` does not read as a result, is named and skipped. Only a `result.json` at the store's run-folder
+depth (`results.run_dir`) is a saved run, never one inside a run's kept state. `--evals` points at another cases folder (default: this repo's `evals/`). Prints one line per
 run; exits 0, 1 when a run could not be graded (its commit missing here), 2 on a usage error or a named case with no
 saved run (nothing graded).
 """
 import argparse
+import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -37,12 +40,34 @@ class GradeError(ValueError):
     """Nothing can be graded: a bad ref, an unknown case or a named case with no saved run."""
 
 
+RUN_GLOB = f"*/*/*/*/*/*/run-*/{results.RESULT}"  # <tool>/<sha>/<model>/<skill>/<case>/<case_hash>/run-<n>, as `results.run_dir`
+
+
 def saved(root):
-    """`(run_dir, result)` of every finished run in the store, in path order."""
+    """`(run_dir, result)` of every finished run in the store, in path order: only a `result.json` at the run-folder
+    depth counts, never one inside a run's kept state. A run whose `result.json` does not read as a result gets the
+    reason as a string in place of its result."""
     root = Path(root)
     if not root.is_dir():
         return []
-    return [(p.parent, results.read(p.parent)) for p in sorted(root.rglob(results.RESULT))]
+    found = []
+    for p in sorted(root.glob(RUN_GLOB)):
+        if not p.is_file() or not re.fullmatch(r"run-[1-9][0-9]*", p.parent.name):
+            continue
+        try:
+            raw = json.loads(p.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+            res = results.read(p.parent)
+        except (OSError, UnicodeDecodeError, ValueError) as err:
+            res = f"{p} does not read as a result: {err}"
+        found.append((p.parent, res))
+    return found
+
+
+def _store_case(root, run_dir):
+    """`<skill>/<case>` from a run folder's place in the store."""
+    return "/".join(Path(run_dir).relative_to(root).parts[3:5])
 
 
 def _case_dir(evals_dir, name):
@@ -104,18 +129,25 @@ def grade(names, every=False, results_root=None, rejudge=False, ref=None, repo=R
     before grading anything on a bad `ref` or a named case with no folder or no saved run."""
     out = out or sys.stdout
     sha = _sha(repo, ref) if ref else None
-    runs = [(d, r) for d, r in saved(results.store_root(results_root)) if sha is None or r["ref_sha"] == sha]
+    root = results.store_root(results_root)
+    found = saved(root)
+    unread = [(d, r) for d, r in found if isinstance(r, str)]
+    runs = [(d, r) for d, r in found if not isinstance(r, str) and (sha is None or r["ref_sha"] == sha)]
     if not every:
         names = [str(n).strip("/") for n in names]
+        unread = [(d, r) for d, r in unread if _store_case(root, d) in names]
         unknown = [n for n in names if _case_dir(evals, n) is None]
         if unknown:
             raise GradeError(f"no case {', '.join(unknown)} under {evals}")
-        missing = [n for n in names if not any(r["case"] == n for _, r in runs)]
+        missing = [n for n in names if not any(r["case"] == n for _, r in runs)
+                   and not any(_store_case(root, d) == n for d, _ in unread)]
         if missing:
             raise GradeError(f"no saved run of {', '.join(missing)}" + (f" at {ref}" if ref else ""))
         runs = [(d, r) for d, r in runs if r["case"] in names]
     loaded, checkouts = {}, {}
-    graded, skipped, failed = [], [], []
+    graded, skipped, failed = [], list(unread), []
+    for run_dir, why in unread:
+        print(f"{_store_case(root, run_dir)}  {run_dir.name}  skipped: {why}", file=out, flush=True)
     try:
         for run_dir, res in runs:
             name = res["case"]
