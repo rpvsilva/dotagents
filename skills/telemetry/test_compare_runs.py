@@ -358,6 +358,23 @@ class Targets(unittest.TestCase):
         self.assertEqual(cost["basis"], "estimate-mid")
         self.assertEqual((cost["value"], cost["status"]), (None, "unknown"))
 
+    def test_remote_reviewers_count_as_reviewer_runs(self):
+        base = compare(gh35_args() + ["--targets", str(TARGETS)])
+        metrics = json.loads((GH35 / "local-metrics.json").read_text(encoding="utf-8"))
+        metrics["remote"] = {"runs": 4, "runs_without_cost": 0, "cost_usd": 4.0, "by_role": {
+            "review": {"count": 2, "models": {"claude-opus-5-5": 1, "claude-sonnet-5-5": 1}},
+            "security": {"count": 1, "models": {"claude-opus-5-5": 1}},
+            "task": {"count": 1, "models": {"claude-opus-5-5": 1}}}}
+        got = compare(gh35_args(**{"b-metrics": self.write("metrics.json", metrics)}) + ["--targets", str(TARGETS)])
+        tickets = base["runs"]["local"]["outcomes"]["tickets"]["count"]
+        before, after = (X["comparison"]["targets"] for X in (base, got))
+        runs = ("reviewer-runs-per-ticket", "opus-reviewer-runs-per-ticket")
+        for key, added in zip(runs, (3, 2)):
+            want = round(before[key]["value"] * tickets + added, 0) / tickets
+            self.assertAlmostEqual(after[key]["value"], want, delta=0.01, msg=key)
+        self.assertAlmostEqual(got["runs"]["local"]["outcomes"]["reviewerRunsPerTicket"],
+                               after["reviewer-runs-per-ticket"]["value"], delta=0.001)
+
     def test_per_task_costs_are_unknown_without_done_tasks(self):
         metrics = json.loads((GH35 / "local-metrics.json").read_text(encoding="utf-8"))
         metrics["tasks"]["by_status"] = {"ready": 3}
