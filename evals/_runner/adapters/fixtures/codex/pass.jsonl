@@ -7,4 +7,4 @@
 {"type": "turn.started"}
 {"type": "item.completed", "item": {"id": "item_2", "type": "file_change", "changes": [{"path": ".agents/settings.json", "kind": "add"}], "status": "completed"}}
 {"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": "Set max_parallel to 2."}}
-{"type": "turn.completed", "usage": {"input_tokens": 3000, "cached_input_tokens": 2500, "output_tokens": 70, "reasoning_output_tokens": 10}}
+{"type": "turn.completed", "usage": {"input_tokens": 4200, "cached_input_tokens": 3500, "output_tokens": 120, "reasoning_output_tokens": 30}}

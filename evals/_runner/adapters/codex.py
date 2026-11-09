@@ -3,8 +3,9 @@
 Auth is `CODEX_API_KEY` alone, passed to the codex process only (never a saved login: the home is throwaway). Codex
 has no turn or cost cap flag, so caps other than time go unused; turns are counted after the fact.
 
-Tokens are `turn.completed.usage` summed over the run: `input_tokens` less `cached_input_tokens` as `input`,
-`cached_input_tokens` as `cacheRead`, `output_tokens` plus `reasoning_output_tokens` as `output`. The events name no
+Tokens are the last `turn.completed.usage`, the thread's running total: `input_tokens` less `cached_input_tokens` as
+`input`, `cached_input_tokens` as `cacheRead`, `output_tokens` as `output` (it already holds the reasoning tokens,
+`reasoning_output_tokens` being their share of it). The events name no
 model or version, so both come from the session log Codex writes for the thread
 (`~/.codex/sessions/**/rollout-*-<thread id>.jsonl`: `turn_context.payload.model`, `session_meta.payload.cli_version`);
 without it, the tokens are kept under `unknown`, which no price matches, so cost is unknown. A subagent is a
@@ -67,21 +68,27 @@ def payload_field(log, kind, field):
 
 
 def tokens(stream, model):
-    """tokensByModel summed over every `turn.completed`'s usage; None when no turn reported any."""
-    usages = [e["usage"] for e in stream if e.get("type") == "turn.completed" and isinstance(e.get("usage"), dict)]
-    if not usages:
+    """tokensByModel from the last `turn.completed`'s usage; None when no turn reported any.
+
+    Per Codex's source (openai/codex, codex-rs at 9f04d88): `turn.completed.usage` is the thread's running total
+    (`usage_from_last_total` in `exec/src/event_processor_with_jsonl_output.rs`), so summing turns would count the
+    earlier ones again; and `output_tokens` is the Responses API's, which includes the reasoning tokens
+    (`reasoning_output_tokens` is `output_tokens_details.reasoning_tokens`, `codex-api/src/sse/responses.rs`).
+    """
+    usage = next((e["usage"] for e in reversed(stream) if e.get("type") == "turn.completed"
+                  and isinstance(e.get("usage"), dict)), None)
+    if usage is None:
         return None
 
-    def count(usage, key):
+    def count(key):
         n = usage.get(key)
         return n if isinstance(n, int) and not isinstance(n, bool) else 0
 
     total = dict.fromkeys(KINDS, 0)
-    for u in usages:
-        cached = count(u, "cached_input_tokens")
-        total["input"] += max(count(u, "input_tokens") - cached, 0)
-        total["cacheRead"] += cached
-        total["output"] += count(u, "output_tokens") + count(u, "reasoning_output_tokens")
+    cached = count("cached_input_tokens")
+    total["input"] = max(count("input_tokens") - cached, 0)
+    total["cacheRead"] = cached
+    total["output"] = count("output_tokens")
     return {model or "unknown": total}
 
 

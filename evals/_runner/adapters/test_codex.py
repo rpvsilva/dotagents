@@ -21,7 +21,7 @@ FIXTURES = HERE / "fixtures" / "codex"
 MINIMAL = HERE.parent / "fixtures" / "cases" / "good" / "configure" / "minimal"
 CAPS = {"turns": 12, "secs": 300.0, "cost_usd": 1.5}
 MODEL = "gpt-5.1-codex"
-PASS_TOKENS = {MODEL: {"input": 700, "output": 150, "cacheRead": 3500, "cacheWrite5m": 0, "cacheWrite1h": 0}}
+PASS_TOKENS = {MODEL: {"input": 700, "output": 120, "cacheRead": 3500, "cacheWrite5m": 0, "cacheWrite1h": 0}}
 ROLLOUT = "sessions/2026/11/09/rollout-2026-11-09T10-00-00-{thread}.jsonl"
 
 
@@ -80,7 +80,7 @@ class ParseTest(EvalSandbox):
             shutil.copy(FIXTURES / f"{rollout}.rollout.jsonl", path)
         return self.codex.parse(self.run_dir, self.eval_home, self.work)
 
-    def test_pass_sums_turn_usage_counts_turns_and_reads_model_and_version_from_the_session_log(self):
+    def test_pass_takes_the_last_turns_running_total_counts_turns_and_reads_model_and_version_from_the_session_log(self):
         self.assertEqual(self.parse("pass", "pass"), {
             "tokens": PASS_TOKENS, "turns": 2, "duration_s": None, "capped": None, "tool_version": "0.58.0",
             "spawned_agents": 0, "error": None})
@@ -100,7 +100,7 @@ class ParseTest(EvalSandbox):
         got = self.parse("error", "pass")
         self.assertEqual(got["error"], "tool")
         self.assertEqual(got["turns"], 1)
-        self.assertEqual(got["tokens"], {MODEL: {"input": 400, "output": 35, "cacheRead": 100, "cacheWrite5m": 0,
+        self.assertEqual(got["tokens"], {MODEL: {"input": 400, "output": 30, "cacheRead": 100, "cacheWrite5m": 0,
                                                  "cacheWrite1h": 0}})
         self.assertIsNone(got["capped"])
 
@@ -193,7 +193,7 @@ cat "{FIXTURES / stream}"
         with mock.patch.object(run, "PRICING", priced):
             _, res = self.saved(self.run_cases([self.case()]))
         self.assertEqual(res["cost_basis"], "pricing")
-        self.assertEqual(res["cost_usd"], round((700 * 1.25 + 150 * 10.0 + 3500 * 0.125) / 1_000_000, 6))
+        self.assertEqual(res["cost_usd"], round((700 * 1.25 + 120 * 10.0 + 3500 * 0.125) / 1_000_000, 6))
 
     def test_a_skill_with_agents_and_none_started_ends_fallback(self):
         self.fake_codex("fallback.jsonl")
