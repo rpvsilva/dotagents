@@ -13,7 +13,7 @@ import shlex
 import time
 from collections import namedtuple
 
-from . import core
+from . import core, decisions
 
 ENV_VAR = "BUILD_EPIC_ENV"
 SETUP_DONE = ".setup-done"
@@ -66,9 +66,21 @@ def env_prefix(run):
     return parts
 
 
-def in_env(run, command):
-    """`command` run inside the run's environment (`env_prefix`), as one `bash -c` line."""
-    return " && ".join(env_prefix(run) + [command])
+def caps_prefix(run, caps=None):
+    """The export giving `capped` with no flags the run's caps: `caps` (`"<mb> <secs>"`), else `decisions.md`'s
+    `caps:` (`setup.py`), as defaults only, so a sandbox's own CAPPED_MB and CAPPED_SECS (its share of its machine)
+    win; nothing when neither is set."""
+    caps = caps or decisions.get(run, "caps")
+    if not caps:
+        return []
+    mb, secs = caps.split()
+    return [f'export CAPPED_MB="${{CAPPED_MB:-{int(mb)}}}" CAPPED_SECS="${{CAPPED_SECS:-{int(secs)}}}"']
+
+
+def in_env(run, command, caps=None):
+    """`command` run under the run's caps (`caps_prefix`) and inside its environment (`env_prefix`), as one
+    `bash -c` line."""
+    return " && ".join(caps_prefix(run, caps) + env_prefix(run) + [command])
 
 
 def commands(map_md):

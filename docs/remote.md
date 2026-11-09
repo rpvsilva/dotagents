@@ -57,7 +57,7 @@ sequenceDiagram
 
 1. **Pack.** `remote-agent` stages your setup: `CLAUDE.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones with the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
 2. **Acquire and send.** The backend gives a fresh sandbox. The setup and snapshot go in as tar streams, and the Claude token goes through stdin, never as an argument.
-3. **Run.** The sandbox reinstalls plugins and MCP servers, commits the snapshot as a base, and runs Claude on the brief. Each shell command Claude runs goes through `capped` under `remote.cap_mb` and `remote.cap_secs`: a runaway test is killed, and Claude carries on. Events stream back as they happen. The caps need `python3` and the packed `~/.agents/bin/capped` in the runner image, and `ps` where there is no `/proc` (on Linux, `capped` reads the process groups from `/proc`, so the cluster runner image, which has no `ps`, is capped). A sandbox lacking one runs uncapped and says so: `== capped: unavailable (missing: python3)` on stderr and `capped_off` in `result.json`.
+3. **Run.** The sandbox reinstalls plugins and MCP servers, commits the snapshot as a base, and runs Claude on the brief. Each shell command Claude runs goes through `capped` under the sandbox's caps: a runaway test is killed, and Claude carries on. The memory cap is the sandbox's share of its machine: its container's memory limit less 1024 MB for Claude (2000 MB when it has no limit), lowered by `remote.cap_mb` when set; the time cap is `remote.cap_secs`. A test command's own `capped` with no flags gets the same caps (`CAPPED_MB`, `CAPPED_SECS`). Events stream back as they happen. The caps need `python3` and the packed `~/.agents/bin/capped` in the runner image, and `ps` where there is no `/proc` (on Linux, `capped` reads the process groups from `/proc`, so the cluster runner image, which has no `ps`, is capped). A sandbox lacking one runs uncapped and says so: `== capped: unavailable (missing: python3)` on stderr and `capped_off` in `result.json`.
 4. **Return.** The patch is applied to your worktree, uncommitted. The skill reviews and commits it like a local subagent's work.
 5. **Release.** The sandbox is removed on exit, Ctrl-C or `kill`. If the laptop dies first, it removes itself after `remote.hours` (2 by default).
 
@@ -134,7 +134,8 @@ The Settings you're most likely to touch:
 | `remote.max_sandboxes` | 4 | Most remote runs at once, across all skills. Set it to what the backend holds |
 | `remote.allowed` | true | Set it to `false` in a repo to keep its code on this machine |
 | `remote.hours` | 2 | How long before an abandoned sandbox removes itself |
-| `remote.cap_mb` | 2000 | Memory cap, in MB, of each shell command the agent runs in the sandbox. Keep it under the sandbox's own memory limit, with room for Claude |
+| `remote.cap_mb` | unset | A lower memory cap, in MB, for each shell command the agent runs in the sandbox. Unset, the sandbox's memory limit less 1024 MB for Claude (2000 MB with no limit) |
+| `remote.sandbox_mb`, `remote.sandbox_cpus` | unset | `docker` and `ssh` (container mode): each run's container memory (MB) and CPU limits, its share of a host others may use too. Unset, the host's over `remote.max_sandboxes`. On the cluster, the SandboxTemplate's pod limits set it |
 | `remote.cap_secs` | 300 | Time cap, in seconds, of each shell command the agent runs in the sandbox |
 | `remote.open_pane` | true | Open Claude Code's `/remote-runs` pane when a run starts |
 
@@ -149,7 +150,7 @@ Each run keeps a folder at `<common git dir>/remote-agent/<run>/` (`git rev-pars
 | `transcript.jsonl` | The agent's events as they arrive. Follow it with `tail -f` |
 | `run.json` | State (`starting`, `running`, `done`, `failed`), timings, exit code |
 | `progress.log` | One line per step, the same as stderr |
-| `result.json` | What the run came to, written on every exit: exit code, `status`, the report's `status:` and `follow-up:` lines, changed files, turns, tokens, cost, model, `complete`, whether the caps were off (`capped_off`: what the sandbox lacked to run them), the caps' kills (`capped_kills`, `killed`) apart from a lost sandbox (`lost`). Read it, not stdout or stderr, when you need the outcome |
+| `result.json` | What the run came to, written on every exit: exit code, `status`, the report's `status:` and `follow-up:` lines, changed files, turns, tokens, cost, model, the sandbox's Claude Code version (`claude_version`), `complete`, the caps it set (`caps`), whether the caps were off (`capped_off`: what the sandbox lacked to run them), the caps' kills (`capped_kills`, `killed`) apart from a lost sandbox (`lost`). Read it, not stdout or stderr, when you need the outcome |
 | `capped.log` | Each command the caps killed in the sandbox |
 | `changes.patch`, `summary.md` | What came back |
 | `session.jsonl` | Claude's session, for `remote-agent resume` |

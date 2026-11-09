@@ -9,7 +9,7 @@
 
 # Writes a stub `docker` into <bin> keeping its state in <state>: run -d, exec [-i], rm -f, and for `remote-agent
 # check` info, image inspect and pull. The daemon is down with <state>/daemon-down; its architecture is
-# <state>/daemon-arch (x86_64). Images are present, of architecture <state>/image-arch (amd64), except with
+# <state>/daemon-arch (x86_64), its memory in bytes <state>/daemon-mem (16 GiB) and CPUs <state>/daemon-cpus (8). Images are present, of architecture <state>/image-arch (amd64), except with
 # <state>/image-missing, which a pull removes unless <state>/no-pull exists. With <state>/corrupt present, exec
 # changes out/ping before a command that writes a tar, so what comes back differs from what went in. With
 # <state>/padding present, such a command's tar is followed, a moment later, by 200 KB of zeros: the remote tar's
@@ -40,7 +40,7 @@ case "$op" in
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift 2 ;;
-        --label|--platform) shift 2 ;;
+        --label|--platform|--memory|--memory-swap|--cpus) shift 2 ;;
         -*) shift ;;
         *) break ;;
       esac
@@ -80,7 +80,10 @@ case "$op" in
     ;;
   info)
     [ ! -e "$state/daemon-down" ] || { echo "Cannot connect to the Docker daemon. Is the docker daemon running?" >&2; exit 1; }
-    cat "$state/daemon-arch" 2>/dev/null || echo x86_64
+    case "$*" in
+      *MemTotal*) echo "$(cat "$state/daemon-mem" 2>/dev/null || echo 17179869184) $(cat "$state/daemon-cpus" 2>/dev/null || echo 8)" ;;
+      *) cat "$state/daemon-arch" 2>/dev/null || echo x86_64 ;;
+    esac
     ;;
   image)
     [ "$1" = inspect ] || { echo "stub docker: unexpected image $1" >&2; exit 1; }
