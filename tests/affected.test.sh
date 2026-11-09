@@ -99,7 +99,7 @@ for f in install.sh scripts/parts.sh scripts/capped skills/configure/SKILL.md sk
 done
 pyexpect "install.sh, run by the evals tests" "evals evals/_runner " install.sh
 pyexpect "parts.sh, run by the evals tests" "evals evals/_runner " scripts/parts.sh
-pyexpect "capped, run by the evals tests" "evals " scripts/capped
+pyexpect "capped, run by the evals tests" "evals evals/_runner " scripts/capped
 pyexpect "the configure skill, installed by the evals tests" "evals evals/_runner " skills/configure/SKILL.md
 pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner " skills/configure/needs.json
 pyexpect "an evals fixture" "evals/_runner " evals/_runner/fixtures/cases/good/configure/minimal/case.json
