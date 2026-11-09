@@ -9,7 +9,8 @@ case's parts into a throwaway home, the fixture as a fresh git repo, the tool's 
 `scripts/capped --secs <caps.secs>` with its stdout written to `transcript.jsonl` as it comes, then the case's checks
 and `no-github` (`_runner/checks.py`). The result is saved under the store (`_runner/results.py`) with the run's
 kept state, every auth value redacted. A run hitting a cap is saved with which cap (`time` from capped's
-`killed: timeout` line, `turns` and `cost` from the adapter); an install failure is saved as `error: install`.
+`killed: timeout` line, `turns` and `cost` from the adapter, else from the run's turns and cost over the case's caps,
+for a tool with no such flag); an install failure is saved as `error: install`.
 
 Saved runs of the same tool, ref commit, model and case files are reused unless `--fresh` or they errored. Once the
 cost of the runs made by this invocation reaches `--budget-usd`, no new run starts (a run whose cost is unknown counts
@@ -125,6 +126,16 @@ def _capped(checkout_dir):
     return own if own.is_file() else REPO / "scripts" / "capped"
 
 
+def over_cap(caps, turns, cost):
+    """`turns` or `cost` when the run went over that cap of `caps`, checked after the run for a tool without the flag;
+    None within both or when the value is unknown."""
+    if turns is not None and turns > caps["turns"]:
+        return "turns"
+    if cost is not None and cost > caps["cost_usd"]:
+        return "cost"
+    return None
+
+
 def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
     """Make run `n` of `case` and save it in `dest`; returns the saved result."""
     base = {"tool": tool, "model": model, "ref": co.ref, "ref_sha": co.sha, "case": case_name(case),
@@ -152,11 +163,11 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
         wall = round(time.monotonic() - start, 3)
         parsed = adapter.parse(run.root, run.home, run.work)
         timed_out = TIME_KILL in stderr.read_bytes().decode("utf-8", "replace").splitlines()
-        capped = "time" if timed_out else parsed.get("capped")
         found = checks.run(case["checks"], {**run.paths, "transcript": transcript, "gh_calls": run.gh_calls,
                                             "checkout": co.path})
         tokens = parsed.get("tokens") or None
         cost = extract.cost(tokens, pricing) if tokens else None
+        capped = "time" if timed_out else parsed.get("capped") or over_cap(case["caps"], parsed.get("turns"), cost)
         error = None if capped else parsed.get("error")
         result = {**base, "tool_version": parsed.get("tool_version"), "checks": found,
                   "passed": all(found.values()) and not capped and not error, "tokens": tokens, "cost_usd": cost,

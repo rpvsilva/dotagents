@@ -101,7 +101,7 @@ It runs each named case, or every case with `--all`, against dotagents at a comm
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude`. |
+| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude`, `codex` ([Codex](#codex)) or `cursor` ([Cursor](#cursor)). |
 | `--ref` | required | The git ref to test, resolved to its commit. Only committed refs: the run extracts it with `git archive`, so uncommitted changes are not in it. |
 | `--runs` | the case's `runs` | How many times each case runs, at least 1. |
 | `--model` | the case's `model` | Overrides the model of every case, as a full ID (an alias fails). Required on a tool whose adapter does not run the case's Claude model. |
@@ -128,7 +128,7 @@ That is the case, the run number, `pass` or `fail`, the cost (`unknown` when it 
 
 ### Auth
 
-The tool authenticates from env vars only, the ones its adapter names: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` for Claude Code. They reach the tool's process and nothing else: not its argv, not the checks, and not a saved file, where every value is replaced by `[redacted]`. No credentials file is copied into the run.
+The tool authenticates from env vars only, the ones its adapter names: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex, `CURSOR_API_KEY` for Cursor. They reach the tool's process and nothing else: not its argv, not the checks, and not a saved file, where every value is replaced by `[redacted]`. No credentials file is copied into the run.
 
 ### What a run starts from
 
@@ -146,6 +146,7 @@ The tool's environment holds only `PATH`, `HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CON
 Each run has the case's three caps:
 
 - `turns` and `cost_usd` go to the tool's own flags (Claude Code's `--max-turns` and `--max-budget-usd`); the adapter reads a hit from the transcript.
+- After every run, on any tool, `run.py` compares the run's `turns` and `cost_usd` with the caps: one over its cap is saved as `capped: turns` or `capped: cost`. This is how a tool with no such flag (Codex) is capped; an unknown value is never over.
 - `secs` is enforced by running the tool under [`scripts/capped`](../scripts/capped) `--secs`; its `capped: killed: timeout` line marks the hit.
 
 A run that hits a cap is saved, not dropped, with the cap's name in `capped` (`turns`, `cost` or `time`) and `passed: false`.
@@ -177,3 +178,45 @@ Results live in the store, never in the repo, and are never committed:
 ### Reuse and `--fresh`
 
 A saved run is reused, with no tool call, when the tool, the ref's commit, the model and every file of the case (the case hash) are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+
+### Codex
+
+`--tool codex` runs the same cases, checks unchanged, on Codex's headless mode, `codex exec --json`, through `evals/_runner/adapters/codex.py`:
+
+```bash
+CODEX_API_KEY=... python3 -I evals/run.py --tool codex --ref main --model gpt-5.1-codex configure/repo-max-parallel
+```
+
+- **Auth**: `CODEX_API_KEY` alone, reaching the `codex` process only, as in [Auth](#auth). The home is throwaway, so a saved `codex login` is never read.
+- **`--model` is required.** A case's `model` is a Claude ID, which Codex cannot run, so the command refuses to start without `--model <full model ID>`. It goes to `codex exec -m`, and the results are filed under it.
+- **Home**: the adapter makes `~/.codex` in the run's home, then `install.sh codex <parts>` installs the case's parts into it.
+- **Caps**: Codex has no turn or cost cap flag, so only `secs` stops a run, by `capped`. `turns` counts the run's `turn.completed` events, and a run over its `turns` or `cost_usd` cap is saved as `capped: turns` or `capped: cost` after the fact ([Caps](#caps)). `duration_s` is the wall clock time.
+- **Tokens**: from the last `turn.completed` event's `usage` alone, never a sum over turns: Codex reports the thread's running total there (`usage_from_last_total` in `codex-rs/exec/src/event_processor_with_jsonl_output.rs`, [openai/codex](https://github.com/openai/codex) at `9f04d88`, as the adapter cites). `input_tokens` less `cached_input_tokens` is `input`, `cached_input_tokens` is `cacheRead`, and `output_tokens` alone is `output`: it already holds the reasoning tokens (`reasoning_output_tokens` is their share of it, `codex-rs/codex-api/src/sse/responses.rs`), so adding them would count them twice. Codex reports no cache writes.
+- **Model and version**: the events name neither, so both come from the session log Codex writes for the thread (`~/.codex/sessions/**/rollout-*-<thread id>.jsonl`). Without it, `tool_version` is `null` and the tokens are kept under the model `unknown`.
+- **Cost is `unknown`** until [`skills/telemetry/pricing.json`](../skills/telemetry/pricing.json) has a row under `models` for the model the session log names, with all five kinds (`input`, `output`, `cacheRead`, `cacheWrite5m`, `cacheWrite1h`, in USD per million tokens; Codex reports no cache writes, so their price never counts). [`update_pricing.py <model> --apply`](../skills/telemetry/update_pricing.py) adds it from LiteLLM's price list only when that gives every kind's price, cache writes included; otherwise add it by hand. Until then a run's cost counts as its case's `cost_usd` cap against `--budget-usd` ([Cost ceiling](#cost-ceiling)).
+- **Subagents**: a run's subagents are its `collab_tool_call` items that spawn an agent, each counted once. When the skill lists `agents` and the run started none, `subagents` is `fallback`: the skill ran its documented one-by-one fallback, following each brief itself ([Subagents](../skills/_shared/conventions.md#subagents)), as on a harness with no subagents.
+- **Final answer**: the text of the run's last completed `agent_message` item, what a judge reads as the run's answer.
+- **A tool error**: a run whose last turn event is not `turn.completed` (a `turn.failed`, an `error` event, or a `turn.started` with no end: a run killed or cut off mid-turn, even after earlier turns completed) is saved with `error: tool`, keeping the tokens it spent.
+
+Not yet proven by a real run, only by Codex's docs and source and by hand-written transcripts: the flags `--sandbox workspace-write`, `--skip-git-repo-check` and `-m`, the session log's path and its `turn_context` and `session_meta` fields, and the `collab_tool_call` items that mark a subagent. The first real run confirms them, or fixes the adapter.
+
+### Cursor
+
+`--tool cursor` runs the same cases, checks unchanged, on Cursor's headless mode, `cursor-agent -p --output-format stream-json`, through `evals/_runner/adapters/cursor.py`:
+
+```bash
+CURSOR_API_KEY=... python3 -I evals/run.py --tool cursor --ref main --model gpt-5.2 configure/repo-max-parallel
+```
+
+- **Auth**: `CURSOR_API_KEY` alone, reaching the `cursor-agent` process only, as in [Auth](#auth): never `--api-key`, so the key stays out of argv. The home is throwaway, so a saved `cursor-agent login` is never read.
+- **`--model` is required.** A case's `model` is a Claude ID, which the command will not pass to Cursor, so it refuses to start without `--model <full model ID>`. It goes to `cursor-agent --model`, and the results are filed under it.
+- **Home**: the adapter makes `~/.cursor` in the run's home, then `install.sh cursor <parts>` installs the case's parts into it. That links subagents, hooks and MCP servers, not skills: see the [Cursor adapter](../adapters/cursor/README.md) for what is wired.
+- **Caps**: Cursor has no turn or cost cap flag, so only `secs` stops a run, by `capped`. `turns` counts the run's `assistant` events (one per complete message, so an approximation), and a run over its `turns` cap is saved as `capped: turns` after the fact ([Caps](#caps)). `duration_s` is the `result` event's `duration_ms`.
+- **Tokens**: none. Cursor's `stream-json` and `json` output carry no token usage, so `tokens` is `null`.
+- **Model and version**: the results are filed under `--model`; the events name no tool version, so `tool_version` is `null`.
+- **Cost is `unknown`, never 0**: with no tokens there is nothing to price, so `cost_usd` is `null` with `cost_basis` `unknown`, and the run line prints `unknown`. A free run and an unpriced one must not look alike, so a 0 would be wrong. A run's cost counts as its case's `cost_usd` cap against `--budget-usd` ([Cost ceiling](#cost-ceiling)), and the `cost_usd` cap never fires after the fact, since an unknown value is never over.
+- **Subagents**: a run's subagents are its started `tool_call` events that start an agent: a `taskToolCall` or `agentToolCall`, or a `function` named `Task` or `Agent`. When the skill lists `agents` and the run started none, `subagents` is `fallback`, as for [Codex](#codex).
+- **Final answer**: the text of the run's last `assistant` message holding any, what a judge reads as the run's answer; not the `result` event's `result`, which a failed or cut run lacks.
+- **A tool error**: a run whose stream has no `result` event (killed, crashed or cut off) or whose `result` has `is_error: true` is saved with `error: tool`.
+
+Not yet proven by a real run, only by Cursor's docs and `cursor-agent --help` and by hand-written transcripts: the flags `--force`, `--trust` and `--workspace`, the event shapes above, the subagent tool names, and whether headless `-p` loads the skills installed in the run's home at all. Until the first manual run settles that, a Cursor result says how the model did without the skill as readily as with it. The first real run confirms them, or fixes the adapter.

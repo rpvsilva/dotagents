@@ -61,6 +61,22 @@ def spawns(event):
     return any(k in call for k in SPAWN_KEYS) or (isinstance(function, dict) and function.get("name") in SPAWN_NAMES)
 
 
+def text(event):
+    """An `assistant` event's text: its message's `text` parts joined; None when it has none."""
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    parts = [p["text"] for p in content if isinstance(p, dict) and p.get("type") == "text"
+             and isinstance(p.get("text"), str)] if isinstance(content, list) else []
+    return "".join(parts) if parts else None
+
+
+def answer(run_dir):
+    """The run's final answer, for the judge: the text of the last `assistant` message holding any; None without one.
+    Not the `result` event's `result`, which a failed or cut run lacks."""
+    return next((t for t in (text(e) for e in reversed(events(Path(run_dir) / TRANSCRIPT))
+                             if e.get("type") == "assistant") if t is not None), None)
+
+
 def parse(run_dir, home, work):
     stream = events(Path(run_dir) / TRANSCRIPT)
     result = next((e for e in reversed(stream) if e.get("type") == "result"), None)

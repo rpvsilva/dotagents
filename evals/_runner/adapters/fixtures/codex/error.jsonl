@@ -1,0 +1,7 @@
+{"type": "thread.started", "thread_id": "0199a213-81c0-7800-8aa1-e440e0000001"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "Looking."}}
+{"type": "turn.completed", "usage": {"input_tokens": 500, "cached_input_tokens": 100, "output_tokens": 30, "reasoning_output_tokens": 5}}
+{"type": "turn.started"}
+{"type": "error", "message": "stream disconnected before completion: unexpected status 401 Unauthorized"}
+{"type": "turn.failed", "error": {"message": "stream disconnected before completion: unexpected status 401 Unauthorized"}}

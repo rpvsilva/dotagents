@@ -94,6 +94,34 @@ class ParseTest(EvalSandbox):
         self.assertEqual(got["turns"], 2)
         self.assertIsNone(got["error"])
 
+    def answer(self, transcript=None):
+        if transcript:
+            shutil.copy(FIXTURES / f"{transcript}.jsonl", self.run_dir / adapters.TRANSCRIPT)
+        return self.cursor.answer(self.run_dir)
+
+    def test_answer_is_the_last_assistant_message(self):
+        self.assertEqual(self.answer("pass"), "Done: max_parallel is 2 in this repo.")
+
+    def test_answer_of_a_failed_or_cut_run_is_the_last_message_sent(self):
+        self.assertEqual(self.answer("error"), "I cannot reach the model.")
+        self.assertEqual(self.answer("no-result"), "Reading the configure skill.")
+
+    def test_answer_joins_a_messages_text_parts_and_skips_messages_with_none(self):
+        lines = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "Set "},
+                                                               {"type": "tool_use", "name": "Edit"},
+                                                               {"type": "text", "text": "it."}]}},
+                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}},
+                 {"type": "result", "subtype": "success", "is_error": False, "result": "Set it."}]
+        (self.run_dir / adapters.TRANSCRIPT).write_text("".join(json.dumps(e) + "\n" for e in lines))
+        self.assertEqual(self.answer(), "Set it.")
+
+    def test_answer_is_none_without_an_assistant_message_or_a_transcript(self):
+        self.assertIsNone(self.answer())
+        lines = [{"type": "user", "message": {"content": [{"type": "text", "text": "set max_parallel to 2"}]}},
+                 {"type": "result", "subtype": "success", "is_error": False, "result": "x"}]
+        (self.run_dir / adapters.TRANSCRIPT).write_text("".join(json.dumps(e) + "\n" for e in lines))
+        self.assertIsNone(self.answer())
+
 
 class RunTest(EvalSandbox):
     """`run.py --tool cursor` on an unchanged case, with a fake `cursor-agent` that writes the setting the case's check
