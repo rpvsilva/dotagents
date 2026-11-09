@@ -10,6 +10,8 @@ case's parts into a throwaway home, the fixture as a fresh git repo, the tool's 
 and `no-github` (`_runner/checks.py`). The result is saved under the store (`_runner/results.py`) with the run's
 kept state, every auth value redacted. A run hitting a cap is saved with which cap (`time` from capped's
 `killed: timeout` line, `turns` and `cost` from the adapter); an install failure is saved as `error: install`.
+A case with a rubric then has the saved run judged through the same adapter (`_runner/judge.py`), its `rubric`
+saved with the result; a reused run is not judged again (`grade.py` re-judges).
 
 Saved runs of the same tool, ref commit, model and case files are reused unless `--fresh` or they errored. Once the
 cost of the runs made by this invocation reaches `--budget-usd`, no new run starts (a run whose cost is unknown counts
@@ -36,6 +38,7 @@ import adapters  # noqa: E402
 import cases  # noqa: E402
 import checks  # noqa: E402
 import home  # noqa: E402
+import judge  # noqa: E402
 import results  # noqa: E402
 
 PRICING = REPO / "skills" / "telemetry" / "pricing.json"
@@ -169,6 +172,8 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
         _write_redacted(dest / adapters.TRANSCRIPT, transcript.read_bytes(), values)
         _write_redacted(dest / STDERR, stderr.read_bytes(), values)
         results.write(dest, result)
+    if case.get("rubric"):
+        results.write(dest, {**results.read(dest), "rubric": judge.judge(dest, case, co.path, tool)})
     return results.read(dest)
 
 
