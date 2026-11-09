@@ -16,6 +16,8 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `remote`: the remote runs' results in `remote/<task>-<remote run>.json`; `cost_usd` sums those with a cost and
   `runs_without_cost` counts the rest. `killed` counts the runs by each kind of kill in their `capped_kills` (a run
   killed for memory, then for timeout, counts under both), or by `killed` in a result without that list.
+  `by_role` counts them by role and model, the role read from the file name: `review` and `security` for review-pr's
+  `review-<PR>-<sha7>` and `security-<PR>-<sha7>`, `task` for `<TT-NN>-...` and `<TT>-tests-...`, else `other`.
 - `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
   folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network. Also
   `first_created`, `last_merged` and the minutes between them.
@@ -194,9 +196,20 @@ def suites(run, gaps):
     return out
 
 
+REMOTE_ROLE = re.compile(r"^(review|security)-\d+-")
+REMOTE_TASK = re.compile(r"^\d+-(?:\d+|tests)")
+
+
+def remote_role(stem):
+    """A remote run's role from its file name: review-pr's `review-<PR>-<sha7>` and `security-<PR>-<sha7>`,
+    a task's `<TT-NN>-<remote run>` (`task`), else `other`."""
+    m = REMOTE_ROLE.match(stem)
+    return m.group(1) if m else "task" if REMOTE_TASK.match(stem) else "other"
+
+
 def remote(run, gaps):
     out = {"runs": 0, "by_status": {}, "complete": 0, "cost_usd": 0.0, "runs_without_cost": 0, "turns": 0,
-           "duration_ms": 0, "tokens": {}, "models": {}, "killed": {}, "lost": 0}
+           "duration_ms": 0, "tokens": {}, "models": {}, "killed": {}, "lost": 0, "by_role": {}}
     statuses, models, killed = [], [], []
     for path in sorted((run / "remote").glob("*.json")):
         out["runs"] += 1
@@ -223,9 +236,14 @@ def remote(run, gaps):
                 out["tokens"][kind] = out["tokens"].get(kind, 0) + n
         if isinstance(r.get("model"), str):
             models.append(r["model"])
+        role = out["by_role"].setdefault(remote_role(path.stem), {"count": 0, "models": {}})
+        role["count"] += 1
+        model = r["model"] if isinstance(r.get("model"), str) else "unknown"
+        role["models"][model] = role["models"].get(model, 0) + 1
         killed += kill_kinds(r)
         out["lost"] += r.get("lost") is True
     out["by_status"], out["models"], out["killed"] = tally(statuses), tally(models), tally(killed)
+    out["by_role"] = dict(sorted(out["by_role"].items()))
     out["tokens"] = dict(sorted(out["tokens"].items()))
     out["cost_usd"] = round(out["cost_usd"], 4)
     if out["runs_without_cost"]:
