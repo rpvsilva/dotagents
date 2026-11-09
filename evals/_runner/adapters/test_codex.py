@@ -109,6 +109,12 @@ class ParseTest(EvalSandbox):
             "tokens": None, "turns": None, "duration_s": None, "capped": None, "tool_version": "0.58.0",
             "spawned_agents": 0, "error": "tool"})
 
+    def test_a_stream_cut_after_an_earlier_turn_completed_is_a_tool_error(self):
+        got = self.parse("cut-after-turn", "pass")
+        self.assertEqual((got["error"], got["turns"]), ("tool", 1))
+        self.assertEqual(got["tokens"], {MODEL: {"input": 200, "output": 50, "cacheRead": 1000, "cacheWrite5m": 0,
+                                                 "cacheWrite1h": 0}})
+
     def test_no_transcript_is_a_tool_error(self):
         got = self.codex.parse(self.run_dir, self.eval_home, self.work)
         self.assertEqual((got["error"], got["tokens"], got["turns"], got["tool_version"]), ("tool", None, None, None))
@@ -232,6 +238,20 @@ cat "{FIXTURES / stream}"
         self.assertEqual(res["error"], "tool")
         self.assertFalse(res["passed"])
         self.assertIn("error tool", self.out.read_text())
+
+    def test_a_run_cut_after_an_earlier_turn_never_passes(self):
+        self.fake_codex("cut-after-turn.jsonl")
+        _, res = self.saved(self.run_cases([self.case()]))
+        self.assertEqual(res["checks"], {"settings-written": True, "no-github": True})
+        self.assertEqual(res["error"], "tool")
+        self.assertFalse(res["passed"])
+
+    def test_more_turns_than_the_turns_cap_is_saved_as_a_turns_cap(self):
+        self.fake_codex("pass.jsonl")
+        _, res = self.saved(self.run_cases([self.case(caps={"turns": 1, "secs": 600, "cost_usd": 1})]))
+        self.assertEqual((res["turns"], res["capped"], res["error"]), (2, "turns", None))
+        self.assertFalse(res["passed"])
+        self.assertIn("cap turns", self.out.read_text())
 
     def test_the_home_has_the_codex_folder_before_install_runs(self):
         repo = self.tmp / "dotagents"

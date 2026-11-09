@@ -1,7 +1,7 @@
 """The Codex adapter: `codex exec --json` headless, and the parse of its JSONL events and session log.
 
 Auth is `CODEX_API_KEY` alone, passed to the codex process only (never a saved login: the home is throwaway). Codex
-has no turn or cost cap flag, so caps other than time go unused; turns are counted after the fact.
+has no turn or cost cap flag, so `run.py` checks the turns counted here and the cost against the caps after the run.
 
 Tokens are the last `turn.completed.usage`, the thread's running total: `input_tokens` less `cached_input_tokens` as
 `input`, `cached_input_tokens` as `cacheRead`, `output_tokens` as `output` (it already holds the reasoning tokens,
@@ -112,7 +112,8 @@ def parse(run_dir, home, work):
     path = session_log(home, thread)
     log = events(path) if path else []
     turns = sum(1 for e in stream if e.get("type") == "turn.completed")
-    last = next((e.get("type") for e in reversed(stream) if e.get("type") in TURN_END), None)
+    # A `turn.started` after the last turn end is a turn cut off (killed, crashed), not a finished run.
+    last = next((e.get("type") for e in reversed(stream) if e.get("type") in ("turn.started", *TURN_END)), None)
     return {
         "tokens": tokens(stream, payload_field(log, "turn_context", "model")),
         "turns": turns or None,
