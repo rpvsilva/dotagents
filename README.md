@@ -192,6 +192,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | ☁️ [Remote subagents](docs/remote.md) | Running subagents on a cluster, Docker or an SSH host, with diagrams |
 | 💬 [Agent communication](docs/agent-communication.md) | Why subagents don't talk to each other |
 | ⚖️ [Compared with Claude features](docs/claude-features.md) | How this setup differs from Claude Code's self-hosted environments and Claude Cowork |
+| 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the eval case format |
 | 👤 [Personal values](docs/personal.md) | Every value that is mine, and what a public install leaves out: my instructions, guardrails, plugins, gate, App identity and cluster |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
 
@@ -209,8 +210,9 @@ scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features
+docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, evals
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
+evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
 ```
 
 ## 🤝 Contributing
