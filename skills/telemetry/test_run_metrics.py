@@ -178,6 +178,20 @@ class RunMetrics(unittest.TestCase):
                                                                "killed": "timeout"}), encoding="utf-8")
         self.assertEqual(self.metrics(run, "--gh", self.gh)["remote"]["killed"], {"memory": 1, "timeout": 2})
 
+    def test_remote_runs_are_counted_by_role_and_model(self):
+        run = self.tmp / "roles"
+        (run / "remote").mkdir(parents=True)
+        for name, model in (("review-12-abc1234", "claude-opus-5-5"), ("review-13-def5678", "claude-sonnet-5-5"),
+                            ("security-12-abc1234", "claude-opus-5-5"), ("01-02-agent-1", "claude-opus-5-5"),
+                            ("01-tests-agent-2", None), ("reviewer-notes", "m")):
+            body = {"status": "done", "total_cost_usd": 1.0, **({"model": model} if model else {})}
+            (run / "remote" / f"{name}.json").write_text(json.dumps(body), encoding="utf-8")
+        self.assertEqual(self.metrics(run, "--gh", self.gh)["remote"]["by_role"], {
+            "other": {"count": 1, "models": {"m": 1}},
+            "review": {"count": 2, "models": {"claude-opus-5-5": 1, "claude-sonnet-5-5": 1}},
+            "security": {"count": 1, "models": {"claude-opus-5-5": 1}},
+            "task": {"count": 2, "models": {"claude-opus-5-5": 1, "unknown": 1}}})
+
     def test_follow_ups_are_counted_from_the_followups_jsonl_rows(self):
         run = self.tmp / "followups"
         run.mkdir()

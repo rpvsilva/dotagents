@@ -35,6 +35,7 @@ TOKEN_KINDS = ["input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h"]
 ROLES = ("implement", "review", "re-review", "ticket-review", "security", "fix", "resolve", "tune", "plan", "explore",
          "other")
 REVIEW_ROLES = ("review", "ticket-review", "re-review", "security")
+REMOTE_REVIEW_ROLES = ("review", "security")
 
 
 def load(path):
@@ -118,6 +119,14 @@ def plain(tbm):
 
 def total_tokens(tbm):
     return {k: int(sum(v.get(k, 0) for v in tbm.values())) for k in TOKEN_KINDS}
+
+
+def remote_reviewers(met):
+    """(remote reviewer runs, those on Opus), from `run_metrics.py`'s `remote.by_role`; (0, 0) in older shapes."""
+    roles = dig(met, "remote", "by_role") or {}
+    runs = [roles[k] for k in REMOTE_REVIEW_ROLES if isinstance(roles.get(k), dict)]
+    return (sum(r.get("count", 0) for r in runs),
+            sum(n for r in runs for m, n in (r.get("models") or {}).items() if "opus" in m))
 
 
 def remote_counts(met):
@@ -260,7 +269,8 @@ def analyse(name, tel, met, branch, prices):
             "outcomes": {
                 "tickets": met.get("tickets"), "tasks": met.get("tasks"), "prs": met.get("prs"),
                 "prsPerTicket": ratio(prs.get("count"), tickets.get("count")),
-                "reviewerRunsPerTicket": ratio(sum(1 for s in subs if s["role"] in REVIEW_ROLES), tickets.get("count")),
+                "reviewerRunsPerTicket": ratio(sum(1 for s in subs if s["role"] in REVIEW_ROLES)
+                                               + remote_reviewers(met)[0], tickets.get("count")),
                 "findingsSaved": met.get("findings_saved"), "humanDecisions": met.get("human_decisions"),
                 "testsFromRunFolder": met.get("tests"),
                 "integrationCatchupMerges": met.get("integration_catchup_merges"),
@@ -429,7 +439,8 @@ def derived(X, met):
     """The figures the targets judge, for one run; None when an input is missing."""
     tickets = dig(X, "outcomes", "tickets", "count")
     subs = X["subagentList"]
-    opus = sum(1 for s in subs if s["role"] in REVIEW_ROLES and any("opus" in m for m in s["models"]))
+    opus = (sum(1 for s in subs if s["role"] in REVIEW_ROLES and any("opus" in m for m in s["models"]))
+            + remote_reviewers(met)[1])
     killed, measured = remote_judged(met)
     total, tasks = dig(X, "cost", "totalEstimateUSD", "mid"), done_tasks(met)
     return {
