@@ -226,10 +226,11 @@ class Run:
         self.close()
 
 
-def prepare(case, checkout_dir, tool_word, parts=None):
+def prepare(case, checkout_dir, tool_word, parts=None, prepare_home=None):
     """A Run for `case` (as `cases.load()` returns it): its parts (default `case["install"]`) installed for
     `tool_word` from `checkout_dir`, the fixture as a git repo, `input/` a copy of the case's (else empty),
-    `scratch/` empty and the `gh` stub. Raises InstallError, leaving nothing behind."""
+    `scratch/` empty and the `gh` stub. `prepare_home(home)`, when given (an adapter's), runs just before the
+    install. Raises InstallError, leaving nothing behind."""
     run = Run(Path(tempfile.mkdtemp(prefix="evals-run-")).resolve())
     try:
         run.home.mkdir()
@@ -240,6 +241,8 @@ def prepare(case, checkout_dir, tool_word, parts=None):
             run.input.mkdir()
         write_gh_stub(run.bin, run.gh_calls)
         make_work(case["fixture"], run.work, case.get("settings"))
+        if prepare_home is not None:
+            prepare_home(run.home)
         install(checkout_dir, run.home, tool_word, case["install"] if parts is None else parts)
     except BaseException:
         run.close()

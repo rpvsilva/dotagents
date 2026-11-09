@@ -84,6 +84,9 @@ pyexpect "a .py in no folder" "$PYALL" skills/telemetry/a.py scripts/x.py
 pyexpect "a file Python tests read" "$PYALL" scripts/hooks/secret-patterns.txt
 pyexpect "a file no Python test reads is ignored" "skills/telemetry " docs/x.md skills/telemetry/a.py
 pyexpect "--all" "$PYALL" --all
+pyexpect "a file other folders' tests run by path" "adapters/claude/telemetry evals evals/_runner/adapters " \
+  adapters/claude/telemetry/extract.py
+pyexpect "a file other folders' tests read by path" "evals evals/_runner skills/telemetry " skills/telemetry/pricing.json
 # This repo's own suites.txt: a fixture a Python test reads selects python.test.sh, and its test folder.
 case " $(cd "$REPO" && tests/affected.sh -- evals/_runner/fixtures/cases/good/configure/minimal/case.json | tr '\n' ' ')" in
   *" python.test.sh "*) ;; *) fail "suites.txt: an evals fixture does not select python.test.sh" ;;

@@ -118,6 +118,15 @@ class Install(AtHead):
         self.assertEqual(err.exception.error, "install")
         self.assertIn("broken at this ref", str(err.exception))
 
+    def test_prepare_home_runs_on_the_throwaway_home_before_the_install(self):
+        co = fake_checkout(self.tmp / "co", 'ls -A "$HOME" >"$HOME/seen-by-install"\n')
+        seen = []
+        run = home.prepare(cases.load(GOOD / "configure" / "minimal"), co, "claude",
+                           prepare_home=lambda h: (seen.append(h), (h / ".tool").mkdir()))
+        self.addCleanup(run.close)
+        self.assertEqual(seen, [run.home])
+        self.assertIn(".tool", (run.home / "seen-by-install").read_text().split())
+
     def test_prepare_leaves_nothing_behind_when_install_fails(self):
         co = fake_checkout(self.tmp / "co", "exit 1\n")
         before = set(Path(home.tempfile.gettempdir()).glob("evals-run-*"))
