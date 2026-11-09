@@ -175,6 +175,28 @@ class RunTest(RunSandbox):
         self.assertEqual(res["capped"], "cost")
         self.assertFalse(res["passed"])
 
+    def test_more_turns_than_the_turns_cap_after_the_run_is_saved_as_a_turns_cap(self):
+        self.passing_claude()
+        _, res = self.saved(self.run_cases([self.case(caps={"turns": 1, "secs": 600, "cost_usd": 1})]))
+        self.assertEqual((res["turns"], res["capped"], res["error"]), (2, "turns", None))
+        self.assertTrue(all(res["checks"].values()))
+        self.assertFalse(res["passed"])
+
+    def test_a_cost_over_the_cost_cap_after_the_run_is_saved_as_a_cost_cap(self):
+        cap = priced(PASS_TOKENS) / 2
+        self.passing_claude()
+        _, res = self.saved(self.run_cases([self.case(caps={"turns": 20, "secs": 600, "cost_usd": cap})]))
+        self.assertEqual((res["cost_usd"], res["capped"], res["error"]), (priced(PASS_TOKENS), "cost", None))
+        self.assertFalse(res["passed"])
+        self.assertIn("cap cost", self.printed())
+
+    def test_a_run_at_its_turns_and_cost_caps_is_not_capped(self):
+        self.passing_claude()
+        _, res = self.saved(self.run_cases([self.case(caps={"turns": 2, "secs": 600,
+                                                             "cost_usd": priced(PASS_TOKENS)})]))
+        self.assertIsNone(res["capped"])
+        self.assertTrue(res["passed"])
+
     def test_a_hang_is_killed_at_the_time_cap_and_saved_as_a_time_cap(self):
         case = self.case(caps={"turns": 5, "secs": 1, "cost_usd": 1})
         self.claude(None, f'head -1 "{STREAMS / "pass.jsonl"}"\nexec sleep 30\n')
