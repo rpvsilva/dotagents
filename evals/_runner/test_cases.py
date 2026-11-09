@@ -238,6 +238,47 @@ class FixtureRules(unittest.TestCase):
         (self.case / "case.json").write_text(json.dumps(data))
         self.assertEqual(check(self.tmp)[1], [f"{self.case}: caps.turns must be a positive integer"])
 
+    def edit(self, **fields):
+        data = json.loads((self.case / "case.json").read_text())
+        data.update(fields)
+        (self.case / "case.json").write_text(json.dumps(data))
+
+    def test_caps_that_are_not_an_object_fail(self):
+        self.edit(caps=[20, 600, 1])
+        self.assertEqual(check(self.tmp)[:2],
+                         (1, [f"{self.case}: caps must be an object with turns, secs and cost_usd"]))
+
+    def test_a_model_that_is_not_a_string_fails(self):
+        self.edit(model=5)
+        self.assertEqual(check(self.tmp)[:2], (1, [f"{self.case}: model must be a model ID"]))
+
+    def test_a_prompt_or_rubric_that_is_not_a_file_name_fails(self):
+        self.edit(prompt=["prompt.md"], rubric="")
+        self.assertEqual(check(self.tmp)[:2], (1, [f"{self.case}: prompt must be a file name",
+                                                   f"{self.case}: rubric must be a file name"]))
+
+    def test_three_checks_with_one_name_fail_once(self):
+        for ext in ("py", "rb"):
+            shutil.copy(self.case / "checks" / "settings-written.sh", self.case / "checks" / f"settings-written.{ext}")
+        self.assertEqual(check(self.tmp)[:2], (1, [f"{self.case}: duplicate check name 'settings-written'"]))
+
+    def test_dot_folders_are_skipped(self):
+        (self.tmp / ".cache" / "case").mkdir(parents=True)
+        self.assertEqual(check(self.tmp)[:2], (0, ["ok"]))
+
+    def test_a_missing_evals_dir_is_fine(self):
+        self.assertEqual(check(self.tmp / "missing")[:2], (0, ["ok"]))
+
+
+class Usage(unittest.TestCase):
+    def test_a_wrong_command_line_prints_usage_and_exits_2(self):
+        for args in ([], ["list"], ["check", "a", "b"]):
+            with self.subTest(args=args):
+                out = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True,
+                                     stdin=subprocess.DEVNULL)
+                self.assertEqual((out.returncode, out.stdout), (2, ""))
+                self.assertIn("usage: cases.py check", out.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
