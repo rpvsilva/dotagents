@@ -7,6 +7,7 @@ and exits 1. Other modules call `load(case_dir)`, which returns the case with it
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ PRICING = REPO / "skills" / "telemetry" / "pricing.json"
 KEYS = ("prompt", "model", "runs", "caps", "settings", "install", "rubric", "judge_model")
 CAPS = {"turns": int, "secs": float, "cost_usd": float}
 DEFAULTS = {"prompt": "prompt.md", "runs": 3, "settings": {}, "judge_model": "claude-haiku-5-5"}
+BUILT_IN_CHECKS = ("no-github",)
 
 
 class CaseError(ValueError):
@@ -27,6 +29,13 @@ class CaseError(ValueError):
 
 def priced_models():
     return set(json.loads(PRICING.read_text())["models"])
+
+
+def part_names():
+    """Every part `scripts/parts.sh list` prints."""
+    out = subprocess.run(["bash", str(REPO / "scripts" / "parts.sh"), "list"], capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL, check=True).stdout
+    return {line.split("\t")[0] for line in out.splitlines() if line}
 
 
 def alias_problem(field, model, priced):
@@ -44,7 +53,19 @@ def positive(value, kind):
     return kind is float or isinstance(value, int)
 
 
-def field_problems(data, priced):
+def install_problems(install, parts):
+    """An eval home installs only named parts, never with no selection (install.sh would install every part) and
+    never `global`."""
+    if not isinstance(install, list) or not all(isinstance(p, str) and p for p in install):
+        return ["install must be a list of part names"]
+    if not install:
+        return ["install must name at least one part"]
+    if "global" in install:
+        return ["install must not name global"]
+    return [f"install names unknown part '{p}'" for p in install if p not in parts]
+
+
+def field_problems(data, priced, parts):
     out = [f"unknown key '{k}' in case.json" for k in data if k not in KEYS]
     if "model" not in data:
         out.append("model missing in case.json")
@@ -66,9 +87,8 @@ def field_problems(data, priced):
                 out.append(f"caps.{name} must be a positive {'integer' if kind is int else 'number'}")
     if "settings" in data and not isinstance(data["settings"], dict):
         out.append("settings must be an object")
-    install = data.get("install", [])
-    if not isinstance(install, list) or not all(isinstance(p, str) and p for p in install):
-        out.append("install must be a list of part names")
+    if "install" in data:
+        out += install_problems(data["install"], parts)
     for field in ("prompt", "rubric"):
         if field in data and (not isinstance(data[field], str) or not data[field]):
             out.append(f"{field} must be a file name")
@@ -91,14 +111,26 @@ def fixture_problems(fixture):
 
 
 def checks_of(case_dir):
-    """The case's checks by stem: every executable file in `checks/`."""
+    """Returns (checks, problems): the case's checks by stem, every executable file in `checks/`. Two files with
+    one stem, or a stem a built-in check uses, are problems."""
     folder = case_dir / "checks"
     if not folder.is_dir():
-        return {}
-    return {f.stem: f for f in sorted(folder.iterdir()) if f.is_file() and os.access(f, os.X_OK)}
+        return {}, []
+    checks, problems = {}, []
+    for f in sorted(folder.iterdir()):
+        if not (f.is_file() and os.access(f, os.X_OK)):
+            continue
+        if f.stem in BUILT_IN_CHECKS:
+            problems.append(f"check name '{f.stem}' is reserved for the built-in check")
+        elif f.stem in checks:
+            if f"duplicate check name '{f.stem}'" not in problems:
+                problems.append(f"duplicate check name '{f.stem}'")
+        else:
+            checks[f.stem] = f
+    return checks, problems
 
 
-def read(case_dir, priced=None):
+def read(case_dir, priced=None, parts=None):
     """Returns (case, problems): the case with defaults filled in, or None when case.json cannot be read."""
     case_dir = Path(case_dir)
     manifest = case_dir / "case.json"
@@ -111,7 +143,8 @@ def read(case_dir, priced=None):
     if not isinstance(data, dict):
         return None, ["case.json must be an object"]
     skill = case_dir.parent.name
-    problems = field_problems(data, priced_models() if priced is None else priced)
+    problems = field_problems(data, priced_models() if priced is None else priced,
+                              part_names() if parts is None else parts)
     case = {**DEFAULTS, "install": [skill], **data, "skill": skill, "case": case_dir.name, "dir": case_dir}
     if not (REPO / "skills" / skill / "SKILL.md").is_file():
         problems.append(f"no skills/{skill}/SKILL.md")
@@ -128,8 +161,9 @@ def read(case_dir, priced=None):
     case["fixture"] = case_dir / "fixture"
     problems += fixture_problems(case["fixture"])
     case["input"] = case_dir / "input" if (case_dir / "input").is_dir() else None
-    case["checks"] = checks_of(case_dir)
-    if not case["checks"]:
+    case["checks"], check_problems = checks_of(case_dir)
+    problems += check_problems
+    if not case["checks"] and not check_problems:
         problems.append("no executable in checks/")
     return case, problems
 
@@ -147,7 +181,7 @@ def check(evals_dir):
     evals_dir = Path(evals_dir)
     if not evals_dir.is_dir():
         return []
-    priced = priced_models()
+    priced, parts = priced_models(), part_names()
     lines = []
     for skill_dir in sorted(evals_dir.iterdir()):
         if not skill_dir.is_dir() or skill_dir.name.startswith(("_", ".")):
@@ -157,7 +191,7 @@ def check(evals_dir):
             continue
         for case_dir in sorted(skill_dir.iterdir()):
             if case_dir.is_dir():
-                lines += [f"{case_dir}: {p}" for p in read(case_dir, priced)[1]]
+                lines += [f"{case_dir}: {p}" for p in read(case_dir, priced, parts)[1]]
     return lines
 
 

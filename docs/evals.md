@@ -27,7 +27,7 @@ evals/configure/repo-max-parallel/
 - `<skill>` must name a skill: `skills/<skill>/SKILL.md` exists.
 - Folders `evals/_*` hold tooling, not cases.
 - `fixture/` holds plain files: no `.git` (the run makes the repo) and no `test_*.py` (`tests/python.test.sh` would run it).
-- `checks/` holds one check per executable file, named by its stem (`checks/settings-written.sh` is the check `settings-written`). A file that is not executable is not a check, and a case needs at least one.
+- `checks/` holds one check per executable file, named by its stem (`checks/settings-written.sh` is the check `settings-written`). A file that is not executable is not a check, and a case needs at least one. Two checks may not share a stem, and `no-github` is the built-in check's name (see below).
 
 ## `case.json`
 
@@ -46,7 +46,7 @@ evals/configure/repo-max-parallel/
 | `prompt` | `prompt.md` | The file holding the prompt; it must exist and not be empty. |
 | `runs` | `3` | How many times the case runs, a positive integer. |
 | `settings` | `{}` | Settings the run uses, written as the fixture's repo Level file `.agents/settings.json`. Same shape as that file: see [Settings](settings.md). |
-| `install` | `["<skill>"]` | The parts installed in the run's throwaway home, as a list of part names. Core always comes along, as with `install.sh`. |
+| `install` | `["<skill>"]` | The parts installed in the run's throwaway home, as a non-empty list of names `scripts/parts.sh list` prints, never `global`. Core always comes along, as with `install.sh`. |
 | `rubric` | `rubric.md` when it exists, else none | The file a judge model scores; when named, it must exist. |
 | `judge_model` | `claude-haiku-5-5` | The model that scores the rubric, as a full ID. |
 
