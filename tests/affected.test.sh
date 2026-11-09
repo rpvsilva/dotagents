@@ -91,6 +91,17 @@ pyexpect "a file other folders' tests read by path" "evals evals/_runner skills/
 case " $(cd "$REPO" && tests/affected.sh -- evals/_runner/fixtures/cases/good/configure/minimal/case.json | tr '\n' ' ')" in
   *" python.test.sh "*) ;; *) fail "suites.txt: an evals fixture does not select python.test.sh" ;;
 esac
+# The real repo files the evals tests extract from HEAD and run select python.test.sh, and the folders running them.
+for f in install.sh scripts/parts.sh scripts/capped skills/configure/SKILL.md skills/configure/needs.json; do
+  case " $(cd "$REPO" && tests/affected.sh -- "$f" | tr '\n' ' ')" in
+    *" python.test.sh "*) ;; *) fail "suites.txt: $f, run by the evals tests, does not select python.test.sh" ;;
+  esac
+done
+pyexpect "install.sh, run by the evals tests" "evals evals/_runner " install.sh
+pyexpect "parts.sh, run by the evals tests" "evals evals/_runner " scripts/parts.sh
+pyexpect "capped, run by the evals tests" "evals " scripts/capped
+pyexpect "the configure skill, installed by the evals tests" "evals evals/_runner " skills/configure/SKILL.md
+pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner " skills/configure/needs.json
 pyexpect "an evals fixture" "evals/_runner " evals/_runner/fixtures/cases/good/configure/minimal/case.json
 [ "$(cd "$REPO" && PYTHON_TEST_FILES="" PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')" = "$PYALL" ] ||
   fail "python.test.sh, no files given: not every folder"

@@ -271,6 +271,18 @@ class RunsAndReuseTest(RunSandbox):
         self.run_cases([case], runs=2, fresh=True)
         self.assertEqual(self.call_count(), 4)
 
+    def test_a_saved_run_with_an_error_is_made_again(self):
+        self.claude()
+        case = self.case()
+        first = self.run_cases([case])
+        self.assertEqual(first["runs"][0]["result"]["error"], "tool")
+        self.passing_claude()
+        again = self.run_cases([case])
+        self.assertEqual(self.call_count(), 2)
+        self.assertFalse(again["runs"][0]["reused"])
+        self.assertIsNone(self.saved(again)[1]["error"])
+        self.assertNotIn("saved", self.printed().splitlines()[-1])
+
     def test_a_changed_case_or_model_is_not_reused(self):
         self.passing_claude()
         case = self.case()
