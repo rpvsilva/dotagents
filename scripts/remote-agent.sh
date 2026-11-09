@@ -2,10 +2,12 @@
 # Runs one subagent task on a remote sandbox for compute only, and applies its changes to a local worktree. The
 # sandbox comes from a backend (scripts/remote-backends/<name>.sh; the cluster by default) and never touches a
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
-# Usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]   (default worktree:
+# Usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--] <brief | @brief-file | -> [worktree]   (default worktree:
 # the current one; - reads the brief from stdin; -h or --help prints this usage on stdout and exits 0; any other
 # argument starting with -- before the brief is refused with the usage, exit 1, and so is a brief, however given,
-# whose text starts with -, which claude would read as an option)
+# whose text starts with -, which claude would read as an option). --agent names the subagent whose brief this is:
+# the run uses the model its Claude wrapper (adapters/claude/agents/<agent>.md) sets in its `model:` line, as a local
+# run of it does; an agent with no wrapper is refused, and without --agent the sandbox's default model runs.
 #        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
@@ -209,16 +211,33 @@ fi
 
 usage_text() {
   cat <<'EOF'
-usage: remote-agent [--attach PATH]... [--name NAME] [--] <brief | @brief-file | -> [worktree]
+usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--] <brief | @brief-file | -> [worktree]
        remote-agent setup | check | ready [dir] | resume <run> [worktree] | result <name|run> [dir]
        remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]
 Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
-from stdin. Exit 0 applied, 3 no changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
+from stdin. --agent runs the model the agent's Claude wrapper sets, as a local run does. Exit 0 applied, 3 no
+changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
 EOF
 }
 usage() { usage_text >&2; exit 1; }
+
+# The model a subagent runs on locally: the `model:` line of its Claude wrapper's frontmatter, so a remote run of it
+# gets the same model. Empty when the wrapper sets none or says `inherit`; fails on an unknown agent or a model that
+# is not a plain name.
+agent_model() {
+  local file m
+  case "$1" in *[!a-z0-9-]* | "" | -*) echo "remote-agent: --agent needs an agent name ([a-z0-9-]): $1" >&2; return 1 ;; esac
+  file="$REPO/adapters/claude/agents/$1.md"
+  [ -f "$file" ] || { echo "remote-agent: no agent $1 (no $file)" >&2; return 1; }
+  m="$(awk 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
+    NR > 1 && /^model:/ { sub(/^model:[ \t]*/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$file")"
+  [ "$m" != inherit ] || m=""
+  case "$m" in *[!A-Za-z0-9._-]* | -*) echo "remote-agent: agent $1 has a bad model: $m" >&2; return 1 ;; esac
+  printf '%s' "$m"
+}
 attach=()
 name=""
+model=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --attach)
@@ -229,6 +248,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || usage
       name="$(task_label "$2")"
       [ -n "$name" ] || { echo "remote-agent: --name needs a letter or digit: $2" >&2; exit 1; }
+      ;;
+    --agent)
+      [ $# -ge 2 ] || usage
+      model="$(agent_model "$2")" || exit 1
       ;;
     -h | --help) usage_text; exit 0 ;;
     --) shift; break ;;
@@ -474,7 +497,7 @@ set -m
 (
   { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
     | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox \
-      "${REMOTE_CAP_MB:-2000}" "${REMOTE_CAP_SECS:-300}" \
+      "${REMOTE_CAP_MB:-2000}" "${REMOTE_CAP_SECS:-300}" ${model:+"$model"} \
     | transcript_to "$keep/transcript.jsonl"
 ) &
 runner=$!
