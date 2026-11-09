@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # The part of scripts/remote-agent.sh that runs inside the sandbox; remote-agent.sh passes it to `bash -c`.
 # Expects the setup unpacked under $HOME (scripts/remote-agent-pack.sh) and the worktree snapshot in ~/work.
-# Arguments after $0: the caps, remote.cap_mb and remote.cap_secs (2000 and 300 when left out), then the model to run
-# Claude on (left out: Claude's default); arguments, since the backends pass argv, not the environment.
+# Arguments after $0: the caps, remote.cap_mb (`auto` or left out: from the sandbox's own memory limit) and
+# remote.cap_secs (300 when left out), then the model to run Claude on (left out: Claude's default); arguments, since
+# the backends pass argv, not the environment.
+# The memory cap is the sandbox's share of its machine: its cgroup's memory limit (v2 memory.max, else v1
+# memory/memory.limit_in_bytes, under REMOTE_AGENT_CGROUP, default /sys/fs/cgroup) less 1024 MB kept for Claude (half
+# the limit when that is under 2048 MB); a number for remote.cap_mb only lowers it. With no limit to read, the number
+# is the cap, else 2000. The caps are also exported as CAPPED_MB and CAPPED_SECS, so a test command's own `capped`
+# with no flags runs under the same ones.
 # Stdin: the Claude token (one line), then the brief.
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
 # progress on stderr and its raw stream-json events on stdout, and leaves ~/out/changes.patch (everything changed
@@ -25,11 +31,37 @@ set -euo pipefail
 
 log="${REMOTE_AGENT_LOG:-/proc/1/fd/1}"
 [ -w "$log" ] || log="$HOME/progress.log"
-cap_mb="${1:-2000}"
+cap_mb="${1:-auto}"
 cap_secs="${2:-300}"
-if [[ ! "$cap_mb" =~ ^[0-9]+$ ]] || [[ ! "$cap_secs" =~ ^[0-9]+$ ]]; then echo "== bad caps: $cap_mb MB, $cap_secs s" >&2; exit 1; fi
+if [[ ! "$cap_mb" =~ ^([0-9]+|auto)$ ]] || [[ ! "$cap_secs" =~ ^[0-9]+$ ]]; then echo "== bad caps: $cap_mb MB, $cap_secs s" >&2; exit 1; fi
 model="${3:-}"
 if [ -n "$model" ] && [[ ! "$model" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then echo "== bad model: $model" >&2; exit 1; fi
+
+# Prints the sandbox's memory limit in MB, from its cgroup; nothing when none is set (v2 `max`, or v1's huge number).
+sandbox_limit_mb() {
+  local root="${REMOTE_AGENT_CGROUP:-/sys/fs/cgroup}" v=""
+  if [ -r "$root/memory.max" ]; then
+    v="$(cat "$root/memory.max")"
+  elif [ -r "$root/memory/memory.limit_in_bytes" ]; then
+    v="$(cat "$root/memory/memory.limit_in_bytes")"
+  fi
+  [[ "$v" =~ ^[0-9]{1,15}$ ]] || return 0
+  echo $((v / 1048576))
+}
+
+# Sets cap_mb to the memory cap and limit_mb to the limit it came from (empty: none read).
+pick_cap_mb() {
+  local derived=""
+  limit_mb="$(sandbox_limit_mb)"
+  if [ -n "$limit_mb" ] && [ "$limit_mb" -gt 0 ]; then
+    if [ "$limit_mb" -ge 2048 ]; then derived=$((limit_mb - 1024)); else derived=$((limit_mb / 2)); fi
+  fi
+  if [ "$cap_mb" = auto ]; then
+    cap_mb="${derived:-2000}"
+  elif [ -n "$derived" ] && [ "$derived" -lt "$cap_mb" ]; then
+    cap_mb="$derived"
+  fi
+}
 
 # Writes the shell prefix to $1. Claude Code runs it with the whole command line as one argument, and quotes a prefix
 # holding " -" as one word, so the caps are written in here rather than passed. A Bash-tool command (it ends with
@@ -119,17 +151,18 @@ base="$(git rev-parse HEAD)"
 
 rules="You run unattended as a remote subagent, in $HOME/work: a snapshot of the user's working tree with no git \
 remote and no GitHub access. Do the task in that folder. Leave your changes in the files (committing is optional); \
-they go back to the user as a patch. Do not push or open PRs. End with a short summary of what you changed and how \
-you checked it."
+they go back to the user as a patch. Do not push or open PRs."
 
 # The caps, once a probe through the prefix shows capped runs here.
+pick_cap_mb
+export CAPPED_MB="$cap_mb" CAPPED_SECS="$cap_secs"
 : >"$HOME/out/capped.log"
 prefix="$HOME/.agents/bin/capped-shell"
 mkdir -p "$HOME/.agents/bin"
 write_prefix "$prefix"
 if "$prefix" "true && eval true && pwd -P >| /dev/null" </dev/null >/dev/null 2>&1; then
   export CLAUDE_CODE_SHELL_PREFIX="$prefix"
-  echo "== capped: shell prefix set (--mb $cap_mb --secs $cap_secs)" >&2
+  echo "== capped: shell prefix set (--mb $cap_mb --secs $cap_secs; sandbox limit: ${limit_mb:-none} MB)" >&2
 else
   missing=""
   [ -x "$HOME/.agents/bin/capped" ] || missing="capped"

@@ -9,6 +9,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAPPED="$REPO/scripts/capped"
+# The cases set the caps they test; any the caller's environment holds (a sandbox sets both) stay out.
+unset CAPPED_MB CAPPED_SECS
 SANDBOX="$(mktemp -d)"
 pids=()
 cleanup() {
@@ -138,6 +140,16 @@ cases() {
   [ "$ms" -ge 500 ] || fail "timeout: killed after ${ms} ms, before the 0.5 s cap"
   [ "$ms" -lt 2500 ] || fail "timeout: took ${ms} ms"
 
+  # A cap left out comes from CAPPED_SECS; a flag wins over it, and a value that is not a number over 0 is no cap.
+  CAPPED_SECS=0.5 run -- sleep 5
+  [ "$code" -eq 124 ] || fail "CAPPED_SECS: exit $code, want 124"
+  CAPPED_SECS=0.2 run --secs 5 -- sleep 0.6
+  [ "$code" -eq 0 ] || fail "--secs over CAPPED_SECS: exit $code, want 0"
+  for bad in abc 0 -1; do
+    CAPPED_SECS="$bad" run -- sleep 0.3
+    [ "$code" -eq 0 ] || fail "CAPPED_SECS=$bad: exit $code, want 0"
+  done
+
   # Stdin is closed: a command waiting on input returns at once, though the caller's stdin stays open.
   code=0
   start="$(now_ms)"
@@ -182,6 +194,13 @@ time.sleep(30)"
     [ "$code" -eq 137 ] || fail "memory: exit $code, want 137"
     grep -qx "capped: killed: memory" "$SANDBOX/err" || fail "memory: no 'capped: killed: memory' on stderr"
     [ "$ms" -lt 8000 ] || fail "memory: took ${ms} ms"
+    # The same from CAPPED_MB, with no --mb.
+    CAPPED_MB=50 run --secs 30 -- python3 -c "import time
+b = []
+for _ in range(20):
+    b.append(' ' * 10**7)
+time.sleep(30)"
+    [ "$code" -eq 137 ] || fail "CAPPED_MB: exit $code, want 137"
     # Under the cap it runs to the end.
     run --mb 500 --secs 10 -- python3 -c "b = ' ' * 10**7"
     [ "$code" -eq 0 ] || fail "under the memory cap: exit $code"

@@ -46,7 +46,7 @@
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
 # exit_code, status, report_status, changed, follow_up, report_path, duration_ms, num_turns, total_cost_usd, usage,
-# model, complete, capped_off, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the token's value
+# model, claude_version, complete, caps, capped_off, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the token's value
 # redacted; and capped.log, the sandbox's own list of the commands its caps killed.
 # Each command the caps killed prints one line on stderr, whatever the exit: [<task>] killed: memory|timeout <command>
 # (from progress.log's `== capped: killed:` lines, which the sandbox sends as they happen and Claude's text, indented
@@ -497,7 +497,7 @@ set -m
 (
   { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
     | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox \
-      "${REMOTE_CAP_MB:-2000}" "${REMOTE_CAP_SECS:-300}" ${model:+"$model"} \
+      "${REMOTE_CAP_MB:-auto}" "${REMOTE_CAP_SECS:-300}" ${model:+"$model"} \
     | transcript_to "$keep/transcript.jsonl"
 ) &
 runner=$!

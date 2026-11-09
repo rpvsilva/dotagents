@@ -15,7 +15,8 @@ subagent's saved `role`, else `report.py`'s rule on its type and description (sp
 model missing from the pricing is null. With `--targets`, `comparison.targets` judges run b against each target:
 its threshold and op, run b's value and `met`, `missed` or `unknown` (an input is missing). A total-cost target's
 `basis` says whether it judged the measured cost or, with remote runs lacking cost, the mid estimate (`range` holds
-low and high). Per-task costs divide by the run's done tasks, so epics of different sizes compare. Nothing reads git or writes prose.
+low and high). Per-task costs divide by the run's done tasks, so epics of different sizes compare.
+`claudeVersions` names the Claude Code versions each run used, locally and in its remote runs, side by side. Nothing reads git or writes prose.
 """
 import argparse
 import json
@@ -129,6 +130,13 @@ def remote_reviewers(met):
             sum(n for r in runs for m, n in (r.get("models") or {}).items() if "opus" in m))
 
 
+def claude_versions(tel, met):
+    """The Claude Code versions the run used: `local`, the session's (null in a save from before they were kept);
+    `remote`, the remote runs' by count (null in metrics from before they were kept), so runs on different versions
+    show it."""
+    return {"local": tel.get("claudeVersions"), "remote": dig(met, "remote", "claude_versions")}
+
+
 def remote_counts(met):
     """(remote runs, runs without cost, measured cost or None), from either metrics shape."""
     remote = met.get("remote")
@@ -208,6 +216,7 @@ def analyse(name, tel, met, branch, prices):
                         "costUSD": r(prices.cost(s["tokensByModel"]), 4)} for s in other_spans],
         "out": {
             "id": name, "telemetryLabel": tel.get("label"), "sessionId": tel["sessionId"],
+            "claudeVersions": claude_versions(tel, met),
             "time": {
                 "sessionStart": tel["start"], "sessionEnd": tel["end"],
                 "sessionMinutes": r(tel["wallClockSeconds"] / 60, 1),
@@ -331,6 +340,7 @@ def compare(names, outs, metrics):
 
     remote = [remote_counts(m)[0] for m in metrics]
     return {
+        "claudeVersions": {a: A["claudeVersions"], b: B["claudeVersions"]},
         "time": {
             "sessionMinutes": pair(lambda X: X["time"]["sessionMinutes"], "min"),
             "firstPrToLastMergeMinutes": pair(lambda X: X["time"]["firstPrToLastMergeMinutes"], "min"),

@@ -8,7 +8,7 @@
   "num_turns": 30,
   "total_cost_usd": 2.5,
   "usage": {"input_tokens": 100, "output_tokens": 2000, "cache_read_input_tokens": 50000, "cache_creation_input_tokens": 3000},
-  "model": "model-b",
+  "claude_version": "9.0.2", "model": "model-b",
   "killed": null,
   "lost": false
 }
