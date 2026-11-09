@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The part of scripts/remote-agent.sh that runs inside the sandbox; remote-agent.sh passes it to `bash -c`.
 # Expects the setup unpacked under $HOME (scripts/remote-agent-pack.sh) and the worktree snapshot in ~/work.
-# Arguments after $0: the caps, remote.cap_mb and remote.cap_secs (2000 and 300 when left out); arguments, since the
-# backends pass argv, not the environment.
+# Arguments after $0: the caps, remote.cap_mb and remote.cap_secs (2000 and 300 when left out), then the model to run
+# Claude on (left out: Claude's default); arguments, since the backends pass argv, not the environment.
 # Stdin: the Claude token (one line), then the brief.
 # Installs the setup's plugins and MCP servers, commits the snapshot as a base, runs Claude on the brief with
 # progress on stderr and its raw stream-json events on stdout, and leaves ~/out/changes.patch (everything changed
@@ -28,6 +28,8 @@ log="${REMOTE_AGENT_LOG:-/proc/1/fd/1}"
 cap_mb="${1:-2000}"
 cap_secs="${2:-300}"
 if [[ ! "$cap_mb" =~ ^[0-9]+$ ]] || [[ ! "$cap_secs" =~ ^[0-9]+$ ]]; then echo "== bad caps: $cap_mb MB, $cap_secs s" >&2; exit 1; fi
+model="${3:-}"
+if [ -n "$model" ] && [[ ! "$model" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then echo "== bad model: $model" >&2; exit 1; fi
 
 # Writes the shell prefix to $1. Claude Code runs it with the whole command line as one argument, and quotes a prefix
 # holding " -" as one word, so the caps are written in here rather than passed. A Bash-tool command (it ends with
@@ -143,14 +145,14 @@ follower=$!
 # Stopped on any exit too (a failed claude ends main under set -e), so it never holds stderr open.
 trap ': >"$stop_follow"; wait "$follower" || true' EXIT
 
-echo "== claude" >&2
+echo "== claude${model:+ ($model)}" >&2
 # Progress: Claude's text and each tool call, every line indented (so none passes for this script's own `==` lines,
 # nor for a line of the backend's client); the full stream is kept for the summary, and goes out
 # raw, as it comes, on the run's stdout (fd 3: see the end), which remote-agent.sh keeps as the live transcript.
 # Each text is held until the next assistant or user event: the last one before a successful result is the final
 # report, which remote-agent.sh prints on stdout from summary.md, so it is dropped here rather than shown twice on its
 # stderr. Before an error result, or with no result at all, it is shown.
-claude -p "$brief" --dangerously-skip-permissions --append-system-prompt "$rules" --output-format stream-json --verbose \
+claude -p "$brief" ${model:+--model "$model"} --dangerously-skip-permissions --append-system-prompt "$rules" --output-format stream-json --verbose \
   | tee "$HOME/out/stream.jsonl" /dev/fd/3 \
   | jq -rn --unbuffered 'foreach ((inputs | objects), {type: "end"}) as $e ({held: null, out: []};
       if $e.type == "assistant" then
