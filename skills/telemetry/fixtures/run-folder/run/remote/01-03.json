@@ -6,5 +6,5 @@
   "complete": true,
   "num_turns": 40,
   "total_cost_usd": 1.25,
-  "model": "model-a"
+  "claude_version": "9.0.1", "model": "model-a"
 }

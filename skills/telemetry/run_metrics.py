@@ -18,6 +18,7 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
   killed for memory, then for timeout, counts under both), or by `killed` in a result without that list.
   `by_role` counts them by role and model, the role read from the file name: `review` and `security` for review-pr's
   `review-<PR>-<sha7>` and `security-<PR>-<sha7>`, `task` for `<TT-NN>-...` and `<TT>-tests-...`, else `other`.
+  `claude_versions` counts them by the sandbox's Claude Code version (`claude_version`; `unknown` without one).
 - `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
   folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network. Also
   `first_created`, `last_merged` and the minutes between them.
@@ -209,8 +210,8 @@ def remote_role(stem):
 
 def remote(run, gaps):
     out = {"runs": 0, "by_status": {}, "complete": 0, "cost_usd": 0.0, "runs_without_cost": 0, "turns": 0,
-           "duration_ms": 0, "tokens": {}, "models": {}, "killed": {}, "lost": 0, "by_role": {}}
-    statuses, models, killed = [], [], []
+           "duration_ms": 0, "tokens": {}, "models": {}, "killed": {}, "lost": 0, "by_role": {}, "claude_versions": {}}
+    statuses, models, killed, versions = [], [], [], []
     for path in sorted((run / "remote").glob("*.json")):
         out["runs"] += 1
         try:
@@ -236,6 +237,7 @@ def remote(run, gaps):
                 out["tokens"][kind] = out["tokens"].get(kind, 0) + n
         if isinstance(r.get("model"), str):
             models.append(r["model"])
+        versions.append(r["claude_version"] if isinstance(r.get("claude_version"), str) else "unknown")
         role = out["by_role"].setdefault(remote_role(path.stem), {"count": 0, "models": {}})
         role["count"] += 1
         model = r["model"] if isinstance(r.get("model"), str) else "unknown"
@@ -243,6 +245,7 @@ def remote(run, gaps):
         killed += kill_kinds(r)
         out["lost"] += r.get("lost") is True
     out["by_status"], out["models"], out["killed"] = tally(statuses), tally(models), tally(killed)
+    out["claude_versions"] = tally(versions)
     out["by_role"] = dict(sorted(out["by_role"].items()))
     out["tokens"] = dict(sorted(out["tokens"].items()))
     out["cost_usd"] = round(out["cost_usd"], 4)

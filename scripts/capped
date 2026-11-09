@@ -8,7 +8,9 @@ The command runs in its own process group with stdin from /dev/null. Every 0.2 s
 to a number over 0) the runner sums the RSS of the group
 and of every process descended from it, from `ps -A -o pid=,ppid=,pgid=,rss=` (the same call on macOS and Linux), or from /proc/<pid>/stat and statm on Linux when ps is missing or fails. Over
 --mb it kills the group, prints `capped: killed: memory` on stderr and exits 137; over --secs it prints
-`capped: killed: timeout` and exits 124. A cap left out is not enforced. Otherwise it exits with the command's code
+`capped: killed: timeout` and exits 124. A cap left out is read from CAPPED_MB or CAPPED_SECS when that is a number
+over 0 (the sandbox and build-epic's test command set them to the machine's share); otherwise it is not enforced.
+Otherwise it exits with the command's code
 (128+N for signal N). When the command exits, what is left of its group is killed too, and SIGTERM, SIGINT or SIGHUP to
 the runner kills the group before the runner exits. Without `ps` or /proc it refuses to run (exit 125) rather than run
 uncapped. A descendant in a group of its own (a shell with job control puts each command in one) is capped and killed
@@ -199,7 +201,19 @@ def parse_run(args):
         args = args[2:]
     if len(args) < 2:
         return None
+    for flag, var in (("--mb", "CAPPED_MB"), ("--secs", "CAPPED_SECS")):
+        if caps[flag] is None:
+            caps[flag] = env_cap(var)
     return caps["--mb"], caps["--secs"], args[1:]
+
+
+def env_cap(var):
+    """The cap in environment variable var when it is a number over 0, else None (not enforced)."""
+    try:
+        value = float(os.environ.get(var, ""))
+    except ValueError:
+        return None
+    return value if 0 < value < float("inf") else None
 
 
 def run(args):

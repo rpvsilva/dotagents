@@ -3,7 +3,11 @@
 # driven with `docker exec`. Only Docker and the image are needed.
 # Usage: docker.sh acquire <run> | put <run> <container> <dir> | run <run> <container> <argv>... | get <run> <container> <dir> | release <run> | check | ping
 # acquire starts container <run> and prints its name; its command is `sleep <REMOTE_HOURS*3600>` under --rm, so it
-# removes itself after REMOTE_HOURS if release never comes.
+# removes itself after REMOTE_HOURS if release never comes. The container gets the run's share of the host, as
+# --memory (with --memory-swap the same: no swap past it) and --cpus: REMOTE_SANDBOX_MB and REMOTE_SANDBOX_CPUS, else
+# the host's memory and CPUs (docker info) over REMOTE_MAX_SANDBOXES (4), since other runs, and other people's, share
+# it. A share under 2048 MB is said: Claude and the tests may not fit. The sandbox derives its commands' memory cap
+# from that limit (scripts/remote-agent-sandbox.sh).
 # put extracts the tar on stdin under the container's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release removes the container (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # The container is labelled sandbox.users.io/remote-agent-run=<run> and, with REMOTE_TASK (set by remote-agent.sh
@@ -14,7 +18,8 @@
 # ping runs `docker info` (`remote-agent ready`): exit 0 when the daemon answers, else one line on stdout with its error
 # and exit 1.
 # Settings: REMOTE_IMAGE (the runner image, required; the `image` Setting supplies its default), REMOTE_PLATFORM
-# (passed as --platform when set; otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP.
+# (passed as --platform when set; otherwise Docker picks the native architecture), REMOTE_HOURS (2), REMOTE_KEEP,
+# REMOTE_SANDBOX_MB, REMOTE_SANDBOX_CPUS, REMOTE_MAX_SANDBOXES.
 # ssh.sh runs this script with DOCKER_SSH_HOST set: every docker command then runs on that host, one ssh call each,
 # its words quoted for the remote shell and its streams through the connection; as `sudo -n docker` under
 # REMOTE_SSH_SUDO (an SSH user outside the docker group, with passwordless sudo). check names that fix when plain
@@ -51,6 +56,35 @@ arch_name() {
   esac
 }
 
+# Sets limits to the docker run options giving one run its share of the host, and share to how it reads
+# (`4096 MB, 2 CPUs`); fails, saying why, on a REMOTE_SANDBOX_CPUS that is not a number.
+run_share() {
+  local mb="${REMOTE_SANDBOX_MB:-}" cpus="${REMOTE_SANDBOX_CPUS:-}" n="${REMOTE_MAX_SANDBOXES:-4}" total="" ncpu=""
+  if [ -n "$cpus" ] && [[ ! "$cpus" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    say "REMOTE_SANDBOX_CPUS=$cpus is not a number of CPUs (remote.sandbox_cpus)"
+    return 1
+  fi
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || n=4
+  if [ -z "$mb" ] || [ -z "$cpus" ]; then
+    # shellcheck disable=SC2016 # a Go template for docker
+    read -r total ncpu < <(dk info --format '{{.MemTotal}} {{.NCPU}}' </dev/null 2>/dev/null || true) || true
+    [[ "${total:-}" =~ ^[0-9]+$ ]] && [ -z "$mb" ] && mb=$((total / 1048576 / n))
+    [[ "${ncpu:-}" =~ ^[0-9]+$ ]] && [ -z "$cpus" ] && cpus="$(awk -v c="$ncpu" -v n="$n" 'BEGIN { x = c / n; if (x < 0.01) x = 0.01; printf "%g", x }')"
+  fi
+  limits=()
+  share=""
+  if [ -n "$mb" ] && [ "$mb" -gt 0 ]; then
+    limits+=(--memory "${mb}m" --memory-swap "${mb}m")
+    share="$mb MB"
+    [ "$mb" -ge 2048 ] || say "note: each run gets $mb MB$where, under 2048 MB: Claude and the tests may not fit (remote.sandbox_mb, or fewer remote.max_sandboxes)"
+  fi
+  if [ -n "$cpus" ]; then
+    limits+=(--cpus "$cpus")
+    share="${share:+$share, }$cpus CPUs"
+  fi
+  return 0
+}
+
 # GNU tar in the image would warn about the xattr headers macOS tar adds.
 untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
 
@@ -69,9 +103,11 @@ case "$op" in
     name="$2"
     args=(run -d --rm --name "$name" --label "sandbox.users.io/remote-agent-run=$name")
     [ -z "${REMOTE_TASK:-}" ] || args+=(--label "sandbox.users.io/remote-agent-task=$REMOTE_TASK")
+    run_share || exit 1
+    args+=(${limits[@]+"${limits[@]}"})
     [ -z "${REMOTE_PLATFORM:-}" ] || args+=(--platform "$REMOTE_PLATFORM")
     dk "${args[@]}" "$image" sleep $((hours * 3600)) </dev/null >/dev/null
-    say "started container $name$where ($image)"
+    say "started container $name$where ($image${share:+; $share})"
     printf '%s\n' "$name"
     ;;
   put)

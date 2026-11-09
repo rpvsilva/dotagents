@@ -3,7 +3,7 @@
 tools its suite skips without.
 
 Usage: python3 -I setup.py <run>
-Prints `OK run set up ci=<on|off> env=<run>/env skips=<n>`, then ` parallel=<n> (<cpus> cores, <gb> GB)` when no
+Prints `OK run set up ci=<on|off> env=<run>/env skips=<n> caps=<mb>MB,<secs>s`, then ` parallel=<n> (<cpus> cores, <gb> GB)` when no
 Level sets `max_parallel` (`steplib/machine.py`: `max(1, min(6, cpus - 2, GB // 4))`; `BUILD_EPIC_MACHINE=<cpus>,<gb>`
 overrides the probe).
 
@@ -13,7 +13,11 @@ overrides the probe).
   code block after it. Any other line starting `Setup` fails `unclear-setup`, never meaning none. Once it succeeds,
   `<run>/env/.setup-done` is written and a rerun does not run `Setup` again; a failed `Setup` fails `setup-failed`
   and runs again next time.
-- **Test command**: `map.md`'s `Checks` joined with `&&`, inside the run's environment (`steplib/checks.py`'s
+- **Caps**: each test command's memory and time caps on this machine (`steplib/machine.py`'s `caps`: the `cap_mb`
+  Setting, else the machine's memory share per slot; `cap_secs`), recorded as `decisions.md`'s `caps: <mb> <secs>`
+  on every run, and exported as CAPPED_MB and CAPPED_SECS defaults ahead of every suite, so a Checks line's
+  `capped` with no flags runs under them (a sandbox's own exports win there).
+- **Test command**: `map.md`'s `Checks` joined with `&&`, under the caps and inside the run's environment (`steplib/checks.py`'s
   `in_env`: `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` (`Scripts/activate` on
   Windows) when it made a virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`;
   every agent is given that exact line.
@@ -91,9 +95,9 @@ def make_env(ctx, repo, commands):
     return env_dir
 
 
-def test_command(run, suites):
-    """The one line every agent runs its tests with: the suites inside the run's environment."""
-    return checks.in_env(run, " && ".join(suites))
+def test_command(run, suites, caps=None):
+    """The one line every agent runs its tests with: the suites under the run's caps, inside its environment."""
+    return checks.in_env(run, " && ".join(suites), caps)
 
 
 # -- CI ------------------------------------------------------------------------------------------------------------
@@ -312,13 +316,15 @@ def step(ctx):
     suites = checks.commands(map_md)
     commands = setup_commands(map_md)
     env_dir = make_env(ctx, repo, commands)
-    command = test_command(ctx.run_dir, suites)
+    mb, secs = machine.caps(repo, ctx.log)
+    caps = f"{mb} {secs}"
+    command = test_command(ctx.run_dir, suites, caps)
 
     base = decisions.get(ctx.run_dir, "base") or info["Default"]
     ci = "on" if ci_runs(ctx, repo, base) else "off"
     who = identity.mode(ctx.run_dir, lambda: tracker.setting("build-epic", "merge_identity", str(repo), ctx.log))
     human = identity.human_login(repo, ctx.log)
-    facts = {"ci": ci, "test_command": command}
+    facts = {"ci": ci, "test_command": command, "caps": caps}
     kept = {"merge_identity": who, "human": human}  # recorded once: a rerun never widens who may merge
     for key, value in {**facts, **kept}.items():
         if value:
@@ -334,7 +340,7 @@ def step(ctx):
         decisions.save(ctx.run_dir, d)
 
     skips = list_skips(ctx, repo, base, map_md, suites)
-    return "set up", f"ci={ci} env={env_dir} skips={skips}{machine.note(repo, ctx.log)}"
+    return "set up", f"ci={ci} env={env_dir} skips={skips} caps={mb}MB,{secs}s{machine.note(repo, ctx.log)}"
 
 
 if __name__ == "__main__":
