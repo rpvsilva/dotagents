@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","apiKeySource":"env","cwd":"/tmp/work","session_id":"c-cut","model":"GPT-5.2","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"set max_parallel to 2"}]},"session_id":"c-cut"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the configure skill."}]},"session_id":"c-cut"}
+{"type":"tool_call","subtype":"started","call_id":"call-1","tool_call":{"readToolCall":{"args":{"path":"/tmp/home/.agents/skills/configure/SKILL.md"}}},"session_id":"c-cut"}
+{"type":"tool_call","subtype":"comp

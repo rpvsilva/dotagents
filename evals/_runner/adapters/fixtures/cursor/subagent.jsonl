@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","apiKeySource":"env","cwd":"/tmp/work","session_id":"c-sub","model":"GPT-5.2","permissionMode":"default"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Starting one explorer per area."}]},"session_id":"c-sub"}
+{"type":"tool_call","subtype":"started","call_id":"call-1","tool_call":{"taskToolCall":{"args":{"description":"explore install","prompt":"..."}}},"session_id":"c-sub"}
+{"type":"tool_call","subtype":"started","call_id":"call-2","tool_call":{"function":{"name":"Task","arguments":"{}"}},"session_id":"c-sub"}
+{"type":"tool_call","subtype":"completed","call_id":"call-1","tool_call":{"taskToolCall":{"args":{"description":"explore install","prompt":"..."},"result":{"success":{}}}},"session_id":"c-sub"}
+{"type":"tool_call","subtype":"completed","call_id":"call-2","tool_call":{"function":{"name":"Task","arguments":"{}"}},"session_id":"c-sub"}
+{"type":"tool_call","subtype":"started","call_id":"call-3","tool_call":{"function":{"name":"Grep","arguments":"{}"}},"session_id":"c-sub"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Both explorers are back."}]},"session_id":"c-sub"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":30000,"duration_api_ms":25000,"result":"done","session_id":"c-sub","request_id":"r-3"}
