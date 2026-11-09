@@ -13,9 +13,9 @@ implementers), tokens, orchestrator figures, subagents by type, role and model, 
 `comparison`: each figure side by side, with `<b>Minus<A>`, `<b>Vs<A>Pct` and which run did `better`. Roles are a
 subagent's saved `role`, else `report.py`'s rule on its type and description (spec Q14 names). A cost that needs a
 model missing from the pricing is null. With `--targets`, `comparison.targets` judges run b against each target:
-its threshold and op, run b's value and `met`, `missed` or `unknown` (an input is missing). The total-cost target's
+its threshold and op, run b's value and `met`, `missed` or `unknown` (an input is missing). A total-cost target's
 `basis` says whether it judged the measured cost or, with remote runs lacking cost, the mid estimate (`range` holds
-low and high). Nothing reads git or writes prose.
+low and high). Per-task costs divide by the run's done tasks, so epics of different sizes compare. Nothing reads git or writes prose.
 """
 import argparse
 import json
@@ -388,7 +388,8 @@ def compare(names, outs, metrics):
 
 OPS = {"lt": lambda v, t: v < t, "le": lambda v, t: v <= t, "eq": lambda v, t: v == t}
 TASK_ID = re.compile(r"^\d+-\d+$")
-METRICS = ("totalCostUSD", "orchestratorAvgContextTokens", "orchestratorTurnsPerTicket", "orchestratorUSD",
+METRICS = ("totalCostUSD", "totalCostPerTaskUSD", "orchestratorAvgContextTokens", "orchestratorTurnsPerTicket",
+           "orchestratorUSD", "orchestratorUSDPerTask",
            "reviewerRunsPerTicket", "opusReviewerRunsPerTicket", "conflictResolverAgents", "handWrittenScripts",
            "remoteKilledByMemory", "remoteCostMeasured", "suitesPerMergedTask", "humanRoundTrips")
 
@@ -415,17 +416,29 @@ def suites_per_merged_task(met):
     return ratio(merges, len(merged)) if isinstance(merges, int) else None
 
 
+def done_tasks(met):
+    """The run's done tasks (`tasks.by_status.done`), in both gh-35's metrics and `run_metrics.py`'s."""
+    done = dig(met, "tasks", "by_status", "done")
+    return done if isinstance(done, int) and done > 0 else None
+
+
+TOTAL_COST = ("totalCostUSD", "totalCostPerTaskUSD")
+
+
 def derived(X, met):
     """The figures the targets judge, for one run; None when an input is missing."""
     tickets = dig(X, "outcomes", "tickets", "count")
     subs = X["subagentList"]
     opus = sum(1 for s in subs if s["role"] in REVIEW_ROLES and any("opus" in m for m in s["models"]))
     killed, measured = remote_judged(met)
+    total, tasks = dig(X, "cost", "totalEstimateUSD", "mid"), done_tasks(met)
     return {
-        "totalCostUSD": dig(X, "cost", "totalEstimateUSD", "mid"),
+        "totalCostUSD": total,
+        "totalCostPerTaskUSD": ratio(total, tasks),
         "orchestratorAvgContextTokens": X["orchestrator"]["avgContextTokensPerTurn"],
         "orchestratorTurnsPerTicket": ratio(X["orchestrator"]["turns"], tickets),
         "orchestratorUSD": X["cost"]["orchestratorUSD"],
+        "orchestratorUSDPerTask": ratio(X["cost"]["orchestratorUSD"], tasks),
         "reviewerRunsPerTicket": X["outcomes"]["reviewerRunsPerTicket"],
         "opusReviewerRunsPerTicket": ratio(opus, tickets),
         "conflictResolverAgents": (X["subagents"]["byRole"].get("resolve") or {}).get("count", 0),
@@ -446,10 +459,11 @@ def judge(targets, name, X, met):
         d = {"run": name, "metric": t["metric"], "op": t["op"], "threshold": t["threshold"], "unit": t["unit"],
              "source": t["source"], "value": value,
              "status": "unknown" if value is None else "met" if OPS[t["op"]](value, t["threshold"]) else "missed"}
-        if t["metric"] == "totalCostUSD":
+        if t["metric"] in TOTAL_COST:
             d["basis"] = cost_basis(X)
             if d["basis"] != "measured":
-                d["range"] = [dig(X, "cost", "totalEstimateUSD", k) for k in ("low", "high")]
+                bounds = [dig(X, "cost", "totalEstimateUSD", k) for k in ("low", "high")]
+                d["range"] = bounds if t["metric"] == "totalCostUSD" else [ratio(b, done_tasks(met)) for b in bounds]
         out[t["id"]] = d
     return out
 
