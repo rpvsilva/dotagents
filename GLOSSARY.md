@@ -67,3 +67,9 @@ _Avoid_: Dependency, requirement, coupling
 **Core**:
 The Parts every Group comes with, which no Part names as a Need: the shared conventions (`skills/_shared`), Settings (`~/.agents/bin/settings`), the hooks library and the `configure` skill.
 _Avoid_: Base, common, runtime
+
+## Evals
+
+**Eval case**:
+One fixed task for one skill, in `evals/<skill>/<case>/`: the prompt a user would type, the fixture repo it starts in, the model and caps it runs with, and the checks its result must pass. Dev tooling, not a Part.
+_Avoid_: Test case, benchmark, scenario
