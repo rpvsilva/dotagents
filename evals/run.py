@@ -98,26 +98,6 @@ def _write_redacted(to, data, values):
     Path(to).write_bytes(data)
 
 
-def _prepare(case, checkout_dir, adapter):
-    """home.prepare, with the adapter's `prepare_home` before the install."""
-    run = home.Run(Path(tempfile.mkdtemp(prefix="evals-run-")).resolve())
-    try:
-        run.home.mkdir()
-        run.scratch.mkdir()
-        if case.get("input"):
-            shutil.copytree(case["input"], run.input, symlinks=True)
-        else:
-            run.input.mkdir()
-        home.write_gh_stub(run.bin, run.gh_calls)
-        home.make_work(case["fixture"], run.work, case.get("settings"))
-        adapter.prepare_home(run.home)
-        home.install(checkout_dir, run.home, adapter.INSTALL_WORD, case["install"])
-    except BaseException:
-        run.close()
-        raise
-    return run
-
-
 def _clear(dest):
     """An empty `dest`, a saved run there removed only now that the new one has its result."""
     if dest.exists():
@@ -152,7 +132,7 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
             "cost_basis": "unknown", "pricing_as_of": (pricing or {}).get("asOf"), "transcript": adapters.TRANSCRIPT}
     values = sorted({os.environ[v].encode() for v in adapter.AUTH_VARS if os.environ.get(v)}, key=len, reverse=True)
     try:
-        run = _prepare(case, co.path, adapter)
+        run = home.prepare(case, co.path, adapter.INSTALL_WORD, prepare_home=adapter.prepare_home)
     except home.InstallError as err:
         _clear(dest)
         _write_redacted(dest / STDERR, (str(err) + "\n").encode(), values)

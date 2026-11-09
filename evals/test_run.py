@@ -418,5 +418,13 @@ class CliTest(RunSandbox):
         self.assertIn("skipped configure/a run 2", out.stdout)
 
 
+    def test_every_flag_of_help_is_documented_in_the_run_cases_section(self):
+        out = self.cli("--help")
+        flags = set(re.findall(r"(?<![\w-])--?[a-z][\w-]*", out.stdout))
+        self.assertIn("--budget-usd", flags)
+        doc = (REPO / "docs" / "evals.md").read_text()
+        section = doc.split("\n## Run cases\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(sorted(f for f in flags if f"`{f}" not in section), [])
+
 if __name__ == "__main__":
     unittest.main()
