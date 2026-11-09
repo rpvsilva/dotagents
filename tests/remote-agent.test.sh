@@ -234,7 +234,9 @@ logged_all() {
 kept() { echo "$W/.git/remote-agent/$(sed -n 's/^  name: //p' "$SANDBOX/claim.yaml" | head -1)"; }
 # Fails ($1 names the case) unless the last run's run.json is valid JSON saying state $2 and exit code $3, with its
 # name $4 (null without), its run id, pid, start and end, and the claim and send times; no run.json.tmp is left; its
-# progress.log holds stderr's lines without the tag; the token is in neither file.
+# progress.log holds stderr's lines without the tag, as a multiset: during the run two writers (the sandbox's
+# progress and the first-event line) each write a line to stderr then to progress.log, so their lines may cross;
+# the token is in neither file.
 run_data() {
   local k run
   k="$(kept)"
@@ -245,9 +247,10 @@ run_data() {
     and (.send_s | type) == "number" and (.worktree | type) == "string"' "$k/run.json" >/dev/null 2>&1 \
     || fail "$1: run.json is not $2 with exit $3 and name ${4:-null}: $(cat "$k/run.json" 2>/dev/null)"
   [ -z "$(find "$k" -name 'run.json.*')" ] || fail "$1: a temporary run.json left: $(find "$k" -name 'run.json.*')"
-  [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null)" = "$(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //")" ] \
-    || fail "$1: progress.log is not stderr without the tag: $(diff <(tr -d '\r' <"$k/progress.log" 2>/dev/null) \
-      <(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //") 2>&1)"
+  [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null | LC_ALL=C sort)" \
+    = "$(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //" | LC_ALL=C sort)" ] \
+    || fail "$1: progress.log is not stderr without the tag: $(diff <(tr -d '\r' <"$k/progress.log" 2>/dev/null \
+      | LC_ALL=C sort) <(tr -d '\r' <"$SANDBOX/err" | sed "s/^\[${4:-$run}\] //" | LC_ALL=C sort) 2>&1)"
   grep -q "sk-claude-secret" "$k/run.json" "$k/progress.log" && fail "$1: the token is in run.json or progress.log"
   return 0
 }
