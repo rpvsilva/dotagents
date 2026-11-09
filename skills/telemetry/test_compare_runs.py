@@ -302,7 +302,8 @@ class Targets(unittest.TestCase):
                          round(run["orchestrator"]["turns"] / tickets, 2))
         self.assertEqual(targets["conflict-resolvers"]["value"],
                          (run["subagents"]["byRole"].get("resolve") or {}).get("count", 0))
-        self.assertEqual(targets["orchestrator-cost"]["value"], run["cost"]["orchestratorUSD"])
+        done = 78  # gh-35's local run: tasks.by_status.done
+        self.assertEqual(targets["orchestrator-cost-per-task"]["value"], round(run["cost"]["orchestratorUSD"] / done, 2))
 
     def test_a_threshold_is_judged_by_its_op(self):
         out = compare(gh35_args() + ["--targets", str(TARGETS)])
@@ -326,9 +327,10 @@ class Targets(unittest.TestCase):
 
     def test_the_cost_target_judges_measured_cost_when_every_remote_run_has_one(self):
         out = compare(gh35_args() + ["--targets", str(TARGETS)])
-        cost = out["comparison"]["targets"]["total-cost"]
+        cost = out["comparison"]["targets"]["total-cost-per-task"]
         self.assertEqual(cost["basis"], "measured")
-        self.assertEqual(cost["value"], out["runs"]["local"]["cost"]["recomputedSessionUSD"])
+        self.assertEqual(cost["value"], round(out["runs"]["local"]["cost"]["recomputedSessionUSD"] / 78, 2))
+        self.assertNotIn("range", cost)
 
     def test_the_cost_target_names_the_estimate_it_judged_when_remote_runs_lack_cost(self):
         # Judge the remote run: 106 remote runs without cost, priced from the local run's implementers.
@@ -337,10 +339,12 @@ class Targets(unittest.TestCase):
                             "b": GH35 / "remote-telemetry.json", "b-metrics": GH35 / "remote-metrics.json",
                             "b-branch": GH35 / "remote-branch.json", "b-name": "remote"})
         out = compare(args + ["--targets", str(TARGETS)])
-        cost, estimate = out["comparison"]["targets"]["total-cost"], out["runs"]["remote"]["cost"]["totalEstimateUSD"]
+        cost, estimate = (out["comparison"]["targets"]["total-cost-per-task"],
+                          out["runs"]["remote"]["cost"]["totalEstimateUSD"])
+        done = 99  # gh-35's remote run: tasks.by_status.done
         self.assertEqual(cost["basis"], "estimate-mid")
-        self.assertEqual(cost["value"], estimate["mid"])
-        self.assertEqual(cost["range"], [estimate["low"], estimate["high"]])
+        self.assertEqual(cost["value"], round(estimate["mid"] / done, 2))
+        self.assertEqual(cost["range"], [round(estimate["low"] / done, 2), round(estimate["high"] / done, 2)])
         self.assertEqual(cost["run"], "remote")
         # gh-35's metrics name no kills, and none of its remote runs has a cost.
         kills, measured = (out["comparison"]["targets"][k] for k in ("remote-memory-kills", "remote-cost-measured"))
@@ -350,8 +354,17 @@ class Targets(unittest.TestCase):
     def test_the_cost_target_is_unknown_when_no_estimate_can_be_made(self):
         args = gh35_args(**{"b-metrics": RUN_METRICS}) + ["--targets", str(TARGETS)]
         targets = compare(args)["comparison"]["targets"]
-        self.assertEqual(targets["total-cost"]["basis"], "estimate-mid")
-        self.assertEqual((targets["total-cost"]["value"], targets["total-cost"]["status"]), (None, "unknown"))
+        cost = targets["total-cost-per-task"]
+        self.assertEqual(cost["basis"], "estimate-mid")
+        self.assertEqual((cost["value"], cost["status"]), (None, "unknown"))
+
+    def test_per_task_costs_are_unknown_without_done_tasks(self):
+        metrics = json.loads((GH35 / "local-metrics.json").read_text(encoding="utf-8"))
+        metrics["tasks"]["by_status"] = {"ready": 3}
+        path = self.write("metrics.json", metrics)
+        targets = compare(gh35_args(**{"b-metrics": path}) + ["--targets", str(TARGETS)])["comparison"]["targets"]
+        for key in ("total-cost-per-task", "orchestrator-cost-per-task"):
+            self.assertEqual((targets[key]["value"], targets[key]["status"]), (None, "unknown"), key)
 
 
 if __name__ == "__main__":
