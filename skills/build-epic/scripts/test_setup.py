@@ -27,6 +27,9 @@ jobs:
       - run: echo hi
 """
 
+# The caps every test command runs under, from the machine-level cap_mb each case sets and cap_secs' default.
+CAPS = 'export CAPPED_MB="${CAPPED_MB:-1500}" CAPPED_SECS="${CAPPED_SECS:-300}" && '
+
 MAP = """# Map
 
 ## Checks
@@ -57,6 +60,7 @@ class SetupCase(unittest.TestCase):
         (self.kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
         self.write_map("echo suite ok")
         self.setting("max_parallel", "4")  # a Level sets it: no `parallel=`, but in the tests of the default
+        self.setting("cap_mb", "1500")  # likewise for the memory cap: not the machine's share, but in its tests
 
     def write_map(self, checks_block, setup="Setup: none."):
         (self.run_dir / "map.md").write_text(MAP.format(checks=checks_block, setup=setup), encoding="utf-8")
@@ -148,13 +152,14 @@ class PrintsOneLine(SetupCase):
     def test_prints_ci_env_and_skips(self):
         self.workflows({"ci.yml": PR_INTO_MAIN})
         line = self.setup()
-        self.assertEqual(line, f"OK run set up ci=on env={self.run_dir / 'env'} skips=0")
+        self.assertEqual(line, f"OK run set up ci=on env={self.run_dir / 'env'} skips=0 caps=1500MB,300s")
         self.assertTrue((self.run_dir / "env").is_dir())
 
     def test_runs_from_a_linked_run_folder(self):
         linked = self.kit.link(self.run_dir, "linked-run")
         p = self.kit.step(SETUP, linked)
-        self.assertEqual(p.stdout, f"OK run set up ci=off env={self.run_dir / 'env'} skips=0\n", p.stderr)
+        self.assertEqual(p.stdout, f"OK run set up ci=off env={self.run_dir / 'env'} skips=0 caps=1500MB,300s\n",
+                         p.stderr)
 
     def test_without_run_md_fails_with_its_log(self):
         (self.run_dir / "run.md").unlink()
@@ -190,11 +195,66 @@ class PrintsOneLine(SetupCase):
                 self.assertTrue(self.setup(ok=False).startswith("FAIL run unclear-setup: "))
 
 
+class CapsFollowTheMachine(SetupCase):
+    """Each test command's caps: cap_mb, else the machine's memory share per slot; cap_secs. Recorded and exported
+    as defaults, so a sandbox's own caps win."""
+
+    def unset(self, key):
+        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "unset", "build-epic", key, "--machine")
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_16_gb_over_the_four_slots_of_the_machine_default(self):
+        self.unset("cap_mb")
+        self.unset("max_parallel")
+        self.kit.env["BUILD_EPIC_MACHINE"] = "10,16"
+        # (16384 - 2048) / 4 - 1024
+        self.assertIn(" caps=2560MB,300s ", self.setup())
+        self.assertEqual(self.decided("caps"), "2560 300")
+
+    def test_fewer_slots_a_level_sets_give_each_a_bigger_share(self):
+        self.unset("cap_mb")
+        self.setting("max_parallel", "2")
+        self.kit.env["BUILD_EPIC_MACHINE"] = "10,16"
+        self.assertTrue(self.setup().endswith(" caps=6144MB,300s"))
+
+    def test_a_small_machine_still_gets_512_mb(self):
+        self.unset("cap_mb")
+        self.kit.env["BUILD_EPIC_MACHINE"] = "4,4"
+        self.assertTrue(self.setup().endswith(" caps=512MB,300s"))
+
+    def test_cap_secs_sets_the_time_cap(self):
+        self.setting("cap_secs", "900")
+        self.setup()
+        self.assertEqual(self.decided("caps"), "1500 900")
+        self.assertTrue(self.decided("test_command").startswith('export CAPPED_MB="${CAPPED_MB:-1500}" '
+                                                               'CAPPED_SECS="${CAPPED_SECS:-900}" && '))
+
+    def test_the_test_command_exports_the_caps_unless_already_set(self):
+        self.write_map('echo "$CAPPED_MB $CAPPED_SECS"')
+        self.setup()
+        command = self.decided("test_command")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CAPPED_")}
+        mine = core.run(["bash", "-c", command], io.StringIO(), env=env)
+        self.assertEqual(mine.out.strip(), "1500 300")
+        sandbox = core.run(["bash", "-c", command], io.StringIO(), env={**env, "CAPPED_MB": "7000", "CAPPED_SECS": "60"})
+        self.assertEqual(sandbox.out.strip(), "7000 60")
+
+    def test_a_merge_runs_its_checks_under_the_recorded_caps(self):
+        self.setup()
+        self.assertEqual(checks.in_env(self.run_dir, "true"), CAPS + "true")
+
+    def test_caps_must_be_two_whole_numbers(self):
+        for bad in ("1500", "1500 0", "x 300", "1500 300 1"):
+            with self.assertRaises(core.Fail):
+                decisions.check_value("caps", bad)
+        decisions.check_value("caps", "1500 300")
+
+
 class RecordsTheRunsFacts(SetupCase):
     def test_records_test_command_human_and_identity(self):
         self.write_map("echo one\necho two")
         self.setup()
-        self.assertEqual(self.decided("test_command"), "echo one && echo two")
+        self.assertEqual(self.decided("test_command"), CAPS + "echo one && echo two")
         self.assertEqual(self.decided("human"), "rui")
         self.assertEqual(self.decided("merge_identity"), "app")
         self.assertEqual(self.decided("ci"), "off")
@@ -210,7 +270,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
-        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
+        self.assertEqual(self.decided("test_command"), CAPS + f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
 
     def test_test_command_activates_a_virtualenv_setup_made(self):
         activate = 'mkdir -p "$BUILD_EPIC_ENV/bin" && touch "$BUILD_EPIC_ENV/bin/activate"'
@@ -218,7 +278,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertEqual(self.decided("test_command"),
-                         f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/bin/activate && echo hi")
+                         CAPS + f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/bin/activate && echo hi")
 
     def test_test_command_activates_a_windows_virtualenv_setup_made(self):
         activate = 'mkdir -p "$BUILD_EPIC_ENV/Scripts" && touch "$BUILD_EPIC_ENV/Scripts/activate"'
@@ -226,7 +286,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertEqual(self.decided("test_command"),
-                         f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/Scripts/activate && echo hi")
+                         CAPS + f"export BUILD_EPIC_ENV={env.as_posix()} && . {env.as_posix()}/Scripts/activate && echo hi")
 
     def test_a_setup_heading_with_a_note_runs_its_code_spans(self):
         made = 'mkdir -p "$BUILD_EPIC_ENV" && echo ok > "$BUILD_EPIC_ENV/made"'
@@ -234,7 +294,7 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
-        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
+        self.assertEqual(self.decided("test_command"), CAPS + f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
 
     def test_a_setup_heading_with_a_note_runs_its_block_and_the_block_is_no_suite(self):
         made = 'echo ok > "$BUILD_EPIC_ENV/made"'
@@ -242,13 +302,13 @@ class RecordsTheRunsFacts(SetupCase):
         self.setup()
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
-        self.assertEqual(self.decided("test_command"), f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
+        self.assertEqual(self.decided("test_command"), CAPS + f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
         self.assertEqual(checks.commands(self.run_dir / "map.md"), ["echo hi"])
 
     def test_setup_none_puts_no_env_in_the_test_command(self):
         self.write_map("echo hi", setup="Setup (fresh worktree): none.")
         self.setup()
-        self.assertEqual(self.decided("test_command"), "echo hi")
+        self.assertEqual(self.decided("test_command"), CAPS + "echo hi")
 
     def test_failing_setup_fails_and_is_run_again_next_time(self):
         count = self.kit.tmp / "count"
@@ -341,7 +401,7 @@ class ListsSkippedTools(SetupCase):
                "SKIPPED [1] tests/test_x.py:3: requires docker\n")
         self.write_map(self.suite_printing(out))
         line = self.setup()
-        self.assertTrue(line.endswith(" skips=3"), line)
+        self.assertTrue(line.endswith(" skips=3 caps=1500MB,300s"), line)
         skips = (self.run_dir / "skips.md").read_text(encoding="utf-8")
         for reason in checks.skip_reasons(out):
             self.assertIn(reason.reason, skips)
@@ -350,7 +410,7 @@ class ListsSkippedTools(SetupCase):
 
     def test_a_red_suite_still_lists_its_skips(self):
         self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'; exit 1")
-        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
         self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| zsh \|")
 
     def test_suites_run_in_a_throwaway_worktree_of_the_base_not_the_checkout(self):
@@ -369,12 +429,12 @@ class ListsSkippedTools(SetupCase):
         suite = self.suite_printing("== tests/zsh.test.sh (0s)\nzsh.test.sh: skipped (zsh is not installed)\n",
                                     only_with_all=True)
         self.write_map(suite, setup=f"Setup: none. Before a ticket ships, run `{suite} --all`.")
-        self.assertTrue(self.setup().endswith(" skips=1"))
-        self.assertEqual(self.decided("test_command"), suite)
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
+        self.assertEqual(self.decided("test_command"), CAPS + suite)
 
     def test_suites_run_in_the_runs_environment(self):
         self.write_map("envtool", setup=env_tool_setup("envtool", "SKIPPED [1] t.py:1: needs docker"))
-        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
         self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| docker \|")
 
 
@@ -408,11 +468,11 @@ class Reruns(SetupCase):
 
     def test_rerun_keeps_skips_md_until_it_is_deleted(self):
         self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'")
-        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
         self.write_map("echo all ran")
-        self.assertTrue(self.setup().endswith(" skips=1"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
         (self.run_dir / "skips.md").unlink()
-        self.assertTrue(self.setup().endswith(" skips=0"))
+        self.assertTrue(self.setup().endswith(" skips=0 caps=1500MB,300s"))
 
 
 class SkipReasons(unittest.TestCase):

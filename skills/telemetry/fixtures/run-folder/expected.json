@@ -93,6 +93,11 @@
      "unknown": 1
     }
    }
+  },
+  "claude_versions": {
+   "9.0.1": 1,
+   "9.0.2": 1,
+   "unknown": 1
   }
  },
  "prs": {

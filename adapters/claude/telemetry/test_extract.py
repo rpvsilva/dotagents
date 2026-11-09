@@ -249,6 +249,21 @@ class Steps(unittest.TestCase):
     def test_the_run_is_schema_version_4(self):
         self.assertEqual(self.out["schemaVersion"], 4)
 
+    def test_a_session_with_no_version_saves_none(self):
+        self.assertEqual(self.out["claudeVersions"], [])
+
+    def test_the_run_names_each_claude_code_version_once_in_the_order_seen(self):
+        lines = (FIXTURES / "steps.jsonl").read_text().splitlines()
+        tagged = []
+        for i, line in enumerate(lines):
+            entry = json.loads(line)
+            entry["version"] = "2.1.9" if i < len(lines) // 2 else "2.1.10"
+            tagged.append(json.dumps(entry))
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / "versions.jsonl"
+            session.write_text("\n".join(tagged) + "\n")
+            self.assertEqual(run("--session", str(session))["claudeVersions"], ["2.1.9", "2.1.10"])
+
     def test_one_step_per_tool_call_in_start_order_subagents_included(self):
         self.assertEqual([(s["tool"], s["start"]) for s in self.steps], [
             ("Bash", "2026-10-24T10:00:01.000Z"), ("Bash", "2026-10-24T10:00:02.000Z"),

@@ -97,6 +97,10 @@ class Gh35(unittest.TestCase):
             want["subagents"].pop("byRole")
             # Added beside the ported figures: the measured cost of remote runs, none in gh-35's metrics.
             self.assertIsNone(run["cost"].pop("remoteMeasuredUSD"))
+            # Added beside them too: the Claude Code versions, which gh-35's telemetry and metrics predate.
+            self.assertEqual(run.pop("claudeVersions"), {"local": None, "remote": None}, name)
+        self.assertEqual(actual["comparison"].pop("claudeVersions"),
+                         {name: {"local": None, "remote": None} for name in ("remote", "local")})
         subs, want_subs = actual["comparison"]["subagents"], expected["comparison"]["subagents"]
         for role in ROLES:
             for field, metric in (("count", subs.pop(f"{role}Runs")), ("costUSD", subs.pop(f"{role}USD"))):
@@ -151,6 +155,17 @@ class Runs(unittest.TestCase):
         turns = out["comparison"]["orchestrator"]["turns"]
         self.assertEqual(turns["bMinusA"], turns["b"] - turns["a"])
         self.assertIn("bVsAPct", turns)
+
+    def test_each_run_names_its_local_and_remote_claude_code_versions(self):
+        run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))
+        run["claudeVersions"] = ["2.1.319"]
+        tel = self.tmp / "tel.json"
+        tel.write_text(json.dumps(run), encoding="utf-8")
+        out = compare(gh35_args(**{"b": tel, "b-metrics": RUN_METRICS}))
+        want = {"local": ["2.1.319"], "remote": {"9.0.1": 1, "9.0.2": 1, "unknown": 1}}
+        self.assertEqual(out["runs"]["local"]["claudeVersions"], want)
+        self.assertEqual(out["comparison"]["claudeVersions"],
+                         {"remote": {"local": None, "remote": None}, "local": want})
 
     def test_a_saved_role_wins_over_the_description(self):
         run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))
