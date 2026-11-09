@@ -66,12 +66,34 @@ def _write(path, text):
     return path
 
 
+def _check_side(tool, ref, case_dirs, model, repo):
+    """Raise run.RunError when `run_cases` would refuse `ref`: the checks it makes before its first run, made here
+    for both refs so a problem on the head is caught before the base's runs are paid for."""
+    try:
+        adapter = run.adapters.load(tool)
+    except ValueError as err:
+        raise run.RunError(str(err)) from None
+    if model is None and not adapter.USES_CASE_MODEL:
+        raise run.RunError(f"the {tool} adapter does not run the case's model: give --model <full model ID>")
+    try:
+        loaded = [cases.load(d) for d in case_dirs]
+    except cases.CaseError as err:
+        raise run.RunError(str(err)) from None
+    co = run.home.checkout(repo, ref)
+    try:
+        for case in loaded:
+            run._check(case, adapter, model or case["model"], co.path)
+    finally:
+        co.close()
+
+
 def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None, head_model=None, budget_usd=10.0,
             results_root=None, out_md=None, out_html=None, repo=REPO, out=None, report_to=None):
     """Run `case_dirs` on `base` and `head` of `repo` and write the report. Returns `{base, head}` (each
     `run_cases()`'s output, its results repriced), `comparison` (the dict `render.py` takes) and the report paths
     `out_md` and `out_html`. Raises run.RunError before any run on an unknown ref, tool, case or model, or a report
-    path inside the repo. Run lines go to `out`, the Markdown report to `report_to` (default `out`)."""
+    path inside the repo, and on a case either ref's `run_cases` would refuse. Run lines go to `out`, the Markdown
+    report to `report_to` (default `out`)."""
     out = out or sys.stdout
     report_to = report_to or out
     root = results.store_root(results_root)
@@ -88,6 +110,9 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
         loaded = [cases.load(d) for d in case_dirs]
     except cases.CaseError as err:
         raise run.RunError(str(err)) from None
+
+    for side, ref in (("base", base), ("head", head)):
+        _check_side(tool, ref, case_dirs, models[side], repo)
 
     got, left = {}, budget_usd
     for side, ref in (("base", base), ("head", head)):

@@ -145,6 +145,16 @@ class ReportTest(CompareSandbox):
         self.assertEqual(self.call_count(), 0)
         self.assertFalse((REPO / "report.md").exists())
 
+    def test_a_bad_case_on_the_head_only_is_refused_before_any_run(self):
+        (self.repo / "scripts" / "parts.sh").write_text("echo configure; echo global\n")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qam",
+            "head pulls in global")
+        with self.assertRaises(compare.run.RunError) as caught:
+            self.compare([self.case()])
+        self.assertIn("global", str(caught.exception))
+        self.assertEqual(self.call_count(), 0)
+        self.assertFalse(self.report.exists())
+
     def test_different_models_per_ref_are_named_per_side(self):
         got = self.compare([self.case()], base_model="claude-opus-5-5", head_model=MODEL)
         c = got["comparison"]
