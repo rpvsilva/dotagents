@@ -377,6 +377,33 @@ class RunsAndReuseTest(RunSandbox):
         self.assertEqual(results.read(d), saved)
         self.assertTrue((d / "transcript.jsonl").is_file())
 
+    def test_a_failed_closure_is_saved_as_an_install_error_not_refused(self):
+        repo = self.fake_repo("exit 0\n", parts_sh="echo closure broken >&2; exit 2\n")
+        self.passing_claude()
+        with open(self.out, "w") as out:
+            got = run.run_cases("claude", "HEAD", [self.case()], runs=1, repo=repo, out=out)
+        d, res = self.saved(got)
+        self.assertEqual(res["error"], "install")
+        self.assertIn("closure broken", (d / "stderr.log").read_text())
+        self.assertEqual(self.call_count(), 0)
+
+    def test_find_cases_refuses_a_tooling_folder_a_dot_folder_and_a_name_not_skill_slash_case(self):
+        self.case("configure/a")
+        shutil.copytree(MINIMAL, self.evals / "_runner" / "x")
+        shutil.copytree(MINIMAL, self.evals / ".hidden" / "x")
+        self.assertEqual(run.find_cases(self.evals, ["configure/a"]), [self.evals / "configure" / "a"])
+        for name in ("_runner/x", ".hidden/x", "configure", "configure/a/checks", "configure/.."):
+            with self.subTest(name=name), self.assertRaises(run.RunError) as caught:
+                run.find_cases(self.evals, [name])
+            self.assertIn(name, str(caught.exception))
+
+    def test_find_cases_all_skips_tooling_and_dot_folders(self):
+        self.case("configure/a")
+        shutil.copytree(MINIMAL, self.evals / "_runner" / "x")
+        shutil.copytree(MINIMAL, self.evals / ".hidden" / "x")
+        (self.evals / "configure" / "notes").mkdir()
+        self.assertEqual(run.find_cases(self.evals, [], every=True), [self.evals / "configure" / "a"])
+
     def test_a_model_alias_is_refused(self):
         with self.assertRaises(run.RunError) as caught:
             self.run_cases([self.case()], model="sonnet")
@@ -429,6 +456,28 @@ class CliTest(RunSandbox):
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("skipped configure/a run 2", out.stdout)
 
+    def test_cli_exits_2_on_a_usage_error_before_any_run(self):
+        self.passing_claude()
+        self.case("configure/a")
+        base = ("--tool", "claude", "--ref", "HEAD", "--evals", str(self.evals))
+        for args in (("--all", "configure/a"), (), ("--runs", "0", "configure/a"),
+                     ("--budget-usd", "0", "configure/a")):
+            with self.subTest(args=args):
+                out = self.cli(*base, *args)
+                self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+                self.assertIn("usage:", out.stderr)
+        self.assertEqual(self.call_count(), 0)
+        self.assertEqual(list(self.results.iterdir()), [])
+
+    def test_cli_results_flag_picks_the_store(self):
+        self.passing_claude()
+        self.case("configure/a")
+        store = self.tmp / "store"
+        out = self.cli("--tool", "claude", "--ref", "HEAD", "--runs", "1", "--results", str(store),
+                       "--evals", str(self.evals), "configure/a")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(len(list(store.rglob(results.RESULT))), 1)
+        self.assertEqual(list(self.results.iterdir()), [])
 
     def test_every_flag_of_help_is_documented_in_the_run_cases_section(self):
         out = self.cli("--help")
