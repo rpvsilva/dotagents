@@ -118,6 +118,28 @@ def _prepare(case, checkout_dir, adapter):
     return run
 
 
+def _clear(dest):
+    """An empty `dest`, a saved run there removed only now that the new one has its result."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+
+
+def _check(case, adapter, model, checkout_dir):
+    """Raise RunError when `case` could not start: a prompt the tool's command refuses or install parts the ref's
+    closure turns down. A failing closure is left to the run, saved as its install error."""
+    dummy = {name: Path("/") / name for name in home.PLACEHOLDERS}
+    prompt = home.fill_prompt((case["dir"] / case["prompt"]).read_text(), dummy)
+    try:
+        adapter.command(prompt, model, case["caps"], dummy["work"])
+        with tempfile.TemporaryDirectory(prefix="evals-check-") as tmp:
+            home.check_parts(checkout_dir, tmp, adapter.INSTALL_WORD, case["install"])
+    except home.InstallError:
+        pass
+    except ValueError as err:
+        raise RunError(f"{case_name(case)}: {err}") from None
+
+
 def _capped(checkout_dir):
     own = Path(checkout_dir) / "scripts" / "capped"
     return own if own.is_file() else REPO / "scripts" / "capped"
@@ -128,13 +150,11 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
     base = {"tool": tool, "model": model, "ref": co.ref, "ref_sha": co.sha, "case": case_name(case),
             "case_hash": case["hash"], "run": n, "checks_hash": checks.checks_hash(case["dir"]), "passed": False,
             "cost_basis": "unknown", "pricing_as_of": (pricing or {}).get("asOf"), "transcript": adapters.TRANSCRIPT}
-    if dest.exists():
-        shutil.rmtree(dest)
     values = sorted({os.environ[v].encode() for v in adapter.AUTH_VARS if os.environ.get(v)}, key=len, reverse=True)
     try:
         run = _prepare(case, co.path, adapter)
     except home.InstallError as err:
-        dest.mkdir(parents=True)
+        _clear(dest)
         _write_redacted(dest / STDERR, (str(err) + "\n").encode(), values)
         (dest / adapters.TRANSCRIPT).write_bytes(b"")
         result = {**base, "error": "install"}
@@ -164,7 +184,7 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
                   "duration_s": parsed.get("duration_s") if parsed.get("duration_s") is not None else wall,
                   "capped": capped, "subagents": subagents(co.path, case["skill"], parsed.get("spawned_agents")),
                   "error": error}
-        dest.mkdir(parents=True)
+        _clear(dest)
         run.keep(dest, adapter.AUTH_VARS)
         _write_redacted(dest / adapters.TRANSCRIPT, transcript.read_bytes(), values)
         _write_redacted(dest / STDERR, stderr.read_bytes(), values)
@@ -188,7 +208,9 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
               repo=REPO, out=None):
     """Run each case of `case_dirs` `runs` times (default its own `runs`) on `tool` with dotagents at `ref` of `repo`.
     Returns `{ref, sha, runs: [{case, run, dir, result, reused}], skipped: [(case, run)], spent_usd}`. Raises
-    RunError, before any run, on an unknown tool, a malformed case or a missing or alias `--model`."""
+    RunError, before any run, on an unknown tool, a malformed case, a prompt the tool would read as an option,
+    install parts pulling in `global` or a missing or alias `--model`. A saved run is replaced only once its new
+    run has a result."""
     out = out or sys.stdout
     try:
         adapter = adapters.load(tool)
@@ -214,6 +236,8 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
     done, skipped, spent = [], [], 0.0
     co = home.checkout(repo, ref)
     try:
+        for case in loaded:
+            _check(case, adapter, model or case["model"], co.path)
         for case in loaded:
             use_model = model or case["model"]
             for n in range(1, (runs or case["runs"]) + 1):

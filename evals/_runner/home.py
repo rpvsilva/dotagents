@@ -71,16 +71,15 @@ def _git(cwd, *args, what=None, env=None):
     return out.stdout.strip()
 
 
-def install(checkout_dir, home, tool_word, parts):
-    """Run the checkout's own `install.sh <tool_word> <parts>` into `home`. Never with no parts (install.sh would
-    install every part) and never `global` (personal instructions), named or in the ref's `parts.sh closure` of them.
-    Raises InstallError on a non-zero exit of either."""
+def check_parts(checkout_dir, home, tool_word, parts):
+    """Raise ValueError unless `install` may run: `tool_word` one tool, at least one part (with none, install.sh
+    would install every part) and no `global` (personal instructions), named or in the ref's `parts.sh closure` of
+    them. Raises InstallError when that closure exits non-zero."""
     if tool_word not in TOOL_WORDS:
         raise ValueError(f"not a tool word: {tool_word!r} (one of {', '.join(TOOL_WORDS)})")
     parts = list(parts)
     if not parts:
         raise ValueError("install needs at least one part: with none, install.sh installs every part")
-    home = Path(home)
     env = _base_env(home)
     # A group (personal) or a part can pull global in through its required needs: refuse on the ref's own closure.
     closure = subprocess.run(["bash", str(Path(checkout_dir) / "scripts" / "parts.sh"), "closure", *parts], env=env,
@@ -90,6 +89,14 @@ def install(checkout_dir, home, tool_word, parts):
                            f"{(closure.stdout + closure.stderr).strip()[-2000:]}")
     if "global" in closure.stdout.split():
         raise ValueError(f"install must not install global, which {' '.join(parts)} pulls in")
+
+
+def install(checkout_dir, home, tool_word, parts):
+    """Run the checkout's own `install.sh <tool_word> <parts>` into `home`, once `check_parts` allows it.
+    Raises InstallError on a non-zero exit of either."""
+    parts = list(parts)
+    check_parts(checkout_dir, home, tool_word, parts)
+    env = _base_env(home)
     env.update(DOTAGENTS_SKIP_PLUGINS="1", DOTAGENTS_PLAIN="1")
     out = subprocess.run(["bash", str(Path(checkout_dir) / "install.sh"), tool_word, *parts], env=env,
                          stdin=subprocess.DEVNULL, capture_output=True, text=True)

@@ -69,12 +69,12 @@ class RunSandbox(EvalSandbox):
     def passing_claude(self, stream="pass.jsonl", extra=""):
         self.claude(stream, "mkdir -p .agents && echo '{}' >.agents/settings.json\n" + extra)
 
-    def fake_repo(self, install_sh):
-        """A dotagents repo whose one commit holds `install_sh`, `capped` and a `parts.sh` echoing the parts."""
+    def fake_repo(self, install_sh, parts_sh='shift; printf "%s\\n" "$@"\n'):
+        """A dotagents repo whose one commit holds `install_sh`, `capped` and `parts_sh` (default: echoing the parts)."""
         repo = self.tmp / "dotagents"
         (repo / "scripts").mkdir(parents=True)
         shutil.copy(REPO / "scripts" / "capped", repo / "scripts" / "capped")
-        (repo / "scripts" / "parts.sh").write_text('shift; printf "%s\\n" "$@"\n')
+        (repo / "scripts" / "parts.sh").write_text(parts_sh)
         (repo / "install.sh").write_text(install_sh)
         git(repo, "init", "-q")
         git(repo, "add", "-A")
@@ -333,6 +333,38 @@ class RunsAndReuseTest(RunSandbox):
             got = self.run_cases([self.case("configure/other")], model="claude-opus-5-5")
         self.assertEqual(got["runs"][0]["result"]["model"], "claude-opus-5-5")
 
+    def test_a_prompt_the_tool_would_read_as_an_option_is_refused_before_any_run(self):
+        self.passing_claude()
+        good, bad = self.case("configure/a"), self.case("configure/b")
+        (bad / "prompt.md").write_text("--help me\n")
+        with self.assertRaises(run.RunError) as caught:
+            self.run_cases([good, bad])
+        self.assertIn("configure/b", str(caught.exception))
+        self.assertEqual(self.call_count(), 0)
+        self.assertEqual(list(self.results.iterdir()), [])
+
+    def test_parts_whose_closure_pulls_in_global_are_refused_before_any_run(self):
+        repo = self.fake_repo("exit 0\n", parts_sh='echo configure; echo global\n')
+        self.passing_claude()
+        with open(self.out, "w") as out, self.assertRaises(run.RunError) as caught:
+            run.run_cases("claude", "HEAD", [self.case()], runs=1, repo=repo, out=out)
+        self.assertIn("global", str(caught.exception))
+        self.assertEqual(self.call_count(), 0)
+        self.assertEqual(list(self.results.iterdir()), [])
+
+    def test_fresh_keeps_the_saved_run_when_the_new_one_cannot_start(self):
+        self.passing_claude()
+        case = self.case()
+        d, saved = self.saved(self.run_cases([case]))
+        with mock.patch.object(run.home, "fill_prompt", lambda text, paths: "-" + text):
+            with self.assertRaises(run.RunError):
+                self.run_cases([case], fresh=True)
+        with mock.patch.object(adapters.load("claude"), "parse", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.run_cases([case], fresh=True)
+        self.assertEqual(results.read(d), saved)
+        self.assertTrue((d / "transcript.jsonl").is_file())
+
     def test_a_model_alias_is_refused(self):
         with self.assertRaises(run.RunError) as caught:
             self.run_cases([self.case()], model="sonnet")
@@ -366,6 +398,15 @@ class CliTest(RunSandbox):
         out = self.cli("--tool", "nope", "--ref", "HEAD", "--evals", str(self.evals), "configure/a")
         self.assertEqual(out.returncode, 2)
         self.assertIn("adapters found", out.stderr)
+        self.assertEqual(self.call_count(), 0)
+
+    def test_cli_exits_2_on_a_prompt_starting_with_a_dash(self):
+        self.passing_claude()
+        (self.case("configure/a") / "prompt.md").write_text("-x\n")
+        out = self.cli("--tool", "claude", "--ref", "HEAD", "--evals", str(self.evals), "configure/a")
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("configure/a", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
         self.assertEqual(self.call_count(), 0)
 
     def test_cli_exits_1_and_names_the_runs_the_budget_skipped(self):
