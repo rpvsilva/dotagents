@@ -376,7 +376,8 @@ if [ ${#personal_files[@]} -gt 0 ]; then
 fi
 
 # Eval cases: each evals/<skill>/<case>/ follows the case format (evals/_runner/cases.py, docs/evals.md). Evals are dev
-# tooling, never shipped: no part, core included, lists a file under evals/.
+# tooling, never shipped: no part, core included, lists a file under evals/, and no needs.json makes one a part (a
+# case's fixture/ and input/ are sample data, skipped).
 if ! cases_out="$(python3 -I evals/_runner/cases.py check 2>&1)"; then
   while IFS= read -r line; do fail "evals: $line"; done <<<"$cases_out"
 fi
@@ -386,6 +387,10 @@ while IFS= read -r p; do
     case "$f" in evals/*) fail "part '$p' ships $f; nothing under evals/ is a part" ;; esac
   done < <(scripts/parts.sh files "$p" | tr -d '\r')
 done < <(printf '_shared\n%s\n' "$part_names")
+while IFS= read -r f; do
+  case "$f" in evals/*/*/fixture/* | evals/*/*/input/*) continue ;; esac
+  fail "$f: evals are dev tooling, not a part; no needs.json under evals/"
+done < <(find evals \( -name needs.json -o -name '*.needs.json' \) -print 2>/dev/null | sort)
 
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
