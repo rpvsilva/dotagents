@@ -102,7 +102,6 @@ It runs each named case, or every case with `--all`, against dotagents at a comm
 | Flag | Default | Meaning |
 |---|---|---|
 | `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude`, `codex` ([Codex](#codex)) or `cursor` ([Cursor](#cursor)). |
-| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude` or `codex` ([Codex](#codex)). |
 | `--ref` | required | The git ref to test, resolved to its commit. Only committed refs: the run extracts it with `git archive`, so uncommitted changes are not in it. |
 | `--runs` | the case's `runs` | How many times each case runs, at least 1. |
 | `--model` | the case's `model` | Overrides the model of every case, as a full ID (an alias fails). Required on a tool whose adapter does not run the case's Claude model. |
