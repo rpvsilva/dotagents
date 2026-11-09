@@ -222,7 +222,7 @@ class Sandbox(unittest.TestCase):
 
         self.run_probe(probe)
         self.assertEqual(seen["home"], Path(seen["HOME"]))
-        self.assertTrue(seen["HOME"].startswith(tempfile.gettempdir()))
+        self.assertTrue(Path(seen["HOME"]).is_relative_to(Path(tempfile.gettempdir()).resolve()))
         self.assertNotEqual(seen["HOME"], os.environ.get("HOME"))
 
     def test_sets_fake_token_values(self):
