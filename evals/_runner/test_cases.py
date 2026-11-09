@@ -162,6 +162,21 @@ class BadCases(unittest.TestCase):
     def test_install_that_is_not_a_list_of_names_fails(self):
         self.assertProblem("configure/bad-install", "install must be a list of part names")
 
+    def test_an_empty_install_fails(self):
+        self.assertProblem("configure/install-empty", "install must name at least one part")
+
+    def test_installing_global_fails(self):
+        self.assertProblem("configure/install-global", "install must not name global")
+
+    def test_installing_an_unknown_part_fails(self):
+        self.assertProblem("configure/install-unknown", "install names unknown part 'no-such-part'")
+
+    def test_two_checks_with_the_same_name_fail(self):
+        self.assertProblem("configure/duplicate-check", "duplicate check name 'settings-written'")
+
+    def test_a_check_named_like_the_built_in_one_fails(self):
+        self.assertProblem("configure/reserved-check", "check name 'no-github' is reserved")
+
     def test_a_missing_named_rubric_fails(self):
         self.assertProblem("configure/rubric-missing", "rubric file criteria.md missing")
 
@@ -169,6 +184,14 @@ class BadCases(unittest.TestCase):
         for case in sorted((BAD / "configure").iterdir()):
             with self.subTest(case=case.name):
                 self.assertEqual(len(self.problems(f"configure/{case.name}")), 1, self.lines)
+
+
+class Docs(unittest.TestCase):
+    def test_docs_name_every_case_json_key_and_cap(self):
+        text = (cases.REPO / "docs" / "evals.md").read_text()
+        for key in (*cases.KEYS, *cases.CAPS):
+            with self.subTest(key=key):
+                self.assertIn(f"`{key}`", text)
 
 
 class FixtureRules(unittest.TestCase):
