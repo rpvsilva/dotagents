@@ -28,6 +28,14 @@ def links(folder):
     return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
 
 
+def fake_checkout(co, install_sh):
+    """A checkout holding only `install_sh` and a `parts.sh` whose closure is the parts it is given."""
+    (co / "scripts").mkdir(parents=True)
+    (co / "install.sh").write_text(install_sh)
+    (co / "scripts" / "parts.sh").write_text('shift; printf "%s\\n" "$@"\n')
+    return co
+
+
 def under(path, folder):
     return Path(path).resolve().is_relative_to(Path(folder).resolve())
 
@@ -77,8 +85,8 @@ class Install(AtHead):
         # Nothing reached the caller's HOME.
         self.assertEqual(links(self.home / ".agents"), [])
 
-    def test_install_refuses_no_parts_and_global(self):
-        for parts in ([], ["configure", "global"]):
+    def test_install_refuses_no_parts_and_any_selection_pulling_in_global(self):
+        for parts in ([], ["configure", "global"], ["personal"]):
             with self.subTest(parts=parts), self.assertRaises(ValueError):
                 home.install(self.co.path, self.tmp / "h", "claude", parts)
         self.assertFalse((self.tmp / "h").exists())
@@ -89,9 +97,7 @@ class Install(AtHead):
                 home.install(self.co.path, self.tmp / "h", word, ["configure"])
 
     def test_install_runs_the_refs_own_install_sh_with_the_throwaway_env(self):
-        co = self.tmp / "co"
-        co.mkdir()
-        (co / "install.sh").write_text('env >"$HOME/env"; echo "$@" >"$HOME/args"\n')
+        co = fake_checkout(self.tmp / "co", 'env >"$HOME/env"; echo "$@" >"$HOME/args"\n')
         os.environ["SOME_LEAK"] = "x"
         self.addCleanup(os.environ.pop, "SOME_LEAK", None)
         h = self.tmp / "h"
@@ -106,18 +112,14 @@ class Install(AtHead):
         self.assertFalse(set(AUTH) & set(env))
 
     def test_a_failed_install_raises_an_install_error(self):
-        co = self.tmp / "co"
-        co.mkdir()
-        (co / "install.sh").write_text("echo broken at this ref >&2; exit 3\n")
+        co = fake_checkout(self.tmp / "co", "echo broken at this ref >&2; exit 3\n")
         with self.assertRaises(home.InstallError) as err:
             home.install(co, self.tmp / "h", "claude", ["configure"])
         self.assertEqual(err.exception.error, "install")
         self.assertIn("broken at this ref", str(err.exception))
 
     def test_prepare_leaves_nothing_behind_when_install_fails(self):
-        co = self.tmp / "co"
-        co.mkdir()
-        (co / "install.sh").write_text("exit 1\n")
+        co = fake_checkout(self.tmp / "co", "exit 1\n")
         before = set(Path(home.tempfile.gettempdir()).glob("evals-run-*"))
         with self.assertRaises(home.InstallError):
             home.prepare(cases.load(GOOD / "configure" / "minimal"), co, "claude")
