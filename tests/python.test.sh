@@ -3,13 +3,19 @@
 # With PYTHON_TEST_FILES (the changed files, one per line, as tests/run.sh and CI set it from `tests/affected.sh --files`),
 # only the folders holding one of them, the deepest when folders nest. Every folder when it is unset, empty or
 # `--all`, or when a changed file a Python test may read (a .py, scripts/hooks/secret-patterns.txt) is in none.
-# A file some folder's code reads by path from elsewhere in the checkout also picks that folder, as READERS lists.
+# A file some folder's code reads or runs by path from elsewhere in the checkout also picks that folder, as READERS
+# lists.
 # PYTHON_TEST_LIST=1 prints the folders it would run and stops.
 set -euo pipefail
 
-# `<file> <folder>...`: the test folders whose code reads <file> by path, so a change to it alone runs them too.
+# `<file> <folder>...`: the test folders whose code reads or runs <file> by path, so a change to it alone runs them too.
 READERS="adapters/claude/telemetry/extract.py evals evals/_runner/adapters
-skills/telemetry/pricing.json evals evals/_runner"
+skills/telemetry/pricing.json evals evals/_runner
+install.sh evals evals/_runner
+scripts/parts.sh evals evals/_runner
+scripts/capped evals
+skills/configure/SKILL.md evals evals/_runner
+skills/configure/needs.json evals evals/_runner"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"

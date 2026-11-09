@@ -11,11 +11,11 @@ and `no-github` (`_runner/checks.py`). The result is saved under the store (`_ru
 kept state, every auth value redacted. A run hitting a cap is saved with which cap (`time` from capped's
 `killed: timeout` line, `turns` and `cost` from the adapter); an install failure is saved as `error: install`.
 
-Saved runs of the same tool, ref commit, model and case files are reused unless `--fresh`. Once the cost of the runs
-made by this invocation reaches `--budget-usd`, no new run starts (a run whose cost is unknown counts as its case's
-cost cap); the saved results stay and the command names the runs it skipped. `--evals` points at another cases
-folder (default: this repo's `evals/`). Prints one line per run; exits 0, 1 when the budget skipped runs, 2 on a
-usage error (no run made). `run_cases()` is the same for `compare.py`.
+Saved runs of the same tool, ref commit, model and case files are reused unless `--fresh` or they errored. Once the
+cost of the runs made by this invocation reaches `--budget-usd`, no new run starts (a run whose cost is unknown counts
+as its case's cost cap); the saved results stay and the command names the runs it skipped. `--evals` points at
+another cases folder (default: this repo's `evals/`). Prints one line per run; exits 0, 1 when the budget skipped
+runs, 2 on a usage error (no run made). `run_cases()` is the same for `compare.py`.
 """
 import argparse
 import importlib.util
@@ -222,8 +222,9 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
             use_model = model or case["model"]
             for n in range(1, (runs or case["runs"]) + 1):
                 dest = results.run_dir(root, tool, co.sha, use_model, case_name(case), case["hash"], n)
-                if not fresh and (dest / results.RESULT).is_file():
-                    res, reused = results.read(dest), True
+                saved = None if fresh or not (dest / results.RESULT).is_file() else results.read(dest)
+                if saved is not None and saved["error"] is None:
+                    res, reused = saved, True
                 elif spent >= budget_usd:
                     skipped.append((case_name(case), n))
                     continue

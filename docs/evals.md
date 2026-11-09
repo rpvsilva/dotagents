@@ -176,4 +176,4 @@ Results live in the store, never in the repo, and are never committed:
 
 ### Reuse and `--fresh`
 
-A saved run is reused, with no tool call, when the tool, the ref's commit, the model and every file of the case (the case hash) are unchanged and its `result.json` exists. So a second run of `main` costs nothing. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+A saved run is reused, with no tool call, when the tool, the ref's commit, the model and every file of the case (the case hash) are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
