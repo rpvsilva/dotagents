@@ -154,6 +154,7 @@ mkdir -p "$SANDBOX/podbin"
 cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
+printf '%s\n' "\$@" >"$SANDBOX/claude-args"
 printf '%s' "\${CLAUDE_CODE_SHELL_PREFIX:-}" >"$SANDBOX/prefix"
 [ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >>"\$HOME/out/capped.log"
 if [ -e "$SANDBOX/loop" ]; then
@@ -606,6 +607,24 @@ code=0; run 0 "" --name quote || code=$?
 result_is "quoted container error result" '.status == "failed" and .lost == false'
 rm -f "$W/hello.txt" "$SANDBOX/quote"
 
+# --agent runs the model the agent's Claude wrapper sets, as a local run of it does; without it, Claude's default.
+want="$(sed -n 's/^model: *//p' "$REPO/adapters/claude/agents/epic-implementer.md" | head -1)"
+[ -n "$want" ] || fail "agent model: the epic-implementer wrapper sets no model"
+run 0 "" --name model --agent epic-implementer || fail "agent model: exited non-zero: $(cat "$SANDBOX/out")"
+if ! grep -qx -- "--model" "$SANDBOX/claude-args" || ! grep -qxF -- "$want" "$SANDBOX/claude-args"; then
+  fail "agent model: claude not run with --model $want: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+fi
+grep -q "remote-agent-sandbox 2000 300 $want\$" "$SANDBOX/calls" || fail "agent model: not the argument after the caps: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
+grep -qx "\[model\] == claude ($want)" "$SANDBOX/err" || fail "agent model: not shown: $(cat "$SANDBOX/err")"
+rm -f "$W/hello.txt"
+run 0 "" --name nomodel || fail "no agent: exited non-zero: $(cat "$SANDBOX/out")"
+grep -qx -- "--model" "$SANDBOX/claude-args" && fail "no agent: claude run with a model: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+rm -f "$W/hello.txt"
+code=0; HOME="$SANDBOX/badmodel" bash "$REPO/scripts/remote-agent-sandbox.sh" 2000 5 '--x' </dev/null >/dev/null 2>"$SANDBOX/err" || code=$?
+if [ "$code" != 1 ] || ! grep -qx "== bad model: --x" "$SANDBOX/err"; then
+  fail "sandbox bad model: wanted exit 1 and the reason, got $code: $(cat "$SANDBOX/err")"
+fi
+
 # Without capped, or without a python3 to run it, the run goes on uncapped and says so, naming only what is missing
 # (on Linux a missing ps is not: capped reads /proc).
 : >"$SANDBOX/nocapped"
@@ -782,6 +801,13 @@ if ! grep -q "unknown option: --bogus" "$SANDBOX/err" || ! grep -q "^usage: remo
   fail "--bogus: not refused with the usage on stderr: $(cat "$SANDBOX/err")"
 fi
 [ ! -e "$SANDBOX/calls" ] || fail "--bogus: kubectl was called: $(cat "$SANDBOX/calls")"
+# --agent names a subagent with a Claude wrapper, refused before any backend call otherwise.
+for bad in no-such-agent ../epic-implementer ""; do
+  code=0; run 0 "" --agent "$bad" || code=$?
+  [ "$code" = 1 ] || fail "--agent '$bad': wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q "^remote-agent: \(no agent\|--agent needs\)" "$SANDBOX/err" || fail "--agent '$bad': no reason: $(cat "$SANDBOX/err")"
+  [ ! -e "$SANDBOX/calls" ] || fail "--agent '$bad': kubectl was called: $(cat "$SANDBOX/calls")"
+done
 
 # The transcript is written live: the stub's sandbox run prints a banner and two events (one echoing the token),
 # touches $SANDBOX/started and waits for $SANDBOX/go; the events are in transcript.jsonl while the run is alive,
