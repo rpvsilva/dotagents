@@ -118,6 +118,16 @@ class Install(AtHead):
         self.assertEqual(err.exception.error, "install")
         self.assertIn("broken at this ref", str(err.exception))
 
+    def test_a_failed_closure_raises_an_install_error_before_install_sh_runs(self):
+        co = fake_checkout(self.tmp / "co", 'touch "$HOME/installed"\n')
+        (co / "scripts" / "parts.sh").write_text("echo no part nope >&2; exit 2\n")
+        h = self.tmp / "h"
+        h.mkdir()
+        with self.assertRaises(home.InstallError) as err:
+            home.install(co, h, "claude", ["nope"])
+        self.assertIn("no part nope", str(err.exception))
+        self.assertFalse((h / "installed").exists())
+
     def test_prepare_home_runs_on_the_throwaway_home_before_the_install(self):
         co = fake_checkout(self.tmp / "co", 'ls -A "$HOME" >"$HOME/seen-by-install"\n')
         seen = []
