@@ -120,6 +120,27 @@ class ParseTest(EvalSandbox):
         self.assertEqual(self.parse("fallback")["spawned_agents"], 0)
         self.assertEqual(self.parse("pass")["spawned_agents"], 0)
 
+    def answer(self, transcript):
+        shutil.copy(FIXTURES / f"{transcript}.jsonl", self.run_dir / adapters.TRANSCRIPT)
+        return self.codex.answer(self.run_dir)
+
+    def test_answer_is_the_last_agent_message(self):
+        self.assertEqual(self.answer("pass"), "Set max_parallel to 2.")
+
+    def test_answer_after_a_failed_turn_is_the_last_message_sent(self):
+        self.assertEqual(self.answer("error"), "Looking.")
+
+    def test_answer_skips_reasoning_and_unfinished_items(self):
+        lines = [{"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "Done."}},
+                 {"type": "item.started", "item": {"id": "item_1", "type": "agent_message", "text": "Half"}},
+                 {"type": "item.completed", "item": {"id": "item_2", "type": "reasoning", "text": "**Checking**"}}]
+        (self.run_dir / adapters.TRANSCRIPT).write_text("".join(json.dumps(e) + "\n" for e in lines))
+        self.assertEqual(self.codex.answer(self.run_dir), "Done.")
+
+    def test_answer_is_none_without_an_agent_message_or_a_transcript(self):
+        self.assertIsNone(self.codex.answer(self.run_dir))
+        self.assertIsNone(self.answer("killed"))
+
 
 class RunTest(EvalSandbox):
     """Whole runs through `run.run_cases("codex", ...)` against this repo at HEAD."""

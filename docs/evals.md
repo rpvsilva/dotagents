@@ -101,7 +101,7 @@ It runs each named case, or every case with `--all`, against dotagents at a comm
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude`. |
+| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude` or `codex` ([Codex](#codex)). |
 | `--ref` | required | The git ref to test, resolved to its commit. Only committed refs: the run extracts it with `git archive`, so uncommitted changes are not in it. |
 | `--runs` | the case's `runs` | How many times each case runs, at least 1. |
 | `--model` | the case's `model` | Overrides the model of every case, as a full ID (an alias fails). Required on a tool whose adapter does not run the case's Claude model. |
@@ -177,3 +177,24 @@ Results live in the store, never in the repo, and are never committed:
 ### Reuse and `--fresh`
 
 A saved run is reused, with no tool call, when the tool, the ref's commit, the model and every file of the case (the case hash) are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+
+### Codex
+
+`--tool codex` runs the same cases, checks unchanged, on Codex's headless mode, `codex exec --json`, through `evals/_runner/adapters/codex.py`:
+
+```bash
+CODEX_API_KEY=... python3 -I evals/run.py --tool codex --ref main --model gpt-5.1-codex configure/repo-max-parallel
+```
+
+- **Auth**: `CODEX_API_KEY` alone, reaching the `codex` process only, as in [Auth](#auth). The home is throwaway, so a saved `codex login` is never read.
+- **`--model` is required.** A case's `model` is a Claude ID, which Codex cannot run, so the command refuses to start without `--model <full model ID>`. It goes to `codex exec -m`, and the results are filed under it.
+- **Home**: the adapter makes `~/.codex` in the run's home, then `install.sh codex <parts>` installs the case's parts into it.
+- **Caps**: Codex has no turn or cost cap flag, so only `secs` is enforced, by `capped`. `turns` counts the run's `turn.completed` events after the fact, and `duration_s` is the wall clock time.
+- **Tokens**: from the last `turn.completed` event's `usage` alone, never a sum over turns: Codex reports the thread's running total there (`usage_from_last_total` in `codex-rs/exec/src/event_processor_with_jsonl_output.rs`, [openai/codex](https://github.com/openai/codex) at `9f04d88`, as the adapter cites). `input_tokens` less `cached_input_tokens` is `input`, `cached_input_tokens` is `cacheRead`, and `output_tokens` alone is `output`: it already holds the reasoning tokens (`reasoning_output_tokens` is their share of it, `codex-rs/codex-api/src/sse/responses.rs`), so adding them would count them twice. Codex reports no cache writes.
+- **Model and version**: the events name neither, so both come from the session log Codex writes for the thread (`~/.codex/sessions/**/rollout-*-<thread id>.jsonl`). Without it, `tool_version` is `null` and the tokens are kept under the model `unknown`.
+- **Cost is `unknown`** until [`skills/telemetry/pricing.json`](../skills/telemetry/pricing.json) has a row under `models` for the model the session log names, with all five kinds (`input`, `output`, `cacheRead`, `cacheWrite5m`, `cacheWrite1h`, in USD per million tokens; Codex reports no cache writes, so their price never counts). [`update_pricing.py <model> --apply`](../skills/telemetry/update_pricing.py) adds it from LiteLLM's price list only when that gives every kind's price, cache writes included; otherwise add it by hand. Until then a run's cost counts as its case's `cost_usd` cap against `--budget-usd` ([Cost ceiling](#cost-ceiling)).
+- **Subagents**: a run's subagents are its `collab_tool_call` items that spawn an agent, each counted once. When the skill lists `agents` and the run started none, `subagents` is `fallback`: the skill ran its documented one-by-one fallback, following each brief itself ([Subagents](../skills/_shared/conventions.md#subagents)), as on a harness with no subagents.
+- **Final answer**: the text of the run's last completed `agent_message` item, what a judge reads as the run's answer.
+- **A tool error**: a run whose last turn event is not `turn.completed` (a `turn.failed`, an `error` event, a run killed mid-turn) is saved with `error: tool`, keeping the tokens it spent.
+
+Not yet proven by a real run, only by Codex's docs and source and by hand-written transcripts: the flags `--sandbox workspace-write`, `--skip-git-repo-check` and `-m`, the session log's path and its `turn_context` and `session_meta` fields, and the `collab_tool_call` items that mark a subagent. The first real run confirms them, or fixes the adapter.

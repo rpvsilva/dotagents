@@ -5,12 +5,12 @@ has no turn or cost cap flag, so caps other than time go unused; turns are count
 
 Tokens are the last `turn.completed.usage`, the thread's running total: `input_tokens` less `cached_input_tokens` as
 `input`, `cached_input_tokens` as `cacheRead`, `output_tokens` as `output` (it already holds the reasoning tokens,
-`reasoning_output_tokens` being their share of it). The events name no
-model or version, so both come from the session log Codex writes for the thread
-(`~/.codex/sessions/**/rollout-*-<thread id>.jsonl`: `turn_context.payload.model`, `session_meta.payload.cli_version`);
-without it, the tokens are kept under `unknown`, which no price matches, so cost is unknown. A subagent is a
-`collab_tool_call` item spawning an agent, counted once per item id. The event shape is from Codex's docs, the flag
-names, session log and subagent items unverified until the first real run.
+`reasoning_output_tokens` being their share of it). The events name no model or version, so both come from the session
+log Codex writes for the thread (`~/.codex/sessions/**/rollout-*-<thread id>.jsonl`: `turn_context.payload.model`,
+`session_meta.payload.cli_version`); without it, the tokens are kept under `unknown`, which no price matches, so cost is
+unknown. A subagent is a `collab_tool_call` item spawning an agent, counted once per item id. The final answer is the
+last completed `agent_message` item's text. The event shape is from Codex's docs, the flag names, session log and
+subagent items unverified until the first real run.
 """
 import json
 from pathlib import Path
@@ -97,6 +97,13 @@ def spawned(stream):
            and isinstance(e.get("item"), dict) and e["item"].get("type") == "collab_tool_call"
            and e["item"].get("tool", "spawn_agent") == "spawn_agent"}
     return len(ids)
+
+
+def answer(run_dir):
+    """The run's final answer, for the judge: the text of the last completed `agent_message` item; None without one."""
+    return next((e["item"]["text"] for e in reversed(events(Path(run_dir) / TRANSCRIPT))
+                 if e.get("type") == "item.completed" and isinstance(e.get("item"), dict)
+                 and e["item"].get("type") == "agent_message" and isinstance(e["item"].get("text"), str)), None)
 
 
 def parse(run_dir, home, work):
