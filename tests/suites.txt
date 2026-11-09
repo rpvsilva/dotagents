@@ -5,7 +5,7 @@ all tests/suites.txt tests/affected.sh tests/parallel.sh .github/workflows/ci.ym
 shellcheck *.sh scripts/shellcheck-version scripts/shellcheck-image
 actionlint .github/workflows/*
 repo.test.sh *
-python.test.sh *.py adapters/claude/telemetry/* skills/telemetry/* scripts/hooks/secret-patterns.txt
+python.test.sh *.py evals/* adapters/claude/telemetry/* skills/telemetry/* scripts/hooks/secret-patterns.txt
 install.test.sh install.sh scripts/ui.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/capped scripts/settings.sh remote/settings.json scripts/parts.sh groups.json *needs.json
 install-groups.test.sh install.sh scripts/parts.sh groups.json *needs.json adapters/* global/* mcp/* remote/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/remote-* scripts/capped scripts/settings.sh
 uninstall.test.sh uninstall.sh scripts/ui.sh install.sh adapters/* global/* mcp/* skills/* scripts/hooks/* scripts/merge-json.sh scripts/claude-plugins.sh scripts/mcp-servers.sh scripts/remote-* scripts/capped scripts/settings.sh remote/settings.json scripts/parts.sh groups.json *needs.json
