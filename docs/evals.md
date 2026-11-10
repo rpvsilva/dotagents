@@ -220,3 +220,94 @@ CURSOR_API_KEY=... python3 -I evals/run.py --tool cursor --ref main --model gpt-
 - **A tool error**: a run whose stream has no `result` event (killed, crashed or cut off) or whose `result` has `is_error: true` is saved with `error: tool`.
 
 Not yet proven by a real run, only by Cursor's docs and `cursor-agent --help` and by hand-written transcripts: the flags `--force`, `--trust` and `--workspace`, the event shapes above, the subagent tool names, and whether headless `-p` loads the skills installed in the run's home at all. Until the first manual run settles that, a Cursor result says how the model did without the skill as readily as with it. The first real run confirms them, or fixes the adapter.
+
+## Rubrics and re-grading
+
+Checks say whether a run did the job; a rubric scores how well, by a judge model. The case names its rubric and judge model with the `rubric` and `judge_model` fields of [`case.json`](#casejson).
+
+### Writing a rubric
+
+`rubric.md` is Markdown. Each top-level list item (`-`, `*`, `+` or `1.`) is one criterion, written `- <name>: <what it asks>`:
+
+```markdown
+- Right level: the Setting lands in the repo Level file, not the machine one.
+- **Says what changed**: the final answer names the key and its new value.
+- Asks nothing
+```
+
+- The name is the text before the first `:`, with `**` and backticks dropped; an item with no `:` is its own name. A name used twice counts once.
+- Nested items and other text are context the judge reads, not criteria.
+- A rubric with no criteria is saved as a rubric error, never a score.
+
+Write each criterion so a reader of the run's answer, diff and scratch files (below) can score it; what a check can test belongs in `checks/`.
+
+### The judge
+
+When a case has a rubric, `run.py` judges each run it makes once the checks have run; a reused run keeps its saved rubric. The judge:
+
+- **Model**: the case's `judge_model`, default `claude-haiku-5-5`, recorded in the result. `--model` does not change it.
+- **Tool**: runs on the run's own tool, through the same adapter and the same [Auth](#auth) env vars as the case, in a throwaway home and an empty work folder, both removed after, under `scripts/capped` with 2 turns, 300 s and $0.50.
+- **On Codex or Cursor**: the default `claude-haiku-5-5` is a Claude ID those tools cannot run, so the judge fails and the run's `rubric` is saved as an error. Give such a case a `judge_model` its tool runs. No test yet covers a rubric case on either tool.
+- **Cost**: not recorded and not counted against `--budget-usd`.
+
+The judge sees only:
+
+- the rubric and the case's prompt;
+- the run's final answer, from its adapter's `answer(run_dir)`, cut to 16,000 bytes;
+- `git diff` of the run's `work/` against the fixture commit, untracked files included, cut to 48,000 bytes;
+- the files under `scratch/`, up to 32,000 bytes in all; the files past that, and binary ones, by name only.
+
+It never sees the checks' results, the rest of the transcript or `home/`.
+
+Every adapter must provide `answer(run_dir)` (the interface is in `evals/_runner/adapters/__init__.py`): the run's final answer from its transcript, or `None`. A new tool's adapter that lacks it cannot be judged.
+
+The judge answers one JSON object, a score from 1 to 5 and a one-line reason per criterion. The run's `result.json` keeps it as `rubric`:
+
+| Outcome | `rubric` |
+|---|---|
+| Judged | `{"scores": {"<criterion>": {"score": 1-5, "reason": "..."}}, "judge_model", "rubric_hash"}` |
+| The judge failed: no answer, not JSON, a criterion missing or extra, a score out of range, or it could not start | `{"error": "<what went wrong>", "judge_model", "rubric_hash"}` |
+| No rubric | `null` |
+
+`rubric_hash` is the sha256 of the rubric file, so re-grading can tell when it changed.
+
+### Grade runs
+
+```bash
+python3 -I evals/grade.py [--results <dir>] [--rejudge] [--ref <ref>] [--evals <dir>] (--all | <skill>/<case>...)
+```
+
+It grades saved runs again with the case's current checks and rubric. Grading never runs a case again: no tool call for the case itself, only the judge when a rubric score needs redoing. It works on every saved run of the named cases, whatever its tool, model or case hash.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store to grade. |
+| `--rejudge` | off | Judges every graded run with a rubric again, even when its rubric and `judge_model` are unchanged. |
+| `--ref` | every ref | Grades only the runs made at this ref's commit. |
+| `--evals` | this repo's `evals/` | Another folder of cases. |
+| `--all` | off | Every saved run. Give `--all` or case names, not both. |
+| `-h`, `--help` | | Prints the usage. |
+
+For each run, it:
+
+1. Runs the case's current `checks/` and `no-github` on the run's kept `work/`, `scratch/`, `home/`, `gh-calls` and transcript ([Results](#results)), with `EVAL_CHECKOUT` a fresh extract of the run's `ref_sha` and `EVAL_INPUT` the case's current `input/`. It rewrites `checks`, `checks_hash` and `passed`; a run that hit a cap or errored stays failed.
+2. Judges the run again, on the run's tool, only when the case's rubric or `judge_model` differs from the saved one (by `rubric_hash` and `judge_model`), a rubric was added since, or with `--rejudge`. A case whose rubric is gone gets `rubric: null`.
+3. Keeps every other field of `result.json`.
+
+Re-grading needs the run's kept state: delete a run's `work/`, `home/` or `scratch/` and its checks have nothing to read. A run saved with `error: install` has no state, so it is left as it is. A run whose case folder is gone, or whose `result.json` does not read, is named and skipped.
+
+`--rejudge` and `--all` together judge every saved run with a rubric, with no cost ceiling: `grade.py` has no `--budget-usd`. Narrow it with case names or `--ref`.
+
+Each run prints one line:
+
+```
+configure/repo-max-parallel  run 1  claude claude-sonnet-5-5 3f2a9c1d0b4e  pass  rubric judged
+```
+
+That is the case, the run number, the tool, model and the first 12 characters of the commit, `pass` or `fail`, and the rubric: `judged` (judged now), `kept` (the saved score stands) or `none`, with `(error)` when the rubric holds an error.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Every run found was graded or skipped. |
+| `1` | A run could not be graded: its commit is missing from this repo. |
+| `2` | A usage error, a bad `--ref`, an unknown case or a named case with no saved run: nothing graded. |
