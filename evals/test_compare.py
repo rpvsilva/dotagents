@@ -15,7 +15,7 @@ sys.path.insert(0, str(HERE / "_runner"))
 
 import compare  # noqa: E402
 import results  # noqa: E402
-from test_run import MODEL, PASS_TOKENS, RunSandbox, git, pricing, priced  # noqa: E402
+from test_run import MODEL, PASS_TOKENS, RUBRIC, SCORES, RunSandbox, git, pricing, priced  # noqa: E402
 
 
 class CompareSandbox(RunSandbox):
@@ -68,6 +68,26 @@ class ReuseTest(CompareSandbox):
         self.assertEqual(self.call_count(), 6)
         made = sorted((side, r["case"]) for side in ("base", "head") for r in self.side_calls(got, side))
         self.assertEqual(made, [("base", "configure/a"), ("head", "configure/a")])
+
+    def test_an_edited_check_or_rubric_reuses_both_refs_with_no_tool_call_for_the_case(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        self.compare([case])
+        self.assertEqual(self.roles_called(), ["case", "judge", "case", "judge"])
+        (case / "checks" / "settings-written.sh").write_text("#!/usr/bin/env bash\nexit 1\n")
+        got = self.compare([case])
+        self.assertEqual(self.roles_called(), ["case", "judge", "case", "judge"])
+        for side in ("base", "head"):
+            self.assertEqual(self.side_calls(got, side), [])
+            self.assertFalse(got[side]["runs"][0]["result"]["passed"])
+        (case / "rubric.md").write_text(RUBRIC + "- clarity: the answer says what changed.\n")
+        self.judging_claude({**SCORES, "clarity": {"score": 2, "reason": "Terse."}})
+        got = self.compare([case])
+        self.assertEqual(self.roles_called().count("case"), 2)
+        self.assertEqual(self.roles_called().count("judge"), 4)
+        for side in ("base", "head"):
+            self.assertEqual(self.side_calls(got, side), [])
+            self.assertIn("clarity", got[side]["runs"][0]["result"]["rubric"]["scores"])
 
     def test_the_same_ref_on_both_sides_runs_once(self):
         case = self.case()
@@ -221,6 +241,15 @@ class CliTest(RunSandbox):
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("skipped configure/a run 2", out.stderr)
         self.assertTrue(out.stdout.startswith("# Eval comparison"))
+
+    def test_every_flag_of_help_is_documented_in_the_compare_section(self):
+        out = self.cli("--help")
+        flags = set(re.findall(r"(?<![\w-])--?[a-z][\w-]*", out.stdout))
+        self.assertIn("--head-model", flags)
+        doc = (REPO / "docs" / "evals.md").read_text()
+        self.assertTrue("\n## Compare two refs\n" in doc, "docs/evals.md has no Compare two refs section")
+        section = doc.split("\n## Compare two refs\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(sorted(f for f in flags if f"`{f}" not in section), [])
 
     def test_cli_exits_2_on_a_usage_error_before_any_run(self):
         self.passing_claude()
