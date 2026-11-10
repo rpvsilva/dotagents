@@ -87,6 +87,7 @@ grep -q '^== evals: skipped (EVALS=1 runs the picked ones, EVALS=all every one):
 # stub evals/compare.py logs its arguments and exits with the code in $SANDBOX/compare-exit.
 mkdir "$R/evals"
 printf '#!/bin/sh\necho "pick $*" >>"%s/log"\ncat "%s/picked"\n' "$SANDBOX" "$SANDBOX" >"$R/evals/pick.py"
+# shellcheck disable=SC2016 # the stub expands these itself
 printf '#!/bin/sh\necho "compare $*" >>"%s/log"\nexit "$(cat "%s/compare-exit")"\n' "$SANDBOX" "$SANDBOX" \
   >"$R/evals/compare.py"
 printf 'configure/a\nconfigure/b\n' >"$SANDBOX/picked"
@@ -99,6 +100,7 @@ evals() {
   shift 2; [ "$#" -eq 0 ] || shift
   rm -rf "$SANDBOX/stubs" "$SANDBOX/log"
   mkdir "$SANDBOX/stubs"
+  # shellcheck disable=SC2016 # the stub expands these itself
   printf '#!/bin/sh\n[ "$1" = -I ] && shift\nexec sh "$@"\n' >"$SANDBOX/stubs/python3"
   printf '#!/bin/sh\necho %s\n' "$os" >"$SANDBOX/stubs/uname"
   chmod +x "$SANDBOX/stubs/python3" "$SANDBOX/stubs/uname"
