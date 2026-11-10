@@ -22,11 +22,11 @@ NAMES = ("build-epic-only", "machine-three-agents", "repo-two-agents", "unknown-
 
 
 class PilotConfigure(EvalSandbox):
-    def end_state(self, name, *sets, commit=False, edit=None, text="changed\n"):
+    def end_state(self, name, *sets, commit=False, edit=None, text="changed\n", then=()):
         """The run folder a run of case `name` leaves: its fixture as the git repo `work/`, then each `sets` entry
         (`<section> <key> <value> --repo|--machine`) applied by `settings.sh set` from `work/` with the run's home,
-        then `text` appended to `edit` (a file of `work/`, made when missing) and, with `commit`, everything committed.
-        Returns the case's checks' results."""
+        then `text` appended to `edit` (a file of `work/`, made when missing), with `commit` everything committed,
+        and then each `then` entry applied as `sets` are. Returns the case's checks' results."""
         case = cases.load(CASES / name)
         run = Path(tempfile.mkdtemp(prefix=name + "-", dir=self.tmp))
         paths = {"work": run / "work", "scratch": run / "scratch", "input": run / "input", "home": run / "home",
@@ -37,9 +37,12 @@ class PilotConfigure(EvalSandbox):
         paths["gh_calls"].write_text("")
         home.make_work(case["fixture"], paths["work"], case.get("settings"))
         env = home.tool_env(paths["home"], ())
-        for args in sets:
-            subprocess.run(["bash", str(SETTINGS), "set", *args.split()], cwd=paths["work"], env=env, check=True,
-                           stdin=subprocess.DEVNULL, capture_output=True)
+        def apply(entries):
+            for args in entries:
+                subprocess.run(["bash", str(SETTINGS), "set", *args.split()], cwd=paths["work"], env=env,
+                               check=True, stdin=subprocess.DEVNULL, capture_output=True)
+
+        apply(sets)
         if edit:
             with open(paths["work"] / edit, "a") as f:
                 f.write(text)
@@ -48,7 +51,12 @@ class PilotConfigure(EvalSandbox):
                    "-c", "commit.gpgsign=false"]
             subprocess.run(git + ["add", "-A"], check=True, env=env)
             subprocess.run(git + ["commit", "-qm", "x", "--no-verify"], check=True, env=env)
+        apply(then)
         return checks.run(case["checks"], paths)
+
+    @staticmethod
+    def failed(results):
+        return [n for n, ok in results.items() if not ok]
 
     def assertPasses(self, results):
         self.assertEqual([n for n, ok in results.items() if not ok], [])
@@ -90,6 +98,8 @@ class PilotConfigure(EvalSandbox):
                          "uncommitted")
         self.assertFails(self.end_state("repo-two-agents", "shared max_parallel 2 --repo",
                                         "shared max_parallel 2 --machine"), "no-machine-file")
+        self.assertEqual(self.failed(self.end_state("repo-two-agents", "shared max_parallel 3 --repo", commit=True,
+                                                    then=("shared max_parallel 2 --repo",))), ["uncommitted"])
 
     def test_machine_three_agents_passes_on_a_machine_write_only(self):
         self.assertPasses(self.end_state("machine-three-agents", "shared max_parallel 3 --machine"))
@@ -98,6 +108,10 @@ class PilotConfigure(EvalSandbox):
                          "machine-max-parallel")
         self.assertFails(self.end_state("machine-three-agents", "shared max_parallel 3 --machine",
                                         "shared max_parallel 3 --repo"), "no-repo-file")
+        self.assertEqual(self.failed(self.end_state("machine-three-agents", "shared max_parallel 3 --machine",
+                                                    edit="README.md")), ["no-repo-file"])
+        self.assertEqual(self.failed(self.end_state("machine-three-agents", "shared max_parallel 3 --machine",
+                                                    edit="README.md", commit=True)), ["no-repo-file"])
 
     def test_build_epic_only_passes_when_only_build_epic_changes_at_repo_level(self):
         self.assertPasses(self.end_state("build-epic-only", "build-epic max_parallel 1 --repo"))
@@ -108,6 +122,8 @@ class PilotConfigure(EvalSandbox):
                          "build-epic-max-parallel", "no-machine-file")
         self.assertFails(self.end_state("build-epic-only", "build-epic max_parallel 1 --repo", commit=True),
                          "uncommitted")
+        self.assertEqual(self.failed(self.end_state("build-epic-only", "build-epic max_parallel 2 --repo", commit=True,
+                                                    then=("build-epic max_parallel 1 --repo",))), ["uncommitted"])
 
     def test_unknown_setting_passes_only_when_nothing_is_written(self):
         self.assertPasses(self.end_state("unknown-setting"))
