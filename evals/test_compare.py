@@ -7,6 +7,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -188,6 +189,40 @@ class ReportTest(CompareSandbox):
         self.assertNotIn("model", got["comparison"]["base"])
         self.assertEqual(re.findall(r"--model (\S+)", self.argv.read_text()), ["claude-opus-5-5"] * 2)
 
+
+    def test_without_runs_each_case_runs_its_own_count_and_the_report_names_both(self):
+        got = self.compare([self.case("configure/a", runs=1), self.case("configure/b", runs=2)], runs=None)
+        self.assertEqual(self.call_count(), 6)
+        self.assertEqual(got["comparison"]["runs"], "1, 2")
+
+
+class RefusedTest(CompareSandbox):
+    """Each refusal comes before the base's runs are paid for, even when only the head's side is wrong."""
+
+    def test_an_alias_head_model_is_refused_before_any_run(self):
+        with self.assertRaises(compare.run.RunError) as caught:
+            self.compare([self.case()], base_model=MODEL, head_model="sonnet")
+        self.assertIn("--head-model 'sonnet'", str(caught.exception))
+        self.assertEqual(self.call_count(), 0)
+        self.assertFalse(self.report.exists())
+
+    def test_a_tool_needing_model_with_only_a_base_model_is_refused_before_any_run(self):
+        self.fake_bin("codex", f'echo call >>"{self.calls}"\n')
+        with mock.patch.dict(os.environ, {"CODEX_API_KEY": "test"}), \
+                self.assertRaises(compare.run.RunError) as caught:
+            with open(self.out, "a") as out:
+                compare.compare("codex", "HEAD~1", "HEAD", [self.case()], runs=1, base_model="gpt-5.5",
+                                repo=self.repo, out=out, out_md=self.report)
+        self.assertIn("give --model", str(caught.exception))
+        self.assertEqual(self.call_count(), 0)
+        self.assertFalse(self.report.exists())
+
+    def test_an_unknown_tool_is_refused_as_a_run_error(self):
+        with self.assertRaises(compare.run.RunError):
+            with open(self.out, "a") as out:
+                compare.compare("nope", "HEAD~1", "HEAD", [self.case()], runs=1, repo=self.repo, out=out,
+                                out_md=self.report)
+        self.assertFalse(self.report.exists())
 
 class BudgetTest(CompareSandbox):
     def test_one_budget_covers_both_refs(self):
