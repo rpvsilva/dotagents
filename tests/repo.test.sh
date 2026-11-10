@@ -392,6 +392,11 @@ while IFS= read -r f; do
   fail "$f: evals are dev tooling, not a part; no needs.json under evals/"
 done < <(find evals \( -name needs.json -o -name '*.needs.json' \) -print 2>/dev/null | sort)
 
+# CI never runs evals: they bill a model per case, so they run only when asked (EVALS=1 tests/run.sh) on this machine.
+while IFS=: read -r f n _; do
+  fail "$f:$n: CI never runs evals; no workflow names evals/ or EVALS"
+done < <(grep -rnE 'evals/|EVALS' .github/workflows/ 2>/dev/null)
+
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"
