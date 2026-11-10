@@ -9,11 +9,14 @@ It runs the prompt through an adapter's `command()` on the case's `judge_model`,
 
 The rubric's criteria are its top-level list items: `- <name>: <what it asks>`, the name with any `**` or backticks
 dropped; an item with no `:` is its own name. The judge must answer one JSON object, `{<criterion>: {"score": <1-5>,
-"reason": "<one line>"}}`, every criterion and no other. The result is `{scores, judge_model, rubric_hash}`; an
-answer that is missing, not JSON, misses a criterion or holds a score out of range gives `{error, judge_model,
-rubric_hash}`, never a score. A case with no rubric gives None.
+"reason": "<one line>"}}`, every criterion and no other. The result is `{scores, judge_model, rubric_hash,
+cost_usd}`; an answer that is missing, not JSON, misses a criterion or holds a score out of range gives `{error,
+judge_model, rubric_hash, cost_usd}`, never a score. `cost_usd` is the judge's tokens priced by `pricing.json`, `null`
+when unknown, and absent when no judge ran (no criteria, or it could not start). `spent()` is what a rubric result
+costs against a `--budget-usd`. A case with no rubric gives None.
 """
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -27,6 +30,8 @@ import adapters
 import home
 
 REPO = Path(__file__).resolve().parents[2]
+PRICING = REPO / "skills" / "telemetry" / "pricing.json"
+EXTRACT = REPO / "adapters" / "claude" / "telemetry" / "extract.py"
 # The judge reads and answers: one turn would do, a second spares a cap hit on a stray tool call.
 CAPS = {"turns": 2, "secs": 300, "cost_usd": 0.5}
 # Bytes of each section the prompt holds. With the rubric and the case prompt, the whole stays under the 128 KiB
@@ -174,13 +179,31 @@ def scores(text, names):
     return out
 
 
+def spent(rubric):
+    """What judging cost against a budget: 0 when no judge ran, its `CAPS` cost when its cost is unknown."""
+    if not isinstance(rubric, dict) or "cost_usd" not in rubric:
+        return 0
+    return CAPS["cost_usd"] if rubric["cost_usd"] is None else rubric["cost_usd"]
+
+
+def _cost(tokens):
+    """USD for the judge's tokens by the current price table; None when unknown."""
+    if not tokens:
+        return None
+    module_spec = importlib.util.spec_from_file_location("evals_judge_extract", EXTRACT)
+    extract = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(extract)
+    return extract.cost(tokens, extract.load_pricing(PRICING))
+
+
 def _capped(checkout):
     own = Path(checkout) / "scripts" / "capped"
     return own if own.is_file() else REPO / "scripts" / "capped"
 
 
 def _ask(adapter, text, model, checkout):
-    """The judge's final answer, or None; from a run in a throwaway home, removed after."""
+    """The judge's final answer, or None, and its cost (None when unknown); from a run in a throwaway home, removed
+    after."""
     root = Path(tempfile.mkdtemp(prefix="evals-judge-")).resolve()
     try:
         judge_home, work = root / "home", root / "work"
@@ -192,7 +215,8 @@ def _ask(adapter, text, model, checkout):
             subprocess.run([sys.executable, "-I", str(_capped(checkout)), "--secs", str(CAPS["secs"]), "--", *argv],
                            cwd=str(work), env=home.tool_env(judge_home, adapter.AUTH_VARS), stdin=subprocess.DEVNULL,
                            stdout=out, stderr=subprocess.DEVNULL)
-        return adapter.answer(root)
+        tokens = adapter.parse(root, judge_home, work).get("tokens")
+        return adapter.answer(root), _cost(tokens)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -218,9 +242,10 @@ def judge(run_dir, case, checkout, tool="claude"):
                   _cut(answer.encode(), ANSWER_CAP) if answer else "(none)", diff(run_dir / "work"),
                   scratch(run_dir / "scratch"))
     try:
-        said = _ask(adapters.load(tool), text, model, checkout)
+        said, cost = _ask(adapters.load(tool), text, model, checkout)
     except (OSError, ValueError) as err:
         return {"error": f"the judge could not start: {err}", **base}
+    base["cost_usd"] = cost
     if not said:
         return {"error": "the judge gave no answer", **base}
     try:

@@ -97,11 +97,39 @@ class CaseHash(EvalSandbox):
     def test_changes_when_a_file_is_added_or_renamed(self):
         d = self.case()
         h = results.case_hash(d)
-        (d / "rubric.md").write_text("")
+        (d / "notes.md").write_text("")
         added = results.case_hash(d)
         self.assertNotEqual(added, h)
-        (d / "rubric.md").rename(d / "rubric2.md")
+        (d / "notes.md").rename(d / "notes2.md")
         self.assertNotEqual(results.case_hash(d), added)
+
+    def test_ignores_the_checks_and_the_rubric_which_grading_redoes(self):
+        d = self.case()
+        h = results.case_hash(d)
+        (d / "checks").mkdir()
+        (d / "checks" / "ok.sh").write_text("exit 0\n")
+        (d / "rubric.md").write_text("- a: b\n")
+        self.assertEqual(results.case_hash(d), h)
+        (d / "checks" / "ok.sh").write_text("exit 1\n")
+        (d / "rubric.md").write_text("- c: d\n")
+        self.assertEqual(results.case_hash(d), h)
+
+    def test_ignores_a_rubric_file_case_json_names_and_the_judge_model_and_runs(self):
+        d = self.case()
+        (d / "case.json").write_text('{"model": "claude-sonnet-5-5", "rubric": "grading.md"}')
+        (d / "grading.md").write_text("- a: b\n")
+        h = results.case_hash(d)
+        (d / "grading.md").write_text("- c: d\n")
+        self.assertEqual(results.case_hash(d), h)
+        (d / "case.json").write_text('{"model": "claude-sonnet-5-5", "rubric": "grading.md", '
+                                     '"judge_model": "claude-opus-5-5", "runs": 5}')
+        self.assertEqual(results.case_hash(d), h)
+
+    def test_changes_when_a_case_json_field_changing_a_run_changes(self):
+        d = self.case()
+        h = results.case_hash(d)
+        (d / "case.json").write_text('{"model": "claude-opus-5-5"}')
+        self.assertNotEqual(results.case_hash(d), h)
 
     def test_does_not_depend_on_where_the_case_sits(self):
         a = self.case()

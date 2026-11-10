@@ -15,9 +15,10 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "_runner"))
 
 import grade  # noqa: E402
+import judge  # noqa: E402
 import results  # noqa: E402
 from run import run_cases  # noqa: E402
-from test_run import RUBRIC, SCORES, RunSandbox, git  # noqa: E402
+from test_run import JUDGE_TOKENS, JUDGE_USAGE, RUBRIC, SCORES, RunSandbox, git, priced  # noqa: E402
 
 FAILING = "#!/usr/bin/env bash\nexit 1\n"
 
@@ -33,11 +34,6 @@ class GradeSandbox(RunSandbox):
         kw.setdefault("evals", self.evals)
         with open(self.out, "a") as out:
             return grade.grade(list(names), out=out, **kw)
-
-    def rubric_case(self, name="configure/quick", **fields):
-        case = self.case(name, **fields)
-        (case / "rubric.md").write_text(RUBRIC)
-        return case
 
 
 class RecheckTest(GradeSandbox):
@@ -153,7 +149,8 @@ class NoToolTest(GradeSandbox):
         self.grade("configure/quick")
         self.assertEqual(self.roles_called(), ["judge"])
         self.assertEqual(results.read(d)["rubric"], {"scores": scores, "judge_model": "claude-haiku-5-5",
-                                                     "rubric_hash": hashlib.sha256(new.encode()).hexdigest()})
+                                                     "rubric_hash": hashlib.sha256(new.encode()).hexdigest(),
+                                                     "cost_usd": None})
 
     def test_a_changed_judge_model_calls_only_the_judge_on_the_new_model(self):
         self.judging_claude(SCORES)
@@ -185,6 +182,44 @@ class NoToolTest(GradeSandbox):
         self.grade("configure/quick")
         self.assertEqual(self.roles_called(), ["judge"])
         self.assertIsNone(results.read(d)["rubric"])
+
+
+class BudgetTest(GradeSandbox):
+    def test_the_judges_cost_is_saved_with_its_rubric(self):
+        self.judging_claude(SCORES)
+        d = self.ran(self.rubric_case())
+        self.judging_claude(SCORES, usage=JUDGE_USAGE)
+        self.grade("configure/quick", rejudge=True)
+        self.assertEqual(results.read(d)["rubric"]["cost_usd"], priced(JUDGE_TOKENS))
+
+    def test_no_judge_starts_once_the_judges_reach_the_budget(self):
+        self.judging_claude(SCORES, usage=JUDGE_USAGE)
+        case = self.rubric_case()
+        got = self.run_cases([case], runs=2)
+        self.roles.unlink()
+        before = [results.read(e["dir"]) for e in got["runs"]]
+        graded = self.grade("configure/quick", rejudge=True, budget_usd=priced(JUDGE_TOKENS) * 0.5)
+        self.assertEqual(self.roles_called(), ["judge"])
+        self.assertEqual([d for d, _ in graded["graded"]], [got["runs"][0]["dir"]])
+        self.assertEqual(graded["over_budget"], [got["runs"][1]["dir"]])
+        self.assertEqual(results.read(got["runs"][1]["dir"]), before[1])
+        self.assertIn("budget", self.printed().splitlines()[-1])
+
+    def test_a_judge_of_unknown_cost_counts_as_the_judges_cost_cap(self):
+        self.judging_claude(SCORES)
+        self.ran(self.rubric_case(), runs=2)
+        got = self.grade("configure/quick", rejudge=True, budget_usd=judge.CAPS["cost_usd"])
+        self.assertEqual(self.roles_called(), ["judge"])
+        self.assertEqual(len(got["over_budget"]), 1)
+
+    def test_checks_alone_cost_nothing_against_the_budget(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        self.ran(case, runs=2)
+        (case / "checks" / "settings-written.sh").write_text(FAILING)
+        got = self.grade("configure/quick", budget_usd=0.000001)
+        self.assertEqual((len(got["graded"]), got["over_budget"]), (2, []))
+        self.assertEqual(self.roles_called(), [])
 
 
 class PickTest(GradeSandbox):
@@ -274,9 +309,16 @@ class CliTest(GradeSandbox):
         self.assertFalse(results.read(d)["passed"])
         self.assertEqual(self.roles_called(), [])
 
+    def test_cli_exits_1_when_the_budget_left_runs_unjudged(self):
+        self.judging_claude(SCORES)
+        self.ran(self.rubric_case(), runs=2)
+        out = self.cli("--rejudge", "--budget-usd", "0.1", "--evals", str(self.evals), "configure/quick")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertRegex(out.stdout.splitlines()[-1], r"^configure/quick +run 2 +not graded: budget")
+
     def test_cli_exits_2_on_a_usage_error_or_a_case_with_no_saved_run(self):
         self.case()
-        for args in ((), ("--all", "configure/quick"), ("configure/quick",)):
+        for args in ((), ("--all", "configure/quick"), ("configure/quick",), ("--budget-usd", "0", "--all")):
             with self.subTest(args=args):
                 out = self.cli("--evals", str(self.evals), *args)
                 self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
