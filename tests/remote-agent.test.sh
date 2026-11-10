@@ -8,6 +8,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 fails=0
+# A pod starts with no shell prefix: drop the one this suite may inherit from a capped sandbox it runs in.
+unset CLAUDE_CODE_SHELL_PREFIX
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 # shellcheck source=lib/remote-stubs.sh disable=SC1091

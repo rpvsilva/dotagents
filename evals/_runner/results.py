@@ -2,8 +2,8 @@
 
 Store root: `--results`, else `EVALS_RESULTS`, else `~/.agents/evals/results`; never inside the repo. One run's folder:
 `<root>/<tool>/<ref sha>/<model>/<case>/<case hash>/run-<n>/`, so a saved run is reused only when the tool, the
-ref's commit, the model and every file of the case are unchanged (spec open question 20). A run is finished once its
-`result.json` exists: `write()` puts it in place last, in one rename.
+ref's commit, the model and every case file that changes a run (`case_hash`) are unchanged (spec open question
+20). A run is finished once its `result.json` exists: `write()` puts it in place last, in one rename.
 
 Unknown values are `null`, never 0: a field the caller leaves out is saved as `null`.
 """
@@ -41,13 +41,39 @@ def read(result_dir):
     return {field: saved.get(field) for field in FIELDS}
 
 
+# `case.json` fields that change no run: grading redoes the rubric's, and run n of a case is the same whatever `runs`.
+GRADING_FIELDS = ("rubric", "judge_model", "runs")
+
+
+def _case_json(case_dir):
+    """`case.json`'s bytes as hashed: without `GRADING_FIELDS`, keys sorted; as they are when not a JSON object.
+    Returns the bytes and the rubric file it names (`rubric.md` by default)."""
+    raw = (case_dir / "case.json").read_bytes() if (case_dir / "case.json").is_file() else b""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw, "rubric.md"
+    if not isinstance(data, dict):
+        return raw, "rubric.md"
+    rubric = data.get("rubric") if isinstance(data.get("rubric"), str) else "rubric.md"
+    kept = {k: v for k, v in data.items() if k not in GRADING_FIELDS}
+    return json.dumps(kept, sort_keys=True, separators=(",", ":")).encode("utf-8"), rubric
+
+
 def case_hash(case_dir):
-    """sha256 over the case folder's files: each relative path and the sha256 of its contents, in path order."""
+    """sha256 over what changes a run of the case: each relative path and the sha256 of its contents, in path order,
+    leaving out what grading redoes with no run (`checks/`, `rubric.md` and the rubric file `case.json` names, and
+    `case.json`'s `GRADING_FIELDS`). A run's checks and rubric are hashed apart, as `checks_hash` and
+    `rubric.rubric_hash`."""
     case_dir = Path(case_dir)
-    files = sorted(p.relative_to(case_dir).as_posix() for p in case_dir.rglob("*") if p.is_file())
+    case_json, rubric = _case_json(case_dir)
+    skip = {"rubric.md", rubric}
+    files = sorted(rel for rel in (p.relative_to(case_dir).as_posix() for p in case_dir.rglob("*") if p.is_file())
+                   if rel not in skip and not rel.startswith("checks/"))
     h = hashlib.sha256()
     for rel in files:
-        h.update(rel.encode("utf-8") + b"\0" + hashlib.sha256((case_dir / rel).read_bytes()).digest())
+        data = case_json if rel == "case.json" else (case_dir / rel).read_bytes()
+        h.update(rel.encode("utf-8") + b"\0" + hashlib.sha256(data).digest())
     return h.hexdigest()
 
 
