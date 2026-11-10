@@ -91,8 +91,9 @@ case "${EVALS:-}" in
     elif [ -z "$cases" ]; then
       echo "== evals: no case picked"
     else
-      # shellcheck disable=SC2086 # one word per case
-      compare $cases
+      # One word per case, split without globbing.
+      read -r -a picks <<<"$cases"
+      compare "${picks[@]}"
     fi
     ;;
   *)

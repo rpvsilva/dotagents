@@ -163,6 +163,9 @@ class EveryCaseTest(PickTest):
         self.assertEqual(self.pick("--", "evals/_runner/fixtures/cases/x.md"), EVERY)
         self.assertEqual(self.pick("--", "evals/run.py"), EVERY)
 
+    def test_an_eval_test_file_picks_no_case(self):
+        self.assertEqual(self.pick("--", "evals/test_pick.py", "evals/_runner/test_cases.py"), [])
+
     def test_all_prints_every_case(self):
         self.assertEqual(self.pick("--all"), EVERY)
 
@@ -179,6 +182,16 @@ class SharedSettingsTest(PickTest):
         self.assertEqual(self.pick(), B)
         self.change_shared(max_parallel=2, tracker="github")
         self.assertEqual(self.pick(), EVERY)
+
+    def test_a_changed_shared_key_picks_every_configure_case(self):
+        self.write("evals/configure/one/case.json", "{}")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "configure case")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        self.change_shared(max_parallel=2)
+        self.assertEqual(self.pick(), A + ["configure/one"])
+        self.change_shared(new_key=1)
+        self.assertEqual(self.pick(), ["configure/one"])
 
     def test_a_skill_naming_the_shared_settings_file_is_picked_only_by_a_key_it_opts_in_to(self):
         self.write("skills/b/SKILL.md", "---\nname: b\n---\nSee `skills/_shared/settings.json`.\n")

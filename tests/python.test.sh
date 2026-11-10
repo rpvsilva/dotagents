@@ -17,7 +17,8 @@ scripts/capped evals evals/_runner evals/_runner/adapters
 skills/configure/SKILL.md evals evals/_runner evals/_runner/adapters
 skills/configure/needs.json evals evals/_runner evals/_runner/adapters
 skills/build-epic/needs.json evals evals/_runner/adapters
-docs/evals.md evals evals/_runner"
+docs/evals.md evals evals/_runner
+tests/affected.sh evals"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
