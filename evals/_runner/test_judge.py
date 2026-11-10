@@ -216,11 +216,22 @@ class AnswerTest(JudgeSandbox):
     def test_an_empty_reason_gives_an_error(self):
         self.assert_error(json.dumps({**GOOD, "correctness": {"score": 4, "reason": "  "}}))
 
+    def test_an_answer_naming_no_criterion_gives_an_error(self):
+        extra = {**GOOD, "speed": {"score": 5, "reason": "Fast."}}
+        self.assertIn("speed", self.assert_error(json.dumps(extra))["error"])
+
     def test_an_answer_that_is_not_an_object_gives_an_error(self):
         self.assert_error(json.dumps([GOOD]))
 
     def test_no_answer_from_the_judge_gives_an_error(self):
         self.assert_error(None)
+
+
+class CriteriaTest(unittest.TestCase):
+    def test_the_criteria_are_the_top_level_list_items_of_any_kind_each_once(self):
+        rubric = ("# Rubric\n\nprose: not an item\n1. **correctness**: right.\n2) `clarity`\n"
+                  "   - nested: not top-level\n* correctness: again\n+ speed: fast.\n")
+        self.assertEqual(judge.criteria(rubric), ["correctness", "clarity", "speed"])
 
 
 class NoRubricTest(JudgeSandbox):

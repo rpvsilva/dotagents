@@ -109,6 +109,22 @@ class RecheckTest(GradeSandbox):
         self.assertEqual(res["capped"], "turns")
         self.assertFalse(res["passed"])
 
+    def test_a_run_whose_commit_is_missing_here_is_named_and_not_graded(self):
+        self.judging_claude(SCORES)
+        case = self.case()
+        d = self.ran(case)
+        before = (d / results.RESULT).read_text()
+        other = self.tmp / "other"
+        other.mkdir()
+        git(other, "init", "-q")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q",
+            "--allow-empty", "-m", "other")
+        (case / "checks" / "settings-written.sh").write_text(FAILING)
+        got = self.grade("configure/quick", repo=other)
+        self.assertEqual(([r for r, _ in got["failed"]], got["graded"]), ([d], []))
+        self.assertEqual((d / results.RESULT).read_text(), before)
+        self.assertIn("run 1  not graded:", self.printed())
+
     def test_an_install_error_run_is_left_as_it_is(self):
         repo = self.fake_repo("exit 1\n")
         self.judging_claude(SCORES)
@@ -253,6 +269,23 @@ class PickTest(GradeSandbox):
         with self.assertRaises(grade.GradeError) as caught:
             self.grade("configure/quick")
         self.assertIn("configure/quick", str(caught.exception))
+
+    def test_an_unknown_case_is_refused_before_any_run_is_graded(self):
+        self.judging_claude(SCORES)
+        case = self.case()
+        d = self.ran(case)
+        (case / "checks" / "settings-written.sh").write_text(FAILING)
+        with self.assertRaises(grade.GradeError) as caught:
+            self.grade("configure/quick", "configure/nope")
+        self.assertIn("no case configure/nope", str(caught.exception))
+        self.assertTrue(results.read(d)["passed"])
+
+    def test_a_ref_that_names_no_commit_is_refused(self):
+        self.judging_claude(SCORES)
+        self.ran(self.case())
+        with self.assertRaises(grade.GradeError) as caught:
+            self.grade("configure/quick", ref="no-such-ref")
+        self.assertIn("no-such-ref", str(caught.exception))
 
     def test_a_saved_run_whose_case_is_gone_is_named_and_skipped(self):
         self.judging_claude(SCORES)

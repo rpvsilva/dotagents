@@ -416,6 +416,19 @@ class ReuseRegradeTest(RunSandbox):
         self.assertTrue(again["runs"][0]["reused"])
         self.assertEqual(again["runs"][0]["result"]["rubric"]["judge_model"], "claude-opus-5-5")
 
+    def test_a_removed_rubric_drops_the_reused_runs_rubric_with_no_tool_call(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        first = self.run_cases([case])
+        self.assertIn("scores", first["runs"][0]["result"]["rubric"])
+        (case / "rubric.md").unlink()
+        again = self.run_cases([case])
+        self.assertEqual(self.roles_called(), ["case", "judge"])
+        entry = again["runs"][0]
+        self.assertTrue(entry["reused"])
+        self.assertIsNone(entry["result"]["rubric"])
+        self.assertIsNone(results.read(entry["dir"])["rubric"])
+
     def test_a_rejudge_on_reuse_counts_against_the_budget(self):
         self.judging_claude(SCORES)
         case = self.rubric_case()
