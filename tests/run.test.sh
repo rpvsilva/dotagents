@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Runs tests/run.sh in a throwaway repo against a stub shellcheck and docker, and checks which way it lints.
 set -euo pipefail
+# The caller's EVALS (as under `EVALS=1 tests/run.sh`) would change every run below; each case sets its own.
+unset EVALS
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SANDBOX="$(mktemp -d)"
@@ -90,22 +92,25 @@ printf '#!/bin/sh\necho "compare $*" >>"%s/log"\nexit "$(cat "%s/compare-exit")"
 printf 'configure/a\nconfigure/b\n' >"$SANDBOX/picked"
 echo 0 >"$SANDBOX/compare-exit"
 
-# Runs run.sh with EVALS set to $1 ("unset" leaves it out) and $3 the uname it sees; $2 is the exit code wanted.
+# Runs run.sh with EVALS set to $1 ("unset" leaves it out), $3 the uname it sees and the rest as its arguments;
+# $2 is the exit code wanted.
 evals() {
   local value="$1" want="$2" os="${3:-Linux}" got=0
+  shift 2; [ "$#" -eq 0 ] || shift
   rm -rf "$SANDBOX/stubs" "$SANDBOX/log"
   mkdir "$SANDBOX/stubs"
   printf '#!/bin/sh\n[ "$1" = -I ] && shift\nexec sh "$@"\n' >"$SANDBOX/stubs/python3"
   printf '#!/bin/sh\necho %s\n' "$os" >"$SANDBOX/stubs/uname"
   chmod +x "$SANDBOX/stubs/python3" "$SANDBOX/stubs/uname"
   if [ "$value" = unset ]; then
-    PATH="$SANDBOX/stubs:$SANDBOX/real" "$BASH_BIN" "$R/tests/run.sh" >"$SANDBOX/out" 2>&1 || got=$?
+    PATH="$SANDBOX/stubs:$SANDBOX/real" "$BASH_BIN" "$R/tests/run.sh" "$@" >"$SANDBOX/out" 2>&1 || got=$?
   else
-    EVALS="$value" PATH="$SANDBOX/stubs:$SANDBOX/real" "$BASH_BIN" "$R/tests/run.sh" >"$SANDBOX/out" 2>&1 || got=$?
+    EVALS="$value" PATH="$SANDBOX/stubs:$SANDBOX/real" "$BASH_BIN" "$R/tests/run.sh" "$@" >"$SANDBOX/out" 2>&1 || got=$?
   fi
   [ "$got" = "$want" ] || fail "EVALS=$value: wanted exit $want, got $got: $(cat "$SANDBOX/out")"
 }
 compared() { sed -n 's/^compare //p' "$SANDBOX/log" 2>/dev/null || true; }
+picks() { sed -n 's/^pick *//p' "$SANDBOX/log" 2>/dev/null || true; }
 
 evals unset 0
 grep -q '^== evals: skipped (EVALS=1 runs the picked ones, EVALS=all every one): configure/a configure/b$' \
@@ -115,6 +120,9 @@ grep -q '^== evals: skipped (EVALS=1 runs the picked ones, EVALS=all every one):
 evals 1 0
 [ "$(compared)" = "--tool claude --base origin/main --head HEAD configure/a configure/b" ] \
   || fail "EVALS=1: did not compare the picked cases on HEAD against origin/main: $(compared)"
+
+evals 1 0 Linux -- a.sh
+[ "$(picks)" = "-- a.sh" ] || fail "EVALS=1 -- a.sh: run.sh did not pass its arguments to pick.py: $(picks)"
 
 # On macOS the suites run twice; the evals step must not.
 evals 1 0 Darwin
