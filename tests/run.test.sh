@@ -82,6 +82,8 @@ expect none none 0 "shellcheck: not installed, skipped"
 # The evals step. With no python3 and no evals/pick.py, as above, the skipped line still prints and the status holds.
 grep -q '^== evals: skipped (EVALS=1 runs the picked ones, EVALS=all every one):' "$SANDBOX/out" \
   || fail "no evals/pick.py: no skipped line: $(cat "$SANDBOX/out")"
+grep -q '^== evals: skipped (EVALS=1 runs the picked ones, EVALS=all every one): unknown (needs python3 and evals/pick.py)$' \
+  "$SANDBOX/out" || fail "no evals/pick.py: skipped line does not say the pick is unknown: $(cat "$SANDBOX/out")"
 
 # Stub python3 runs a stub script with sh; stub evals/pick.py logs its arguments and prints $SANDBOX/picked;
 # stub evals/compare.py logs its arguments and exits with the code in $SANDBOX/compare-exit.

@@ -134,6 +134,11 @@ class PartTest(PickTest):
         self.write("skills/b/brief.md", "Run `scripts/capped` first.\n")
         self.assertEqual(self.pick("--", "scripts/capped"), B)
 
+    def test_capped_named_by_its_installed_path_picks_that_skills_cases(self):
+        self.write("scripts/capped", "")
+        self.write("skills/b/brief.md", "Run `~/.agents/bin/capped -- make`.\n")
+        self.assertEqual(self.pick("--", "scripts/capped"), B)
+
     def test_a_core_file_no_skill_names_picks_no_case(self):
         self.write("scripts/settings.sh", "")
         self.write("scripts/capped", "")
@@ -142,6 +147,10 @@ class PartTest(PickTest):
 
     def test_a_case_whose_parts_cannot_be_read_is_picked_by_any_change(self):
         self.write("evals/b/two/case.json", json.dumps({"install": ["nope"]}))
+        self.assertEqual(self.pick("--", "docs/x.md"), ["b/two"])
+
+    def test_a_case_whose_install_is_not_a_list_is_picked_by_any_change(self):
+        self.write("evals/b/two/case.json", json.dumps({"install": "b"}))
         self.assertEqual(self.pick("--", "docs/x.md"), ["b/two"])
 
 
@@ -208,6 +217,15 @@ class SharedSettingsTest(PickTest):
         self.assertEqual(self.pick(), EVERY)
         (self.repo / "skills" / "_shared" / "settings.json").unlink()
         self.assertEqual(self.pick(), EVERY)
+
+
+class UsageTest(PickTest):
+    def test_arguments_affected_sh_refuses_exit_2_with_the_usage(self):
+        got = subprocess.run([sys.executable, "-I", str(self.repo / "evals" / "pick.py"), "--nope"], cwd=self.tmp,
+                             capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(got.returncode, 2)
+        self.assertEqual(got.stdout, "")
+        self.assertTrue(got.stderr.startswith("usage: evals/pick.py"), got.stderr)
 
 
 class NothingTest(PickTest):
