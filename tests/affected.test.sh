@@ -101,7 +101,7 @@ for f in install.sh scripts/parts.sh scripts/capped skills/configure/SKILL.md sk
 done
 pyexpect "install.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " install.sh
 pyexpect "parts.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/parts.sh
-pyexpect "capped, run by the evals tests" "evals evals/_runner/adapters " scripts/capped
+pyexpect "capped, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/capped
 pyexpect "the configure skill, installed by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/SKILL.md
 pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/needs.json
 pyexpect "the build-epic skill's needs, read by the evals tests" "evals evals/_runner/adapters skills/build-epic " \

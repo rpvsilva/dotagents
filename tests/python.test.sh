@@ -13,7 +13,7 @@ READERS="adapters/claude/telemetry/extract.py evals evals/_runner/adapters
 skills/telemetry/pricing.json evals evals/_runner evals/_runner/adapters
 install.sh evals evals/_runner evals/_runner/adapters
 scripts/parts.sh evals evals/_runner evals/_runner/adapters
-scripts/capped evals evals/_runner/adapters
+scripts/capped evals evals/_runner evals/_runner/adapters
 skills/configure/SKILL.md evals evals/_runner evals/_runner/adapters
 skills/configure/needs.json evals evals/_runner evals/_runner/adapters
 skills/build-epic/needs.json evals evals/_runner/adapters"
