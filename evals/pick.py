@@ -5,8 +5,8 @@
 
 The changed files come from `tests/affected.sh --files` with the same arguments. A file under `skills/<s>/` (but not a
 `test_*` file or one under `fixtures/`) or under `evals/<s>/` picks `<s>`'s cases. `skills/_shared/conventions.md`,
-`evals/_runner/*`, `evals/*.py` (but not `evals/test_*.py` or `evals/_runner/test_*.py`), `--all` and a change with no
-merge base pick every case. A changed `skills/_shared/settings.json` picks the skills whose `settings.json` opts in to a
+`evals/_runner/*` (but not a file under `fixtures/`), `evals/*.py`, `--all` and a change with no merge base pick every
+case; a `test_*` file under `evals/`, at any depth, picks none. A changed `skills/_shared/settings.json` picks the skills whose `settings.json` opts in to a
 changed key with `{"shared": true}`, and `configure`, which shows and changes every Setting; when the changed keys
 cannot be read (no merge base, a missing or broken file), every case. A change touching no skill with cases prints
 nothing.
@@ -164,7 +164,8 @@ def case_files(skill, case):
 def skill_of(path):
     """The skill whose cases `path` picks, `"*"` for every skill, or None."""
     parts = path.split("/")
-    if parts[0] == "evals" and parts[-1].startswith("test_") and parts[1:-1] in ([], ["_runner"]):
+    if parts[0] == "evals" and (parts[-1].startswith("test_") or
+                                parts[1:2] == ["_runner"] and "fixtures" in parts[2:-1]):
         return None
     if path == "skills/_shared/conventions.md" or (parts[0] == "evals" and (
             len(parts) == 2 and path.endswith(".py") or len(parts) > 2 and parts[1] == "_runner")):

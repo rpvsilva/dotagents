@@ -160,11 +160,19 @@ class EveryCaseTest(PickTest):
 
     def test_the_runner_or_a_top_level_eval_script_picks_every_case(self):
         self.assertEqual(self.pick("--", "evals/_runner/cases.py"), EVERY)
-        self.assertEqual(self.pick("--", "evals/_runner/fixtures/cases/x.md"), EVERY)
+        self.assertEqual(self.pick("--", "evals/_runner/adapters/claude.py"), EVERY)
         self.assertEqual(self.pick("--", "evals/run.py"), EVERY)
 
     def test_an_eval_test_file_picks_no_case(self):
         self.assertEqual(self.pick("--", "evals/test_pick.py", "evals/_runner/test_cases.py"), [])
+
+    def test_an_eval_test_file_at_any_depth_picks_no_case(self):
+        self.assertEqual(self.pick("--", "evals/_runner/adapters/test_claude.py"), [])
+        self.assertEqual(self.pick("--", "evals/a/one/checks/test_x.py"), [])
+
+    def test_a_runner_fixture_picks_no_case(self):
+        self.assertEqual(self.pick("--", "evals/_runner/fixtures/cases/x.md"), [])
+        self.assertEqual(self.pick("--", "evals/_runner/adapters/fixtures/claude/x.jsonl"), [])
 
     def test_all_prints_every_case(self):
         self.assertEqual(self.pick("--all"), EVERY)
