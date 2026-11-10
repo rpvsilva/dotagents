@@ -17,6 +17,10 @@ scripts/capped evals evals/_runner evals/_runner/adapters
 skills/configure/SKILL.md evals evals/_runner evals/_runner/adapters
 skills/configure/needs.json evals evals/_runner evals/_runner/adapters
 skills/build-epic/needs.json evals evals/_runner/adapters
+skills/build-epic/plan_check.py evals
+scripts/settings.sh evals
+skills/_shared/settings.json evals
+skills/build-epic/settings.json evals
 docs/evals.md evals evals/_runner"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
