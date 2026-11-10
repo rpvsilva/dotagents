@@ -78,7 +78,9 @@ pyexpect() {
 PYALL="$(cd "$REPO" && PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')"
 pyexpect "a file in a folder" "skills/telemetry " skills/telemetry/report.py
 pyexpect "the deepest of nested folders" "skills/build-epic/scripts " skills/build-epic/scripts/steplib/core.py
-pyexpect "the outer of nested folders" "skills/build-epic " skills/build-epic/plan_check.py
+pyexpect "the outer of nested folders" "skills/build-epic " skills/build-epic/test_plan_check.py
+pyexpect "a file another folder reads" "evals skills/build-epic " skills/build-epic/plan_check.py
+pyexpect "settings files the configure pilot reads" "evals " scripts/settings.sh skills/_shared/settings.json
 pyexpect "two folders" "adapters/claude/telemetry skills/telemetry " skills/telemetry/a.py adapters/claude/telemetry/b.json
 pyexpect "a .py in no folder" "$PYALL" skills/telemetry/a.py scripts/x.py
 pyexpect "a file Python tests read" "$PYALL" scripts/hooks/secret-patterns.txt

@@ -22,11 +22,11 @@ NAMES = ("build-epic-only", "machine-three-agents", "repo-two-agents", "unknown-
 
 
 class PilotConfigure(EvalSandbox):
-    def end_state(self, name, *sets, commit=False, edit=None):
+    def end_state(self, name, *sets, commit=False, edit=None, text="changed\n"):
         """The run folder a run of case `name` leaves: its fixture as the git repo `work/`, then each `sets` entry
         (`<section> <key> <value> --repo|--machine`) applied by `settings.sh set` from `work/` with the run's home,
-        then `edit` (a file of `work/`) changed and, with `commit`, everything committed. Returns the case's checks'
-        results."""
+        then `text` appended to `edit` (a file of `work/`, made when missing) and, with `commit`, everything committed.
+        Returns the case's checks' results."""
         case = cases.load(CASES / name)
         run = Path(tempfile.mkdtemp(prefix=name + "-", dir=self.tmp))
         paths = {"work": run / "work", "scratch": run / "scratch", "input": run / "input", "home": run / "home",
@@ -42,7 +42,7 @@ class PilotConfigure(EvalSandbox):
                            stdin=subprocess.DEVNULL, capture_output=True)
         if edit:
             with open(paths["work"] / edit, "a") as f:
-                f.write("changed\n")
+                f.write(text)
         if commit:
             git = ["git", "-C", str(paths["work"]), "-c", "user.name=t", "-c", "user.email=t@localhost",
                    "-c", "commit.gpgsign=false"]
@@ -115,3 +115,9 @@ class PilotConfigure(EvalSandbox):
         self.assertFails(self.end_state("unknown-setting", "shared max_parallel 5 --machine"), "no-settings-file")
         self.assertFails(self.end_state("unknown-setting", edit="README.md"), "work-unchanged")
         self.assertFails(self.end_state("unknown-setting", edit="README.md", commit=True), "work-unchanged")
+
+    def test_unknown_setting_fails_when_a_file_names_the_made_up_key(self):
+        self.assertFails(self.end_state("unknown-setting", edit="NOTES.md", text="coffee_breaks: 2\n"),
+                         "no-settings-file")
+        self.assertFails(self.end_state("unknown-setting", edit="README.md", text="coffee_breaks: 2\n", commit=True),
+                         "no-settings-file")
