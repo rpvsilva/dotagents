@@ -3,12 +3,13 @@
 
   python3 -I evals/pick.py [--all | --base <ref> | -- <path>...]
 
-The changed files come from `tests/affected.sh --files` with the same arguments. A file under `skills/<s>/` (but not
-a `test_*` file or one under `fixtures/`) or under `evals/<s>/` picks `<s>`'s cases. `skills/_shared/conventions.md`,
-`evals/_runner/*`, `evals/*.py`, `--all` and a change with no merge base pick every case. A changed
-`skills/_shared/settings.json` picks the skills whose `settings.json` opts in to a changed key with `{"shared": true}`;
-when the changed keys cannot be read (no merge base, a missing or broken file), every case. A change touching no
-skill with cases prints nothing.
+The changed files come from `tests/affected.sh --files` with the same arguments. A file under `skills/<s>/` (but not a
+`test_*` file or one under `fixtures/`) or under `evals/<s>/` picks `<s>`'s cases. `skills/_shared/conventions.md`,
+`evals/_runner/*`, `evals/*.py` (but not `evals/test_*.py` or `evals/_runner/test_*.py`), `--all` and a change with no
+merge base pick every case. A changed `skills/_shared/settings.json` picks the skills whose `settings.json` opts in to a
+changed key with `{"shared": true}`, and `configure`, which shows and changes every Setting; when the changed keys
+cannot be read (no merge base, a missing or broken file), every case. A change touching no skill with cases prints
+nothing.
 A case is also picked by a change to a file a part ships (`scripts/parts.sh files`, so a skill's
 `adapters/<tool>/<skill>/` helpers count) when that part is in the `scripts/parts.sh closure --optional` of its skill
 and its `install` parts. A core part's file counts only when that part is named there, or when the skill's own shipped
@@ -25,6 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 EVALS = REPO / "evals"
 SHARED = "skills/_shared/settings.json"
+CONFIGURE = "configure"
 USAGE = "usage: evals/pick.py [--all | --base <ref> | -- <path>...]\n"
 
 
@@ -162,6 +164,8 @@ def case_files(skill, case):
 def skill_of(path):
     """The skill whose cases `path` picks, `"*"` for every skill, or None."""
     parts = path.split("/")
+    if parts[0] == "evals" and parts[-1].startswith("test_") and parts[1:-1] in ([], ["_runner"]):
+        return None
     if path == "skills/_shared/conventions.md" or (parts[0] == "evals" and (
             len(parts) == 2 and path.endswith(".py") or len(parts) > 2 and parts[1] == "_runner")):
         return "*"
@@ -179,7 +183,7 @@ def pick(args):
     for path in files or []:
         if path == SHARED:
             keys = changed_shared_keys(args)
-            skills |= set(cases) if keys is None else {s for s in cases if opts_in(s, keys)}
+            skills |= set(cases) if keys is None else {s for s in cases if opts_in(s, keys) or keys and s == CONFIGURE}
         elif skill_of(path) == "*":
             skills |= set(cases)
         elif skill_of(path) in cases:
