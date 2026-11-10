@@ -149,5 +149,18 @@ evals yes 2
 grep -q '^usage: EVALS=1|all' "$SANDBOX/out" || fail "EVALS=yes: no usage line: $(cat "$SANDBOX/out")"
 grep -q '^== tests/' "$SANDBOX/out" && fail "EVALS=yes: suites still ran: $(cat "$SANDBOX/out")"
 
+# EVALS=1 that cannot pick: no evals/pick.py, then no python3. It says so and fails the run.
+mv "$R/evals/pick.py" "$SANDBOX/pick.py"
+evals 1 1
+grep -q '^== evals: cannot pick the cases' "$SANDBOX/out" || fail "no evals/pick.py: not said: $(cat "$SANDBOX/out")"
+[ -z "$(compared)" ] || fail "no evals/pick.py: still compared: $(compared)"
+mv "$SANDBOX/pick.py" "$R/evals/pick.py"
+got=0
+rm -f "$SANDBOX/stubs/python3" "$SANDBOX/log"
+EVALS=1 PATH="$SANDBOX/stubs:$SANDBOX/real" "$BASH_BIN" "$R/tests/run.sh" >"$SANDBOX/out" 2>&1 || got=$?
+[ "$got" = 1 ] || fail "no python3: wanted exit 1, got $got: $(cat "$SANDBOX/out")"
+grep -q '^== evals: cannot pick the cases' "$SANDBOX/out" || fail "no python3: not said: $(cat "$SANDBOX/out")"
+[ -z "$(picks)" ] || fail "no python3: still picked: $(picks)"
+
 [ "$fails" -eq 0 ] || { echo "run.test.sh: $fails failure(s)"; exit 1; }
 echo "run.test.sh: ok"

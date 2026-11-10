@@ -11,7 +11,9 @@ when the changed keys cannot be read (no merge base, a missing or broken file), 
 skill with cases prints nothing.
 A case is also picked by a change to a file a part ships (`scripts/parts.sh files`, so a skill's
 `adapters/<tool>/<skill>/` helpers count) when that part is in the `scripts/parts.sh closure --optional` of its skill
-and its `install` parts, core left out unless named there; a case whose parts cannot be read is picked by any change.
+and its `install` parts. A core part's file counts only when that part is named there, or when the skill's own shipped
+files name the file by its repo path or its installed path (`~/.agents/bin/settings` for `scripts/settings.sh`,
+`~/.agents/hooks/<x>` for `scripts/hooks/<x>`). A case whose parts cannot be read is picked by any change.
 Exits 0, or non-zero when `tests/affected.sh` refuses the arguments.
 """
 import functools
@@ -98,6 +100,42 @@ def shipped(part):
     return {f for f in files if not ("fixtures" in f.split("/")[:-1] or f.split("/")[-1].startswith("test_"))}
 
 
+INSTALLED = {"scripts/settings.sh": "~/.agents/bin/settings", "scripts/capped": "~/.agents/bin/capped"}
+
+
+def installed(path):
+    """Where `install.sh` links the core file `path`, or None."""
+    if path.startswith("scripts/hooks/"):
+        return "~/.agents/hooks/" + path[len("scripts/hooks/"):]
+    if path.startswith("skills/"):
+        return "~/.agents/" + path
+    return INSTALLED.get(path)
+
+
+@functools.lru_cache(maxsize=None)
+def text_of(skill):
+    """The text of the files `skill` ships, or None when they cannot be read."""
+    files = shipped(skill)
+    if files is None:
+        return None
+    texts = []
+    for f in sorted(files):
+        try:
+            texts.append((REPO / f).read_text(errors="replace"))
+        except OSError:
+            pass
+    return "\n".join(texts)
+
+
+def named_by(skill, files):
+    """The core `files` the files `skill` ships name by their repo path or installed path, or None. `SHARED` is left
+    out: its own rule picks by the keys a skill opts in to."""
+    text = text_of(skill)
+    if text is None:
+        return None
+    return {f for f in files - {SHARED} if f in text or (installed(f) or "\0") in text}
+
+
 def case_files(skill, case):
     """The files the parts of `skill`'s `case` ship, or None when they cannot be read."""
     try:
@@ -112,11 +150,12 @@ def case_files(skill, case):
         return None
     files = set()
     for part in closure:
-        if part in named or part not in core():
-            got = shipped(part)
-            if got is None:
-                return None
-            files |= got
+        got = shipped(part)
+        if got is not None and part not in named and part in core():
+            got = named_by(skill, got)
+        if got is None:
+            return None
+        files |= got
     return files
 
 

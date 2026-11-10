@@ -120,6 +120,26 @@ class PartTest(PickTest):
     def test_a_core_part_picks_no_case_of_a_skill_needing_it(self):
         self.assertEqual(self.pick("--", "skills/configure/SKILL.md"), [])
 
+    def test_a_core_file_a_skill_names_by_its_installed_path_picks_that_skills_cases(self):
+        self.write("scripts/settings.sh", "")
+        self.write("scripts/hooks/lib.sh", "")
+        self.write("skills/configure/SKILL.md", "---\nname: configure\n---\nRun `~/.agents/bin/settings list`.\n")
+        self.write("evals/configure/one/case.json", "{}")
+        self.write("skills/b/SKILL.md", "---\nname: b\n---\nSource `~/.agents/hooks/lib.sh`.\n")
+        self.assertEqual(self.pick("--", "scripts/settings.sh"), ["configure/one"])
+        self.assertEqual(self.pick("--", "scripts/hooks/lib.sh"), B)
+
+    def test_a_core_file_a_skill_names_by_its_repo_path_picks_that_skills_cases(self):
+        self.write("scripts/capped", "")
+        self.write("skills/b/brief.md", "Run `scripts/capped` first.\n")
+        self.assertEqual(self.pick("--", "scripts/capped"), B)
+
+    def test_a_core_file_no_skill_names_picks_no_case(self):
+        self.write("scripts/settings.sh", "")
+        self.write("scripts/capped", "")
+        self.write("evals/configure/one/case.json", "{}")
+        self.assertEqual(self.pick("--", "scripts/settings.sh", "scripts/capped"), [])
+
     def test_a_case_whose_parts_cannot_be_read_is_picked_by_any_change(self):
         self.write("evals/b/two/case.json", json.dumps({"install": ["nope"]}))
         self.assertEqual(self.pick("--", "docs/x.md"), ["b/two"])
@@ -150,6 +170,13 @@ class SharedSettingsTest(PickTest):
         self.assertEqual(self.pick(), B)
         self.change_shared(max_parallel=2, tracker="github")
         self.assertEqual(self.pick(), EVERY)
+
+    def test_a_skill_naming_the_shared_settings_file_is_picked_only_by_a_key_it_opts_in_to(self):
+        self.write("skills/b/SKILL.md", "---\nname: b\n---\nSee `skills/_shared/settings.json`.\n")
+        git(self.repo, "commit", "-qam", "b names it")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        self.change_shared(max_parallel=2)
+        self.assertEqual(self.pick(), A)
 
     def test_a_shared_key_change_given_as_a_path_reads_the_change_since_origin_main(self):
         self.change_shared(tracker="github")
