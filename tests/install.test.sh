@@ -225,6 +225,35 @@ has_guard "$home/.codex/hooks.json"
 has_guard "$home/.cursor/hooks.json"
 jq -e '[.hooks.SessionEnd[]? | .. | .command? | strings | select(test("telemetry-save"))] | length == 1' "$home/.claude/settings.json" >/dev/null || fail "Claude SessionEnd telemetry-save hook missing or doubled"
 jq -e '.hooks.Stop[0].hooks[0].command == "orca"' "$home/.cursor/hooks.json" >/dev/null || fail "existing Cursor hook lost"
+# Each merged Cursor guard, run as Cursor runs it (a shell, the event's JSON on stdin): prints the allow Cursor needs
+# when the guard passes, and on a block exits non-zero with no allow.
+cursor_hook() {
+  local cmd="$1" event="$2" json="$3" want="$4" out code=0
+  out="$(HOME="$home" sh -c "$cmd" <<<"$json" 2>/dev/null)" || code=$?
+  if [ "$want" = allow ]; then
+    [ "$code" -eq 0 ] && [ "$out" = '{"permission":"allow"}' ] || fail "Cursor $event hook did not allow $json: exit $code, $out"
+  else
+    [ "$code" -ne 0 ] && [ -z "$out" ] || fail "Cursor $event hook did not block $json: exit $code, $out"
+  fi
+}
+cursor_hooks=0
+while IFS=$'\t' read -r event cmd; do
+  cursor_hooks=$((cursor_hooks + 1))
+  case "$event:$cmd" in
+    beforeShellExecution:*guard-merge*)
+      cursor_hook "$cmd" "$event" "$(jq -nc --arg d "$SANDBOX/gated" '{command: "git status", cwd: $d}')" allow
+      cursor_hook "$cmd" "$event" "$(jq -nc --arg d "$SANDBOX/gated" '{command: "gh pr merge 1", cwd: $d}')" block ;;
+    beforeShellExecution:*guard-secrets*)
+      cursor_hook "$cmd" "$event" '{"command": "cat src/app.ts"}' allow
+      cursor_hook "$cmd" "$event" '{"command": "cat .env"}' block ;;
+    beforeReadFile:*guard-secrets*)
+      cursor_hook "$cmd" "$event" '{"file_path": "/repo/src/app.ts"}' allow
+      cursor_hook "$cmd" "$event" '{"file_path": "/repo/.env"}' block ;;
+    *) fail "Cursor hook not checked: $event: $cmd" ;;
+  esac
+done < <(jq -r '.hooks | to_entries[] | .key as $e | .value[] | select((.command // "") | test("guard-")) | [$e, .command] | @tsv' \
+  "$home/.cursor/hooks.json")
+[ "$cursor_hooks" -eq 3 ] || fail "wanted 3 Cursor guard hooks, found $cursor_hooks"
 jq -e '.permissions.deny | index("Bash(gh auth token:*)") != null' "$home/.claude/settings.json" >/dev/null || fail "Claude deny rules not merged"
 
 # MCP servers without variables reach Codex and Cursor even with no secrets file.
