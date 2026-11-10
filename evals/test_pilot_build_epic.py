@@ -186,36 +186,59 @@ class PilotBuildEpicTest(EvalSandbox):
         def add(paths):
             (paths["work"] / "plan.md").write_text("a plan in the repo\n")
 
-        for name in PASS_A + PASS_B:
+        for name in ("pass-a-remove", "pass-b-top"):
             self.assert_fails_only(name, "work-unchanged", edit)
             shutil.rmtree(self.tmp / name)
             self.assert_fails_only(name, "work-unchanged", add)
             shutil.rmtree(self.tmp / name)
 
+    def test_work_unchanged_fails_on_pass_a_rename_when_the_planner_edits_or_adds_a_repo_file(self):
+        def edit(paths):
+            with (paths["work"] / "README.md").open("a") as f:
+                f.write("planned\n")
+
+        self.assert_fails_only("pass-a-rename", "work-unchanged", edit)
+        shutil.rmtree(self.tmp / "pass-a-rename")
+        self.assert_fails_only("pass-a-rename", "work-unchanged",
+                               lambda paths: (paths["work"] / "plan.md").write_text("a plan in the repo\n"))
+
     def test_spec_sections_fails_on_a_missing_heading_or_no_numbered_behaviour(self):
+        for heading in ("## Goal", "## Behaviours", "## Out of scope", "## Open questions"):
+            def drop(paths, heading=heading):
+                spec = paths["scratch"] / "spec.md"
+                spec.write_text(spec.read_text().replace(heading + "\n", ""))
+            self.assert_fails_only("pass-a-remove", "spec-sections", drop)
+            shutil.rmtree(self.tmp / "pass-a-remove")
+
         def unnumbered(paths):
             spec = paths["scratch"] / "spec.md"
             spec.write_text(spec.read_text().replace("1. (epic)", "- (epic)").replace("2. (epic)", "- (epic)"))
 
-        for name in PASS_A:
-            for heading in ("## Goal", "## Behaviours", "## Out of scope", "## Open questions"):
-                def drop(paths, heading=heading):
-                    spec = paths["scratch"] / "spec.md"
-                    spec.write_text(spec.read_text().replace(heading + "\n", ""))
-                self.assert_fails_only(name, "spec-sections", drop)
-                shutil.rmtree(self.tmp / name)
-            self.assert_fails_only(name, "spec-sections", unnumbered)
-            shutil.rmtree(self.tmp / name)
+        self.assert_fails_only("pass-a-remove", "spec-sections", unnumbered)
+
+    def test_spec_sections_fails_on_pass_a_rename_with_a_missing_heading_or_no_numbered_behaviour(self):
+        def unnumbered(paths):
+            spec = paths["scratch"] / "spec.md"
+            spec.write_text(spec.read_text().replace("1. (epic)", "- (epic)").replace("2. (epic)", "- (epic)"))
+
+        for heading in ("## Goal", "## Behaviours", "## Out of scope", "## Open questions"):
+            def drop(paths, heading=heading):
+                spec = paths["scratch"] / "spec.md"
+                spec.write_text(spec.read_text().replace(heading + "\n", ""))
+            self.assert_fails_only("pass-a-rename", "spec-sections", drop)
+            shutil.rmtree(self.tmp / "pass-a-rename")
+        self.assert_fails_only("pass-a-rename", "spec-sections", unnumbered)
 
     def test_areas_written_fails_on_an_empty_areas_file(self):
-        for name in PASS_A:
-            self.assert_fails_only(name, "areas-written",
-                                   lambda paths: (paths["scratch"] / "areas.md").write_text(""))
-            shutil.rmtree(self.tmp / name)
+        self.assert_fails_only("pass-a-rename", "areas-written",
+                               lambda paths: (paths["scratch"] / "areas.md").write_text(""))
+
+    def test_areas_written_fails_on_pass_a_remove_with_an_empty_areas_file(self):
+        self.assert_fails_only("pass-a-remove", "areas-written",
+                               lambda paths: (paths["scratch"] / "areas.md").write_text(""))
 
     def test_report_done_fails_unless_the_report_ends_with_status_done(self):
-        for name, file in (("pass-a-remove", "plan-A.md"), ("pass-a-rename", "plan-A.md"),
-                           ("pass-b-top", "plan-B.md")):
+        for name, file in (("pass-a-remove", "plan-A.md"), ("pass-b-top", "plan-B.md")):
             self.assert_fails_only(name, "report-done",
                                    lambda paths, f=file: (paths["scratch"] / "reports" / f).write_text(
                                        report("blocked")))
@@ -224,6 +247,15 @@ class PilotBuildEpicTest(EvalSandbox):
                                    lambda paths, f=file: (paths["scratch"] / "reports" / f).write_text(
                                        report("done") + "\n".join(["more text"] * 10) + "\n"))
             shutil.rmtree(self.tmp / name)
+
+    def test_report_done_fails_on_pass_a_rename_unless_the_report_ends_with_status_done(self):
+        reports = lambda paths: paths["scratch"] / "reports" / "plan-A.md"  # noqa: E731
+        self.assert_fails_only("pass-a-rename", "report-done",
+                               lambda paths: reports(paths).write_text(report("blocked")))
+        shutil.rmtree(self.tmp / "pass-a-rename")
+        self.assert_fails_only("pass-a-rename", "report-done",
+                               lambda paths: reports(paths).write_text(
+                                   report("done") + "\n".join(["more text"] * 10) + "\n"))
 
     def test_plan_ok_fails_on_a_plan_check_problem_or_no_ticket_or_task(self):
         def no_writes(paths):
