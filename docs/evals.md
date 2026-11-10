@@ -458,9 +458,10 @@ The first run of the cases, to see whether evals are worth keeping (#378). The c
 
 ### The run
 
-- **Commit:** `4bf92459a6cb391fb494e5407d9e5e8505e8f747`, the head of the `evals` integration branch before its PR merged.
+- **Date:** 2026-11-10.
+- **Commit:** `4bf92459a6cb391fb494e5407d9e5e8505e8f747`, the head of ticket 08's branch `feat/gh-378-eval-pilot` (the branch that adds the cases) when the run started; the `evals` integration branch's PR had not merged.
 - **Tool and model:** Claude Code, `claude-sonnet-5-5`, 3 runs per case.
-- **Command:** a same-commit compare ([Compare two refs](#compare-two-refs) with `--base HEAD --head HEAD`), so it measures noise and cost, not a change: `python3 -I evals/compare.py --tool claude --base HEAD --head HEAD --all --runs 3 --budget-usd 40 --out <report.md> --html <report.html>`.
+- **Command:** a same-commit compare ([Compare two refs](#compare-two-refs) with `--base HEAD --head HEAD`), so it measures noise and cost, not a change: `EVALS_RESULTS=<dir> python3 -I evals/compare.py --tool claude --base HEAD --head HEAD --all --runs 3 --budget-usd 40 --out <report.md> --html <report.html>`. `EVALS_RESULTS` was the run folder's `pilot/results/`, and `CLAUDE_CODE_OAUTH_TOKEN` came from the environment, never the command line.
 - **Full report:** saved on the machine that ran it, never committed: `~/.agents/runs/cichlid/gh-372-skill-evals/pilot/report.md`, its page `report.html` beside it, and the runs under `pilot/results/claude/<commit>/claude-sonnet-5-5/`.
 
 ### Numbers
