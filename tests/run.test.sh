@@ -145,6 +145,14 @@ evals 1 0
 grep -q '^== evals: no case picked' "$SANDBOX/out" || fail "empty pick: not said: $(cat "$SANDBOX/out")"
 [ -z "$(compared)" ] || fail "empty pick: still compared: $(compared)"
 
+# A picked name holding a glob character reaches compare.py as it is, never expanded against the checkout.
+mkdir -p "$R/configure/x"
+echo 'configure/*' >"$SANDBOX/picked"
+evals 1 0
+[ "$(compared)" = "--tool claude --base origin/main --head HEAD configure/*" ] \
+  || fail "glob in a picked name: expanded: $(compared)"
+rm -rf "$R/configure"
+
 evals yes 2
 grep -q '^usage: EVALS=1|all' "$SANDBOX/out" || fail "EVALS=yes: no usage line: $(cat "$SANDBOX/out")"
 grep -q '^== tests/' "$SANDBOX/out" && fail "EVALS=yes: suites still ran: $(cat "$SANDBOX/out")"
