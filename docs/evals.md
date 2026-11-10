@@ -316,3 +316,80 @@ That is the case, the run number, the tool, model and the first 12 characters of
 | `0` | Every run found was graded or skipped. |
 | `1` | A run could not be graded: its commit is missing from this repo, or the budget was reached before its judge. |
 | `2` | A usage error, a bad `--ref`, an unknown case or a named case with no saved run: nothing graded. |
+
+## Compare two refs
+
+```bash
+python3 -I evals/compare.py --tool claude --base <ref> --head <ref> [--runs N] [--model <id>] \
+  [--base-model <id>] [--head-model <id>] [--budget-usd 10] [--results <dir>] [--out <file.md>] \
+  [--html <file.html>] [--evals <dir>] (--all | <skill>/<case>...)
+```
+
+It runs each named case, or every case with `--all`, on both refs and reports, per case, whether the head is better, worse or within noise of the base. Use it to judge a change to a skill: `--base main --head <your branch>`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--tool` | required | The tool adapter, as for [Run cases](#run-cases). |
+| `--base` | required | The ref to compare against, e.g. `main`, resolved to its commit. Only committed refs. |
+| `--head` | required | The ref under test, resolved to its commit. Only committed refs. |
+| `--runs` | the case's `runs` | How many times each case runs on each ref, at least 1. |
+| `--model` | the case's `model` | The model of every case on both refs, as a full ID. Required on a tool whose adapter does not run the case's Claude model. |
+| `--base-model` | `--model` | The base ref's model alone, e.g. to compare two models on one ref. |
+| `--head-model` | `--model` | The head ref's model alone. |
+| `--budget-usd` | `10` | One cost ceiling for both refs, over 0: the base runs first, and the head gets what the base left ([Cost ceiling](#cost-ceiling)). |
+| `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store, read for saved runs and written with new ones. |
+| `--out` | `<store>/reports/<tool>-<base sha>-<head sha>.md`, with each sha's first 12 characters | Where the Markdown report is written. |
+| `--html` | none | Also writes the report as one self-contained HTML page there. |
+| `--evals` | this repo's `evals/` | Another folder of cases. |
+| `--all` | off | Every case under `--evals`. Give `--all` or case names, not both. |
+| `-h`, `--help` | | Prints the usage. |
+
+Before any run, it checks both refs as `run.py` would ([Run cases](#run-cases)), so a case the head breaks is refused before the base's runs are paid for. It also refuses a report path (`--out` or `--html`) inside the repo: reports are never committed.
+
+Run lines go to stderr as in [Run cases](#run-cases), then the path of each report written. The Markdown report goes to stdout.
+
+| Exit | Meaning |
+|---|---|
+| `0` | Every run was made or reused. |
+| `1` | The cost ceiling skipped runs; the report is still written, from the runs made. |
+| `2` | A usage error, an unknown ref, tool or case, a model alias, or a report path inside the repo: nothing ran. |
+
+### Saved runs are reused
+
+Each ref runs through `run.py`'s own code, so a saved run is reused exactly as [Reuse and `--fresh`](#reuse-and---fresh) says, keyed by the tool, the ref's commit, the model and the case hash. Comparing a new branch against `main` a second time pays only for the new head: `main`'s runs are reused. The same ref on both sides runs once. Editing a case's checks or rubric re-grades the saved runs of both refs without calling the tool for the case; only the judge runs, when the rubric changed. `compare.py` has no `--fresh`: to run a ref again, use `run.py --fresh` on it first.
+
+### Prices
+
+Every run of both refs, saved or new, is priced again from its saved tokens with the current [`skills/telemetry/pricing.json`](../skills/telemetry/pricing.json), so a price change between the two refs' runs never shows as a cost difference. The report names the table's `asOf` date. A run with no tokens, or a model with no price, costs `unknown`, never 0.
+
+### Verdicts
+
+Each case gets one verdict, from its metrics: pass rate, rubric score per criterion, cost, turns and time. Higher pass rate and rubric are better; lower cost, turns and time are better.
+
+A metric's change is **real** when:
+
+- **pass rate**: the number of passing runs moves by at least two-thirds of the runs per case, rounded up (2 of 3, 4 of 5, 7 of 10). The runs per case are the larger side's;
+- **every other metric**: the two refs' min-max ranges do not overlap.
+
+Otherwise it is noise. The first metric with a real change, in the order pass rate, rubric, cost, turns, time, decides the verdict: `better` or `worse`. So a pass rate gain outranks a higher cost. Rubric criteria that are real in both directions decide nothing, and the next metric is tried. With no real change, the verdict is `noise`. A case that ran on one ref only is `unknown`.
+
+A `noise` case is **worth more runs** when a median or the pass rate differs between the refs: there may be a change too small to show at this many runs. Run it again with a higher `--runs`; the saved runs are reused and only the new ones are made.
+
+### Reading the report
+
+The report starts with a header naming the tool, the model (and each ref's when they differ), both refs with their commits, the runs per case and the price table's date.
+
+Then one row per case, and one row per rubric criterion under it:
+
+```
+| case | pass rate | cost | turns | time | rubric | verdict |
+|---|---|---|---|---|---|---|
+| configure/repo-max-parallel | 33% → 100% (+67%) | $0.05 ($0.04–$0.06) → $0.03 ($0.03–$0.04) (-$0.02) | 8 (7–9) → 6 (5–6) (-2) | 45 s (40 s–50 s) → 31 s (30 s–32 s) (-14 s) |  | better |
+| configure/repo-max-parallel · right-level |  |  |  |  | 3 (3–4) → 4 (4–5) (+1) | noise |
+```
+
+Each cell reads `base → head (difference)`. A metric shows its median, with its min-max in brackets when the runs differ; the difference is head's median less base's. Each rubric criterion's row gives its score from 1 to 5 the same way ([Rubrics and re-grading](#rubrics-and-re-grading)) and that criterion's own verdict. A value no run gave prints `unknown`, never 0.
+
+In the example, the pass count moved from 1 to 3 of 3, a real change, so the case is `better`; the rubric's ranges overlap, so that criterion alone is `noise`.
+
+The report ends with **Worth more runs**: the cases to run again, or `No case.`
