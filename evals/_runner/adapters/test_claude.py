@@ -24,7 +24,7 @@ class LoadTest(EvalSandbox):
         self.assertEqual(claude.INSTALL_WORD, "claude")
         self.assertTrue(claude.USES_CASE_MODEL)
         self.assertEqual(set(claude.AUTH_VARS), {"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"})
-        for name in ("prepare_home", "command", "parse"):
+        for name in ("prepare_home", "command", "parse", "answer"):
             self.assertTrue(callable(getattr(claude, name)), name)
 
     def test_unknown_tool_names_the_adapters_found(self):
@@ -124,6 +124,15 @@ class ParseTest(EvalSandbox):
         self.assertEqual(got["error"], "tool")
         self.assertIsNone(got["tool_version"])
         self.assertIsNone(got["tokens"])
+
+    def test_answer_is_the_result_event_text(self):
+        shutil.copy(FIXTURES / "pass.jsonl", self.run_dir / adapters.TRANSCRIPT)
+        self.assertEqual(self.claude.answer(self.run_dir), "done")
+
+    def test_no_result_event_means_no_answer(self):
+        self.assertIsNone(self.claude.answer(self.run_dir))
+        shutil.copy(FIXTURES / "killed.jsonl", self.run_dir / adapters.TRANSCRIPT)
+        self.assertIsNone(self.claude.answer(self.run_dir))
 
     def test_spawned_agents_counts_task_and_agent_tool_uses(self):
         got = self.parse("subagent")

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -139,10 +140,12 @@ class Install(AtHead):
 
     def test_prepare_leaves_nothing_behind_when_install_fails(self):
         co = fake_checkout(self.tmp / "co", "exit 1\n")
-        before = set(Path(home.tempfile.gettempdir()).glob("evals-run-*"))
-        with self.assertRaises(home.InstallError):
+        # A temp folder of its own: another test file running at once keeps its own run folders in the shared one.
+        tmp = self.tmp / "tempdir"
+        tmp.mkdir()
+        with mock.patch.object(home.tempfile, "tempdir", str(tmp)), self.assertRaises(home.InstallError):
             home.prepare(cases.load(GOOD / "configure" / "minimal"), co, "claude")
-        self.assertEqual(set(Path(home.tempfile.gettempdir()).glob("evals-run-*")), before)
+        self.assertEqual(list(tmp.iterdir()), [])
 
 
 class Work(AtHead):

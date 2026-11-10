@@ -89,6 +89,13 @@ def result_tokens(result):
             for model, u in usage.items() if isinstance(u, dict)} or None
 
 
+def answer(run_dir):
+    """The last `result` event's text: the final answer `claude -p` printed."""
+    result = next((e for e in reversed(events(Path(run_dir) / TRANSCRIPT)) if e.get("type") == "result"), None)
+    text = (result or {}).get("result")
+    return text if isinstance(text, str) else None
+
+
 def parse(run_dir, home, work):
     stream = events(Path(run_dir) / TRANSCRIPT)
     init = next((e for e in stream if e.get("type") == "system" and e.get("subtype") == "init"), {})

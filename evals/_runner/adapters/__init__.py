@@ -9,6 +9,7 @@ An adapter module holds:
 - `command(prompt, model, caps, work) -> argv`: the headless run; `caps` is the case's `{turns, secs, cost_usd}`.
 - `parse(run_dir, home, work) -> {tokens, turns, duration_s, capped, tool_version, spawned_agents, error}`: what
   the run's transcript (`<run_dir>/transcript.jsonl`, the tool's stdout) and logs say; unknown values are `None`.
+- `answer(run_dir) -> str | None`: the run's final answer, from the same transcript; `None` when it has none.
 """
 import importlib
 import re

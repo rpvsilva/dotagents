@@ -101,11 +101,15 @@ for f in install.sh scripts/parts.sh scripts/capped skills/configure/SKILL.md sk
 done
 pyexpect "install.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " install.sh
 pyexpect "parts.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/parts.sh
-pyexpect "capped, run by the evals tests" "evals evals/_runner/adapters " scripts/capped
+pyexpect "capped, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/capped
 pyexpect "the configure skill, installed by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/SKILL.md
 pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/needs.json
 pyexpect "the build-epic skill's needs, read by the evals tests" "evals evals/_runner/adapters skills/build-epic " \
   skills/build-epic/needs.json
+case " $(cd "$REPO" && tests/affected.sh -- docs/evals.md | tr '\n' ' ')" in
+  *" python.test.sh "*) ;; *) fail "suites.txt: docs/evals.md, read by the evals tests, does not select python.test.sh" ;;
+esac
+pyexpect "the evals doc, read by the evals tests" "evals evals/_runner " docs/evals.md
 pyexpect "an evals fixture" "evals/_runner " evals/_runner/fixtures/cases/good/configure/minimal/case.json
 [ "$(cd "$REPO" && PYTHON_TEST_FILES="" PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')" = "$PYALL" ] ||
   fail "python.test.sh, no files given: not every folder"
