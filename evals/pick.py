@@ -164,8 +164,8 @@ def case_files(skill, case):
 def skill_of(path):
     """The skill whose cases `path` picks, `"*"` for every skill, or None."""
     parts = path.split("/")
-    if parts[0] == "evals" and (parts[-1].startswith("test_") or
-                                parts[1:2] == ["_runner"] and "fixtures" in parts[2:-1]):
+    if parts[0] == "evals" and (len(parts) == 2 and parts[-1].startswith("test_") or parts[1:2] == ["_runner"] and (
+            parts[-1].startswith("test_") or "fixtures" in parts[2:-1])):
         return None
     if path == "skills/_shared/conventions.md" or (parts[0] == "evals" and (
             len(parts) == 2 and path.endswith(".py") or len(parts) > 2 and parts[1] == "_runner")):

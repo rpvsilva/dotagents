@@ -166,9 +166,14 @@ class EveryCaseTest(PickTest):
     def test_an_eval_test_file_picks_no_case(self):
         self.assertEqual(self.pick("--", "evals/test_pick.py", "evals/_runner/test_cases.py"), [])
 
-    def test_an_eval_test_file_at_any_depth_picks_no_case(self):
+    def test_a_runner_test_file_at_any_depth_picks_no_case(self):
         self.assertEqual(self.pick("--", "evals/_runner/adapters/test_claude.py"), [])
-        self.assertEqual(self.pick("--", "evals/a/one/checks/test_x.py"), [])
+        self.assertEqual(self.pick("--", "evals/_runner/adapters/fixtures/test_data.json"), [])
+
+    def test_a_test_file_inside_a_case_folder_picks_its_skill(self):
+        self.assertEqual(self.pick("--", "evals/a/one/checks/test_x.sh"), A)
+        self.assertEqual(self.pick("--", "evals/b/two/fixture/tests/test_app.sh"), B)
+        self.assertEqual(self.pick("--", "evals/a/one/input/test_plan.md"), A)
 
     def test_a_runner_fixture_picks_no_case(self):
         self.assertEqual(self.pick("--", "evals/_runner/fixtures/cases/x.md"), [])
