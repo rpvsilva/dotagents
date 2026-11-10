@@ -1,0 +1,1 @@
+Use 3 agents for me on this machine, across all my repos: set the shared max_parallel Setting to 3 at the machine Level, not in this repo. I approve the change, so apply it without asking me again, and leave this repo uncommitted: no commit, no branch, no PR.
