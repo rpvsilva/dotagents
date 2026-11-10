@@ -446,3 +446,46 @@ python3 -I evals/run.py --tool claude --ref main --all --model <full id>
 ```
 
 To see what the update changed, compare the same ref on both models: `evals/compare.py --tool claude --base main --head main --base-model <old id> --head-model <new id> --all`.
+
+## Pilot
+
+The first run of the cases, to see whether evals are worth keeping (#378). The cases are the seven in this repo, built as [Eval cases](#eval-cases) says and run as [Run cases](#run-cases) says:
+
+| Skill | Cases |
+|---|---|
+| `configure` | `build-epic-only`, `machine-three-agents`, `repo-two-agents`, `unknown-setting` |
+| `build-epic` (planning only, epic given as a file, no GitHub) | `pass-a-remove`, `pass-a-rename`, `pass-b-top` |
+
+### The run
+
+- **Date:** 2026-11-10.
+- **Commit:** `4bf92459a6cb391fb494e5407d9e5e8505e8f747`, the head of ticket 08's branch `feat/gh-378-eval-pilot` (the branch that adds the cases) when the run started; the `evals` integration branch's PR had not merged.
+- **Tool and model:** Claude Code, `claude-sonnet-5-5`, 3 runs per case.
+- **Command:** a same-commit compare ([Compare two refs](#compare-two-refs) with `--base HEAD --head HEAD`), so it measures noise and cost, not a change: `EVALS_RESULTS=<dir> python3 -I evals/compare.py --tool claude --base HEAD --head HEAD --all --runs 3 --budget-usd 40 --out <report.md> --html <report.html>`. `EVALS_RESULTS` was the run folder's `pilot/results/`, and `CLAUDE_CODE_OAUTH_TOKEN` came from the environment, never the command line.
+- **Full report:** saved on the machine that ran it, never committed: `~/.agents/runs/cichlid/gh-372-skill-evals/pilot/report.md`, its page `report.html` beside it, and the runs under `pilot/results/claude/<commit>/claude-sonnet-5-5/`.
+
+### Numbers
+
+| Measure | Value |
+|---|---|
+| Pass rate | 7 of 7 cases passed 3/3; no cap hit, no budget stop |
+| Total cost | $1.53 for all 21 runs (prices as of 2026-10-23), plus about $0.002 per Haiku rubric grade |
+| Median cost per case | $0.064; case medians from $0.044 (`configure/machine-three-agents`) to $0.118 (`build-epic/pass-b-top`) |
+| Median turns | 5 |
+| Time per run | 5-35 s |
+| Rubric scores | mostly 4-5 of 5; lowest `build-epic/pass-b-top` tracer-bullets at 3 (range 3-5) |
+
+### What it showed
+
+- The cases are stable: every run passed, so a failure on a later PR points at the change, not at noise.
+- No check or prompt bug: no case needed a fix. A spot check of `pass-b-top` run 1 found the planner read its brief and wrote a real `map.md`, one ticket and two tasks with real `Writes` and `Check` lines.
+- The costs are a floor. The fixtures are small (about 200 lines), so a real epic costs more.
+
+### Outcome
+
+The decision is made on the next three PRs that change a skill: each runs its picked cases with `EVALS=1 tests/run.sh` ([`EVALS` in `tests/run.sh`](#evals-in-testsrunsh)) and notes whether the compare caught something, missed something or only cost money. Then write here whether evals stay or go (#378).
+
+| PR | Skill | What the compare showed |
+|---|---|---|
+
+**Decision:** not made yet.
