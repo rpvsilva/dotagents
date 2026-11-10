@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -280,6 +281,15 @@ class CliTest(GradeSandbox):
                 out = self.cli("--evals", str(self.evals), *args)
                 self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
                 self.assertNotIn("Traceback", out.stderr)
+
+    def test_every_flag_of_help_is_documented_in_the_rubrics_and_re_grading_section(self):
+        out = self.cli("--help")
+        flags = set(re.findall(r"(?<![\w-])--?[a-z][\w-]*", out.stdout))
+        self.assertIn("--rejudge", flags)
+        doc = (HERE.parent / "docs" / "evals.md").read_text()
+        section = doc.split("\n## Rubrics and re-grading\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(sorted(f for f in flags if f"`{f}" not in section), [])
+        self.assertIn("never runs a case again", section)
 
 
 if __name__ == "__main__":
