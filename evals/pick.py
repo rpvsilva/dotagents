@@ -8,8 +8,13 @@ a `test_*` file or one under `fixtures/`) or under `evals/<s>/` picks `<s>`'s ca
 `evals/_runner/*`, `evals/*.py`, `--all` and a change with no merge base pick every case. A changed
 `skills/_shared/settings.json` picks the skills whose `settings.json` opts in to a changed key with `{"shared": true}`;
 when the changed keys cannot be read (no merge base, a missing or broken file), every case. A change touching no
-skill with cases prints nothing. Exits 0, or non-zero when `tests/affected.sh` refuses the arguments.
+skill with cases prints nothing.
+A case is also picked by a change to a file a part ships (`scripts/parts.sh files`, so a skill's
+`adapters/<tool>/<skill>/` helpers count) when that part is in the `scripts/parts.sh closure --optional` of its skill
+and its `install` parts, core left out unless named there; a case whose parts cannot be read is picked by any change.
+Exits 0, or non-zero when `tests/affected.sh` refuses the arguments.
 """
+import functools
 import json
 import subprocess
 import sys
@@ -71,6 +76,50 @@ def opts_in(skill, keys):
     return isinstance(data, dict) and any(data.get(k) == {"shared": True} for k in keys)
 
 
+def parts(*args):
+    """The lines `scripts/parts.sh` prints, or None when it fails."""
+    got = subprocess.run(["bash", str(REPO / "scripts" / "parts.sh"), *args], cwd=REPO, capture_output=True,
+                         text=True, stdin=subprocess.DEVNULL)
+    return got.stdout.splitlines() if got.returncode == 0 else None
+
+
+@functools.lru_cache(maxsize=None)
+def core():
+    listed = parts("list") or []
+    return {"_shared"} | {line.split("\t")[0] for line in listed if line.split("\t")[2:3] == ["core"]}
+
+
+@functools.lru_cache(maxsize=None)
+def shipped(part):
+    """The files `part` ships that can change how a run goes: no `test_*` file and none under `fixtures/`."""
+    files = parts("files", part)
+    if files is None:
+        return None
+    return {f for f in files if not ("fixtures" in f.split("/")[:-1] or f.split("/")[-1].startswith("test_"))}
+
+
+def case_files(skill, case):
+    """The files the parts of `skill`'s `case` ship, or None when they cannot be read."""
+    try:
+        install = json.loads((EVALS / skill / case / "case.json").read_text()).get("install", [skill])
+    except (ValueError, OSError, AttributeError):
+        return None
+    if not isinstance(install, list) or not all(isinstance(p, str) and p and not p.startswith("-") for p in install):
+        return None
+    named = {skill, *install}
+    closure = parts("closure", "--optional", *sorted(named))
+    if closure is None:
+        return None
+    files = set()
+    for part in closure:
+        if part in named or part not in core():
+            got = shipped(part)
+            if got is None:
+                return None
+            files |= got
+    return files
+
+
 def skill_of(path):
     """The skill whose cases `path` picks, `"*"` for every skill, or None."""
     parts = path.split("/")
@@ -96,8 +145,17 @@ def pick(args):
             skills |= set(cases)
         elif skill_of(path) in cases:
             skills.add(skill_of(path))
-    return [f"{s}/{c}" for s in sorted(skills) for c in cases[s]]
-
+    picked = []
+    for s in sorted(cases):
+        for c in cases[s]:
+            if s not in skills and files:
+                found = case_files(s, c)
+                if found is not None and not found & set(files):
+                    continue
+            elif s not in skills:
+                continue
+            picked.append(f"{s}/{c}")
+    return picked
 
 if __name__ == "__main__":
     for case in pick(sys.argv[1:]):

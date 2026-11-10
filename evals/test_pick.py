@@ -1,5 +1,6 @@
 """Tests for `pick.py`: the eval cases a change affects, run in a throwaway repo holding a copy of `pick.py` and
-`tests/affected.sh`, with skills that have cases (`a`, `b`), one without (`c`) and a shared Settings file."""
+`tests/affected.sh` and `scripts/parts.sh`, with skills that have cases (`a`, `b`), one without (`c`), parts they
+need or install (`lib`, `tool`, the core skill `configure`) and a shared Settings file."""
 import json
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 A = ["a/one", "a/two"]
-B = ["b/one"]
+B = ["b/one", "b/two"]
 EVERY = A + B
 SHARED = {"max_parallel": {"kind": "int", "default": 4, "meaning": "m"},
           "tracker": {"kind": "string", "default": None, "meaning": "t"}}
@@ -31,14 +32,27 @@ class PickTest(unittest.TestCase):
         (r / "tests" / "suites.txt").write_text("repo.test.sh *\n")
         (r / "evals" / "_runner").mkdir(parents=True)
         shutil.copy(REPO / "evals" / "pick.py", r / "evals")
+        (r / "scripts").mkdir()
+        shutil.copy(REPO / "scripts" / "parts.sh", r / "scripts")
+        self.write("groups.json", json.dumps({"core": {"about": "c"}, "g": {"about": "g"}}))
         self.write("evals/_runner/cases.py", "")
         self.write("skills/_shared/conventions.md", "# Conventions\n")
         self.write("skills/_shared/settings.json", json.dumps(SHARED))
         for skill, opt_in in (("a", "max_parallel"), ("b", "tracker"), ("c", "max_parallel")):
             self.write(f"skills/{skill}/SKILL.md", f"---\nname: {skill}\n---\n")
             self.write(f"skills/{skill}/settings.json", json.dumps({opt_in: {"shared": True}}))
+        needs = {"a": {"lib": "optional", "configure": "required"}, "b": {}, "c": {"lib": "required"}, "lib": {},
+                 "tool": {}}
+        for skill, need in needs.items():
+            self.write(f"skills/{skill}/needs.json", json.dumps({"group": "g", "needs": need}))
+        for skill in ("lib", "tool", "configure"):
+            self.write(f"skills/{skill}/SKILL.md", f"---\nname: {skill}\n---\n")
+        self.write("skills/configure/needs.json", json.dumps({"group": "core"}))
+        self.write("skills/lib/brief.md", "brief\n")
+        self.write("adapters/claude/a/helper.py", "")
         for case in EVERY:
             self.write(f"evals/{case}/case.json", "{}")
+        self.write("evals/b/one/case.json", json.dumps({"install": ["b", "tool"]}))
         self.write("docs/x.md", "x\n")
         git(r, "init", "-q")
         git(r, "add", ".")
@@ -86,6 +100,29 @@ class SkillFileTest(PickTest):
         git(self.repo, "commit", "-qam", "b")
         self.assertEqual(self.pick("--base", "HEAD~1"), B)
         self.assertEqual(self.pick(), EVERY)
+
+
+class PartTest(PickTest):
+    def test_a_part_a_skill_needs_picks_that_skills_cases(self):
+        self.assertEqual(self.pick("--", "skills/lib/brief.md"), A)
+
+    def test_a_skills_adapter_helper_picks_that_skills_cases(self):
+        self.assertEqual(self.pick("--", "adapters/claude/a/helper.py"), A)
+
+    def test_a_part_a_case_installs_picks_only_that_case(self):
+        self.assertEqual(self.pick("--", "skills/tool/SKILL.md"), ["b/one"])
+
+    def test_a_test_file_or_fixture_under_a_needed_part_picks_nothing(self):
+        self.write("skills/lib/test_x.py", "")
+        self.write("skills/lib/fixtures/x.md", "x\n")
+        self.assertEqual(self.pick("--", "skills/lib/test_x.py", "skills/lib/fixtures/x.md"), [])
+
+    def test_a_core_part_picks_no_case_of_a_skill_needing_it(self):
+        self.assertEqual(self.pick("--", "skills/configure/SKILL.md"), [])
+
+    def test_a_case_whose_parts_cannot_be_read_is_picked_by_any_change(self):
+        self.write("evals/b/two/case.json", json.dumps({"install": ["nope"]}))
+        self.assertEqual(self.pick("--", "docs/x.md"), ["b/two"])
 
 
 class EveryCaseTest(PickTest):
