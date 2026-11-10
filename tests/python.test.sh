@@ -21,7 +21,8 @@ skills/build-epic/plan_check.py evals
 scripts/settings.sh evals
 skills/_shared/settings.json evals
 skills/build-epic/settings.json evals
-docs/evals.md evals evals/_runner"
+docs/evals.md evals evals/_runner
+tests/affected.sh evals"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
