@@ -411,10 +411,10 @@ It takes the changed files from `tests/affected.sh --files` with the same argume
 | Changed file | Picks |
 |---|---|
 | Under `skills/<s>/`, but not a `test_*` file or one under `fixtures/` | every case of `<s>` |
-| Under `evals/<s>/` | every case of `<s>` |
+| Under `evals/<s>/`, `test_*` files included (`evals/<s>/<case>/checks/test_x.sh`) | every case of `<s>` |
 | A file another part ships (`scripts/parts.sh files`), when that part is in the case's `scripts/parts.sh closure --optional` of its skill and its `install` parts: a part the skill links to or needs (`skills/review-pr/reviewer-brief.md` for `build-epic`), a skill's helpers in `adapters/<tool>/<skill>/`, a part only the case installs. `test_*` files and `fixtures/` do not count. A core part's file counts when the case's skill or `install` names that part, or when the skill's own shipped files name the file by its repo path or its installed path (`~/.agents/bin/settings` for `scripts/settings.sh`, `~/.agents/hooks/<x>` for `scripts/hooks/<x>`), so `scripts/settings.sh` picks the `configure` cases. | that case |
 | `skills/_shared/conventions.md`, anything under `evals/_runner/` but not under a `fixtures/` folder, an `evals/*.py` script | every case |
-| A `test_*` file anywhere under `evals/` (`evals/test_pick.py`, `evals/_runner/adapters/test_claude.py`), anything under a `fixtures/` folder in `evals/_runner/` | no case |
+| A `test_*` file at the top of `evals/` (`evals/test_pick.py`) or anywhere under `evals/_runner/` (`evals/_runner/adapters/test_claude.py`), anything under a `fixtures/` folder in `evals/_runner/` | no case |
 | `skills/_shared/settings.json` | the cases of every skill whose `settings.json` opts in with `{"shared": true}` to a key added, removed or changed since the merge base, and, when any key changed, every `configure` case (it shows and changes every Setting); every case when the changed keys cannot be read (no merge base, a missing or broken file) |
 | A case whose `case.json` or parts cannot be read | that case, on any change |
 
