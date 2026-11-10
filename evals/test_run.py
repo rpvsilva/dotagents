@@ -18,6 +18,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(RUNNER))
 
 import adapters  # noqa: E402
+import judge  # noqa: E402
 import results  # noqa: E402
 import run  # noqa: E402
 from testlib import EvalSandbox  # noqa: E402
@@ -83,12 +84,15 @@ class RunSandbox(EvalSandbox):
         git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "x")
         return repo
 
-    def judging_claude(self, answer, stream="pass.jsonl"):
-        """A fake `claude` that, given a judge prompt, records `judge` and answers `answer` (a JSON-able value);
-        given any other prompt, records `case` and passes the minimal case."""
+    def judging_claude(self, answer, stream="pass.jsonl", usage=None):
+        """A fake `claude` that, given a judge prompt, records `judge` and answers `answer` (a JSON-able value),
+        reporting `usage` as its `modelUsage` when given; given any other prompt, records `case` and passes the
+        minimal case."""
         judge = self.tmp / "judge-stream.jsonl"
-        judge.write_text(json.dumps({"type": "result", "subtype": "success", "is_error": False,
-                                     "result": json.dumps(answer)}) + "\n")
+        event = {"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(answer)}
+        if usage is not None:
+            event["modelUsage"] = usage
+        judge.write_text(json.dumps(event) + "\n")
         self.fake_bin("claude", f'''case "$*" in
 *"You are grading one run"*) echo judge >>"{self.roles}"; cat "{judge}"; exit 0 ;;
 esac
@@ -96,6 +100,11 @@ echo case >>"{self.roles}"
 mkdir -p .agents && echo '{{}}' >.agents/settings.json
 cat "{STREAMS / stream}"
 ''')
+
+    def rubric_case(self, name="configure/quick", **fields):
+        case = self.case(name, **fields)
+        (case / "rubric.md").write_text(RUBRIC)
+        return case
 
     def roles_called(self):
         return self.roles.read_text().split() if self.roles.exists() else []
@@ -288,22 +297,22 @@ class RunTest(RunSandbox):
             self.assertRegex(line, rf"^configure/quick +run {n} +pass +{re.escape(cost)} +turns 2 +12\.5s +cap -$")
 
 
+JUDGE = "claude-haiku-5-5"
+JUDGE_TOKENS = {JUDGE: {"input": 200_000, "output": 20_000, "cacheRead": 0, "cacheWrite5m": 0, "cacheWrite1h": 0}}
+JUDGE_USAGE = {JUDGE: {"inputTokens": 200_000, "outputTokens": 20_000, "cacheReadInputTokens": 0,
+                       "cacheCreationInputTokens": 0}}
 RUBRIC = "# Rubric\n\n- correctness: the setting holds the asked value.\n"
 SCORES = {"correctness": {"score": 4, "reason": "It is set."}}
 
 
 class JudgeTest(RunSandbox):
-    def rubric_case(self, name="configure/quick", **fields):
-        case = self.case(name, **fields)
-        (case / "rubric.md").write_text(RUBRIC)
-        return case
-
     def test_a_case_with_a_rubric_is_judged_after_its_checks(self):
         self.judging_claude(SCORES)
         _, res = self.saved(self.run_cases([self.rubric_case(judge_model="claude-opus-5-5")]))
         self.assertEqual(self.roles_called(), ["case", "judge"])
         self.assertEqual(res["rubric"], {"scores": SCORES, "judge_model": "claude-opus-5-5",
-                                         "rubric_hash": hashlib.sha256(RUBRIC.encode()).hexdigest()})
+                                         "rubric_hash": hashlib.sha256(RUBRIC.encode()).hexdigest(),
+                                         "cost_usd": None})
         self.assertTrue(res["passed"])
         self.assertEqual(res["checks"], {"settings-written": True, "no-github": True})
 
@@ -336,6 +345,87 @@ class JudgeTest(RunSandbox):
         again = self.run_cases([case])
         self.assertEqual(self.roles_called(), ["case", "judge"])
         self.assertEqual(again["runs"][0]["result"]["rubric"], first["runs"][0]["result"]["rubric"])
+
+    def test_the_judges_cost_is_saved_with_its_rubric(self):
+        self.judging_claude(SCORES, usage=JUDGE_USAGE)
+        _, res = self.saved(self.run_cases([self.rubric_case()]))
+        self.assertEqual(res["rubric"]["cost_usd"], priced(JUDGE_TOKENS))
+        self.assertEqual(res["cost_usd"], priced(PASS_TOKENS))
+
+    def test_a_judge_that_tips_the_budget_stops_the_next_run(self):
+        # The case alone stays under the budget; with its judge's cost it reaches it.
+        self.judging_claude(SCORES, usage=JUDGE_USAGE)
+        budget = priced(PASS_TOKENS) + priced(JUDGE_TOKENS) * 0.5
+        got = self.run_cases([self.rubric_case()], runs=2, budget_usd=budget)
+        self.assertEqual(self.roles_called(), ["case", "judge"])
+        self.assertEqual(got["skipped"], [("configure/quick", 2)])
+        self.assertAlmostEqual(got["spent_usd"], priced(PASS_TOKENS) + priced(JUDGE_TOKENS))
+
+    def test_a_judge_of_unknown_cost_counts_as_the_judges_cost_cap(self):
+        self.judging_claude(SCORES)
+        got = self.run_cases([self.rubric_case()], runs=1)
+        self.assertAlmostEqual(got["spent_usd"], priced(PASS_TOKENS) + judge.CAPS["cost_usd"])
+
+
+class ReuseRegradeTest(RunSandbox):
+    """A saved run whose checks or rubric changed since is re-graded on reuse, as `grade.py` does: the case's tool is
+    never called again."""
+
+    def test_an_edited_check_regrades_the_reused_run_with_no_tool_call(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        first = self.run_cases([case])
+        (case / "checks" / "settings-written.sh").write_text("#!/usr/bin/env bash\nexit 1\n")
+        again = self.run_cases([case])
+        self.assertEqual(self.roles_called(), ["case", "judge"])
+        entry = again["runs"][0]
+        self.assertTrue(entry["reused"])
+        self.assertEqual(entry["dir"], first["runs"][0]["dir"])
+        self.assertEqual(entry["result"]["checks"], {"settings-written": False, "no-github": True})
+        self.assertFalse(entry["result"]["passed"])
+        self.assertNotEqual(entry["result"]["checks_hash"], first["runs"][0]["result"]["checks_hash"])
+        self.assertEqual(entry["result"]["rubric"], first["runs"][0]["result"]["rubric"])
+        self.assertEqual(results.read(entry["dir"]), entry["result"])
+        self.assertEqual(again["spent_usd"], 0)
+
+    def test_an_edited_rubric_rejudges_the_reused_run_calling_only_the_judge(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        first = self.run_cases([case])
+        new = RUBRIC + "- clarity: the answer says what changed.\n"
+        (case / "rubric.md").write_text(new)
+        scores = {**SCORES, "clarity": {"score": 2, "reason": "Terse."}}
+        self.judging_claude(scores)
+        again = self.run_cases([case])
+        self.assertEqual(self.roles_called(), ["case", "judge", "judge"])
+        entry = again["runs"][0]
+        self.assertTrue(entry["reused"])
+        self.assertEqual(entry["dir"], first["runs"][0]["dir"])
+        self.assertEqual(entry["result"]["rubric"]["scores"], scores)
+        self.assertEqual(entry["result"]["rubric"]["rubric_hash"], hashlib.sha256(new.encode()).hexdigest())
+        self.assertAlmostEqual(again["spent_usd"], judge.CAPS["cost_usd"])
+
+    def test_a_changed_judge_model_rejudges_the_reused_run_calling_only_the_judge(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        self.run_cases([case])
+        data = json.loads((case / "case.json").read_text())
+        (case / "case.json").write_text(json.dumps({**data, "judge_model": "claude-opus-5-5"}))
+        again = self.run_cases([case])
+        self.assertEqual(self.roles_called(), ["case", "judge", "judge"])
+        self.assertTrue(again["runs"][0]["reused"])
+        self.assertEqual(again["runs"][0]["result"]["rubric"]["judge_model"], "claude-opus-5-5")
+
+    def test_a_rejudge_on_reuse_counts_against_the_budget(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        self.run_cases([case], runs=2)
+        (case / "rubric.md").write_text(RUBRIC + "- clarity: the answer says what changed.\n")
+        self.judging_claude({**SCORES, "clarity": {"score": 2, "reason": "Terse."}})
+        got = self.run_cases([case], runs=2, budget_usd=judge.CAPS["cost_usd"] / 2)
+        self.assertEqual(self.roles_called(), ["case", "judge", "case", "judge", "judge"])
+        self.assertEqual(got["skipped"], [("configure/quick", 2)])
+        self.assertIn("budget", self.printed().splitlines()[-1])
 
 
 class RunsAndReuseTest(RunSandbox):

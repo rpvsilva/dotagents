@@ -12,11 +12,15 @@ kept state, every auth value redacted. A run hitting a cap is saved with which c
 `killed: timeout` line, `turns` and `cost` from the adapter, else from the run's turns and cost over the case's caps,
 for a tool with no such flag); an install failure is saved as `error: install`.
 A case with a rubric then has the saved run judged through the same adapter (`_runner/judge.py`), its `rubric`
-saved with the result; a reused run is not judged again (`grade.py` re-judges).
+saved with the result, the judge's cost in it.
 
-Saved runs of the same tool, ref commit, model and case files are reused unless `--fresh` or they errored. Once the
-cost of the runs made by this invocation reaches `--budget-usd`, no new run starts (a run whose cost is unknown counts
-as its case's cost cap); the saved results stay and the command names the runs it skipped. `--evals` points at
+Saved runs of the same tool, ref commit, model and case files that change a run (`results.case_hash`: not `checks/`,
+the rubric, `judge_model` or `runs`) are reused unless `--fresh` or they errored. A reused run whose checks, rubric or
+`judge_model` changed since is re-graded first, as `grade.py` does (`_runner/grading.py`): checks re-run on its kept
+state, the judge only when the rubric or `judge_model` changed, the case's tool never. Once the cost of the runs and
+judges this invocation made reaches `--budget-usd`, no new run or judge starts (an unknown cost counts as the case's
+cost cap for a run, the judge's `$0.50` cap for a judge); the saved results stay and the command names the runs it
+skipped. `--evals` points at
 another cases folder (default: this repo's `evals/`). Prints one line per run; exits 0, 1 when the budget skipped
 runs, 2 on a usage error (no run made). `run_cases()` is the same for `compare.py`.
 """
@@ -38,6 +42,7 @@ sys.path.insert(0, str(HERE / "_runner"))
 import adapters  # noqa: E402
 import cases  # noqa: E402
 import checks  # noqa: E402
+import grading  # noqa: E402
 import home  # noqa: E402
 import judge  # noqa: E402
 import results  # noqa: E402
@@ -241,6 +246,13 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
                 saved = None if fresh or not (dest / results.RESULT).is_file() else results.read(dest)
                 if saved is not None and saved["error"] is None:
                     res, reused = saved, True
+                    if grading.stale(saved, case):
+                        if grading.needs_judging(saved, case) and spent >= budget_usd:
+                            skipped.append((case_name(case), n))
+                            continue
+                        res, judged = grading.regrade(dest, saved, case, co.path)
+                        if judged:
+                            spent += judge.spent(res["rubric"])
                 elif spent >= budget_usd:
                     skipped.append((case_name(case), n))
                     continue
@@ -248,6 +260,7 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
                     res, reused = run_once(case, n, adapter, tool, use_model, co, dest, pricing, extract), False
                     if res["error"] != "install":
                         spent += res["cost_usd"] if res["cost_usd"] is not None else case["caps"]["cost_usd"]
+                        spent += judge.spent(res["rubric"])
                 done.append({"case": case_name(case), "run": n, "dir": dest, "result": res, "reused": reused})
                 print(line(res, reused), file=out, flush=True)
     finally:

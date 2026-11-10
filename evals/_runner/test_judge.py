@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -68,12 +69,14 @@ class JudgeSandbox(EvalSandbox):
         results.write(run_dir, {"tool": "claude", "model": "claude-sonnet-5-5"})
         return run_dir
 
-    def judge_says(self, text=None):
+    def judge_says(self, text=None, usage=None):
         """The fake judge: records its argv (NUL-separated) and `$HOME`, then prints a stream whose final answer is
-        `text` (no stream at all when None)."""
+        `text` (no stream at all when None), reporting `usage` as its result event's `modelUsage` when given."""
         if text is not None:
-            self.stream.write_text(json.dumps({"type": "result", "subtype": "success", "is_error": False,
-                                               "result": text}) + "\n")
+            event = {"type": "result", "subtype": "success", "is_error": False, "result": text}
+            if usage is not None:
+                event["modelUsage"] = usage
+            self.stream.write_text(json.dumps(event) + "\n")
         body = (f'for a in "$@"; do printf "%s\\0" "$a"; done >"{self.argv}"\n'
                 f'printf "%s" "$HOME" >"{self.seen_home}"\n')
         if text is not None:
@@ -231,3 +234,38 @@ class NoRubricTest(JudgeSandbox):
         got = self.judge(self.case(rubric="# Rubric\n\nJust be good.\n"))
         self.assertIn("criteria", got["error"])
         self.assertFalse(self.argv.exists())
+
+
+class CostTest(JudgeSandbox):
+    USAGE = {"claude-haiku-5-5": {"inputTokens": 1000, "outputTokens": 200, "cacheReadInputTokens": 0,
+                                  "cacheCreationInputTokens": 0}}
+
+    def test_the_judges_cost_is_priced_from_its_tokens(self):
+        self.judge_says(json.dumps(GOOD), usage=self.USAGE)
+        got = self.judge()
+        prices = json.loads((REPO / "skills" / "telemetry" / "pricing.json").read_text())["models"]["claude-haiku-5-5"]
+        self.assertEqual(got["cost_usd"], round((1000 * prices["input"] + 200 * prices["output"]) / 1_000_000, 6))
+        self.assertEqual(judge.spent(got), got["cost_usd"])
+
+    def test_a_judge_reporting_no_tokens_has_unknown_cost_counted_as_its_cost_cap(self):
+        self.judge_says(json.dumps(GOOD))
+        got = self.judge()
+        self.assertIn("cost_usd", got)
+        self.assertIsNone(got["cost_usd"])
+        self.assertEqual(judge.spent(got), judge.CAPS["cost_usd"])
+
+    def test_a_bad_answer_still_records_what_the_judge_cost(self):
+        self.judge_says("not json", usage=self.USAGE)
+        got = self.judge()
+        self.assertIn("error", got)
+        self.assertGreater(got["cost_usd"], 0)
+
+    def test_a_judge_that_never_ran_costs_nothing(self):
+        self.assertEqual(judge.spent(None), 0)
+        got = self.judge(self.case(rubric="no criteria here\n"))
+        self.assertNotIn("cost_usd", got)
+        self.assertEqual(judge.spent(got), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

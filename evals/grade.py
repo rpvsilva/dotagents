@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Re-grade saved eval runs with the current checks and rubric, without running any case again (spec behaviour 14).
 
-  python3 -I evals/grade.py [--results <dir>] [--rejudge] [--ref <ref>] [--evals <dir>] (--all | <skill>/<case>...)
+  python3 -I evals/grade.py [--results <dir>] [--rejudge] [--ref <ref>] [--budget-usd 10] [--evals <dir>]
+                            (--all | <skill>/<case>...)
 
 Each saved run of the named cases (every case with `--all`; only those at `--ref`'s commit with `--ref`), whatever
 its tool, model or case hash, is checked again by the case's current `checks/` and `no-github`
@@ -10,30 +11,30 @@ its tool, model or case hash, is checked again by the case's current `checks/` a
 `checks`, `checks_hash` and `passed` in its `result.json`. The run is judged again (`_runner/judge.py`, through its
 own tool's adapter) only when the case's rubric or `judge_model` differs from the saved one, or with `--rejudge`; a
 case with no rubric now gets `rubric: null`. The judge is the only tool ever called. Every other field is kept.
+Once the judges' cost reaches `--budget-usd` (a judge of unknown cost counting as its `$0.50` cap), no run needing the
+judge is graded: it is left as it is and named; re-running checks costs nothing.
 
 A run saved with `error: install` has no state to check and is left as it is; a saved run whose case folder is gone,
 or whose `result.json` does not read as a result, is named and skipped. Only a `result.json` at the store's run-folder
 depth (`results.run_dir`) is a saved run, never one inside a run's kept state. `--evals` points at another cases folder (default: this repo's `evals/`). Prints one line per
-run; exits 0, 1 when a run could not be graded (its commit missing here), 2 on a usage error or a named case with no
-saved run (nothing graded).
+run; exits 0, 1 when a run could not be graded (its commit missing here, or the budget reached), 2 on a usage error
+or a named case with no saved run (nothing graded).
 """
 import argparse
 import json
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(HERE / "_runner"))
 
-import adapters  # noqa: E402
 import cases  # noqa: E402
-import checks  # noqa: E402
 import home  # noqa: E402
 import judge  # noqa: E402
 import results  # noqa: E402
+from grading import needs_judging, regrade  # noqa: E402
 
 
 class GradeError(ValueError):
@@ -85,36 +86,6 @@ def _sha(repo, ref):
         raise GradeError(str(err)) from None
 
 
-def needs_judging(res, case, rejudge):
-    """True when the run's saved rubric no longer stands for the case's rubric."""
-    if not case.get("rubric"):
-        return False
-    old = res["rubric"] or {}
-    return rejudge or old.get("rubric_hash") != judge.rubric_hash(case) or old.get("judge_model") != case["judge_model"]
-
-
-def regrade(run_dir, res, case, checkout_dir, rejudge=False):
-    """The run kept in `run_dir` (its saved result `res`) checked again and, when `needs_judging`, judged again;
-    saved and returned with whether the judge ran."""
-    run_dir = Path(run_dir)
-    with tempfile.TemporaryDirectory(prefix="evals-grade-input-") as empty:
-        paths = {"work": run_dir / "work", "scratch": run_dir / "scratch", "home": run_dir / "home",
-                 "input": case.get("input") or Path(empty), "transcript": run_dir / (res["transcript"] or
-                                                                                    adapters.TRANSCRIPT),
-                 "gh_calls": run_dir / "gh-calls", "checkout": checkout_dir}
-        found = checks.run(case["checks"], paths)
-    new = {**res, "checks": found, "checks_hash": checks.checks_hash(case["dir"]),
-           "passed": all(found.values()) and not res["capped"] and not res["error"]}
-    judged = needs_judging(res, case, rejudge)
-    if not case.get("rubric"):
-        new["rubric"] = None
-    results.write(run_dir, new)
-    if judged:
-        new["rubric"] = judge.judge(run_dir, case, checkout_dir, res["tool"])
-        results.write(run_dir, new)
-    return results.read(run_dir), judged
-
-
 def line(res, judged):
     rubric = "judged" if judged else ("kept" if res["rubric"] else "none")
     if res["rubric"] and "error" in res["rubric"]:
@@ -123,10 +94,12 @@ def line(res, judged):
             f"{'pass' if res['passed'] else 'fail'}  rubric {rubric}")
 
 
-def grade(names, every=False, results_root=None, rejudge=False, ref=None, repo=REPO, evals=HERE, out=None):
+def grade(names, every=False, results_root=None, rejudge=False, ref=None, repo=REPO, evals=HERE, out=None,
+          budget_usd=10.0):
     """Re-grade the saved runs of `names` (`<skill>/<case>`), or every saved run with `every`, as the module says.
-    Returns `{graded: [(run_dir, result)], skipped: [(run_dir, why)], failed: [(run_dir, why)]}`. Raises GradeError
-    before grading anything on a bad `ref` or a named case with no folder or no saved run."""
+    Returns `{graded: [(run_dir, result)], skipped: [(run_dir, why)], failed: [(run_dir, why)], over_budget:
+    [run_dir], spent_usd}`. Raises GradeError before grading anything on a bad `ref` or a named case with no folder or
+    no saved run."""
     out = out or sys.stdout
     sha = _sha(repo, ref) if ref else None
     root = results.store_root(results_root)
@@ -145,7 +118,7 @@ def grade(names, every=False, results_root=None, rejudge=False, ref=None, repo=R
             raise GradeError(f"no saved run of {', '.join(missing)}" + (f" at {ref}" if ref else ""))
         runs = [(d, r) for d, r in runs if r["case"] in names]
     loaded, checkouts = {}, {}
-    graded, skipped, failed = [], list(unread), []
+    graded, skipped, failed, over_budget, spent = [], list(unread), [], [], 0.0
     for run_dir, why in unread:
         print(f"{_store_case(root, run_dir)}  {run_dir.name}  skipped: {why}", file=out, flush=True)
     try:
@@ -179,14 +152,21 @@ def grade(names, every=False, results_root=None, rejudge=False, ref=None, repo=R
                 failed.append((run_dir, str(co)))
                 print(f"{name}  run {res['run']}  not graded: {co}", file=out, flush=True)
                 continue
+            if needs_judging(res, case, rejudge) and spent >= budget_usd:
+                over_budget.append(run_dir)
+                print(f"{name}  run {res['run']}  not graded: budget of ${budget_usd:g} reached (${spent:.4f} spent)",
+                      file=out, flush=True)
+                continue
             new, judged = regrade(run_dir, res, case, co.path, rejudge)
+            if judged:
+                spent += judge.spent(new["rubric"])
             graded.append((run_dir, new))
             print(line(new, judged), file=out, flush=True)
     finally:
         for co in checkouts.values():
             if not isinstance(co, Exception):
                 co.close()
-    return {"graded": graded, "skipped": skipped, "failed": failed}
+    return {"graded": graded, "skipped": skipped, "failed": failed, "over_budget": over_budget, "spent_usd": spent}
 
 
 def main(argv):
@@ -195,19 +175,22 @@ def main(argv):
     parser.add_argument("--results")
     parser.add_argument("--rejudge", action="store_true")
     parser.add_argument("--ref")
+    parser.add_argument("--budget-usd", type=float, default=10.0)
     parser.add_argument("--evals", default=str(HERE))
     parser.add_argument("--all", action="store_true")
     parser.add_argument("cases", nargs="*")
     args = parser.parse_args(argv)
     if args.all == bool(args.cases):
         parser.error("give --all or one or more <skill>/<case>, not both")
+    if args.budget_usd <= 0:
+        parser.error("--budget-usd must be over 0")
     try:
         got = grade(args.cases, every=args.all, results_root=args.results, rejudge=args.rejudge, ref=args.ref,
-                    evals=Path(args.evals))
+                    evals=Path(args.evals), budget_usd=args.budget_usd)
     except GradeError as err:
         print(f"grade.py: {err}", file=sys.stderr)
         return 2
-    return 1 if got["failed"] else 0
+    return 1 if got["failed"] or got["over_budget"] else 0
 
 
 if __name__ == "__main__":

@@ -157,7 +157,7 @@ After the tool exits, `evals/_runner/checks.py` runs each check in `work/`, with
 
 ### Cost ceiling
 
-`--budget-usd` caps what one invocation spends. Once the summed cost of the runs it made reaches it, no new run starts: the results saved so far stay, the remaining runs are named on the last line, and the command exits 1. A reused run and an install failure cost nothing against it; a run whose cost is unknown counts as its case's `cost_usd` cap.
+`--budget-usd` caps what one invocation spends. Once the summed cost of the runs and judges it made reaches it, no new run or judge starts: the results saved so far stay, the remaining runs are named on the last line, and the command exits 1. The judge's cost ([The judge](#the-judge)) counts like the run's, so a judge can be what tips the budget. A reused run and an install failure cost nothing against it, unless the reused run is judged again (below); a run whose cost is unknown counts as its case's `cost_usd` cap, a judge whose cost is unknown as its $0.50 cap.
 
 ### Results
 
@@ -177,7 +177,9 @@ Results live in the store, never in the repo, and are never committed:
 
 ### Reuse and `--fresh`
 
-A saved run is reused, with no tool call, when the tool, the ref's commit, the model and every file of the case (the case hash) are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+A saved run is reused, with no tool call, when the tool, the ref's commit, the model and the case hash are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+
+The case hash covers only what changes a run: every file of the case except `checks/` and the rubric (`rubric.md`, or the file `case.json`'s `rubric` names), and every field of `case.json` except `rubric`, `judge_model` and `runs`. Those are graded, not run, so editing them never pays for the case again: a reused run whose `checks_hash`, `rubric_hash` or `judge_model` differs from the case's is re-graded first, as [`grade.py`](#grade-runs) does. Its checks run again on its kept state, the judge runs again only when the rubric or `judge_model` changed, and the case's tool is never called. A changed `runs` reuses the saved runs it still counts and makes only the new ones.
 
 ### Codex
 
@@ -243,12 +245,12 @@ Write each criterion so a reader of the run's answer, diff and scratch files (be
 
 ### The judge
 
-When a case has a rubric, `run.py` judges each run it makes once the checks have run; a reused run keeps its saved rubric. The judge:
+When a case has a rubric, `run.py` judges each run it makes once the checks have run; a reused run keeps its saved rubric unless the rubric or `judge_model` changed since ([Reuse and `--fresh`](#reuse-and---fresh)). The judge:
 
 - **Model**: the case's `judge_model`, default `claude-haiku-5-5`, recorded in the result. `--model` does not change it.
 - **Tool**: runs on the run's own tool, through the same adapter and the same [Auth](#auth) env vars as the case, in a throwaway home and an empty work folder, both removed after, under `scripts/capped` with 2 turns, 300 s and $0.50.
 - **On Codex or Cursor**: the default `claude-haiku-5-5` is a Claude ID those tools cannot run, so the judge fails and the run's `rubric` is saved as an error. Give such a case a `judge_model` its tool runs. No test yet covers a rubric case on either tool.
-- **Cost**: not recorded and not counted against `--budget-usd`.
+- **Cost**: its tokens priced by [`skills/telemetry/pricing.json`](../skills/telemetry/pricing.json), saved as the rubric's `cost_usd` (`null` when unknown), apart from the run's own `cost_usd`. It counts against `--budget-usd` in `run.py` and `grade.py`; an unknown one counts as the judge's $0.50 cap.
 
 The judge sees only:
 
@@ -265,16 +267,18 @@ The judge answers one JSON object, a score from 1 to 5 and a one-line reason per
 
 | Outcome | `rubric` |
 |---|---|
-| Judged | `{"scores": {"<criterion>": {"score": 1-5, "reason": "..."}}, "judge_model", "rubric_hash"}` |
-| The judge failed: no answer, not JSON, a criterion missing or extra, a score out of range, or it could not start | `{"error": "<what went wrong>", "judge_model", "rubric_hash"}` |
+| Judged | `{"scores": {"<criterion>": {"score": 1-5, "reason": "..."}}, "judge_model", "rubric_hash", "cost_usd"}` |
+| The judge failed: no answer, not JSON, a criterion missing or extra, or a score out of range | `{"error": "<what went wrong>", "judge_model", "rubric_hash", "cost_usd"}` |
+| No judge ran: it could not start, or the rubric has no criteria | `{"error": "<what went wrong>", "judge_model", "rubric_hash"}`, no `cost_usd` (costs nothing) |
 | No rubric | `null` |
 
-`rubric_hash` is the sha256 of the rubric file, so re-grading can tell when it changed.
+`rubric_hash` is the sha256 of the rubric file, so re-grading can tell when it changed, as `checks_hash` does for `checks/`; neither is part of the case hash.
 
 ### Grade runs
 
 ```bash
-python3 -I evals/grade.py [--results <dir>] [--rejudge] [--ref <ref>] [--evals <dir>] (--all | <skill>/<case>...)
+python3 -I evals/grade.py [--results <dir>] [--rejudge] [--ref <ref>] [--budget-usd 10] [--evals <dir>] \
+                          (--all | <skill>/<case>...)
 ```
 
 It grades saved runs again with the case's current checks and rubric. Grading never runs a case again: no tool call for the case itself, only the judge when a rubric score needs redoing. It works on every saved run of the named cases, whatever its tool, model or case hash.
@@ -284,6 +288,7 @@ It grades saved runs again with the case's current checks and rubric. Grading ne
 | `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store to grade. |
 | `--rejudge` | off | Judges every graded run with a rubric again, even when its rubric and `judge_model` are unchanged. |
 | `--ref` | every ref | Grades only the runs made at this ref's commit. |
+| `--budget-usd` | `10` | The cost ceiling for the judges this invocation starts, over 0 (see below). |
 | `--evals` | this repo's `evals/` | Another folder of cases. |
 | `--all` | off | Every saved run. Give `--all` or case names, not both. |
 | `-h`, `--help` | | Prints the usage. |
@@ -296,7 +301,7 @@ For each run, it:
 
 Re-grading needs the run's kept state: delete a run's `work/`, `home/` or `scratch/` and its checks have nothing to read. A run saved with `error: install` has no state, so it is left as it is. A run whose case folder is gone, or whose `result.json` does not read, is named and skipped.
 
-`--rejudge` and `--all` together judge every saved run with a rubric, with no cost ceiling: `grade.py` has no `--budget-usd`. Narrow it with case names or `--ref`.
+Once the judges' summed cost reaches `--budget-usd` (an unknown one counting as the judge's $0.50 cap), a run that needs the judge is no longer graded: it is left as it is, named with `not graded: budget ...`, and the command exits 1. Re-running checks costs nothing, so a run needing no judge is always graded. `--rejudge` and `--all` together judge every saved run with a rubric: narrow it with case names or `--ref`, or raise the budget.
 
 Each run prints one line:
 
@@ -309,5 +314,5 @@ That is the case, the run number, the tool, model and the first 12 characters of
 | Exit | Meaning |
 |---|---|
 | `0` | Every run found was graded or skipped. |
-| `1` | A run could not be graded: its commit is missing from this repo. |
+| `1` | A run could not be graded: its commit is missing from this repo, or the budget was reached before its judge. |
 | `2` | A usage error, a bad `--ref`, an unknown case or a named case with no saved run: nothing graded. |
