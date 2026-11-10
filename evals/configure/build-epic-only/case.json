@@ -1,0 +1,1 @@
+{"model": "claude-sonnet-5-5", "runs": 3, "caps": {"turns": 20, "secs": 420, "cost_usd": 1}, "settings": {"max_parallel": 3}, "install": ["configure", "build-epic"]}
