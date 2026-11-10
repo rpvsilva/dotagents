@@ -393,3 +393,55 @@ Each cell reads `base → head (difference)`. A metric shows its median, with it
 In the example, the pass count moved from 1 to 3 of 3, a real change, so the case is `better`; the rubric's ranges overlap, so that criterion alone is `noise`.
 
 The report ends with **Worth more runs**: the cases to run again, or `No case.`
+
+## When evals run
+
+Evals bill a model per run, so nothing runs them unless you ask. CI (`.github/workflows/ci.yml`) never runs them: `tests/repo.test.sh` fails if a workflow names `evals/` or `EVALS`.
+
+### What a change picks
+
+`evals/pick.py` prints the cases a change affects, one `<skill>/<case>` per line:
+
+```bash
+python3 -I evals/pick.py [--all | --base <ref> | -- <path>...]
+```
+
+It takes the changed files from `tests/affected.sh --files` with the same arguments: since the merge base with `origin/main` (committed, uncommitted or untracked), since `--base <ref>`, or the paths after `--`. [`AGENTS.md`'s Checks](../AGENTS.md#checks) says how `tests/affected.sh` picks them. Then:
+
+| Changed file | Picks |
+|---|---|
+| Under `skills/<s>/`, but not a `test_*` file or one under `fixtures/` | every case of `<s>` |
+| Under `evals/<s>/` | every case of `<s>` |
+| A file another part ships (`scripts/parts.sh files`), when that part is in the case's `scripts/parts.sh closure --optional` of its skill and its `install` parts: a part the skill links to or needs (`skills/review-pr/reviewer-brief.md` for `build-epic`), a skill's helpers in `adapters/<tool>/<skill>/`, a part only the case installs. `test_*` files and `fixtures/` do not count. A core part's file counts when the case's skill or `install` names that part, or when the skill's own shipped files name the file by its repo path or its installed path (`~/.agents/bin/settings` for `scripts/settings.sh`, `~/.agents/hooks/<x>` for `scripts/hooks/<x>`), so `scripts/settings.sh` picks the `configure` cases. | that case |
+| `skills/_shared/conventions.md`, anything under `evals/_runner/`, an `evals/*.py` script | every case |
+| `skills/_shared/settings.json` | the cases of every skill whose `settings.json` opts in with `{"shared": true}` to a key added, removed or changed since the merge base; every case when the changed keys cannot be read (no merge base, a missing or broken file) |
+| A case whose `case.json` or parts cannot be read | that case, on any change |
+
+`--all`, and a change with no merge base, pick every case. A change touching no skill with cases prints nothing.
+
+### `EVALS` in `tests/run.sh`
+
+`tests/run.sh` runs the evals last, after the suites, once, outside the macOS bash 3.2 pass (which would bill every run twice). The `EVALS` env var opts in, the way `REMOTE_SMOKE=1` opts in to `tests/remote-smoke.test.sh`:
+
+| `EVALS` | What runs |
+|---|---|
+| unset | Nothing. The line `== evals: skipped (...)` names the cases `evals/pick.py` picks. |
+| `1` | `evals/compare.py --tool claude --base origin/main --head HEAD` on the picked cases ([Compare two refs](#compare-two-refs)); `no case picked` when none. |
+| `all` | The same compare on every case. |
+
+Any other value is a usage error (exit 2). `tests/run.sh`'s arguments (`--all`, `--base <ref>`, `-- <path>...`) pass to `evals/pick.py` too. The compare runs commit `HEAD`, not the working tree: commit first. A failed compare fails `tests/run.sh`.
+
+```bash
+EVALS=1 tests/run.sh      # the suites, then the picked cases, HEAD against origin/main
+EVALS=all tests/run.sh    # the suites, then every case
+```
+
+### After a model or tool update
+
+A new model or a new tool version can move every case, whatever changed in the repo. Run the whole suite at once with the new model:
+
+```bash
+python3 -I evals/run.py --tool claude --ref main --all --model <full id>
+```
+
+To see what the update changed, compare the same ref on both models: `evals/compare.py --tool claude --base main --head main --base-model <old id> --head-model <new id> --all`.
