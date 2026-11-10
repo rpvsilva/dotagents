@@ -59,7 +59,7 @@ class PilotConfigure(EvalSandbox):
         return [n for n, ok in results.items() if not ok]
 
     def assertPasses(self, results):
-        self.assertEqual(self.failed(results), [])
+        self.assertEqual([n for n, ok in results.items() if not ok], [])
 
     def assertFails(self, results, *names):
         """Every check in `names` failed (at least one given)."""
