@@ -481,6 +481,10 @@ python3 -I evals/run.py --tool claude --ref main --all --model <full id>
 
 To see what the update changed, compare the same ref on both models: `evals/compare.py --tool claude --base main --head main --base-model <old id> --head-model <new id> --all`.
 
+## Baselines
+
+A baseline measures a whole build-epic run rather than one case: `evals/_baseline/402/` replays a fixed plan of the sandbox's epic #402 into a fresh integration branch and scores the result with hidden acceptance tests, the run's review findings, red merges and hand fixes. Its [README](../evals/_baseline/402/README.md) holds the replay commands and the calibration on the four earlier builds. It bills a real build-epic run, so it runs only by hand.
+
 ## Pilot
 
 The first run of the cases, to see whether evals are worth keeping (#378). The cases are the seven in this repo, built as [Eval cases](#eval-cases) says and run as [Run cases](#run-cases) says:
