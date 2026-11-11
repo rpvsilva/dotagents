@@ -481,6 +481,40 @@ class RemoteCompareTest(RunSandbox):
         self.assertEqual(self.call_count(), 0)
         self.assertEqual(self.calls_of_remote_agent(), [])
 
+    def refused_before_any_run(self, case, message, **kw):
+        with self.assertRaises(compare.run.RunError) as caught:
+            self.compare([case], **kw)
+        self.assertIn(message, str(caught.exception))
+        self.assertEqual(self.call_count(), 0)
+        self.assertEqual(self.calls_of_remote_agent(), [])
+
+    def test_a_remote_side_with_a_backend_that_is_not_ready_is_refused_before_the_base_runs(self):
+        self.remote_agent(ready="echo 'no token' >&2; exit 1")
+        case = self.case()
+        for kw in ({"head_remote": True}, {"base_remote": True}, {"remote": True}):
+            with self.subTest(kw=kw):
+                self.refused_before_any_run(case, "remote-agent is not ready: no token", **kw)
+
+    def test_a_case_set_the_head_cannot_run_remotely_is_refused_before_the_base_runs(self):
+        case = self.case()
+        (case / "prompt.md").write_text("Look in {home}\n")
+        self.refused_before_any_run(case, "no case can run remotely", head_remote=True)
+
+    def test_a_fixture_holding_eval_scratch_is_refused_for_a_remote_head_before_the_base_runs(self):
+        case = self.case()
+        (case / "fixture" / ".eval-scratch").mkdir()
+        (case / "fixture" / ".eval-scratch" / "x").write_text("x")
+        self.refused_before_any_run(case, ".eval-scratch", head_remote=True)
+
+    def test_the_cli_exits_2_for_a_remote_head_whose_backend_is_not_ready(self):
+        self.remote_agent(ready="echo 'no token' >&2; exit 1")
+        self.case("configure/a")
+        out = self.cli("--tool", "claude", "--head-remote", "--runs", "1", "--base", "HEAD", "--head", "HEAD",
+                       "--evals", str(self.evals), "--results", str(self.tmp / "s"), "configure/a")
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("compare.py: remote-agent is not ready", out.stderr)
+        self.assertEqual(self.call_count(), 0)
+
     def test_the_cli_takes_the_three_flags_and_exits_2_for_codex(self):
         self.case("configure/a")
         base = ("--base", "HEAD", "--head", "HEAD", "--evals", str(self.evals), "--results", str(self.tmp / "s"))

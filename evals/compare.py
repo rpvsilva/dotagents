@@ -23,6 +23,7 @@ authentication: the stop line `run_cases` printed is the last word, the head is 
 report is written.
 """
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -145,6 +146,10 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
 
     for side, ref in (("base", base), ("head", head)):
         _check_side(tool, ref, case_dirs, models[side], repo)
+    for side in SIDES:
+        if remotes[side]:
+            with open(os.devnull, "w") as quiet:
+                run.check_remote(tool, loaded, quiet)
 
     # Run n of every case on the base, then on the head, then run n+1: drift over the session (API load, time of
     # day) then falls on both refs alike, not on the head alone. An auth stop ends the loop at once.
