@@ -325,8 +325,8 @@ That is the case, the run number, the tool, model and the first 12 characters of
 
 ```bash
 python3 -I evals/compare.py --tool claude --base <ref> --head <ref> [--runs N] [--model <id>] \
-  [--base-model <id>] [--head-model <id>] [--budget-usd 10] [--results <dir>] [--out <file.md>] \
-  [--html <file.html>] [--evals <dir>] (--all | <skill>/<case>...)
+  [--base-model <id>] [--head-model <id>] [--remote | --base-remote | --head-remote] [--budget-usd 10] \
+  [--results <dir>] [--out <file.md>] [--html <file.html>] [--evals <dir>] (--all | <skill>/<case>...)
 ```
 
 It runs each named case, or every case with `--all`, on both refs and reports, per case, whether the head is better, worse or within noise of the base. Use it to judge a change to a skill: `--base main --head <your branch>`.
@@ -340,9 +340,12 @@ It runs each named case, or every case with `--all`, on both refs and reports, p
 | `--model` | the case's `model` | The model of every case on both refs, as a full ID. Required on a tool whose adapter does not run the case's Claude model. |
 | `--base-model` | `--model` | The base ref's model alone, e.g. to compare two models on one ref. |
 | `--head-model` | `--model` | The head ref's model alone. |
+| `--remote` | off | Runs both refs through the remote backend, as `run.py --remote` does. `--tool claude` only (else exit 2 before any run). The report labels each side `local` or `remote (<backend>)`. |
+| `--base-remote` | `--remote` | Runs the base ref alone through the remote backend. |
+| `--head-remote` | `--remote` | Runs the head ref alone through the remote backend, e.g. a local and a remote run of one ref. Both runs are saved apart and reused next time. |
 | `--budget-usd` | `10` | One cost ceiling for both refs, over 0, spent in the order the runs are made ([Cost ceiling](#cost-ceiling)). |
 | `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store, read for saved runs and written with new ones. |
-| `--out` | `<store>/reports/<tool>-<base sha>-<head sha>.md`, with each sha's first 12 characters | Where the Markdown report is written. |
+| `--out` | `<store>/reports/<tool>-<base sha>-<head sha>.md`, with each sha's first 12 characters and `@<backend>` after a remote side's sha | Where the Markdown report is written. |
 | `--html` | none | Also writes the report as one self-contained HTML page there. |
 | `--evals` | this repo's `evals/` | Another folder of cases. |
 | `--all` | off | Every case under `--evals`. Give `--all` or case names, not both. |

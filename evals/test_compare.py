@@ -16,6 +16,7 @@ sys.path.insert(0, str(HERE / "_runner"))
 
 import compare  # noqa: E402
 import results  # noqa: E402
+import test_run  # noqa: E402
 from test_run import MODEL, STREAMS, PASS_TOKENS, RUBRIC, SCORES, RunSandbox, git, pricing, priced  # noqa: E402
 
 
@@ -392,6 +393,103 @@ class CliTest(RunSandbox):
                 self.assertNotIn("Traceback", out.stderr)
         self.assertEqual(self.call_count(), 0)
         self.assertFalse((REPO / "r.md").exists())
+
+
+class RemoteCompareTest(RunSandbox):
+    """`--base-remote`, `--head-remote` and `--remote`: a side runs through the stub `remote-agent` of `RemoteTest`."""
+    remote_agent = test_run.RemoteTest.remote_agent
+    calls_of_remote_agent = test_run.RemoteTest.calls_of_remote_agent
+
+    def setUp(self):
+        super().setUp()
+        self.ra_calls = self.tmp / "ra-calls"
+        self.ra_argv = self.tmp / "ra-argv"
+        self.ra_env = self.tmp / "ra-env"
+        self.ra_stdin = self.tmp / "ra-stdin"
+        self.ra_cwd = self.tmp / "ra-cwd"
+        self.passing_claude()
+        self.remote_agent()
+        self.repo = self.fake_repo("exit 0\n")
+        self.report = self.tmp / "report.md"
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, "-I", str(HERE / "compare.py"), *args], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, env=os.environ.copy())
+
+    def compare(self, cases, base="HEAD", head="HEAD", **kw):
+        kw.setdefault("runs", 1)
+        kw.setdefault("out_md", self.report)
+        with open(self.out, "a") as out:
+            return compare.compare("claude", base, head, cases, repo=self.repo, out=out, **kw)
+
+    def test_the_same_ref_with_head_remote_calls_remote_agent_once_and_claude_once(self):
+        got = self.compare([self.case()], head_remote=True)
+        self.assertEqual(self.calls_of_remote_agent(), ["call"])
+        self.assertEqual(self.call_count(), 1)
+        self.assertEqual(got["base"]["runs"][0]["result"]["remote"], False)
+        self.assertEqual(got["head"]["runs"][0]["result"]["backend"], "docker")
+
+    def test_a_second_compare_reuses_both_the_local_and_the_remote_run(self):
+        case = self.case()
+        self.compare([case], head_remote=True)
+        again = self.compare([case], head_remote=True)
+        self.assertEqual(self.calls_of_remote_agent(), ["call"])
+        self.assertEqual(self.call_count(), 1)
+        self.assertTrue(all(r["reused"] for side in ("base", "head") for r in again[side]["runs"]))
+
+    def test_each_side_is_labelled_local_or_remote_in_both_formats(self):
+        html = self.tmp / "report.html"
+        got = self.compare([self.case()], head_remote=True, out_html=html)
+        self.assertEqual((got["comparison"]["base"]["where"], got["comparison"]["head"]["where"]),
+                         ("local", "remote (docker)"))
+        md = self.report.read_text()
+        self.assertRegex(md, r"- Base: .*, local\n")
+        self.assertRegex(md, r"- Head: .*, remote \(docker\)\n")
+        self.assertIn("remote (docker)", html.read_text())
+        self.assertIn(", local<", html.read_text())
+
+    def test_remote_for_both_sides_labels_both_remote(self):
+        got = self.compare([self.case()], remote=True)
+        self.assertEqual(self.calls_of_remote_agent(), ["call"])
+        self.assertEqual([got["comparison"][s]["where"] for s in ("base", "head")], ["remote (docker)"] * 2)
+
+    def test_the_default_report_path_gains_the_backend_only_for_a_remote_side(self):
+        case = self.case()
+        local = self.compare([case], out_md=None, results_root=self.tmp / "s")["out_md"]
+        remote = self.compare([case], out_md=None, results_root=self.tmp / "s", head_remote=True)["out_md"]
+        sha = git(self.repo, "rev-parse", "HEAD")[:12]
+        self.assertEqual(local.name, f"claude-{sha}-{sha}.md")
+        self.assertEqual(remote.name, f"claude-{sha}-{sha}@docker.md")
+        base_side = self.compare([case], out_md=None, results_root=self.tmp / "s", base_remote=True)["out_md"]
+        self.assertEqual(base_side.name, f"claude-{sha}@docker-{sha}.md")
+
+    def test_an_all_local_comparison_carries_no_where(self):
+        got = self.compare([self.case()])
+        self.assertNotIn("where", got["comparison"]["base"])
+        self.assertNotIn("local", self.report.read_text().split("|")[0])
+
+    def test_remote_with_another_tool_is_refused_before_the_base_runs(self):
+        case = self.case()
+        for kw in ({"remote": True}, {"base_remote": True}, {"head_remote": True}):
+            with self.subTest(kw=kw):
+                with open(self.out, "a") as out, mock.patch.object(compare.run, "run_cases") as ran, \
+                        self.assertRaises(compare.run.RunError) as caught:
+                    compare.compare("codex", "HEAD", "HEAD", [case], model=MODEL, repo=self.repo, out=out,
+                                    out_md=self.report, **kw)
+                self.assertIn("claude", str(caught.exception))
+                ran.assert_not_called()
+        self.assertEqual(self.call_count(), 0)
+        self.assertEqual(self.calls_of_remote_agent(), [])
+
+    def test_the_cli_takes_the_three_flags_and_exits_2_for_codex(self):
+        self.case("configure/a")
+        base = ("--base", "HEAD", "--head", "HEAD", "--evals", str(self.evals), "--results", str(self.tmp / "s"))
+        out = self.cli("--tool", "codex", "--model", MODEL, "--head-remote", *base, "configure/a")
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("compare.py: --remote needs --tool claude", out.stderr)
+        out = self.cli("--tool", "claude", "--head-remote", "--runs", "1", *base, "configure/a")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("remote (docker)", out.stdout)
 
 
 if __name__ == "__main__":
