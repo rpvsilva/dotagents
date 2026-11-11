@@ -80,6 +80,8 @@ grep -q "keyed" "$SANDBOX/pack.err" || fail "pack: dropped MCP server not report
 # $SANDBOX/nomain. With $SANDBOX/vanish, the fake run prints that file on stderr and fails, as a run whose container
 # went away mid-run.
 POD="$SANDBOX/pod"
+# The sandbox reads its memory limit from this cgroup folder: none here, unless a case writes one.
+export REMOTE_AGENT_CGROUP="$SANDBOX/cgroup"
 mkdir -p "$SANDBOX/bin" "$SANDBOX/config/dotagents"
 cat >"$SANDBOX/bin/kubectl" <<EOF
 #!/usr/bin/env bash
@@ -130,6 +132,8 @@ case " \$* " in
     [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
     mkdir -p "\$pod/out"; cp "\$patch" "\$pod/out/changes.patch"
     if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "\$pod/out/summary.md"; else echo "did the thing" >"\$pod/out/summary.md"; fi
+    # With $SANDBOX/reportfile, the report file the agent wrote as ~/out/report.md.
+    [ ! -e "$SANDBOX/reportfile" ] || cp "$SANDBOX/reportfile" "\$pod/out/report.md"
     # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
     # it read the victim in as the session, and a forged run.json.
     if [ -e "$SANDBOX/evil" ]; then
@@ -147,7 +151,8 @@ EOF
 chmod +x "$SANDBOX/bin/kubectl"
 mkdir -p "$SANDBOX/podbin"
 # It also starts a session as Claude does, under $HOME/.claude/projects/<munged cwd>, holding the token and cwd
-# lines; not with $SANDBOX/nosession. It saves the shell prefix it was given to $SANDBOX/prefix. With $SANDBOX/killmsg,
+# lines; not with $SANDBOX/nosession. It saves the shell prefix it was given to $SANDBOX/prefix, and its CAPPED_MB and
+# CAPPED_SECS to $SANDBOX/capped-env. With $SANDBOX/killmsg,
 # it appends that file to ~/out/capped.log, as the prefix does with capped's kill line. With $SANDBOX/quote, it prints
 # that file's events, and stops there with exit 1 when one is a result. With $SANDBOX/loop, it runs a red test that loops (a minute: a broken cap fails, not hangs, this test) as
 # Claude Code runs a Bash command under CLAUDE_CODE_SHELL_PREFIX: the prefix, then the whole command line as one
@@ -156,7 +161,9 @@ mkdir -p "$SANDBOX/podbin"
 cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
+printf '%s\n' "\$@" >"$SANDBOX/claude-args"
 printf '%s' "\${CLAUDE_CODE_SHELL_PREFIX:-}" >"$SANDBOX/prefix"
+printf '%s %s\n' "\${CAPPED_MB:-}" "\${CAPPED_SECS:-}" >"$SANDBOX/capped-env"
 [ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >>"\$HOME/out/capped.log"
 if [ -e "$SANDBOX/loop" ]; then
   "\$CLAUDE_CODE_SHELL_PREFIX" "shopt -u extglob 2>/dev/null || true && eval 'while [ \\\$SECONDS -lt 60 ]; do :; done' && pwd -P >| /dev/null" >/dev/null 2>&1
@@ -309,7 +316,7 @@ rm "$W/hello.txt"
 # the transcript's last result event and the init event's model, the changed files from the patch, the report's
 # status and follow-ups from the summary. The events and the summary carry the token, which never reaches it.
 {
-  echo '{"type":"system","subtype":"init","model":"claude-test-1","session_id":"s"}'
+  echo '{"type":"system","subtype":"init","model":"claude-test-1","claude_code_version":"9.8.7","session_id":"s"}'
   echo '{"type":"result","is_error":false,"num_turns":1,"total_cost_usd":0.01,"usage":{"input_tokens":1}}'
   echo '{"type":"assistant","message":{"content":[{"type":"text","text":"key sk-claude-secret"}]}}'
   echo '{"type":"result","is_error":false,"duration_ms":4200,"num_turns":7,"total_cost_usd":1.25,"result":"sk-claude-secret","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300}}'
@@ -319,16 +326,30 @@ run 0 "$patch" --name "08-result" || fail "result on exit 0: exited non-zero: $(
 result_is "result on exit 0" '.exit_code == 0 and .status == "done" and .complete == true and .name == "08-result"
   and (.run | startswith("agent-")) and .num_turns == 7 and .total_cost_usd == 1.25 and .duration_ms == 4200
   and .usage == {"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300} and .model == "claude-test-1"
-  and .changed == ["hello.txt"] and .report_status == "done"
+  and .claude_version == "9.8.7" and .changed == ["hello.txt"] and .report_status == "done"
   and .follow_up == ["document --flag", "token [redacted]"] and (.report_path | endswith("/summary.md"))'
 rm -f "$W/hello.txt"
+
+# A report file the agent wrote as ~/out/report.md: stdout and report_path give it, then the final message (the
+# block); the status and follow-ups still come from the final message. The token is redacted in it too.
+printf 'Built hello.txt.\nkey sk-claude-secret\n' >"$SANDBOX/reportfile"
+printf 'status: done\nchanged: hello.txt\nwhy:\nfollow-up: document --flag\n' >"$SANDBOX/summary"
+run 0 "$patch" --name "08-report-file" || fail "report file: exited non-zero: $(cat "$SANDBOX/out")"
+want="$(printf 'Built hello.txt.\nkey [redacted]\n\nstatus: done\nchanged: hello.txt\nwhy:\nfollow-up: document --flag')"
+[ "$(cat "$SANDBOX/report")" = "$want" ] || fail "report file: stdout is not the report then the block: $(cat "$SANDBOX/report")"
+result_is "report file" '.report_status == "done" and .follow_up == ["document --flag"]
+  and (.report_path | endswith("/report.md"))'
+rf="$(jq -r .report_path "$(kept)/result.json" | tr -d '\r')"
+[ "$(cat "$rf")" = "$want" ] || fail "report file: report_path does not hold the report then the block: $(cat "$rf")"
+rm -f "$W/hello.txt" "$SANDBOX/reportfile"
 
 # No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
 [ "$code" = 3 ] || fail "no changes: wanted exit 3, got $code"
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "no changes: claim not deleted"
 run_data "no changes run data" "done" 3
-result_is "result on exit 3" '.exit_code == 3 and .status == "done" and .complete == true and .changed == []'
+result_is "result on exit 3" '.exit_code == 3 and .status == "done" and .complete == true and .changed == []
+  and .caps == null'
 
 # A patch that does not apply (the worktree changed meanwhile): exit 4, worktree untouched. The patch is kept as it
 # came, so a file named after the token is redacted in result.json only.
@@ -362,7 +383,7 @@ code=0; run 1 "$patch" || code=$?
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
 run_data "failed run data" failed 1
 result_is "result on exit 1" '.exit_code == 1 and .status == "failed" and .complete == false and .total_cost_usd == null
-  and .num_turns == null and .usage == null and .model == null and .report_status == null and .follow_up == []
+  and .num_turns == null and .usage == null and .model == null and .claude_version == null and .report_status == null and .follow_up == []
   and (.duration_ms | type) == "number"'
 # A rename to a name of another length lists both its paths, and a non-ASCII name, which git C-quotes
 # ("b/caf\303\251.txt"), is listed as it is on disk.
@@ -556,7 +577,7 @@ else
   [ "$code" = 0 ] || fail "caps loop: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
   [ $((SECONDS - t)) -lt 60 ] || fail "caps loop: took $((SECONDS - t))s"
   [ "$(cat "$SANDBOX/loop-rc" 2>/dev/null)" = 124 ] || fail "caps loop: the looping test was not killed at the time cap: $(cat "$SANDBOX/loop-rc" 2>/dev/null)"
-  grep -q "remote-agent-sandbox 2000 1\$" "$SANDBOX/calls" || fail "caps loop: the caps are not the arguments after the script: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
+  grep -q "remote-agent-sandbox auto 1\$" "$SANDBOX/calls" || fail "caps loop: the caps are not the arguments after the script: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
   case "$(cat "$SANDBOX/prefix" 2>/dev/null)" in /*) ;; *) fail "caps loop: no absolute CLAUDE_CODE_SHELL_PREFIX: $(cat "$SANDBOX/prefix" 2>/dev/null)" ;; esac
   [ -f "$POD/.agents/bin/capped" ] || fail "caps loop: capped not sent with the setup"
   grep -q "^\[caps-loop\] == capped: shell prefix set" "$SANDBOX/err" || fail "caps loop: shell prefix not reported: $(cat "$SANDBOX/err")"
@@ -575,6 +596,28 @@ else
   [ "$(echo in | "$pre" "cat" 2>/dev/null)" = in ] || fail "prefix: a hook command lost its stdin"
   [ "$(echo in | "$pre" printf '%s-%s' a 'b c' 2>/dev/null)" = "a-b c" ] || fail "prefix: several arguments not run as a command"
   rm -f "$W/hello.txt" "$SANDBOX/loop"
+  # With no memory limit to read, the cap is 2000 MB; a test command's own capped gets the same caps.
+  grep -q "^\[caps-loop\] == capped: shell prefix set (--mb 2000 --secs 1; sandbox limit: none MB)" "$SANDBOX/err" \
+    || fail "caps loop: not the 2000 MB fallback: $(grep 'prefix set' "$SANDBOX/err")"
+  [ "$(cat "$SANDBOX/capped-env")" = "2000 1" ] || fail "caps loop: CAPPED_MB and CAPPED_SECS not exported: $(cat "$SANDBOX/capped-env")"
+  # The memory cap is the sandbox's share: its cgroup's limit (v2, else v1) less 1024 MB for Claude, half a limit under
+  # 2048 MB; remote.cap_mb only lowers it.
+  mkdir -p "$SANDBOX/cgroup/memory"
+  for c in "v2 4294967296 - 3072 4096" "v2 4294967296 1000 1000 4096" "v2 4294967296 9000 3072 4096" \
+    "v2 1073741824 - 512 1024" "v1 4294967296 - 3072 4096" "v2 max - 2000 none" "v1 9223372036854771712 - 2000 none"; do
+    read -r v limit cm want shown <<<"$c"
+    rm -f "$SANDBOX/cgroup/memory.max" "$SANDBOX/cgroup/memory/memory.limit_in_bytes"
+    if [ "$v" = v2 ]; then echo "$limit" >"$SANDBOX/cgroup/memory.max"; else echo "$limit" >"$SANDBOX/cgroup/memory/memory.limit_in_bytes"; fi
+    code=0
+    if [ "$cm" = - ]; then run 0 "" --name share || code=$?; else REMOTE_CAP_MB="$cm" run 0 "" --name share || code=$?; fi
+    [ "$code" = 0 ] || fail "share $c: wanted exit 0, got $code: $(cat "$SANDBOX/out")"
+    rm -f "$W/hello.txt"
+    grep -q "^\[share\] == capped: shell prefix set (--mb $want --secs 300; sandbox limit: $shown MB)" "$SANDBOX/err" \
+      || fail "share $c: $(grep 'prefix set' "$SANDBOX/err")"
+    [ "$(cat "$SANDBOX/capped-env")" = "$want 300" ] || fail "share $c: CAPPED_MB not the cap: $(cat "$SANDBOX/capped-env")"
+    result_is "share $c result" ".caps == {\"mb\": $want, \"secs\": 300}"
+  done
+  rm -rf "$SANDBOX/cgroup"
 fi
 # Caps that are not whole numbers never reach the backend; the sandbox script refuses them too.
 code=0; REMOTE_CAP_SECS=abc run 0 "" || code=$?
@@ -610,6 +653,31 @@ code=0; run 0 "" --name quote || code=$?
 [ "$code" = 1 ] || fail "quoted container error: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
 result_is "quoted container error result" '.status == "failed" and .lost == false'
 rm -f "$W/hello.txt" "$SANDBOX/quote"
+
+# --agent runs the model the agent's Claude wrapper sets, as a local run of it does; without it, Claude's default.
+want="$(sed -n 's/^model: *//p' "$REPO/adapters/claude/agents/epic-implementer.md" | head -1)"
+[ -n "$want" ] || fail "agent model: the epic-implementer wrapper sets no model"
+run 0 "" --name model --agent epic-implementer || fail "agent model: exited non-zero: $(cat "$SANDBOX/out")"
+if ! grep -qx -- "--model" "$SANDBOX/claude-args" || ! grep -qxF -- "$want" "$SANDBOX/claude-args"; then
+  fail "agent model: claude not run with --model $want: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+fi
+grep -q "remote-agent-sandbox auto 300 $want\$" "$SANDBOX/calls" || fail "agent model: not the argument after the caps: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 200)"
+grep -qx "\[model\] == claude ($want)" "$SANDBOX/err" || fail "agent model: not shown: $(cat "$SANDBOX/err")"
+rm -f "$W/hello.txt"
+run 0 "" --name nomodel || fail "no agent: exited non-zero: $(cat "$SANDBOX/out")"
+grep -qx -- "--model" "$SANDBOX/claude-args" && fail "no agent: claude run with a model: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+# The appended rules state facts about the sandbox only: how the agent ends is its brief's to say, as in a local run.
+rules="$(grep -A1 -x -- "--append-system-prompt" "$SANDBOX/claude-args" | tail -1)"
+case "$rules" in
+  "You run unattended"*) ;;
+  *) fail "rules: not passed: $(tr '\n' ' ' <"$SANDBOX/claude-args")" ;;
+esac
+case "$rules" in *"End with"* | *summary*) fail "rules: tell the agent how to end: $rules" ;; esac
+rm -f "$W/hello.txt"
+code=0; HOME="$SANDBOX/badmodel" bash "$REPO/scripts/remote-agent-sandbox.sh" 2000 5 '--x' </dev/null >/dev/null 2>"$SANDBOX/err" || code=$?
+if [ "$code" != 1 ] || ! grep -qx "== bad model: --x" "$SANDBOX/err"; then
+  fail "sandbox bad model: wanted exit 1 and the reason, got $code: $(cat "$SANDBOX/err")"
+fi
 
 # Without capped, or without a python3 to run it, the run goes on uncapped and says so, naming only what is missing
 # (on Linux a missing ps is not: capped reads /proc).
@@ -787,6 +855,13 @@ if ! grep -q "unknown option: --bogus" "$SANDBOX/err" || ! grep -q "^usage: remo
   fail "--bogus: not refused with the usage on stderr: $(cat "$SANDBOX/err")"
 fi
 [ ! -e "$SANDBOX/calls" ] || fail "--bogus: kubectl was called: $(cat "$SANDBOX/calls")"
+# --agent names a subagent with a Claude wrapper, refused before any backend call otherwise.
+for bad in no-such-agent ../epic-implementer ""; do
+  code=0; run 0 "" --agent "$bad" || code=$?
+  [ "$code" = 1 ] || fail "--agent '$bad': wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q "^remote-agent: \(no agent\|--agent needs\)" "$SANDBOX/err" || fail "--agent '$bad': no reason: $(cat "$SANDBOX/err")"
+  [ ! -e "$SANDBOX/calls" ] || fail "--agent '$bad': kubectl was called: $(cat "$SANDBOX/calls")"
+done
 
 # The transcript is written live: the stub's sandbox run prints a banner and two events (one echoing the token),
 # touches $SANDBOX/started and waits for $SANDBOX/go; the events are in transcript.jsonl while the run is alive,

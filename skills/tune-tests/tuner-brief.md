@@ -4,7 +4,7 @@ You make one repo's tests faster and their coverage wider, inside a worktree you
 
 Speed and coverage pull against each other: the cheap way to a fast suite is deleting cases. Every gain you report is one that keeps every behaviour tested.
 
-1. **Get ready.** Read the repo's rules (`AGENTS.md` or `CLAUDE.md`), the notes file and the baseline. With no baseline given, measure it: run each suite in scope by itself, one at a time, and note its wall time and result. When a suite is **red** before you change anything, report `blocked` with it. Run tests only through the test command your prompt gives (`test_command:`) or `map.md`'s `Checks` as written, or, with neither, as `capped --mb 2000 --secs 300 -- <suite>` (`~/.agents/bin/capped` when `capped` is not found); always in the foreground with stdin closed (`</dev/null`), never in a background shell (`&`, `nohup`, a harness's background option). A cap kill prints `capped: killed: memory` or `capped: killed: timeout` (exit 137 or 124): when a new test goes red against broken code (step 4), it counts as that red; anywhere else it is a red, a timeout kill most likely a stall. Done when you have a baseline and can run each suite in scope by itself.
+1. **Get ready.** Read the repo's rules (`AGENTS.md` or `CLAUDE.md`), the notes file and the baseline. With no baseline given, measure it: run each suite in scope by itself, one at a time, and note its wall time and result. When a suite is **red** before you change anything, report `blocked` with it. Run tests only through the test command your prompt gives (`test_command:`) or `map.md`'s `Checks` as written, or, with neither, as `capped -- <suite>` when `CAPPED_MB` is set (a sandbox sets it to its share of its machine), else `capped --mb 2000 --secs 300 -- <suite>` (`~/.agents/bin/capped` when `capped` is not found); always in the foreground with stdin closed (`</dev/null`), never in a background shell (`&`, `nohup`, a harness's background option). A cap kill prints `capped: killed: memory` or `capped: killed: timeout` (exit 137 or 124): when a new test goes red against broken code (step 4), it counts as that red; anywhere else it is a red, a timeout kill most likely a stall. Done when you have a baseline and can run each suite in scope by itself.
 
 2. **Profile** the slowest suites first, until they make up most of the total time. Find where each one spends its time, line by line: the runner's own timing report when it has one (`pytest --durations`, `go test -v`, `jest --verbose`), else a trace with timestamps (for shell, `PS4='+${EPOCHREALTIME}:${LINENO} ' bash -x`), and the process tree with its open files (`ps`, `lsof`) while a suite sits idle. Low CPU over a long run means it waits. Classify each slow spot:
    - **stall**: it waits on the clock, not on work: a `sleep` or poll, a timeout running out, a lock, or a reader waiting for end-of-file because some child process still holds the pipe's write end.
@@ -32,7 +32,7 @@ Speed and coverage pull against each other: the cheap way to a fast suite is del
 
 ## When you run remotely
 
-Your worktree is `~/work`, a snapshot with one commit; the notes file and anything else attached are under `~/attached`. Do not commit: leave your changes in the files, and whoever started you commits them. In the report, `changed:` lists the files.
+Your worktree is `~/work`, a snapshot with one commit; the notes file and anything else attached are under `~/attached`. Do not commit: leave your changes in the files, and whoever started you commits them. Your report file is `~/out/report.md`, outside `~/work` so it stays out of your changes. In the report, `changed:` lists the files.
 
 ## Report
 
@@ -51,6 +51,6 @@ why: <one line, when status is blocked>
 follow-up: <one line: the suites' total time before -> after, and the count of gaps closed>
 ```
 
-With a report file named, write the full report there, then your final message is the block alone (its last four lines), at most 400 characters. With none, or running remotely, your final message is the full report, its block as the last four lines, unfenced.
+With a report file named (`~/out/report.md` when you run remotely), write the full report there, then your final message is the block alone (its last four lines), at most 400 characters. With none, your final message is the full report, its block as the last four lines, unfenced. A `reissue:` line in your prompt names your last run's report on this task, which broke this section: the work is done, so change no file, run nothing, and write that report again as this section says, then end with the block.
 
 A key with several values takes one per line, each indented or as a `- ` item under the key; `none` means no value. Each `mutations:` entry names a line of the code under test in your worktree (`file` relative to its root, `line` its line number there), the first `old` text on that line and the `new` text that replaces it (empty to delete it), e.g. `src/parse.py:42 >= 0 -> > 0`. A removed or merged assertion that `moved:` does not name, or a mutation that leaves the suites green, sends the PR to an agent review.

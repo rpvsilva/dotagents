@@ -398,6 +398,11 @@ def repo_of(cwd):
     return str(Path(top)) if top else None
 
 
+def claude_versions(entries):
+    """Each Claude Code version the entries were written by (their `version`), once, in the order first seen."""
+    return list(dict.fromkeys(e["version"] for e in entries if isinstance(e.get("version"), str)))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", help="session .jsonl path or ID (default: current session)")
@@ -471,6 +476,7 @@ def main():
         "end": stamp(end),
         "wallClockSeconds": round((end - start).total_seconds()),
         "pricingAsOf": pricing.get("asOf") if pricing else None,
+        "claudeVersions": claude_versions(window),
         "spans": spans,
         "steps": all_steps,
     }, sys.stdout, indent=2)

@@ -64,6 +64,31 @@ grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "docker: the token 
 gone "$c" || fail "docker: container $c not removed after success"
 rm -f "$W/hello.txt"
 
+# Each run gets its share of the host: its memory (no swap past it) and CPUs over max_sandboxes (4): 16 GiB and 8 CPUs.
+grep -q "^run -d .*--memory 4096m --memory-swap 4096m --cpus 2 $IMAGE " "$S/calls" \
+  || fail "docker share: not the host over max_sandboxes: $(grep '^run' "$S/calls")"
+grep -q "started container $c ($IMAGE; 4096 MB, 2 CPUs)" "$SANDBOX/out" || fail "docker share: not said: $(cat "$SANDBOX/out")"
+rm -f "$W/hello.txt"
+# The Settings set it instead; a share under 2048 MB is said, and CPUs that are not a number start nothing.
+run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_SANDBOX_MB=1500 REMOTE_SANDBOX_CPUS=1.5 \
+  || fail "docker share settings: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "^run -d .*--memory 1500m --memory-swap 1500m --cpus 1.5 $IMAGE " "$S/calls" \
+  || fail "docker share settings: not used: $(grep '^run' "$S/calls")"
+grep -q "each run gets 1500 MB, under 2048 MB" "$SANDBOX/out" || fail "docker small share: not said: $(cat "$SANDBOX/out")"
+rm -f "$W/hello.txt"
+echo 2 >"$S/daemon-cpus"
+run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_MAX_SANDBOXES=8 \
+  || fail "docker share of 8: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "^run -d .*--memory 2048m --memory-swap 2048m --cpus 0.25 $IMAGE " "$S/calls" \
+  || fail "docker share of 8: not the host over 8: $(grep '^run' "$S/calls")"
+rm -f "$W/hello.txt" "$S/daemon-cpus"
+code=0; run 0 "$HELLO_PATCH" REMOTE_BACKEND=docker REMOTE_SANDBOX_CPUS=two || code=$?
+[ "$code" != 0 ] || fail "docker bad cpus: not refused"
+grep -q "REMOTE_SANDBOX_CPUS=two is not a number" "$SANDBOX/out" || fail "docker bad cpus: not said: $(cat "$SANDBOX/out")"
+grep -q "^run -d" "$S/calls" 2>/dev/null && fail "docker bad cpus: a container started"
+rm -f "$W/hello.txt"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=docker
+
 # Settings: image, platform and hours. The brief comes from a file (@file).
 printf 'line one\nline two\n' >"$SANDBOX/brief.md"
 BRIEF="@$SANDBOX/brief.md" \

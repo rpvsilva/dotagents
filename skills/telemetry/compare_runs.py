@@ -15,7 +15,8 @@ subagent's saved `role`, else `report.py`'s rule on its type and description (sp
 model missing from the pricing is null. With `--targets`, `comparison.targets` judges run b against each target:
 its threshold and op, run b's value and `met`, `missed` or `unknown` (an input is missing). A total-cost target's
 `basis` says whether it judged the measured cost or, with remote runs lacking cost, the mid estimate (`range` holds
-low and high). Per-task costs divide by the run's done tasks, so epics of different sizes compare. Nothing reads git or writes prose.
+low and high). Per-task costs divide by the run's done tasks, so epics of different sizes compare.
+`claudeVersions` names the Claude Code versions each run used, locally and in its remote runs, side by side. Nothing reads git or writes prose.
 """
 import argparse
 import json
@@ -35,6 +36,7 @@ TOKEN_KINDS = ["input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h"]
 ROLES = ("implement", "review", "re-review", "ticket-review", "security", "fix", "resolve", "tune", "plan", "explore",
          "other")
 REVIEW_ROLES = ("review", "ticket-review", "re-review", "security")
+REMOTE_REVIEW_ROLES = ("review", "security")
 
 
 def load(path):
@@ -120,6 +122,21 @@ def total_tokens(tbm):
     return {k: int(sum(v.get(k, 0) for v in tbm.values())) for k in TOKEN_KINDS}
 
 
+def remote_reviewers(met):
+    """(remote reviewer runs, those on Opus), from `run_metrics.py`'s `remote.by_role`; (0, 0) in older shapes."""
+    roles = dig(met, "remote", "by_role") or {}
+    runs = [roles[k] for k in REMOTE_REVIEW_ROLES if isinstance(roles.get(k), dict)]
+    return (sum(r.get("count", 0) for r in runs),
+            sum(n for r in runs for m, n in (r.get("models") or {}).items() if "opus" in m))
+
+
+def claude_versions(tel, met):
+    """The Claude Code versions the run used: `local`, the session's (null in a save from before they were kept);
+    `remote`, the remote runs' by count (null in metrics from before they were kept), so runs on different versions
+    show it."""
+    return {"local": tel.get("claudeVersions"), "remote": dig(met, "remote", "claude_versions")}
+
+
 def remote_counts(met):
     """(remote runs, runs without cost, measured cost or None), from either metrics shape."""
     remote = met.get("remote")
@@ -199,6 +216,7 @@ def analyse(name, tel, met, branch, prices):
                         "costUSD": r(prices.cost(s["tokensByModel"]), 4)} for s in other_spans],
         "out": {
             "id": name, "telemetryLabel": tel.get("label"), "sessionId": tel["sessionId"],
+            "claudeVersions": claude_versions(tel, met),
             "time": {
                 "sessionStart": tel["start"], "sessionEnd": tel["end"],
                 "sessionMinutes": r(tel["wallClockSeconds"] / 60, 1),
@@ -260,7 +278,8 @@ def analyse(name, tel, met, branch, prices):
             "outcomes": {
                 "tickets": met.get("tickets"), "tasks": met.get("tasks"), "prs": met.get("prs"),
                 "prsPerTicket": ratio(prs.get("count"), tickets.get("count")),
-                "reviewerRunsPerTicket": ratio(sum(1 for s in subs if s["role"] in REVIEW_ROLES), tickets.get("count")),
+                "reviewerRunsPerTicket": ratio(sum(1 for s in subs if s["role"] in REVIEW_ROLES)
+                                               + remote_reviewers(met)[0], tickets.get("count")),
                 "findingsSaved": met.get("findings_saved"), "humanDecisions": met.get("human_decisions"),
                 "testsFromRunFolder": met.get("tests"),
                 "integrationCatchupMerges": met.get("integration_catchup_merges"),
@@ -321,6 +340,7 @@ def compare(names, outs, metrics):
 
     remote = [remote_counts(m)[0] for m in metrics]
     return {
+        "claudeVersions": {a: A["claudeVersions"], b: B["claudeVersions"]},
         "time": {
             "sessionMinutes": pair(lambda X: X["time"]["sessionMinutes"], "min"),
             "firstPrToLastMergeMinutes": pair(lambda X: X["time"]["firstPrToLastMergeMinutes"], "min"),
@@ -429,7 +449,8 @@ def derived(X, met):
     """The figures the targets judge, for one run; None when an input is missing."""
     tickets = dig(X, "outcomes", "tickets", "count")
     subs = X["subagentList"]
-    opus = sum(1 for s in subs if s["role"] in REVIEW_ROLES and any("opus" in m for m in s["models"]))
+    opus = (sum(1 for s in subs if s["role"] in REVIEW_ROLES and any("opus" in m for m in s["models"]))
+            + remote_reviewers(met)[1])
     killed, measured = remote_judged(met)
     total, tasks = dig(X, "cost", "totalEstimateUSD", "mid"), done_tasks(met)
     return {

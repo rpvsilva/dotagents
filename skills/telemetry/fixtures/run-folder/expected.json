@@ -83,7 +83,22 @@
    "memory": 1,
    "timeout": 1
   },
-  "lost": 0
+  "lost": 0,
+  "by_role": {
+   "task": {
+    "count": 3,
+    "models": {
+     "model-a": 1,
+     "model-b": 1,
+     "unknown": 1
+    }
+   }
+  },
+  "claude_versions": {
+   "9.0.1": 1,
+   "9.0.2": 1,
+   "unknown": 1
+  }
  },
  "prs": {
   "count": 6,

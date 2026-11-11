@@ -54,9 +54,10 @@ def read_report(ctx, given):
     if not stored.is_file():
         return "", ""
     text = stored.read_text(encoding="utf-8")
-    status = re.search(r"^status:[ \t]*(\S+)", text, re.MULTILINE)
-    why = re.search(r"^why:[ \t]*(.*)$", text, re.MULTILINE)
-    return (status.group(1) if status else ""), (why.group(1).strip() if why else "")
+    # The last block's, as report_check.py checks it: a remote report holds the agent's file, then its final message.
+    status = re.findall(r"^status:[ \t]*(\S+)", text, re.MULTILINE)
+    why = re.findall(r"^why:[ \t]*(.*)$", text, re.MULTILINE)
+    return (status[-1] if status else ""), (why[-1].strip() if why else "")
 
 
 def remote_records(ctx, task):
