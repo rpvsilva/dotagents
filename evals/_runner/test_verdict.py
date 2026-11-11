@@ -16,13 +16,22 @@ def run(case="c", passed=True, cost=1.0, turns=10, secs=60.0, scores=None):
 
 
 def runs(n, case="c", passes=None, **fields):
-    """`n` runs of one case; `passes` of them pass (all by default); list fields give one value per run."""
+    """`n` runs of one case; `passes` of them pass (all by default); list fields give one value per run, repeated
+    from the start when shorter than `n`."""
     passes = n if passes is None else passes
     out = []
     for i in range(n):
-        kw = {k: v[i] if isinstance(v, list) else v for k, v in fields.items()}
+        kw = {k: v[i % len(v)] if isinstance(v, list) else v for k, v in fields.items()}
         out.append(run(case, passed=i < passes, **kw))
     return out
+
+
+N = verdict.MIN_RUNS  # enough runs for cost, turns, time and rubric to decide
+
+
+def scored(*scores):
+    """`N` runs scoring `spec`, `scores` repeated from the start."""
+    return [run(scores={"spec": scores[i % len(scores)]}) for i in range(N)]
 
 
 def compare(base, head):
@@ -72,42 +81,42 @@ class Summarise(unittest.TestCase):
 
 class RangeRule(unittest.TestCase):
     def test_overlapping_ranges_are_noise(self):
-        v = compare(runs(3, cost=[1.0, 2.0, 3.0]), runs(3, cost=[2.5, 3.5, 4.0]))
+        v = compare(runs(N, cost=[1.0, 2.0, 3.0]), runs(N, cost=[2.5, 3.5, 4.0]))
         self.assertEqual(v["cases"]["c"]["metrics"]["cost_usd"]["verdict"], "noise")
         self.assertEqual(v["cases"]["c"]["verdict"], "noise")
 
     def test_lower_cost_without_overlap_is_better(self):
-        v = compare(runs(3, cost=[2.0, 2.5, 3.0]), runs(3, cost=[1.0, 1.2, 1.9]))
+        v = compare(runs(N, cost=[2.0, 2.5, 3.0]), runs(N, cost=[1.0, 1.2, 1.9]))
         self.assertEqual(v["cases"]["c"]["verdict"], "better")
         self.assertAlmostEqual(v["cases"]["c"]["metrics"]["cost_usd"]["diff"], 1.2 - 2.5)
 
     def test_more_turns_or_time_without_overlap_is_worse(self):
-        self.assertEqual(compare(runs(3, turns=[5, 6, 7]), runs(3, turns=[8, 9, 9]))["cases"]["c"]["verdict"], "worse")
-        self.assertEqual(compare(runs(3, secs=[5.0, 6.0, 7.0]), runs(3, secs=[50.0, 60.0, 70.0]))["cases"]["c"]["verdict"],
+        self.assertEqual(compare(runs(N, turns=[5, 6, 7]), runs(N, turns=[8, 9, 9]))["cases"]["c"]["verdict"], "worse")
+        self.assertEqual(compare(runs(N, secs=[5.0, 6.0, 7.0]), runs(N, secs=[50.0, 60.0, 70.0]))["cases"]["c"]["verdict"],
                          "worse")
 
     def test_a_change_under_the_floor_is_noise_even_without_overlap(self):
         # The pilot's same-skills compare: a $0.00001 gap between two tight ranges came out `better`.
-        v = compare(runs(3, cost=[0.044364, 0.044449, 0.044479]), runs(3, cost=[0.044073, 0.044242, 0.04435]))
+        v = compare(runs(N, cost=[0.044364, 0.044449, 0.044479]), runs(N, cost=[0.044073, 0.044242, 0.04435]))
         self.assertEqual(v["cases"]["c"]["metrics"]["cost_usd"]["verdict"], "noise")
         self.assertEqual(v["cases"]["c"]["verdict"], "noise")
         self.assertEqual(v["more_runs"], [])
 
     def test_a_change_at_the_floor_without_overlap_is_real(self):
-        v = compare(runs(3, cost=[0.99, 1.0, 1.01]), runs(3, cost=[1.09, 1.1, 1.11]))
+        v = compare(runs(N, cost=[0.99, 1.0, 1.01]), runs(N, cost=[1.09, 1.1, 1.11]))
         self.assertEqual(v["cases"]["c"]["verdict"], "worse")
-        v = compare(runs(3, secs=[59.0, 60.0, 61.0]), runs(3, secs=[54.5, 55.0, 55.5]))
+        v = compare(runs(N, secs=[59.0, 60.0, 61.0]), runs(N, secs=[54.5, 55.0, 55.5]))
         self.assertEqual(v["cases"]["c"]["verdict"], "noise")
 
     def test_the_floor_leaves_rubric_and_a_zero_median_alone(self):
-        v = compare([run(scores={"spec": s}) for s in (4, 4, 4)], [run(scores={"spec": s}) for s in (5, 5, 5)])
+        v = compare(scored(4), scored(5))
         self.assertEqual(v["cases"]["c"]["verdict"], "better")
-        v = compare(runs(3, cost=0.0), runs(3, cost=0.01))
+        v = compare(runs(N, cost=0.0), runs(N, cost=0.01))
         self.assertEqual(v["cases"]["c"]["verdict"], "worse")
 
     def test_higher_rubric_without_overlap_is_better(self):
-        base = [run(scores={"spec": s}) for s in (2, 2, 3)]
-        head = [run(scores={"spec": s}) for s in (4, 5, 4)]
+        base = scored(2, 2, 3)
+        head = scored(4, 5, 4)
         v = compare(base, head)["cases"]["c"]
         self.assertEqual(v["metrics"]["rubric"]["spec"]["verdict"], "better")
         self.assertEqual(v["verdict"], "better")
@@ -130,11 +139,39 @@ class PassRateRule(unittest.TestCase):
         self.assertEqual(compare(runs(5, passes=5), runs(5, passes=1))["cases"]["c"]["verdict"], "worse")
 
     def test_pass_rate_change_outranks_cost_of_the_other_sign(self):
-        cheaper_but_failing = compare(runs(3, passes=3, cost=[5.0, 5.0, 5.0]), runs(3, passes=0, cost=[1.0, 1.0, 1.0]))
+        cheaper_but_failing = compare(runs(N, passes=N, cost=5.0), runs(N, passes=0, cost=1.0))
         self.assertEqual(cheaper_but_failing["cases"]["c"]["metrics"]["cost_usd"]["verdict"], "better")
         self.assertEqual(cheaper_but_failing["cases"]["c"]["verdict"], "worse")
-        dearer_but_passing = compare(runs(3, passes=0, cost=1.0), runs(3, passes=3, cost=5.0))
+        dearer_but_passing = compare(runs(N, passes=0, cost=1.0), runs(N, passes=N, cost=5.0))
         self.assertEqual(dearer_but_passing["cases"]["c"]["verdict"], "better")
+
+
+class PassRateOnly(unittest.TestCase):
+    def test_under_min_runs_cost_turns_time_and_rubric_do_not_decide(self):
+        # The pilot's second same-skills compare: 3 runs a side, cost 25% apart and rubric 4,4,4 against 3,3,3.
+        v = compare(runs(3, cost=[0.066, 0.0726, 0.0707], secs=[5.0, 6.0, 7.0])
+                    + [run("r", scores={"spec": 4})] * 3,
+                    runs(3, cost=[0.0543, 0.046, 0.0592], secs=[50.0, 60.0, 70.0])
+                    + [run("r", scores={"spec": 3})] * 3)
+        c, r = v["cases"]["c"], v["cases"]["r"]
+        self.assertEqual((c["verdict"], r["verdict"]), ("noise", "noise"))
+        self.assertEqual(c["metrics"]["cost_usd"]["verdict"], "noise")
+        self.assertEqual(r["metrics"]["rubric"]["spec"]["verdict"], "noise")
+        self.assertEqual(v["pass_rate_only"], ["c", "r"])
+        self.assertEqual(v["more_runs"], ["c", "r"])
+
+    def test_under_min_runs_the_pass_rate_still_decides(self):
+        v = compare(runs(3, passes=3), runs(3, passes=1))
+        self.assertEqual(v["cases"]["c"]["verdict"], "worse")
+        self.assertEqual(v["pass_rate_only"], ["c"])
+
+    def test_the_side_with_fewer_runs_counts(self):
+        v = compare(runs(N, cost=2.0), runs(N - 1, cost=1.0))
+        self.assertEqual(v["cases"]["c"]["verdict"], "noise")
+        self.assertEqual(v["pass_rate_only"], ["c"])
+        v = compare(runs(N, cost=2.0), runs(N, cost=1.0))
+        self.assertEqual(v["cases"]["c"]["verdict"], "better")
+        self.assertEqual(v["pass_rate_only"], [])
 
 
 class MoreRuns(unittest.TestCase):

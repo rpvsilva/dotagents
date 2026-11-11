@@ -374,7 +374,9 @@ A metric's change is **real** when:
 - **rubric score**: the two refs' min-max ranges do not overlap;
 - **cost, turns and time**: the ranges do not overlap, and the median moves by at least 10% of the base's. Without that floor, two tight ranges a fraction of a cent apart would count as real.
 
-Otherwise it is noise. The first metric with a real change, in the order pass rate, rubric, cost, turns, time, decides the verdict: `better` or `worse`. So a pass rate gain outranks a higher cost. Rubric criteria that are real in both directions decide nothing, and the next metric is tried. With no real change, the verdict is `noise`. A case that ran on one ref only is `unknown`.
+Otherwise it is noise. Below **5 runs** on either ref, only the pass rate can be real: rubric, cost, turns and time are shown but count as noise. With 3 runs a side, two sets of runs of the same skill fall fully apart by chance once in 10 tries per metric (2 of the 20 orderings), so with several metrics per case a compare of unchanged skills showed 2 false verdicts in 7 cases; at 5 runs it is 2 in 252. Give `--runs 5` or more when a change should show in cost or the rubric.
+
+The first metric with a real change, in the order pass rate, rubric, cost, turns, time, decides the verdict: `better` or `worse`. So a pass rate gain outranks a higher cost. Rubric criteria that are real in both directions decide nothing, and the next metric is tried. With no real change, the verdict is `noise`. A case that ran on one ref only is `unknown`.
 
 A `noise` case is **worth more runs** when the pass rate or a rubric median differs between the refs, or a cost, turns or time median moves by at least 10%: there may be a change too small to show at this many runs. Run it again with a higher `--runs`; the saved runs are reused and only the new ones are made.
 
@@ -393,7 +395,9 @@ Then one row per case, and one row per rubric criterion under it:
 
 Each cell reads `base → head (difference)`. A metric shows its median, with its min-max in brackets when the runs differ; the difference is head's median less base's. Each rubric criterion's row gives its score from 1 to 5 the same way ([Rubrics and re-grading](#rubrics-and-re-grading)) and that criterion's own verdict. A value no run gave prints `unknown`, never 0.
 
-In the example, the pass count moved from 1 to 3 of 3, a real change, so the case is `better`; the rubric's ranges overlap, so that criterion alone is `noise`.
+In the example, the pass count moved from 1 to 3 of 3, a real change, so the case is `better`; with 3 runs, the rubric, cost, turns and time cannot decide, so the criterion is `noise`.
+
+Under the table, a line names the cases judged on pass rate alone, those with fewer than 5 runs on a ref.
 
 The report ends with **Worth more runs**: the cases to run again, or `No case.`
 

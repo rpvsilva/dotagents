@@ -39,8 +39,9 @@ class Markdown(unittest.TestCase):
             self.assertIn(word, md.split("|")[0])
 
     def test_one_row_per_case_with_both_refs_the_difference_and_the_verdict(self):
-        md = render.markdown(comparison([run(cost=2.0)] * 3 + [run("d")],
-                                        [run(cost=1.0)] * 3 + [run("d")]))
+        n = verdict.MIN_RUNS
+        md = render.markdown(comparison([run(cost=2.0)] * n + [run("d")],
+                                        [run(cost=1.0)] * n + [run("d")]))
         rows = table_rows(md)
         self.assertEqual([r[0] for r in rows], ["c", "d"])
         cost = rows[0][2]
@@ -77,8 +78,8 @@ class Markdown(unittest.TestCase):
         self.assertEqual(gone[-1], "unknown")
 
     def test_rubric_criteria_are_sub_rows_by_median(self):
-        md = render.markdown(comparison([run(scores={"spec": 2}), run(scores={"spec": 4}), run(scores={"spec": 3})],
-                                        [run(scores={"spec": 5})] * 3))
+        md = render.markdown(comparison([run(scores={"spec": s}) for s in (2, 4, 3, 3, 3)],
+                                        [run(scores={"spec": 5})] * verdict.MIN_RUNS))
         rows = table_rows(md)
         self.assertEqual(len(rows), 2)
         sub = rows[1]
@@ -87,6 +88,17 @@ class Markdown(unittest.TestCase):
         self.assertTrue(rubric.startswith("3 (2–4) → 5"), rubric)
         self.assertIn("+2", rubric)
         self.assertEqual(sub[-1], "better")
+
+    def test_names_the_cases_judged_on_pass_rate_alone(self):
+        n = verdict.MIN_RUNS
+        md = render.markdown(comparison([run("few", cost=2.0)] * 3 + [run("many", cost=2.0)] * n,
+                                        [run("few", cost=1.0)] * 3 + [run("many", cost=1.0)] * n))
+        note = next(line for line in md.splitlines() if "only the pass rate decides" in line)
+        self.assertTrue(note.startswith(f"Under {n} runs a side"), note)
+        self.assertTrue(note.endswith(": few"), note)
+        self.assertEqual({r[0]: r[-1] for r in table_rows(md)}, {"few": "noise", "many": "better"})
+        self.assertNotIn("only the pass rate decides",
+                         render.markdown(comparison([run(cost=2.0)] * n, [run(cost=1.0)] * n)))
 
     def test_cases_worth_more_runs_are_listed(self):
         md = render.markdown(comparison([run("noisy", cost=c) for c in (1.0, 2.0, 3.0)] + [run("same")] * 3,
@@ -104,13 +116,21 @@ class Html(unittest.TestCase):
             self.assertNotIn(external, page.lower())
 
     def test_holds_the_same_content_html_escaped(self):
-        c = comparison([run("<b>x</b>&y", cost=2.0)] * 3, [run("<b>x</b>&y", cost=1.0)] * 3)
+        n = verdict.MIN_RUNS
+        c = comparison([run("<b>x</b>&y", cost=2.0)] * n, [run("<b>x</b>&y", cost=1.0)] * n)
         page = render.html(c)
         self.assertNotIn("<b>x</b>", page)
         self.assertIn("&lt;b&gt;x&lt;/b&gt;&amp;y", page)
-        for word in ("claude-sonnet-5-5", "aaaa111", "bbbb222", "2026-10-01", "$2.00", "-$1.00", "better",
+        for word in ("claude-sonnet-5-5", "aaaa111", "bbbb222", "2026-10-01", "$2.00", "-$1.00", "<td>better</td>",
                      "Worth more runs"):
             self.assertIn(word, page)
+        self.assertNotIn("only the pass rate decides", page)
+
+    def test_names_the_cases_judged_on_pass_rate_alone(self):
+        page = render.html(comparison([run("few", cost=2.0)] * 3, [run("few", cost=1.0)] * 3))
+        self.assertIn(f"Under {verdict.MIN_RUNS} runs a side, only the pass rate decides", page)
+        self.assertIn("cannot make a case better or worse: few</p>", page)
+        self.assertIn("<td>noise</td>", page)
 
     def test_newline_in_a_cell_is_a_line_break(self):
         page = render.html(comparison([run("a\nb")], [run("a\nb")]))

@@ -8,7 +8,8 @@ value is left out; a metric with no values is `None` (unknown), never 0.
 side lacks). A metric's change is real when its min-max ranges do not overlap, and for cost, turns and time also when
 its median moves by at least `MIN_CHANGE` of the base's, so a gap of a hundredth of a cent between two tight ranges is
 noise; the pass rate's when it moves by at least `ceil(2/3 * runs)` runs (spec open question 10); otherwise it is
-noise. Higher pass rate and rubric are better;
+noise. Below `MIN_RUNS` runs on either side only the pass rate can be real: two sets of 3 runs of the same skill fall
+apart by chance once in 10 tries per metric, so cost, turns, time and rubric are shown there but are noise. Higher pass rate and rubric are better;
 lower cost, turns and time are better. The first metric in `ORDER` with a real change decides the case, so a
 pass-rate change outranks a cost change of the other sign; rubric criteria real in both directions decide nothing. A `noise` case is worth more runs when its pass rate or a rubric
 median differs, or a cost, turns or time median moves by at least `MIN_CHANGE`.
@@ -18,6 +19,7 @@ import statistics
 METRICS = ("cost_usd", "turns", "duration_s")  # lower is better
 ORDER = ("pass_rate", "rubric") + METRICS
 MIN_CHANGE = 0.10  # the share of the base median a cost, turns or time median must move by to count
+MIN_RUNS = 5  # the runs each side needs before cost, turns, time or rubric can decide; by chance 2 in 252 per metric
 
 
 def spread(values):
@@ -98,6 +100,11 @@ def compare_case(base, head):
     metrics.update({m: _range(base[m], head[m], -1, MIN_CHANGE) for m in METRICS})
     metrics["rubric"] = {c: _range(base["rubric"].get(c), head["rubric"].get(c), 1)
                          for c in sorted(set(base["rubric"]) | set(head["rubric"]))}
+    pass_rate_only = min(base["runs"], head["runs"]) < MIN_RUNS
+    if pass_rate_only:
+        for m in [metrics[m] for m in METRICS] + list(metrics["rubric"].values()):
+            if m["verdict"] in ("better", "worse"):
+                m["verdict"] = "noise"
     word = "noise"
     for name in ORDER:
         found = [m["verdict"] for m in (metrics[name].values() if name == "rubric" else [metrics[name]])]
@@ -109,16 +116,18 @@ def compare_case(base, head):
     moved += [metrics[m]["base"] is not None and _big(metrics[m]["base"], metrics[m]["diff"], MIN_CHANGE)
               for m in METRICS]
     more = word == "noise" and any(moved)
-    return {"verdict": word, "metrics": metrics, "more_runs": more}
+    return {"verdict": word, "metrics": metrics, "more_runs": more, "pass_rate_only": pass_rate_only}
 
 
 def verdict(base, head):
-    """`{"cases": {case: {verdict, metrics, more_runs}}, "more_runs": [case, ...]}` for two `summarise()` outputs."""
+    """`{"cases": {case: {verdict, metrics, more_runs, pass_rate_only}}, "more_runs": [case, ...], "pass_rate_only":
+    [case, ...]}` for two `summarise()` outputs."""
     cases = {}
     for case in sorted(set(base) | set(head)):
         if case in base and case in head:
             cases[case] = compare_case(base[case], head[case])
         else:
-            cases[case] = {"verdict": "unknown", "metrics": {}, "more_runs": False,
+            cases[case] = {"verdict": "unknown", "metrics": {}, "more_runs": False, "pass_rate_only": False,
                            "base": base.get(case), "head": head.get(case)}
-    return {"cases": cases, "more_runs": [c for c, v in cases.items() if v["more_runs"]]}
+    return {"cases": cases, "more_runs": [c for c, v in cases.items() if v["more_runs"]],
+            "pass_rate_only": [c for c, v in cases.items() if v["pass_rate_only"]]}
