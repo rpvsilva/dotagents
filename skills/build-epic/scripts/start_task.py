@@ -8,9 +8,7 @@ Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from `origin/<tick
 a conflict only in hub files that `steplib/union.py` settles (both sides kept, `decisions.md`'s `test_command:` green)
 is committed and adds `union=<file>,..`; any other conflict removes the worktree and branch, leaves the task `ready` and
 prints `FAIL TT-NN sync-conflict <files>`.
-After the sync, it copies each `interaction` row of its ticket in `<run>/followups.jsonl` not yet carried into its
-`## Acceptance criteria` as `- [ ] <file[:line]>: <claim> (from <source>)`, marks those rows carried by TT-NN and adds
-`carried=<n>`. It then appends `{task, waited_on, ready_at, started_at, minutes}` to `<run>/waits.jsonl`: `waited_on`
+After the sync, it appends `{task, waited_on, ready_at, started_at, minutes}` to `<run>/waits.jsonl`: `waited_on`
 its `ticket NN` blockers, `ready_at` the latest `Done:` of its task blockers (null, and `minutes` null, when one has none,
 as in a run from before `merge_task.py` wrote it), times in UTC ISO; `status.py --report` reads it.
 A task not `ready`, or whose worktree or branch already exists, is refused.
@@ -22,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ci, core, followups, gitops, runfolder, union  # noqa: E402
+from steplib import ci, core, gitops, runfolder, union  # noqa: E402
 
 
 def names(task):
@@ -34,16 +32,6 @@ def names(task):
 def slug(branch):
     """The ticket slug: the ticket branch without its `feat/` prefix."""
     return branch[len("feat/"):] if branch.startswith("feat/") else branch
-
-
-def carry(run, task, tt, task_id):
-    """Copies ticket `tt`'s uncarried interaction rows into the task's acceptance criteria and marks them carried by
-    `task_id`; returns how many rows it carried."""
-    rows = followups.uncarried(run, tt, "interaction")
-    runfolder.append_criteria(task, [
-        f"- [ ] {r['file']}{'' if r.get('line') is None else ':' + str(r['line'])}: {r['claim']} (from {r['source']})"
-        for r in rows])
-    return followups.mark(run, [r["id"] for r in rows], "carried", task_id)
 
 
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
@@ -126,7 +114,6 @@ def step(ctx):
             git.branch_delete(branch)
             raise core.Fail(f"sync-conflict {' '.join(conflicted)}" if conflicted else "sync-failed")
         details = f" synced={synced[:7]}" + (f" union={','.join(unioned)}" if unioned else "")
-        details += f" carried={carry(ctx.run_dir, task, tt, f'{tt}-{nn}')}"
         record_wait(ctx.run_dir, task, tt, f"{tt}-{nn}")
         tip = git.tip(f"refs/heads/{branch}")
     runfolder.set_header(task, "Status", "in-progress")
