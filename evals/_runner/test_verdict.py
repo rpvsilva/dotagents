@@ -86,6 +86,25 @@ class RangeRule(unittest.TestCase):
         self.assertEqual(compare(runs(3, secs=[5.0, 6.0, 7.0]), runs(3, secs=[50.0, 60.0, 70.0]))["cases"]["c"]["verdict"],
                          "worse")
 
+    def test_a_change_under_the_floor_is_noise_even_without_overlap(self):
+        # The pilot's same-skills compare: a $0.00001 gap between two tight ranges came out `better`.
+        v = compare(runs(3, cost=[0.044364, 0.044449, 0.044479]), runs(3, cost=[0.044073, 0.044242, 0.04435]))
+        self.assertEqual(v["cases"]["c"]["metrics"]["cost_usd"]["verdict"], "noise")
+        self.assertEqual(v["cases"]["c"]["verdict"], "noise")
+        self.assertEqual(v["more_runs"], [])
+
+    def test_a_change_at_the_floor_without_overlap_is_real(self):
+        v = compare(runs(3, cost=[0.99, 1.0, 1.01]), runs(3, cost=[1.09, 1.1, 1.11]))
+        self.assertEqual(v["cases"]["c"]["verdict"], "worse")
+        v = compare(runs(3, secs=[59.0, 60.0, 61.0]), runs(3, secs=[54.5, 55.0, 55.5]))
+        self.assertEqual(v["cases"]["c"]["verdict"], "noise")
+
+    def test_the_floor_leaves_rubric_and_a_zero_median_alone(self):
+        v = compare([run(scores={"spec": s}) for s in (4, 4, 4)], [run(scores={"spec": s}) for s in (5, 5, 5)])
+        self.assertEqual(v["cases"]["c"]["verdict"], "better")
+        v = compare(runs(3, cost=0.0), runs(3, cost=0.01))
+        self.assertEqual(v["cases"]["c"]["verdict"], "worse")
+
     def test_higher_rubric_without_overlap_is_better(self):
         base = [run(scores={"spec": s}) for s in (2, 2, 3)]
         head = [run(scores={"spec": s}) for s in (4, 5, 4)]
@@ -125,6 +144,15 @@ class MoreRuns(unittest.TestCase):
         self.assertEqual(v["more_runs"], ["moved"])
         self.assertTrue(v["cases"]["moved"]["more_runs"])
         self.assertFalse(v["cases"]["same"]["more_runs"])
+
+    def test_a_cost_or_time_move_under_the_floor_is_not_worth_more_runs(self):
+        v = compare(runs(3, cost=[1.0, 2.0, 3.0], secs=[60.0, 70.0, 80.0]),
+                    runs(3, cost=[1.1, 2.1, 3.0], secs=[62.0, 72.0, 81.0]))
+        self.assertEqual(v["more_runs"], [])
+
+    def test_noise_with_a_rubric_move_is_worth_more_runs(self):
+        v = compare([run(scores={"spec": s}) for s in (3, 3, 4)], [run(scores={"spec": s}) for s in (3, 4, 4)])
+        self.assertEqual(v["more_runs"], ["c"])
 
     def test_noise_with_a_pass_rate_move_is_worth_more_runs(self):
         self.assertEqual(compare(runs(3, passes=1), runs(3, passes=2))["more_runs"], ["c"])
