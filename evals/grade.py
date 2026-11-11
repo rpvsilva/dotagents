@@ -14,7 +14,7 @@ case with no rubric now gets `rubric: null`. The judge is the only tool ever cal
 Once the judges' cost reaches `--budget-usd` (a judge of unknown cost counting as its `$0.50` cap), no run needing the
 judge is graded: it is left as it is and named; re-running checks costs nothing.
 
-A run saved with `error: install` has no state to check and is left as it is; a saved run whose case folder is gone,
+A run saved with `error: install` or `error: auth` has no state to check and is left as it is; a saved run whose case folder is gone,
 or whose `result.json` does not read as a result, is named and skipped. Only a `result.json` at the store's run-folder
 depth (`results.run_dir`) is a saved run, never one inside a run's kept state. `--evals` points at another cases folder (default: this repo's `evals/`). Prints one line per
 run; exits 0, 1 when a run could not be graded (its commit missing here, or the budget reached), 2 on a usage error
@@ -136,8 +136,8 @@ def grade(names, every=False, results_root=None, rejudge=False, ref=None, repo=R
                 why = f"no case {name} under {evals}"
             elif isinstance(case, str):
                 why = case
-            elif res["error"] == "install":
-                why = "error install: no state kept"
+            elif res["error"] in ("install", "auth"):
+                why = f"error {res['error']}: no state kept"
             if why:
                 skipped.append((run_dir, why))
                 print(f"{name}  run {res['run']}  skipped: {why}", file=out, flush=True)

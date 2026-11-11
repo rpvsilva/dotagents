@@ -19,6 +19,7 @@ from . import TRANSCRIPT
 INSTALL_WORD = "claude"
 AUTH_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 USES_CASE_MODEL = True
+RENEW = "claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN, or set a new ANTHROPIC_API_KEY"
 
 EXTRACT = Path(__file__).resolve().parents[3] / "adapters" / "claude" / "telemetry" / "extract.py"
 CAPS = {"error_max_turns": "turns", "error_max_budget_usd": "cost"}
@@ -96,6 +97,24 @@ def answer(run_dir):
     return text if isinstance(text, str) else None
 
 
+def auth_failed(stream):
+    """True when an `api_retry` event reports a 401 or `authentication_failed`; event fields only, never text."""
+    return any(e.get("type") == "system" and e.get("subtype") == "api_retry"
+               and (e.get("error_status") == 401 or e.get("error") == "authentication_failed") for e in stream)
+
+
+def zero_cost(result):
+    """True when the result event reports a cost of 0 and every usage count 0; None without a result event."""
+    if result is None:
+        return None
+    usage = result.get("usage")
+    cost = result.get("total_cost_usd")
+    if not isinstance(usage, dict) or not usage or isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return False
+    return cost == 0 and all(isinstance(n, int) and not isinstance(n, bool) and n == 0
+                             for n in usage.values() if not isinstance(n, (dict, list, str, type(None))))
+
+
 def parse(run_dir, home, work):
     stream = events(Path(run_dir) / TRANSCRIPT)
     init = next((e for e in stream if e.get("type") == "system" and e.get("subtype") == "init"), {})
@@ -117,5 +136,7 @@ def parse(run_dir, home, work):
         "capped": capped,
         "tool_version": init.get("claude_code_version"),
         "spawned_agents": spawned,
-        "error": None if result and (capped or not result.get("is_error")) else "tool",
+        "error": "auth" if auth_failed(stream) else
+                 None if result and (capped or not result.get("is_error")) else "tool",
+        "zero_cost": zero_cost(result),
     }

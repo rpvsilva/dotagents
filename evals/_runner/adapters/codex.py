@@ -20,6 +20,7 @@ from . import TRANSCRIPT
 INSTALL_WORD = "codex"
 AUTH_VARS = ("CODEX_API_KEY",)
 USES_CASE_MODEL = False
+RENEW = "a new CODEX_API_KEY"
 
 KINDS = ("input", "output", "cacheRead", "cacheWrite5m", "cacheWrite1h")
 TURN_END = ("turn.completed", "turn.failed", "error")
@@ -106,6 +107,18 @@ def answer(run_dir):
                  and e["item"].get("type") == "agent_message" and isinstance(e["item"].get("text"), str)), None)
 
 
+def auth_failed(stream):
+    """True when an `error` or `turn.failed` event's message carries `401 Unauthorized`."""
+    for e in stream:
+        if e.get("type") not in ("error", "turn.failed"):
+            continue
+        err = e.get("error")
+        for message in (e.get("message"), err.get("message") if isinstance(err, dict) else None):
+            if isinstance(message, str) and "401 Unauthorized" in message:
+                return True
+    return False
+
+
 def parse(run_dir, home, work):
     stream = events(Path(run_dir) / TRANSCRIPT)
     thread = next((e.get("thread_id") for e in stream if e.get("type") == "thread.started"), None)
@@ -121,5 +134,5 @@ def parse(run_dir, home, work):
         "capped": None,
         "tool_version": payload_field(log, "session_meta", "cli_version"),
         "spawned_agents": spawned(stream),
-        "error": None if last == "turn.completed" else "tool",
+        "error": None if last == "turn.completed" else "auth" if auth_failed(stream) else "tool",
     }

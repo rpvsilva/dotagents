@@ -15,7 +15,9 @@ both alike. One `--budget-usd` covers both refs, spent in that order. Every run,
 The Markdown report (`_runner/render.py`) is printed on stdout and written to `--out`, by default
 `<results root>/reports/<tool>-<base sha>-<head sha>.md`; `--html` also writes the HTML page. A report path inside
 the repo is refused: reports are never committed. Each run's line and the report paths go to stderr. Exits 0, 1 when
-the budget skipped runs (the report still written), 2 on a usage error (no run made).
+the budget skipped runs (the report still written), 2 on a usage error (no run made), 3 when a run failed on
+authentication: the stop line `run_cases` printed is the last word, the head is not run after a base stop, and no
+report is written.
 """
 import argparse
 import subprocess
@@ -37,7 +39,10 @@ SIDES = ("base", "head")
 
 
 def reprice(result, pricing, extract):
-    """`result` with `cost_usd`, `cost_basis` and `pricing_as_of` from its tokens and the price table `pricing`."""
+    """`result` with `cost_usd`, `cost_basis` and `pricing_as_of` from its tokens and the price table `pricing`; a run whose tool
+    reported its cost (`cost_basis: "reported"`, a $0 run) keeps it."""
+    if result.get("cost_basis") == "reported":
+        return result
     tokens = result.get("tokens")
     cost = extract.cost(tokens, pricing) if tokens else None
     return {**result, "cost_usd": cost, "cost_basis": "pricing" if cost is not None else "unknown",
@@ -92,7 +97,8 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
             results_root=None, out_md=None, out_html=None, repo=REPO, out=None, report_to=None):
     """Run `case_dirs` on `base` and `head` of `repo` and write the report. Returns `{base, head}` (each
     `run_cases()`'s output, its results repriced), `comparison` (the dict `render.py` takes) and the report paths
-    `out_md` and `out_html`. Raises run.RunError before any run on an unknown ref, tool, case or model, or a report
+    `out_md` and `out_html`. When a side stops on an auth failure the other is not run if it is the base, no report
+    is written, and `comparison`, `out_md` and `out_html` are None. Raises run.RunError before any run on an unknown ref, tool, case or model, or a report
     path inside the repo, and on a case either ref's `run_cases` would refuse. Run lines go to `out`, the Markdown
     report to `report_to` (default `out`)."""
     out = out or sys.stdout
@@ -116,8 +122,8 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
         _check_side(tool, ref, case_dirs, models[side], repo)
 
     # Run n of every case on the base, then on the head, then run n+1: drift over the session (API load, time of
-    # day) then falls on both refs alike, not on the head alone.
-    got = {side: {"ref": ref, "sha": shas[side], "runs": [], "skipped": [], "spent_usd": 0.0}
+    # day) then falls on both refs alike, not on the head alone. An auth stop ends the loop at once.
+    got = {side: {"ref": ref, "sha": shas[side], "runs": [], "skipped": [], "spent_usd": 0.0, "stopped": None}
            for side, ref in (("base", base), ("head", head))}
     left = budget_usd
     for n in range(1, max(runs or c["runs"] for c in loaded) + 1):
@@ -128,6 +134,9 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
             for key in ("runs", "skipped"):
                 got[side][key] += step[key]
             got[side]["spent_usd"] += step["spent_usd"]
+            if step["stopped"]:
+                got[side]["stopped"] = step["stopped"]
+                return {**got, "comparison": None, "out_md": None, "out_html": None}
     for side in SIDES:
         got[side]["runs"].sort(key=lambda e: (e["case"], e["run"]))
         got[side]["skipped"].sort()
@@ -191,6 +200,8 @@ def main(argv):
     except (run.RunError, RuntimeError) as err:
         print(f"compare.py: {err}", file=sys.stderr)
         return 2
+    if got["base"]["stopped"] or got["head"]["stopped"]:
+        return 3
     return 1 if got["base"]["skipped"] or got["head"]["skipped"] else 0
 
 

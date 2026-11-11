@@ -18,11 +18,12 @@ Saved runs of the same tool, ref commit, model and case files that change a run 
 the rubric, `judge_model` or `runs`) are reused unless `--fresh` or they errored. A reused run whose checks, rubric or
 `judge_model` changed since is re-graded first, as `grade.py` does (`_runner/grading.py`): checks re-run on its kept
 state, the judge only when the rubric or `judge_model` changed, the case's tool never. Once the cost of the runs and
-judges this invocation made reaches `--budget-usd`, no new run or judge starts (an unknown cost counts as the case's
+judges this invocation made reaches `--budget-usd`, no new run or judge starts (a cost the tool reported as 0 counts as $0, an unknown cost as the case's
 cost cap for a run, the judge's `$0.50` cap for a judge); the saved results stay and the command names the runs it
 skipped. `--evals` points at
 another cases folder (default: this repo's `evals/`). Prints one line per run; exits 0, 1 when the budget skipped
-runs, 2 on a usage error (no run made). `run_cases()` is the same for `compare.py`.
+runs, 2 on a usage error (no run made), 3 when a run failed on authentication (it is saved with `error: auth` and
+no judge, nothing else starts, and the command names the env vars to renew). `run_cases()` is the same for `compare.py`.
 """
 import argparse
 import importlib.util
@@ -174,12 +175,13 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
         found = checks.run(case["checks"], {**run.paths, "transcript": transcript, "gh_calls": run.gh_calls,
                                             "checkout": co.path})
         tokens = parsed.get("tokens") or None
-        cost = extract.cost(tokens, pricing) if tokens else None
+        zero = bool(parsed.get("zero_cost"))
+        cost = 0.0 if zero else extract.cost(tokens, pricing) if tokens else None
         capped = "time" if timed_out else parsed.get("capped") or over_cap(case["caps"], parsed.get("turns"), cost)
         error = None if capped else parsed.get("error")
         result = {**base, "tool_version": parsed.get("tool_version"), "checks": found,
                   "passed": all(found.values()) and not capped and not error, "tokens": tokens, "cost_usd": cost,
-                  "cost_basis": "pricing" if cost is not None else "unknown", "turns": parsed.get("turns"),
+                  "cost_basis": "reported" if zero else "pricing" if cost is not None else "unknown", "turns": parsed.get("turns"),
                   "duration_s": parsed.get("duration_s") if parsed.get("duration_s") is not None else wall,
                   "capped": capped, "subagents": subagents(co.path, case["skill"], parsed.get("spawned_agents")),
                   "error": error}
@@ -188,7 +190,7 @@ def run_once(case, n, adapter, tool, model, co, dest, pricing, extract):
         _write_redacted(dest / adapters.TRANSCRIPT, transcript.read_bytes(), values)
         _write_redacted(dest / STDERR, stderr.read_bytes(), values)
         results.write(dest, result)
-    if case.get("rubric"):
+    if case.get("rubric") and result["error"] != "auth":
         results.write(dest, {**results.read(dest), "rubric": judge.judge(dest, case, co.path, tool)})
     return results.read(dest)
 
@@ -209,7 +211,8 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
               repo=REPO, out=None, only_run=None):
     """Run each case of `case_dirs` `runs` times (default its own `runs`) on `tool` with dotagents at `ref` of `repo`;
     with `only_run`, only run number `only_run` of each case that has that many (`compare.py` alternates the refs so).
-    Returns `{ref, sha, runs: [{case, run, dir, result, reused}], skipped: [(case, run)], spent_usd}`. Raises
+    Returns `{ref, sha, runs: [{case, run, dir, result, reused}], skipped: [(case, run)], spent_usd, stopped}`
+    (`stopped` is `"auth"` when a run failed on authentication and the rest were not started, else None). Raises
     RunError, before any run, on an unknown tool, a malformed case, a prompt the tool would read as an option,
     install parts pulling in `global` or a missing or alias `--model`. A saved run is replaced only once its new
     run has a result."""
@@ -235,12 +238,15 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
     root = results.store_root(results_root)
     extract = _extract()
     pricing = extract.load_pricing(PRICING)
-    done, skipped, spent = [], [], 0.0
+    done, skipped, spent, stopped = [], [], 0.0, None
+    total = sum(runs or case["runs"] for case in loaded)
     co = home.checkout(repo, ref)
     try:
         for case in loaded:
             _check(case, adapter, model or case["model"], co.path)
         for case in loaded:
+            if stopped:
+                break
             use_model = model or case["model"]
             numbers = range(1, (runs or case["runs"]) + 1)
             for n in [only_run] if only_run in numbers else [] if only_run else numbers:
@@ -265,12 +271,19 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
                         spent += judge.spent(res["rubric"])
                 done.append({"case": case_name(case), "run": n, "dir": dest, "result": res, "reused": reused})
                 print(line(res, reused), file=out, flush=True)
+                if res["error"] == "auth":
+                    stopped = "auth"
+                    left = total - len(done) - len(skipped)
+                    print(f"auth failed for {tool}: renew {', '.join(adapter.AUTH_VARS)} ({adapter.RENEW}); "
+                          f"stopped before {left} more run(s)", file=out, flush=True)
+                    break
     finally:
         co.close()
     if skipped:
         names = ", ".join(f"{c} run {n}" for c, n in skipped)
         print(f"budget of ${budget_usd:g} reached (${spent:.4f} spent): skipped {names}", file=out, flush=True)
-    return {"ref": ref, "sha": co.sha, "runs": done, "skipped": skipped, "spent_usd": spent}
+    return {"ref": ref, "sha": co.sha, "runs": done, "skipped": skipped, "spent_usd": spent,
+            "stopped": stopped}
 
 
 def main(argv):
@@ -298,7 +311,7 @@ def main(argv):
     except (RunError, RuntimeError) as err:
         print(f"run.py: {err}", file=sys.stderr)
         return 2
-    return 1 if got["skipped"] else 0
+    return 3 if got["stopped"] else 1 if got["skipped"] else 0
 
 
 if __name__ == "__main__":
