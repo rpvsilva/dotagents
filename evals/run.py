@@ -157,6 +157,18 @@ def over_cap(caps, turns, cost):
     return None
 
 
+def remote_needs(case):
+    """What keeps `case` from running remotely, or None: the sandbox has no run home, so a prompt naming `{home}` or a
+    check naming `EVAL_HOME` cannot be served. `{scratch}` / `EVAL_SCRATCH` run (scratch lives in the worktree)."""
+    if "{home}" in (case["dir"] / case["prompt"]).read_text():
+        return "{home} in its prompt"
+    checks_dir = Path(case["dir"]) / "checks"
+    for path in sorted(checks_dir.rglob("*")) if checks_dir.is_dir() else []:
+        if path.is_file() and b"EVAL_HOME" in path.read_bytes():
+            return f"EVAL_HOME in checks/{path.relative_to(checks_dir)}"
+    return None
+
+
 def _remote_agent():
     return os.environ.get("EVALS_REMOTE_AGENT") or str(REMOTE_AGENT)
 
@@ -323,12 +335,22 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
     backend = None
     if remote:
         if tool != "claude":
-            raise RunError(f"--remote runs claude only, not {tool}")
+            raise RunError("--remote needs --tool claude: the remote sandbox runs Claude Code only")
         held = [case_name(c) for c in loaded if (c["fixture"] / home.SCRATCH_DIR).exists()
                 or (c["fixture"] / home.SCRATCH_DIR).is_symlink()]
         if held:
             raise RunError(f"{', '.join(held)}: the fixture holds {home.SCRATCH_DIR}, where a remote run keeps "
                            "its scratch")
+        runnable = []
+        for c in loaded:
+            needs = remote_needs(c)
+            if needs:
+                print(f"{case_name(c)}: cannot run remotely ({needs})", file=out, flush=True)
+            else:
+                runnable.append(c)
+        if not runnable:
+            raise RunError("no case can run remotely")
+        loaded = runnable
         backend = _remote_ready()
     root = results.store_root(results_root)
     extract = _extract()
@@ -370,8 +392,10 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
                 if res["error"] == "auth":
                     stopped = "auth"
                     left = total - len(done) - len(skipped)
-                    print(f"auth failed for {tool}: renew {', '.join(adapter.AUTH_VARS)} ({adapter.RENEW}); "
-                          f"stopped before {left} more run(s)", file=out, flush=True)
+                    renew = ("run `remote-agent setup` (the token in remote.env)" if backend
+                             else f"renew {', '.join(adapter.AUTH_VARS)} ({adapter.RENEW})")
+                    print(f"auth failed for {tool}: {renew}; stopped before {left} more run(s)", file=out,
+                          flush=True)
                     break
     finally:
         co.close()
