@@ -5,10 +5,15 @@ An adapter module holds:
 - `INSTALL_WORD`: the tool word `install.sh` takes (`claude`, `codex`, `cursor`).
 - `AUTH_VARS`: the env vars the tool authenticates with, passed to its process only and scrubbed from kept files.
 - `USES_CASE_MODEL`: true when the case's `model` is this tool's; else the runner needs `--model`.
+- `RENEW`: one short phrase saying how to renew the tool's auth, which the runner's auth stop line prints.
 - `prepare_home(home)`: whatever the throwaway home needs before `install.sh` runs.
 - `command(prompt, model, caps, work) -> argv`: the headless run; `caps` is the case's `{turns, secs, cost_usd}`.
 - `parse(run_dir, home, work) -> {tokens, turns, duration_s, capped, tool_version, spawned_agents, error}`: what
   the run's transcript (`<run_dir>/transcript.jsonl`, the tool's stdout) and logs say; unknown values are `None`.
+  `error` is `None`, `"tool"` or `"auth"` (the run failed on authentication, read from event fields, never from
+  free text). An adapter that can tell also returns `zero_cost`: true when the tool reported a cost of 0 and no
+  tokens, false when it reported anything else, `None` when it reported nothing; the key is left out when the tool
+  never reports a cost.
 - `answer(run_dir) -> str | None`: the run's final answer, from the same transcript; `None` when it has none.
 """
 import importlib

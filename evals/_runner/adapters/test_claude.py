@@ -1,5 +1,6 @@
 """Tests for the adapter loader (`adapters/__init__.py`) and the Claude Code adapter (`adapters/claude.py`), on the
 hand-written stream-json transcripts and session logs in `fixtures/claude/`."""
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -83,10 +84,59 @@ class ParseTest(EvalSandbox):
             shutil.copy(FIXTURES / f"{session}.session.jsonl", project / f"{session_id}.jsonl")
         return self.claude.parse(self.run_dir, self.eval_home, self.work)
 
+    def write(self, stream):
+        (self.run_dir / adapters.TRANSCRIPT).write_text("".join(json.dumps(e) + "\n" for e in stream))
+
     def test_pass_reads_tokens_from_the_session_log(self):
         got = self.parse("pass", "pass", "s-pass")
         self.assertEqual(got, {"tokens": SESSION_TOKENS, "turns": 2, "duration_s": 12.5, "capped": None,
-                               "tool_version": "2.1.319", "spawned_agents": 0, "error": None})
+                               "tool_version": "2.1.319", "spawned_agents": 0, "error": None,
+                               "zero_cost": False})
+
+    def test_a_revoked_token_run_is_an_auth_error_with_a_reported_zero_cost(self):
+        got = self.parse("auth-failed")
+        self.assertEqual(got["error"], "auth")
+        self.assertIs(got["zero_cost"], True)
+
+    def test_an_authentication_failed_retry_without_a_status_is_an_auth_error(self):
+        self.write([{"type": "system", "subtype": "api_retry", "error": "authentication_failed"},
+                    {"type": "result", "is_error": True, "total_cost_usd": 0.1}])
+        self.assertEqual(self.claude.parse(self.run_dir, self.eval_home, self.work)["error"], "auth")
+
+    def test_a_401_retry_without_an_error_name_is_an_auth_error(self):
+        self.write([{"type": "system", "subtype": "api_retry", "error_status": 401},
+                    {"type": "result", "is_error": True, "total_cost_usd": 0.1}])
+        self.assertEqual(self.claude.parse(self.run_dir, self.eval_home, self.work)["error"], "auth")
+
+    def test_assistant_text_about_authentication_is_not_an_auth_error(self):
+        self.write([{"type": "assistant", "message": {"content": [
+                        {"type": "text", "text": "Failed to authenticate: 401 authentication_failed"}]}},
+                    {"type": "system", "subtype": "api_retry", "error_status": 500, "error": "server_error"},
+                    {"type": "result", "is_error": True, "total_cost_usd": 0.1}])
+        self.assertEqual(self.claude.parse(self.run_dir, self.eval_home, self.work)["error"], "tool")
+
+    def test_zero_cost_needs_a_zero_cost_and_every_usage_count_zero(self):
+        zero = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        cases = [(0, zero, True), (0.0, zero, True), (0.1, zero, False), (0, {**zero, "output_tokens": 3}, False),
+                 (None, zero, False), (0, None, False)]
+        for cost, usage, want in cases:
+            result = {"type": "result", "is_error": False, "total_cost_usd": cost, "usage": usage}
+            self.write([{k: v for k, v in result.items() if v is not None}])
+            got = self.claude.parse(self.run_dir, self.eval_home, self.work)["zero_cost"]
+            self.assertIs(got, want, (cost, usage))
+
+    def test_zero_cost_is_none_without_a_result_event(self):
+        self.write([{"type": "system", "subtype": "init", "session_id": "x"}])
+        self.assertIsNone(self.claude.parse(self.run_dir, self.eval_home, self.work)["zero_cost"])
+
+    def test_renew_says_how_to_renew_the_token(self):
+        self.assertIn("claude setup-token", self.claude.RENEW)
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", self.claude.RENEW)
+        self.assertIn("ANTHROPIC_API_KEY", self.claude.RENEW)
+
+    def test_the_auth_fixture_holds_no_token_like_value(self):
+        text = (FIXTURES / "auth-failed.jsonl").read_text()
+        self.assertNotRegex(text, r"sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{8,}|Bearer ")
 
     def test_without_a_session_log_tokens_come_from_the_result_event(self):
         self.assertEqual(self.parse("pass")["tokens"], RESULT_TOKENS)
@@ -114,7 +164,8 @@ class ParseTest(EvalSandbox):
     def test_killed_mid_stream_is_a_tool_error_with_unknowns_null(self):
         got = self.parse("killed")
         self.assertEqual(got, {"tokens": None, "turns": None, "duration_s": None, "capped": None,
-                               "tool_version": "2.1.319", "spawned_agents": 0, "error": "tool"})
+                               "tool_version": "2.1.319", "spawned_agents": 0, "error": "tool",
+                               "zero_cost": None})
 
     def test_killed_mid_stream_still_reads_tokens_from_the_session_log(self):
         self.assertEqual(self.parse("killed", "pass", "s-killed")["tokens"], SESSION_TOKENS)

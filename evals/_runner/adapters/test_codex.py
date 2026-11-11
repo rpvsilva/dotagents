@@ -96,13 +96,47 @@ class ParseTest(EvalSandbox):
         self.assertIsNone(got["tool_version"])
         self.assertIsNone(got["error"])
 
-    def test_an_error_event_and_failed_turn_is_a_tool_error_keeping_the_tokens_spent(self):
+    def test_a_401_unauthorized_error_and_failed_turn_is_an_auth_error_keeping_the_tokens_spent(self):
         got = self.parse("error", "pass")
-        self.assertEqual(got["error"], "tool")
+        self.assertEqual(got["error"], "auth")
         self.assertEqual(got["turns"], 1)
         self.assertEqual(got["tokens"], {MODEL: {"input": 400, "output": 30, "cacheRead": 100, "cacheWrite5m": 0,
                                                  "cacheWrite1h": 0}})
         self.assertIsNone(got["capped"])
+
+    def write(self, stream):
+        (self.run_dir / adapters.TRANSCRIPT).write_text("".join(json.dumps(e) + "\n" for e in stream))
+
+    def test_an_error_event_alone_with_401_is_an_auth_error(self):
+        self.write([{"type": "turn.started"}, {"type": "error", "message": "unexpected status 401 Unauthorized"}])
+        self.assertEqual(self.codex.parse(self.run_dir, self.eval_home, self.work)["error"], "auth")
+
+    def test_a_turn_failed_alone_with_401_is_an_auth_error(self):
+        self.write([{"type": "turn.started"},
+                    {"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized"}}])
+        self.assertEqual(self.codex.parse(self.run_dir, self.eval_home, self.work)["error"], "auth")
+
+    def test_a_non_auth_error_stays_a_tool_error(self):
+        self.write([{"type": "turn.started"}, {"type": "error", "message": "unexpected status 500 Internal"},
+                    {"type": "turn.failed", "error": {"message": "unexpected status 500 Internal"}}])
+        self.assertEqual(self.codex.parse(self.run_dir, self.eval_home, self.work)["error"], "tool")
+
+    def test_a_401_that_is_not_unauthorized_stays_a_tool_error(self):
+        self.write([{"type": "turn.started"}, {"type": "error", "message": "retry in 401 ms failed"}])
+        self.assertEqual(self.codex.parse(self.run_dir, self.eval_home, self.work)["error"], "tool")
+
+    def test_agent_text_saying_401_is_not_an_auth_error(self):
+        self.write([{"type": "item.completed", "item": {"id": "i", "type": "agent_message",
+                                                        "text": "401 Unauthorized"}},
+                    {"type": "turn.started"}])
+        self.assertEqual(self.codex.parse(self.run_dir, self.eval_home, self.work)["error"], "tool")
+
+    def test_a_401_in_an_earlier_turn_of_a_completed_run_is_no_error(self):
+        self.write([{"type": "error", "message": "401 Unauthorized, retrying"}, {"type": "turn.completed"}])
+        self.assertIsNone(self.codex.parse(self.run_dir, self.eval_home, self.work)["error"])
+
+    def test_renew_names_the_new_key(self):
+        self.assertIn("CODEX_API_KEY", self.codex.RENEW)
 
     def test_killed_mid_stream_is_a_tool_error_with_unknowns_null(self):
         self.assertEqual(self.parse("killed", "pass"), {
@@ -232,12 +266,12 @@ cat "{FIXTURES / stream}"
         _, res = self.saved(self.run_cases([self.case("build-epic/plan", install=["configure"])]))
         self.assertEqual(res["subagents"], "used")
 
-    def test_an_error_event_fails_the_run_as_a_tool_error(self):
+    def test_a_401_error_event_fails_the_run_as_an_auth_error(self):
         self.fake_codex("error.jsonl")
         _, res = self.saved(self.run_cases([self.case()]))
-        self.assertEqual(res["error"], "tool")
+        self.assertEqual(res["error"], "auth")
         self.assertFalse(res["passed"])
-        self.assertIn("error tool", self.out.read_text())
+        self.assertIn("error auth", self.out.read_text())
 
     def test_a_run_cut_after_an_earlier_turn_never_passes(self):
         self.fake_codex("cut-after-turn.jsonl")
