@@ -34,7 +34,8 @@ the ticket head in a scratch worktree (`red <suite>` stops it). Then, with the `
 (the default), it records the integration ancestry the squash merges dropped (`steplib/ancestry.py`): a
 `git merge -s ours origin/<base>` commit on the ticket branch, pushed, and the merge is pinned to it. It merges only
 when the ticket's tree is the reviewed tree (`tree-mismatch`) and that tree already holds the base's content
-(`reviewed-head-lacks-base`: merging the base into it would change it); either refusal merges and pushes nothing. The
+(`reviewed-head-lacks-base`: merging the base into it would change it, from the newest base commit a merged task PR's
+head contains when its squash landed on the ticket, else from the fork point); either refusal merges and pushes nothing. The
 reviewed head is the commit the ticket PR's review was posted on (`<run>/logs/PR<n>-review.json`), else
 `--reviewed <sha>`, which overrides it, else it fails `no-review`. With `merge`, no ancestry step runs. `ship_batch.py` lands a batch of tickets through this same `merge`, with the
 Checks it ran once on their combined tree and the ancestry recorded against the tip it started from; a branch tip other than the head the batch tested fails
@@ -198,7 +199,8 @@ class Ship:
                 self.run_checks(sha)
             if (merge.setting(self.repo, "task_merge_method", self.ctx.log) or "squash") == "squash":
                 sha = ancestry.record(self.git, self.branch, self.base, self.reviewed(number, reviewed),
-                                      base_tip=batch[0] if batch else None)
+                                      base_tip=batch[0] if batch else None,
+                                      heads=ancestry.task_heads(self.git, self.run, self.ctx.id))
         try:
             merge.merge(number, sha, self.repo, self.ctx.log, self.base, command)
         except core.Fail as e:

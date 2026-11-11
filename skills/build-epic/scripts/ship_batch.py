@@ -15,8 +15,9 @@ head whose tree is not the reviewed tree (`tree-mismatch`), that lacks the base'
 `task_merge_method` `squash` only) or whose reviewed head git does not know (`reviewed-unknown`) is **sent back**: left
 as it is, never reset or rewritten, for a catch-up and a new review.
 
-The rest are merged as they are (`git merge --no-ff`, no rebase) in that order into a scratch worktree
-`<run>/worktrees/batch` on the start tip, and `map.md`'s Checks run once on the combined tree. A ticket whose head
+The rest are merged (`git merge --no-ff`, no rebase) in that order into a scratch worktree `<run>/worktrees/batch` on
+the start tip, each as the ancestry commit its landing will record (with `squash`: its own tree, the start tip as a
+second parent), and `map.md`'s Checks run once on the combined tree. A ticket whose head
 conflicts with the ones before it is a **conflict** and ends the batch there. Green: each ticket lands through
 `ship_ticket.py`'s `merge` (its guard and merge rule unchanged), with the batch's suite results saved as its
 `reports/<TT>.checks.json` and its ancestry recorded against the start tip; a ticket whose branch moved on origin
@@ -144,7 +145,8 @@ class Batch:
             try:
                 reviewed = self.ship(e["ticket"]).reviewed(e["pr"], None)
                 if squash:
-                    ancestry.check(self.git, start_tip, e["head"], reviewed, self.base)
+                    ancestry.check(self.git, start_tip, e["head"], reviewed, self.base,
+                                   ancestry.task_heads(self.git, self.run, e["ticket"]))
                 elif self.git.tree(e["head"]) != self.git.tree(reviewed):
                     raise core.Fail("tree-mismatch")
             except core.Fail as f:
@@ -158,12 +160,20 @@ class Batch:
 
     def combine(self, entries, start_tip):
         """Merges each entry's head into the scratch worktree on `start_tip`, in order. Returns the combined commit
-        after each merged entry; an entry that conflicts is marked `conflict`, and the ones after it `waiting`."""
+        after each merged entry; an entry that conflicts is marked `conflict`, and the ones after it `waiting`.
+        With squash task merges, an entry merges as the ancestry commit its landing records (its own tree, `start_tip`
+        a second parent; `send_back` proved that tree holds `start_tip`'s content), so base changes its squashed hub
+        task already merged are not replayed from its fork point."""
+        squash = (merge.setting(self.repo, "task_merge_method", self.ctx.log) or "squash") == "squash"
         self.git.worktree_remove(self.scratch)
         self.git.worktree_add(self.scratch, ref=start_tip, detach=True)
         tips = []
         for i, e in enumerate(entries):
-            res = self.git._git("merge", "--no-ff", "--no-edit", "-m", f"batch: {e['ticket']}", e["head"],
+            head = e["head"]
+            if squash and not self.git.is_ancestor(start_tip, head):
+                head = self.git._git("commit-tree", self.git.tree(head), "-p", head, "-p", start_tip, "-m",
+                                     f"batch: {e['ticket']} with its ancestry").out.strip()
+            res = self.git._git("merge", "--no-ff", "--no-edit", "-m", f"batch: {e['ticket']}", head,
                                 check=False, cwd=self.scratch)
             if res.rc != 0:
                 self.git._git("merge", "--abort", check=False, cwd=self.scratch)
