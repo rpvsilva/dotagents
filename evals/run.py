@@ -193,6 +193,29 @@ def _remote_ready():
     return backend
 
 
+def check_remote(tool, loaded, out):
+    """The refusals of a remote run, made before its first run: a tool other than `claude`, a fixture holding
+    `.eval-scratch`, no case that can run remotely, a `remote-agent` that is not ready. Returns the runnable cases
+    (the others are named on `out`) and the backend. Raises RunError."""
+    if tool != "claude":
+        raise RunError("--remote needs --tool claude: the remote sandbox runs Claude Code only")
+    held = [case_name(c) for c in loaded if (c["fixture"] / home.SCRATCH_DIR).exists()
+            or (c["fixture"] / home.SCRATCH_DIR).is_symlink()]
+    if held:
+        raise RunError(f"{', '.join(held)}: the fixture holds {home.SCRATCH_DIR}, where a remote run keeps "
+                       "its scratch")
+    runnable = []
+    for c in loaded:
+        needs = remote_needs(c)
+        if needs:
+            print(f"{case_name(c)}: cannot run remotely ({needs})", file=out, flush=True)
+        else:
+            runnable.append(c)
+    if not runnable:
+        raise RunError("no case can run remotely")
+    return runnable, _remote_ready()
+
+
 def _remote_values():
     """The remote token, from `remote.env` of the runner's config folder and the caller's env, as bytes."""
     config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "dotagents" / "remote.env"
@@ -334,24 +357,7 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
         loaded.append(case)
     backend = None
     if remote:
-        if tool != "claude":
-            raise RunError("--remote needs --tool claude: the remote sandbox runs Claude Code only")
-        held = [case_name(c) for c in loaded if (c["fixture"] / home.SCRATCH_DIR).exists()
-                or (c["fixture"] / home.SCRATCH_DIR).is_symlink()]
-        if held:
-            raise RunError(f"{', '.join(held)}: the fixture holds {home.SCRATCH_DIR}, where a remote run keeps "
-                           "its scratch")
-        runnable = []
-        for c in loaded:
-            needs = remote_needs(c)
-            if needs:
-                print(f"{case_name(c)}: cannot run remotely ({needs})", file=out, flush=True)
-            else:
-                runnable.append(c)
-        if not runnable:
-            raise RunError("no case can run remotely")
-        loaded = runnable
-        backend = _remote_ready()
+        loaded, backend = check_remote(tool, loaded, out)
     root = results.store_root(results_root)
     extract = _extract()
     pricing = extract.load_pricing(PRICING)
