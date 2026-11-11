@@ -896,9 +896,95 @@ status="$(git -C "$EVAL_WORK" status --porcelain --untracked-files=all)"
 
     def test_remote_runs_claude_only(self):
         self.remote_agent()
-        with self.assertRaises(run.RunError):
+        with self.assertRaises(run.RunError) as err:
             run.run_cases("codex", "HEAD", [self.case()], remote=True, model=MODEL, out=io.StringIO())
+        self.assertEqual(str(err.exception),
+                         "--remote needs --tool claude: the remote sandbox runs Claude Code only")
         self.assertFalse(self.ra_cwd.exists())
+        out = self.cli("--tool", "codex", "--ref", "HEAD", "--remote", "--model", MODEL, "--evals", str(self.evals),
+                       "configure/quick")
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("the remote sandbox runs Claude Code only", out.stderr)
+        self.assertEqual(self.calls_of_remote_agent(), [])
+
+    def test_remote_needs_names_the_configure_cases_and_none_of_the_build_epic_ones(self):
+        import cases as case_loader
+        evals = REPO / "evals"
+        named = {}
+        for d in sorted(evals.glob("*/*")):
+            if (d / "case.json").is_file():
+                named[f"{d.parent.name}/{d.name}"] = run.remote_needs(case_loader.load(d))
+        configure = {k for k, v in named.items() if k.startswith("configure/")}
+        self.assertEqual(len(configure), 4)
+        for k in configure:
+            self.assertIn("EVAL_HOME", named[k], k)
+        build = {k: v for k, v in named.items() if k.startswith("build-epic/")}
+        self.assertEqual(len(build), 3)
+        self.assertEqual(set(build.values()), {None})
+
+    def test_a_home_case_is_named_and_skipped_while_a_scratch_case_runs(self):
+        self.remote_agent(work_script="mkdir -p .eval-scratch && echo areas >.eval-scratch/areas.md")
+        scratch = self.scratch_case("configure/scratch")
+        home_case = self.case("configure/home")
+        (home_case / "prompt.md").write_text("Look in {home}\n")
+        got = self.remote([home_case, scratch])
+        self.assertEqual([r["case"] for r in got["runs"]], ["configure/scratch"])
+        self.assertIn("configure/home: cannot run remotely ({home} in its prompt)", self.printed())
+        self.assertEqual(self.calls_of_remote_agent(), ["call"])
+        self.assertEqual(len(list(self.results.rglob(results.RESULT))), 1)
+
+    def test_a_check_naming_eval_home_is_skipped(self):
+        self.remote_agent()
+        case = self.case("configure/homecheck")
+        (case / "checks" / "h.sh").write_text('#!/usr/bin/env bash\ntest -d "$EVAL_HOME"\n')
+        (case / "checks" / "h.sh").chmod(0o755)
+        self.remote([case, self.case("configure/ok")])
+        self.assertIn("configure/homecheck: cannot run remotely (EVAL_HOME in checks/h.sh)", self.printed())
+
+    def test_only_home_cases_exit_2_before_any_call_and_save_nothing(self):
+        self.remote_agent()
+        case = self.case("configure/home")
+        (case / "prompt.md").write_text("Look in {home}\n")
+        out = self.cli("--tool", "claude", "--ref", "HEAD", "--remote", "--results", str(self.tmp / "s"),
+                       "--evals", str(self.evals), "configure/home")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertIn("configure/home: cannot run remotely", out.stdout)
+        self.assertFalse(self.ra_cwd.exists())
+        self.assertEqual(self.calls_of_remote_agent(), [])
+        self.assertFalse((self.tmp / "s").exists() and list((self.tmp / "s").rglob(results.RESULT)))
+
+    def test_a_remote_auth_failure_names_remote_agent_setup_and_exits_3(self):
+        token = "remote-secret-" + "q" * 12
+        conf = self.home / ".config" / "dotagents"
+        conf.mkdir(parents=True)
+        (conf / "remote.env").write_text(f"CLAUDE_CODE_OAUTH_TOKEN={token}\n")
+        self.remote_agent(stream="auth-failed.jsonl")
+        self.case("configure/a")
+        out = self.cli("--tool", "claude", "--ref", "HEAD", "--runs", "2", "--remote", "--evals", str(self.evals),
+                       "configure/a")
+        self.assertEqual(out.returncode, 3, out.stdout + out.stderr)
+        self.assertIn("auth failed for claude: run `remote-agent setup` (the token in remote.env); "
+                      "stopped before 1 more run(s)", out.stdout)
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", out.stdout.split("auth failed", 1)[1])
+        self.assertEqual(self.calls_of_remote_agent(), ["call"])
+        self.assertNotIn(token, out.stdout + out.stderr)
+
+    def test_a_token_in_returned_files_and_records_reaches_no_file_of_the_store(self):
+        token = "remote-secret-" + "y" * 12
+        conf = self.home / ".config" / "dotagents"
+        conf.mkdir(parents=True)
+        (conf / "remote.env").write_text(f"CLAUDE_CODE_OAUTH_TOKEN={token}\n")
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        self.remote_agent(work_script=f"echo {token} >leak.txt; mkdir -p .eval-scratch; echo {token} "
+                          f">.eval-scratch/s.md; mkdir -p .git/remote-agent/run-a; "
+                          f"echo {token} >.git/remote-agent/run-a/changes.patch; "
+                          f"echo {token} >.git/remote-agent/run-a/stderr.log; echo {token} >&2")
+        d, _ = self.saved(self.remote([self.case()]))
+        files = [p for p in self.results.rglob("*") if p.is_file()]
+        self.assertTrue(files)
+        for p in files:
+            self.assertNotIn(token.encode(), p.read_bytes(), p)
+        self.assertEqual((d / "scratch" / "s.md").read_text(), "[redacted]\n")
 
     def test_the_remote_token_reaches_no_kept_file(self):
         token = "remote-secret-" + "z" * 12
