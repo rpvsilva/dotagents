@@ -39,6 +39,9 @@ FULL = {
     "rubric": {"scores": {"clear": {"score": 4, "reason": "one line"}}, "judge_model": "claude-haiku-5-5",
                "rubric_hash": "d" * 64},
     "transcript": "transcript.jsonl",
+    "remote": True,
+    "backend": "docker",
+    "unenforced": ["turns", "cost_usd"],
 }
 
 
@@ -66,6 +69,16 @@ class ResultFile(EvalSandbox):
         self.assertEqual(got["turns"], 3)
         self.assertIsNone(got["cost_usd"])
         self.assertIsNone(got["tokens"])
+
+    def test_a_result_saved_before_the_remote_fields_reads_them_as_null(self):
+        d = self.tmp / "run-1"
+        d.mkdir()
+        (d / "result.json").write_text(json.dumps({"schema": 1, "tool": "claude", "turns": 3}))
+        got = results.read(d)
+        for field in ("remote", "backend", "unenforced"):
+            self.assertIsNone(got[field], field)
+        self.assertEqual(got["schema"], 1)
+        self.assertEqual(results.SCHEMA, 1)
 
     def test_write_refuses_an_unknown_field(self):
         with self.assertRaises(ValueError):
@@ -178,6 +191,41 @@ class StoreRoot(EvalSandbox):
         self.assertEqual(results.run_dir(root, "claude", "f" * 40, "claude-sonnet-5-5", "configure/minimal", "e" * 64, 3),
                          root / "claude" / ("f" * 40) / "claude-sonnet-5-5" / "configure" / "minimal" / ("e" * 64)
                          / "run-3")
+
+    def test_a_backend_makes_the_tool_folder_one_segment_at_the_same_depth(self):
+        root = results.store_root(None)
+        args = ("claude", "f" * 40, "claude-sonnet-5-5", "configure/minimal", "e" * 64)
+        local = results.run_dir(root, *args, 3)
+        remote = results.run_dir(root, *args, 3, backend="docker")
+        self.assertEqual(remote, root / "claude@docker" / ("f" * 40) / "claude-sonnet-5-5" / "configure" / "minimal"
+                         / ("e" * 64) / "run-3")
+        self.assertEqual(len(remote.parts), len(local.parts))
+        self.assertEqual(results.key_dir(root, *args, backend="ssh"),
+                         root / "claude@ssh" / ("f" * 40) / "claude-sonnet-5-5" / "configure" / "minimal" / ("e" * 64))
+        self.assertEqual(results.run_dir(root, *args, 3, backend=None), local)
+
+    def test_without_a_backend_the_path_is_the_local_one(self):
+        root = results.store_root(None)
+        self.assertEqual(results.key_dir(root, "claude", "f" * 40, "m-1", "c/x", "e" * 64),
+                         root / "claude" / ("f" * 40) / "m-1" / "c" / "x" / ("e" * 64))
+
+    def test_a_backend_must_be_one_plain_segment(self):
+        root = results.store_root(None)
+        for bad in ("", "..", "a/b", "/x", "Docker", "1x", "-x", "a@b", "a b", "a.b", "x\n"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                results.run_dir(root, "claude", "f" * 40, "m-1", "c/x", "e" * 64, 1, backend=bad)
+        with self.assertRaises(ValueError):
+            results.key_dir(root, "claude", "f" * 40, "m-1", "c/x", "e" * 64, backend="a/b")
+        for good in ("docker", "ssh", "cluster", "my_back-end2"):
+            results.run_dir(root, "claude", "f" * 40, "m-1", "c/x", "e" * 64, 1, backend=good)
+
+    def test_saved_runs_of_a_backend_are_kept_apart_from_local_and_other_backends(self):
+        root = results.store_root(None)
+        key = ("claude", "f" * 40, "m-1", "c/x", "e" * 64)
+        results.write(results.run_dir(root, *key, 1, backend="docker"), {"tool": "claude", "run": 1})
+        self.assertEqual(len(results.saved_runs(root, *key, backend="docker")), 1)
+        self.assertEqual(results.saved_runs(root, *key), [])
+        self.assertEqual(results.saved_runs(root, *key, backend="ssh"), [])
 
     def test_run_dir_refuses_a_key_that_escapes_the_store(self):
         root = results.store_root(None)

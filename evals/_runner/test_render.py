@@ -38,6 +38,17 @@ class Markdown(unittest.TestCase):
                      "2026-10-01"):
             self.assertIn(word, md.split("|")[0])
 
+    def test_each_side_names_where_it_ran_only_when_the_comparison_says_so(self):
+        c = comparison([run()], [run()])
+        c["base"]["where"], c["head"]["where"] = "local", "remote (docker)"
+        header = render.markdown(c).split("|")[0]
+        self.assertIn("- Base: origin/main (aaaa111), local\n", header)
+        self.assertIn("- Head: HEAD (bbbb222), remote (docker)\n", header)
+        self.assertIn("HEAD (bbbb222), remote (docker)</li>", render.html(c))
+        plain = render.markdown(comparison([run()], [run()]))
+        self.assertIn("- Base: origin/main (aaaa111)\n", plain)
+        self.assertNotIn("local", plain)
+
     def test_one_row_per_case_with_both_refs_the_difference_and_the_verdict(self):
         n = verdict.MIN_RUNS
         md = render.markdown(comparison([run(cost=2.0)] * n + [run("d")],

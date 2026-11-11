@@ -1,7 +1,8 @@
 """The comparison report of two refs, as Markdown (`markdown()`) or one self-contained HTML page (`html()`).
 
 Both take one `comparison` dict: `tool`, `model`, `runs` (per case), `pricing_as_of`, `base` and `head` (each
-`{ref, sha}`, plus `model` when the two refs ran different models) and `verdict` (the output of `verdict.verdict()`).
+`{ref, sha}`, plus `model` when the two refs ran different models, and `where` (`local` or `remote (<backend>)`) when
+either ran remotely) and `verdict` (the output of `verdict.verdict()`).
 The report holds a header naming those, one table row per case with both refs' numbers (median and min-max), the
 difference and the verdict, one sub-row per rubric criterion, then the cases worth more runs. A missing value prints
 `unknown`, never 0.
@@ -85,7 +86,8 @@ def _text(value):
 def _side(c, side):
     s = c.get(side) or {}
     out = f"{_text(s.get('ref'))} ({_text(s.get('sha'))})"
-    return out + (f", model {s['model']}" if s.get("model") else "")
+    out += f", model {s['model']}" if s.get("model") else ""
+    return out + (f", {s['where']}" if s.get("where") else "")
 
 
 def _header(c):

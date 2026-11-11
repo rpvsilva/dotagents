@@ -8,7 +8,7 @@ Evals are dev tooling, like `tests/`:
 
 - They live in one top-level `evals/` folder: the cases, and the runner in `evals/_runner/`.
 - They are not a Part and belong to no Group: no `needs.json`, and `install.sh` links nothing from `evals/`. `tests/repo.test.sh` fails if a part ships a file under `evals/`.
-- They run on your machine, only when you ask. CI never runs them.
+- They run on your machine, or through the remote backend `remote-agent` is set up for ([Remote](#remote)), only when you ask. CI never runs them.
 
 ## Eval cases
 
@@ -101,13 +101,14 @@ It runs each named case, or every case with `--all`, against dotagents at a comm
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude`, `codex` ([Codex](#codex)) or `cursor` ([Cursor](#cursor)). |
+| `--tool` | required | The tool adapter in `evals/_runner/adapters/`: `claude`, `codex` ([Codex](#codex)) or `cursor` ([Cursor](#cursor)). With `--remote`, `claude` only. |
 | `--ref` | required | The git ref to test, resolved to its commit. Only committed refs: the run extracts it with `git archive`, so uncommitted changes are not in it. |
 | `--runs` | the case's `runs` | How many times each case runs, at least 1. |
 | `--model` | the case's `model` | Overrides the model of every case, as a full ID (an alias fails). Required on a tool whose adapter does not run the case's Claude model. |
 | `--budget-usd` | `10` | The cost ceiling for the whole invocation, over 0 (see below). |
 | `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store. |
 | `--fresh` | off | Runs again even when a saved run matches; the saved run is replaced only once the new one has its result. |
+| `--remote` | off | Runs each case through the backend `remote-agent` is set up for (`claude` only, else exit 2 before any run): the run is stored under `claude@<backend>`, saved with `remote: true`, and ends its line `remote <backend>`. See [Remote](#remote). |
 | `--evals` | this repo's `evals/` | Another folder of cases. |
 | `--all` | off | Every case under `--evals`. Give `--all` or case names, not both. |
 | `-h`, `--help` | | Prints the usage. |
@@ -118,20 +119,20 @@ Before any run, it refuses an unknown tool or case, a malformed case, a model al
 configure/repo-max-parallel  run 1  pass  $0.0412  turns 6  38.2s  cap -
 ```
 
-That is the case, the run number, `pass` or `fail`, the cost (`unknown` when it cannot be priced), the turns and seconds (`?` when unknown) and the cap it hit (`-` for none), then `error <kind>` when the run errored and `(saved)` when a saved run was reused.
+That is the case, the run number, `pass` or `fail`, the cost (`unknown` when it cannot be priced), the turns and seconds (`?` when unknown) and the cap it hit (`-` for none), then `error <kind>` when the run errored, `(saved)` when a saved run was reused and `remote <backend>` (`docker`, `ssh` or `cluster`) when it ran through [Remote](#remote).
 
 | Exit | Meaning |
 |---|---|
 | `0` | Every run was made or reused, whatever its checks gave. |
 | `1` | The cost ceiling skipped runs; the last line names them. |
 | `2` | A usage error: nothing ran. |
-| `3` | A run failed on authentication; see [Auth](#auth). |
+| `3` | A run failed on authentication; see [Auth](#auth). The same code and one line serve a remote run, which names `remote-agent setup`. |
 
 ### Auth
 
 The tool authenticates from env vars only, the ones its adapter names: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex, `CURSOR_API_KEY` for Cursor. They reach the tool's process and nothing else: not its argv, not the checks, and not a saved file, where every value is replaced by `[redacted]`. No credentials file is copied into the run.
 
-A run that fails on authentication stops the command. It is saved with `error: auth` and no judge, no further run or judge starts, and `run.py` prints one line naming the adapter's env vars to renew and how, such as `auth failed for claude: renew CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY (claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN, or set a new ANTHROPIC_API_KEY); stopped before 4 more run(s)`, then exits 3. Claude Code and Codex detect it (Claude Code from a 401 or `authentication_failed` event, Codex from a `401 Unauthorized` error); Cursor does not yet, so a Cursor auth failure is saved as `error: tool`. `auth` is an `error` value like the others, so [errored runs are never reused](#reuse-and---fresh): after you renew the variable, the same command makes the stopped run again and reuses the runs it already saved.
+A run that fails on authentication stops the command. It is saved with `error: auth` and no judge, no further run or judge starts, and `run.py` prints one line naming the adapter's env vars to renew and how, such as `auth failed for claude: renew CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY (claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN, or set a new ANTHROPIC_API_KEY); stopped before 4 more run(s)`, then exits 3. Claude Code and Codex detect it (Claude Code from a 401 or `authentication_failed` event, Codex from a `401 Unauthorized` error); Cursor does not yet, so a Cursor auth failure is saved as `error: tool`. A remote run stops the same way, but its line says `auth failed for claude: run `remote-agent setup` (the token in remote.env); stopped before N more run(s)`: the sandbox's token is the one in `remote.env`, not the env var. `auth` is an `error` value like the others, so [errored runs are never reused](#reuse-and---fresh): after you renew the variable, the same command makes the stopped run again and reuses the runs it already saved.
 
 ### What a run starts from
 
@@ -176,11 +177,11 @@ Results live in the store, never in the repo, and are never committed:
 
 `home/` keeps its real files only: the links `install.sh` made into the checkout are dropped. Every kept file has each auth value replaced by `[redacted]`, so a token never lands in a result. The kept state is what grading re-runs the checks on.
 
-`result.json` holds the tool, `tool_version`, `model`, `ref` and `ref_sha`, the `case`, `case_hash` and `run`, `checks` (`{name: true|false}`) and `checks_hash`, `passed`, `tokens` per model, `cost_usd` (computed from [`skills/telemetry/pricing.json`](../skills/telemetry/pricing.json)) with `cost_basis` and `pricing_as_of`, `turns`, `duration_s`, `capped`, `subagents` (`used`, `fallback` when the skill lists `agents` and none started, or `none`), `error`, `rubric` and the `transcript` path. An unknown value is `null`, never 0.
+`result.json` holds the tool, `tool_version`, `model`, `ref` and `ref_sha`, the `case`, `case_hash` and `run`, `checks` (`{name: true|false}`) and `checks_hash`, `passed`, `tokens` per model, `cost_usd` (computed from [`skills/telemetry/pricing.json`](../skills/telemetry/pricing.json)) with `cost_basis` and `pricing_as_of`, `turns`, `duration_s`, `capped`, `subagents` (`used`, `fallback` when the skill lists `agents` and none started, or `none`), `error`, `rubric` and the `transcript` path. A remote run adds `remote` (`true`; `false` locally), `backend` (`docker`, `ssh` or `cluster`) and `unenforced` (the caps checked only after the run, see [Remote](#remote)); `error` may be `patch` there. A remote run's folder is `<store>/claude@<backend>/...`, so each backend has its own. An unknown value is `null`, never 0.
 
 ### Reuse and `--fresh`
 
-A saved run is reused, with no tool call, when the tool, the ref's commit, the model and the case hash are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install, auth or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+A saved run is reused, with no tool call, when the tool, the ref's commit, the model and the case hash are unchanged and its `result.json` exists with no `error`. A remote run is stored under `claude@<backend>` and counts that as its tool: it is reused only by a remote run on the same backend, never by a local run, never by a run on another backend, and a local run is never reused for a remote one. `--fresh` replaces only the runs it makes, so `--remote --fresh` leaves the local ones. So a second run of `main` costs nothing, and a run that errored (an install, auth or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
 
 The case hash covers only what changes a run: every file of the case except `checks/` and the rubric (`rubric.md`, or the file `case.json`'s `rubric` names), and every field of `case.json` except `rubric`, `judge_model` and `runs`. Those are graded, not run, so editing them never pays for the case again: a reused run whose `checks_hash`, `rubric_hash` or `judge_model` differs from the case's is re-graded first, as [`grade.py`](#grade-runs) does. Its checks run again on its kept state, the judge runs again only when the rubric or `judge_model` changed, and the case's tool is never called. A changed `runs` reuses the saved runs it still counts and makes only the new ones.
 
@@ -225,6 +226,25 @@ CURSOR_API_KEY=... python3 -I evals/run.py --tool cursor --ref main --model gpt-
 - **A tool error**: a run whose stream has no `result` event (killed, crashed or cut off) or whose `result` has `is_error: true` is saved with `error: tool`.
 
 Not yet proven by a real run, only by Cursor's docs and `cursor-agent --help` and by hand-written transcripts: the flags `--force`, `--trust` and `--workspace`, the event shapes above, the subagent tool names, and whether headless `-p` loads the skills installed in the run's home at all. Until the first manual run settles that, a Cursor result says how the model did without the skill as readily as with it. The first real run confirms them, or fixes the adapter.
+
+### Remote
+
+`--remote` runs each case through `remote-agent` instead of on this machine: the same cases and checks, with the dotagents install at the run's ref, on the backend (Docker, SSH or the cluster) `remote-agent` is set up for. It is for Claude Code only (`--tool claude`; another tool exits 2 before any run), only when you ask, and never in CI.
+
+```bash
+python3 -I evals/run.py --tool claude --ref main --remote configure/repo-max-parallel
+```
+
+- **Setup**: run `remote-agent setup` once, which writes the backend and the Claude token to your machine's `~/.config/dotagents`. The run calls `remote-agent ready` first, once, from a folder outside any repo; its stdout is the backend the result names. When it fails, the command exits 2 with its line and `run remote-agent setup`, before any run. The setup is read from this machine, not from the run's throwaway home; the home's install (at the ref, as for a local run) is what the sandbox gets.
+- **What the sandbox sees**: Claude Code runs headless in a sandbox under a system prompt saying it is a remote subagent with no git remote and no GitHub, [as every remote run](remote.md). The run's `work/` is `~/work` there and the case's `input/` is `~/attached/input`, so a prompt's `{work}` and `{input}` name those paths. Only the worktree's changes come back, as a patch the runner applies to `work/`, and the checks and the judge run on that. A commit the run made in the sandbox is an uncommitted change in `work/`, and a run killed by `secs` returns no patch.
+- **Caps**: `secs` is enforced, by `scripts/capped` around `remote-agent`, as locally. The sandbox has no turn or cost flag, so `turns` and `cost_usd` are checked after the run ([Caps](#caps)) and the result names them in `unenforced`.
+- **Cost**: a remote run counts against `--budget-usd` like a local one: a run that reports zero tokens and zero cost counts $0, an unknown cost counts the case's `cost_usd` cap ([Cost ceiling](#cost-ceiling)).
+- **Model**: the case's `model`, or `--model`, goes to `remote-agent --model`, and the results are filed under it.
+- **`{scratch}`**: the folder is `~/work/.eval-scratch`, inside the worktree, so what the run writes there comes back in the patch. After the patch applies, the runner moves it to the run's `scratch/` and `work/` reads as after a local run. So a fixture may not hold `.eval-scratch`: the command refuses to start.
+- **Cases that cannot run**: the sandbox has no run home, so a case whose prompt names `{home}` or whose checks read `EVAL_HOME` cannot run remotely. The four `configure` cases are these. Each is named on its own line (`<case>: cannot run remotely (...)`), is not run and is not saved as a failure; the command exits 2 when none can run. The `build-epic` cases run.
+- **Transcript and auth**: the run's transcript is the stream `remote-agent` kept, and the run's token is never in a saved file. An auth failure stops the command ([Auth](#auth)).
+- **A patch that does not apply** is saved with `error: patch`, with no judge, and the run is made again next time.
+- **Still different from local**: the sandbox's Claude Code is whatever its image installs, `tool_version` is read from the transcript, and `no-github` passes trivially, since the `gh` stub is local and the sandbox has no GitHub.
 
 ## Rubrics and re-grading
 
@@ -302,7 +322,7 @@ For each run, it:
 2. Judges the run again, on the run's tool, only when the case's rubric or `judge_model` differs from the saved one (by `rubric_hash` and `judge_model`), a rubric was added since, or with `--rejudge`. A case whose rubric is gone gets `rubric: null`.
 3. Keeps every other field of `result.json`.
 
-Re-grading needs the run's kept state: delete a run's `work/`, `home/` or `scratch/` and its checks have nothing to read. A run saved with `error: install` has no state, so it is left as it is. A run whose case folder is gone, or whose `result.json` does not read, is named and skipped.
+Re-grading needs the run's kept state: delete a run's `work/`, `home/` or `scratch/` and its checks have nothing to read. A run saved with `error: install` or `error: auth` has no state to grade (an `auth` run was stopped, no checks or judge ran), so it is left as it is. A run whose case folder is gone, or whose `result.json` does not read, is named and skipped.
 
 Once the judges' summed cost reaches `--budget-usd` (an unknown one counting as the judge's $0.50 cap), a run that needs the judge is no longer graded: it is left as it is, named with `not graded: budget ...`, and the command exits 1. Re-running checks costs nothing, so a run needing no judge is always graded. `--rejudge` and `--all` together judge every saved run with a rubric: narrow it with case names or `--ref`, or raise the budget.
 
@@ -324,8 +344,8 @@ That is the case, the run number, the tool, model and the first 12 characters of
 
 ```bash
 python3 -I evals/compare.py --tool claude --base <ref> --head <ref> [--runs N] [--model <id>] \
-  [--base-model <id>] [--head-model <id>] [--budget-usd 10] [--results <dir>] [--out <file.md>] \
-  [--html <file.html>] [--evals <dir>] (--all | <skill>/<case>...)
+  [--base-model <id>] [--head-model <id>] [--remote | --base-remote | --head-remote] [--budget-usd 10] \
+  [--results <dir>] [--out <file.md>] [--html <file.html>] [--evals <dir>] (--all | <skill>/<case>...)
 ```
 
 It runs each named case, or every case with `--all`, on both refs and reports, per case, whether the head is better, worse or within noise of the base. Use it to judge a change to a skill: `--base main --head <your branch>`.
@@ -339,9 +359,12 @@ It runs each named case, or every case with `--all`, on both refs and reports, p
 | `--model` | the case's `model` | The model of every case on both refs, as a full ID. Required on a tool whose adapter does not run the case's Claude model. |
 | `--base-model` | `--model` | The base ref's model alone, e.g. to compare two models on one ref. |
 | `--head-model` | `--model` | The head ref's model alone. |
+| `--remote` | off | Runs both refs through the remote backend, as `run.py --remote` does. `--tool claude` only (else exit 2 before any run). The report labels each side `local` or `remote (<backend>)`. |
+| `--base-remote` | `--remote` | Runs the base ref alone through the remote backend. |
+| `--head-remote` | `--remote` | Runs the head ref alone through the remote backend, e.g. a local and a remote run of one ref. Both runs are saved apart and reused next time. |
 | `--budget-usd` | `10` | One cost ceiling for both refs, over 0, spent in the order the runs are made ([Cost ceiling](#cost-ceiling)). |
 | `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store, read for saved runs and written with new ones. |
-| `--out` | `<store>/reports/<tool>-<base sha>-<head sha>.md`, with each sha's first 12 characters | Where the Markdown report is written. |
+| `--out` | `<store>/reports/<tool>-<base sha>-<head sha>.md`, with each sha's first 12 characters and `@<backend>` after a remote side's sha | Where the Markdown report is written. |
 | `--html` | none | Also writes the report as one self-contained HTML page there. |
 | `--evals` | this repo's `evals/` | Another folder of cases. |
 | `--all` | off | Every case under `--evals`. Give `--all` or case names, not both. |
@@ -351,7 +374,7 @@ Before any run, it checks both refs as `run.py` would ([Run cases](#run-cases)),
 
 The refs take turns, one run number at a time: run 1 of every case on the base, then on the head, then run 2, and so on. Drift over the session (API load, time of day) then falls on both refs alike instead of on the head alone.
 
-Run lines go to stderr as in [Run cases](#run-cases), then the path of each report written. The Markdown report goes to stdout.
+With `--remote`, `--base-remote` or `--head-remote`, `--out`'s default keeps the two reports of one pair apart: `@<backend>` follows a remote side's sha, so a local and a remote compare of the same refs never overwrite each other. Run lines go to stderr as in [Run cases](#run-cases), then the path of each report written. The Markdown report goes to stdout.
 
 | Exit | Meaning |
 |---|---|
@@ -362,7 +385,7 @@ Run lines go to stderr as in [Run cases](#run-cases), then the path of each repo
 
 ### Saved runs are reused
 
-Each ref runs through `run.py`'s own code, so a saved run is reused exactly as [Reuse and `--fresh`](#reuse-and---fresh) says, keyed by the tool, the ref's commit, the model and the case hash. Comparing a new branch against `main` a second time pays only for the new head: `main`'s runs are reused. The same ref on both sides runs once. Editing a case's checks or rubric re-grades the saved runs of both refs without calling the tool for the case; only the judge runs, when the rubric changed. `compare.py` has no `--fresh`: to run a ref again, use `run.py --fresh` on it first.
+Each ref runs through `run.py`'s own code, so a saved run is reused exactly as [Reuse and `--fresh`](#reuse-and---fresh) says, keyed by the tool, the ref's commit, the model and the case hash. Comparing a new branch against `main` a second time pays only for the new head: `main`'s runs are reused. The same ref on both sides runs once when both sides run in the same place; a local base and a remote head of one ref are two runs, saved and reused apart ([Remote](#remote)). Editing a case's checks or rubric re-grades the saved runs of both refs without calling the tool for the case; only the judge runs, when the rubric changed. `compare.py` has no `--fresh`: to run a ref again, use `run.py --fresh` on it first.
 
 ### Prices
 
@@ -386,7 +409,7 @@ A `noise` case is **worth more runs** when the pass rate or a rubric median diff
 
 ### Reading the report
 
-The report starts with a header naming the tool, the model (and each ref's when they differ), both refs with their commits, the runs per case and the price table's date.
+The report starts with a header naming the tool, the model (and each ref's when they differ), both refs with their commits, the runs per case and the price table's date. When a side ran remotely, each side is labelled where it ran, `local` or `remote (<backend>)`, read from its saved runs (a reused run ran where it was saved), in the header and in the HTML page.
 
 Then one row per case, and one row per rubric criterion under it:
 
