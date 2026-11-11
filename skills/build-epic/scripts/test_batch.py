@@ -124,6 +124,34 @@ class BatchTest(unittest.TestCase):
     def status(self, tt):
         return runfolder.get(self.kit.run_dir / "tickets" / f"{tt}-t.md", "Status")
 
+    def squash_task(self, tt, nn, pr, task):
+        """Task `tt-nn`'s PR `pr`, done, its head `task` kept as `refs/pull/<pr>/head`, squash-merged into `feat/<tt>`."""
+        self.git("push", "-q", "-f", "origin", f"{task}:refs/pull/{pr}/head")
+        self.git("fetch", "-q", "origin")
+        self.push(self.git("commit-tree", f"{task}^{{tree}}", "-p", f"origin/feat/{tt}", "-m", "squash"), f"feat/{tt}")
+        self.git("fetch", "-q", "origin")
+        (self.kit.run_dir / "tasks" / f"{tt}-{nn}-t.md").write_text(
+            f"# {tt}-{nn}: task\nStatus: done\nTicket: {tt}\nBlocked by: none\nPR: https://github.com/o/r/pull/{pr}\n",
+            encoding="utf-8")
+
+    def test_a_task_rewriting_what_its_hub_merged_from_the_base_lands(self):
+        """The reported bug: a hub task merged the moved base, a later task rewrote the lines the base added; the
+        fork-point merge conflicts on them, though the ticket lacks nothing."""
+        self.ticket("01", "a.txt")
+        self.squash_task("01", "01", 30, self.tip("feat/01"))
+        self.push(self.commit("b.txt", "b\n", on=f"origin/{BASE}"), BASE)
+        self.git("fetch", "-q", "origin")
+        self.git("checkout", "-q", "--detach", "origin/feat/01")
+        self.git("merge", "-q", "--no-edit", f"origin/{BASE}")
+        self.squash_task("01", "02", 31, self.git("rev-parse", "HEAD"))
+        self.squash_task("01", "03", 32, self.commit("b.txt", "b, regrouped\n", on="origin/feat/01"))
+        head = self.tip("feat/01")
+        self.review("21", head)
+        self.assertEqual(self.batch(), "OK batch landed 01 suites=1")
+        self.assertEqual(self.status("01"), "merged")
+        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", f"{BASE}^{{tree}}"),
+                         self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", f"{head}^{{tree}}"))
+
     def test_three_green_tickets_land_with_one_suite_run(self):
         for tt in ("01", "02", "03"):
             self.ticket(tt, f"{tt}.txt")

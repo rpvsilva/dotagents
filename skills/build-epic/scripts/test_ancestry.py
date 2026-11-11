@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import runfolder  # noqa: E402
-from test_ship import SHIP, TICKET, Base  # noqa: E402
+from test_ship import SHIP, TASK, TICKET, Base  # noqa: E402
 
 BASE = "integ"
 
@@ -195,6 +195,70 @@ class AncestryTest(Base):
         self.assertEqual([c for c in self.calls("issue", "edit")],
                          [["issue", "edit", "7", "--add-label", f"merged-to-{BASE}"],
                           ["issue", "edit", "8", "--add-label", f"merged-to-{BASE}"]])
+
+    def pull(self, n, sha):
+        """GitHub's `refs/pull/<n>/head` on origin: kept after the task branch is deleted."""
+        self.git("push", "-q", "-f", "origin", f"{sha}:refs/pull/{n}/head")
+
+    def regroup(self):
+        """The reported bug: tasks 1 and 2 (the hub, which merged the base) have their PRs' heads on origin, and a
+        later squash-merged task 3 rewrites the lines the base added, so the 3-way merge from the ticket's fork point
+        conflicts on them. The ticket PR is reviewed at that head."""
+        self.pull(5, self.task1)
+        self.pull(6, self.task2)
+        (self.kit.run_dir / "tasks" / "01-03-c.md").write_text(TASK.format(nn="03", pr=9), encoding="utf-8")
+        task3 = self.commit("b.txt", "b, regrouped\n", on="origin/feat/t")
+        self.pull(9, task3)
+        self.squash(task3)
+        self.reviewed_head = self.head()
+        self.review(self.reviewed_head)
+
+    def test_a_task_rewriting_what_the_hub_merged_from_the_base_ships_with_the_reviewed_tree(self):
+        self.regroup()
+        before = self.head()
+        self.assertEqual(self.ship("merge"), "OK 01 merged pr=20")
+        head = self.head()
+        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", f"{head}^@").split(),
+                         [before, self.base_tip])
+        self.assertEqual(self.tree(head), self.tree(self.reviewed_head))
+        self.git("fetch", "-q", "origin")
+        self.git("checkout", "-q", "--detach", f"origin/{BASE}")
+        self.git("merge", "--no-edit", head)  # raises on a conflict
+        self.assertEqual(self.tree("HEAD"), self.tree(self.reviewed_head))
+
+    def test_a_base_moving_on_after_the_hub_task_is_still_refused(self):
+        self.regroup()
+        self.push(self.commit("e.txt", "late base\n", on=f"origin/{BASE}"), BASE)
+        before = self.head()
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 reviewed-head-lacks-base \(log: ")
+        self.assertEqual(self.merge_calls(), [])
+        self.assertEqual(self.head(), before)
+
+    def test_with_no_task_prs_recorded_the_guard_merges_from_the_fork_point_as_before(self):
+        self.regroup()
+        for path in (self.kit.run_dir / "tasks").glob("01-*.md"):
+            path.write_text("".join(line for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+                                    if not line.startswith("PR:")), encoding="utf-8")
+        before = self.head()
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 reviewed-head-lacks-base \(log: ")
+        self.assertEqual(self.head(), before)
+
+    def test_a_task_pr_head_origin_lacks_falls_back_to_the_fork_point(self):
+        self.regroup()
+        self.kit.git("--git-dir", str(self.kit.origin), "update-ref", "-d", "refs/pull/9/head")
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 reviewed-head-lacks-base \(log: ")
+        self.assertEqual(self.merge_calls(), [])
+
+    def test_a_task_pr_head_the_ticket_never_merged_proves_nothing(self):
+        self.regroup()
+        late = self.commit("e.txt", "late base\n", on=f"origin/{BASE}")
+        self.push(late, BASE)
+        # Task 3's PR head claims the late base (the hub's head with it merged), but that tree never landed on the ticket.
+        self.git("checkout", "-q", "--detach", self.task2)
+        self.git("merge", "-q", "--no-edit", late)
+        self.pull(9, self.git("rev-parse", "HEAD"))
+        self.assertRegex(self.ship("merge"), r"^FAIL 01 reviewed-head-lacks-base \(log: ")
+        self.assertEqual(self.merge_calls(), [])
 
     def checks(self, command):
         (self.kit.run_dir / "map.md").write_text(f"# Map\n\n## Checks\n\n```\n{command}\n```\n", encoding="utf-8")
