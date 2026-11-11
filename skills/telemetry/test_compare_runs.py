@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -166,6 +167,32 @@ class Runs(unittest.TestCase):
         self.assertEqual(out["runs"]["local"]["claudeVersions"], want)
         self.assertEqual(out["comparison"]["claudeVersions"],
                          {"remote": {"local": None, "remote": None}, "local": want})
+
+    def test_saved_active_time_agents_lead_time_and_interruptions_are_compared(self):
+        run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))
+        span = next(s for s in run["spans"] if s["skill"] == "build-epic")
+        span.update(activeSeconds=5400, agentsAtOnce={"peak": 3, "average": 1.5}, humanMessages=4)
+        span["tools"]["AskUserQuestion"] = 2
+        tel = self.tmp / "tel.json"
+        tel.write_text(json.dumps(run), encoding="utf-8")
+        met = json.loads(RUN_METRICS.read_text(encoding="utf-8"))
+        last = (datetime.fromisoformat(span["start"].replace("Z", "+00:00")) + timedelta(minutes=200)).isoformat()
+        met["lead_time"] = {"epic": 5, "epic_opened": "2026-11-01T00:00:00+00:00", "last_ticket_merged": last,
+                            "hours": 30.5, "unmerged_tickets": []}
+        metrics = self.tmp / "met.json"
+        metrics.write_text(json.dumps(met), encoding="utf-8")
+        out = compare(gh35_args(**{"b": tel, "b-metrics": metrics}))
+        local = out["runs"]["local"]
+        self.assertEqual((local["time"]["activeMinutes"], local["time"]["agentsAtOnce"]["average"]), (90.0, 1.5))
+        self.assertEqual((local["time"]["leadTimeHours"], local["time"]["runStartToLastTicketMergeMinutes"]),
+                         (30.5, 200.0))
+        # Four typed answers and two questions asked.
+        self.assertEqual(local["outcomes"]["interruptions"], 6)
+        self.assertEqual(out["comparison"]["outcomes"]["interruptions"]["local"], 6)
+        self.assertEqual(out["comparison"]["time"]["leadTimeHours"]["local"], 30.5)
+        # Saved before schemaVersion 5: unknown, never 0.
+        self.assertIsNone(out["runs"]["remote"]["outcomes"]["interruptions"])
+        self.assertIsNone(out["runs"]["remote"]["time"]["leadTimeHours"])
 
     def test_a_saved_role_wins_over_the_description(self):
         run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))

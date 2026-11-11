@@ -9,8 +9,8 @@ from pathlib import Path
 from report import HERE, cost, merged_tokens, money, seconds, table, token_total, tokens
 from runs import NO_SKILL, run_date, saved_runs, short_name, skill_matches
 
-HEADERS = ["Date", "Cost", "Time", "Turns", "Tools", "In", "Out", "Cache R", "Cache W"]
-KEY = "Tools = tool calls · In/Out = input/output tokens · Cache R/W = cache read/write"
+HEADERS = ["Date", "Cost", "Time", "Active", "Turns", "Tools", "In", "Out", "Cache R", "Cache W"]
+KEY = "Active = time minus stalls over 15 min (unknown for older saves) · Tools = tool calls · In/Out = input/output tokens · Cache R/W = cache read/write"
 
 
 def figures(spans, pricing):
@@ -19,6 +19,7 @@ def figures(spans, pricing):
     return [
         cost(merged, pricing),
         sum(s["wallClockSeconds"] for s in spans),
+        active(spans),
         sum(s["turns"] for s in spans),
         sum(s["toolCalls"] for s in spans),
         token_total(merged, "input"),
@@ -28,7 +29,17 @@ def figures(spans, pricing):
     ]
 
 
-FORMATS = [money, seconds, str, str, tokens, tokens, tokens, tokens]
+def active(spans):
+    """Active seconds of these spans summed; None when a span was saved before they were measured."""
+    values = [s.get("activeSeconds") for s in spans]
+    return None if any(v is None for v in values) else sum(values)
+
+
+def maybe_seconds(n):
+    return "unknown" if n is None else seconds(n)
+
+
+FORMATS = [money, seconds, maybe_seconds, str, str, tokens, tokens, tokens, tokens]
 
 
 def cells(values):
