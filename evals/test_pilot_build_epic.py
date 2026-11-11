@@ -77,8 +77,6 @@ None: the epic adds no command that creates, copies or moves counts.
 ## Lanes
 
 - Lane 1: 01.
-
-Hub files: none
 """
 
 TICKET = """# 01: tally top
@@ -283,10 +281,10 @@ class PilotBuildEpicTest(EvalSandbox):
         result = self.run_case("pass-b-top", checkout=checkout)
         self.assertEqual([c for c, ok in result.items() if not ok], ["plan-ok"])
 
-    def test_map_sections_fails_on_a_missing_section_setup_or_hub_files_line(self):
+    def test_map_sections_fails_on_a_missing_section_or_setup_line(self):
         cuts = ["## " + s + "\n" for s in ("Checks", "Invariants", "Field matrix", "Test isolation", "Gaps",
                                            "Lanes")]
-        for cut in cuts + ["Setup: none\n", "Hub files: none\n"]:
+        for cut in cuts + ["Setup: none\n"]:
             def drop(paths, cut=cut):
                 path = paths["scratch"] / "map.md"
                 path.write_text(path.read_text().replace(cut, ""))
