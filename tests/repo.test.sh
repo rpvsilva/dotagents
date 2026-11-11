@@ -375,6 +375,28 @@ if [ ${#personal_files[@]} -gt 0 ]; then
   } | sort -u)
 fi
 
+# Eval cases: each evals/<skill>/<case>/ follows the case format (evals/_runner/cases.py, docs/evals.md). Evals are dev
+# tooling, never shipped: no part, core included, lists a file under evals/, and no needs.json makes one a part (a
+# case's fixture/ and input/ are sample data, skipped).
+if ! cases_out="$(python3 -I evals/_runner/cases.py check 2>&1)"; then
+  while IFS= read -r line; do fail "evals: $line"; done <<<"$cases_out"
+fi
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  while read -r f; do
+    case "$f" in evals/*) fail "part '$p' ships $f; nothing under evals/ is a part" ;; esac
+  done < <(scripts/parts.sh files "$p" | tr -d '\r')
+done < <(printf '_shared\n%s\n' "$part_names")
+while IFS= read -r f; do
+  case "$f" in evals/*/*/fixture/* | evals/*/*/input/*) continue ;; esac
+  fail "$f: evals are dev tooling, not a part; no needs.json under evals/"
+done < <(find evals \( -name needs.json -o -name '*.needs.json' \) -print 2>/dev/null | sort)
+
+# CI never runs evals: they bill a model per case, so they run only when asked (EVALS=1 tests/run.sh) on this machine.
+while IFS=: read -r f n _; do
+  fail "$f:$n: CI never runs evals; no workflow names evals/ or EVALS"
+done < <(grep -rnE 'evals/|EVALS' .github/workflows/ 2>/dev/null)
+
 # Shell scripts are committed executable.
 while read -r mode _ _ path; do
   [ "$mode" = "100755" ] || fail "$path is not executable (git update-index --chmod=+x $path)"

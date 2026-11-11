@@ -3,8 +3,26 @@
 # With PYTHON_TEST_FILES (the changed files, one per line, as tests/run.sh and CI set it from `tests/affected.sh --files`),
 # only the folders holding one of them, the deepest when folders nest. Every folder when it is unset, empty or
 # `--all`, or when a changed file a Python test may read (a .py, scripts/hooks/secret-patterns.txt) is in none.
+# A file some folder's code reads or runs by path from elsewhere in the checkout also picks that folder, as READERS
+# lists.
 # PYTHON_TEST_LIST=1 prints the folders it would run and stops.
 set -euo pipefail
+
+# `<file> <folder>...`: the test folders whose code reads or runs <file> by path, so a change to it alone runs them too.
+READERS="adapters/claude/telemetry/extract.py evals evals/_runner/adapters
+skills/telemetry/pricing.json evals evals/_runner evals/_runner/adapters
+install.sh evals evals/_runner evals/_runner/adapters
+scripts/parts.sh evals evals/_runner evals/_runner/adapters
+scripts/capped evals evals/_runner evals/_runner/adapters
+skills/configure/SKILL.md evals evals/_runner evals/_runner/adapters
+skills/configure/needs.json evals evals/_runner evals/_runner/adapters
+skills/build-epic/needs.json evals evals/_runner/adapters
+skills/build-epic/plan_check.py evals
+scripts/settings.sh evals
+skills/_shared/settings.json evals
+skills/build-epic/settings.json evals
+docs/evals.md evals evals/_runner
+tests/affected.sh evals"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
@@ -20,6 +38,10 @@ if [ -n "${PYTHON_TEST_FILES:-}" ]; then
     for d in $all; do
       case "$f" in "$d"/*) [ "${#d}" -le "${#best}" ] || best="$d" ;; esac
     done
+    while read -r file readers; do
+      # shellcheck disable=SC2086 # one folder per word
+      [ "$f" != "$file" ] || picked="$picked$(printf '%s\n' $readers)"$'\n'
+    done <<<"$READERS"
     if [ -n "$best" ]; then
       picked="$picked$best"$'\n'
     else

@@ -415,7 +415,8 @@ test('a run that ends between reading run.json and ps notifies how it ended, not
   expect((await words($))[0]).toBe('✓ TT-01-list  done 32s · <1m ago')
 })
 
-test('more finished runs on disk than the store keeps are never notified again', async ($, on) => {
+// 1005 run folders take about 1.5 s alone, and over 5 s beside the other suites of tests/run.sh.
+test('more finished runs on disk than the store keeps are never notified again', { timeoutMs: 30000 }, async ($, on) => {
   const w = engine(on, { ps: psAlive([42]) })
   mock.store(on)
   for (let i = 0; i < 1005; i++) addRun(w, '/repo/.git', `agent-${String(i).padStart(4, '0')}`, runJson({ state: 'done', exit_code: 0, ended: NOW / 1000 - 100 }))

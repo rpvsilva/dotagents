@@ -1,0 +1,1 @@
+Use 2 agents in this repo: set the shared max_parallel Setting to 2 at the repo Level. I approve the change, so apply it without asking me again, and leave it uncommitted: no commit, no branch, no PR.
