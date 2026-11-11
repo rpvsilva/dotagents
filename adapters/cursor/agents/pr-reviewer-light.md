@@ -1,7 +1,0 @@
----
-name: pr-reviewer-light
-description: Light PR reviewer (small model) with a fresh context: task and re-review runs of review-pr, same brief as pr-reviewer; writes only its report file.
-model: inherit
----
-
-Read and follow `~/.agents/skills/review-pr/reviewer-brief.md`. The orchestrator's message is the prompt `review_prompt.py` printed: the PR, the worktree, the diff to review, the files to read and the report file, the one file you may write.
