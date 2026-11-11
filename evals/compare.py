@@ -2,18 +2,21 @@
 """Compare eval cases on two git refs of dotagents and report it in Markdown, and optionally HTML.
 
   python3 -I evals/compare.py --tool claude --base <ref> --head <ref> [--runs N] [--model <id>]
-                              [--base-model <id>] [--head-model <id>] [--budget-usd 10] [--results <dir>]
+                              [--base-model <id>] [--head-model <id>] [--remote | --base-remote | --head-remote] [--budget-usd 10] [--results <dir>]
                               [--out <file.md>] [--html <file.html>] [--evals <dir>] (--all | <skill>/<case>...)
 
 Each ref runs through `run.py`'s `run_cases`, so a saved run of the same tool, ref commit, model and case files is
 reused and `main` is not paid for again; a changed case file changes its hash and runs again. `--model` sets both
 refs' model, `--base-model` and `--head-model` one ref's (default: each case's own). The refs take turns, one run
 number at a time (run 1 of every case on the base, then on the head, then run 2), so drift over the session falls on
-both alike. One `--budget-usd` covers both refs, spent in that order. Every run, saved or new, is priced again from its tokens with the current
+both alike. `--remote` runs both refs through the remote backend (`run.py --remote`), `--base-remote` or `--head-remote` one ref
+only (claude only, else exit 2 before the base runs); the report labels each side `local` or `remote (<backend>)`, and
+the default report path gains `@<backend>` after a remote side's sha. A local and a remote run of one ref are saved
+apart, so both run and both are reused. One `--budget-usd` covers both refs, spent in that order. Every run, saved or new, is priced again from its tokens with the current
 `skills/telemetry/pricing.json` (cost `unknown` without tokens or a price), and the report names that table's date.
 
 The Markdown report (`_runner/render.py`) is printed on stdout and written to `--out`, by default
-`<results root>/reports/<tool>-<base sha>-<head sha>.md`; `--html` also writes the HTML page. A report path inside
+`<results root>/reports/<tool>-<base sha>-<head sha>.md` (`<sha>@<backend>` for a remote side); `--html` also writes the HTML page. A report path inside
 the repo is refused: reports are never committed. Each run's line and the report paths go to stderr. Exits 0, 1 when
 the budget skipped runs (the report still written), 2 on a usage error (no run made), 3 when a run failed on
 authentication: the stop line `run_cases` printed is the last word, the head is not run after a base stop, and no
@@ -93,8 +96,27 @@ def _check_side(tool, ref, case_dirs, model, repo):
         co.close()
 
 
+def _where(side_runs, remote):
+    """Where a side ran, from its saved results (a reused run ran where it was saved): `local`, or `remote (<backend>)`.
+    A remote side with no run to read says `remote`."""
+    for entry in side_runs:
+        res = entry["result"]
+        if res.get("remote"):
+            return f"remote ({res.get('backend')})"
+        return "local"
+    return "remote" if remote else "local"
+
+
+def _tag(where):
+    """The report-path tag of a side: `@<backend>` for `remote (<backend>)`, `@remote` for a bare `remote`, else empty."""
+    if where == "local":
+        return ""
+    return "@" + (where[len("remote ("):-1] if where.endswith(")") else where)
+
+
 def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None, head_model=None, budget_usd=10.0,
-            results_root=None, out_md=None, out_html=None, repo=REPO, out=None, report_to=None):
+            results_root=None, out_md=None, out_html=None, repo=REPO, out=None, report_to=None, remote=False,
+            base_remote=False, head_remote=False):
     """Run `case_dirs` on `base` and `head` of `repo` and write the report. Returns `{base, head}` (each
     `run_cases()`'s output, its results repriced), `comparison` (the dict `render.py` takes) and the report paths
     `out_md` and `out_html`. When a side stops on an auth failure the other is not run if it is the base, no report
@@ -108,6 +130,9 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
         if path is not None and any(_inside(path, r) for r in {REPO, Path(repo)}):
             raise run.RunError(f"{path} is inside the repo: reports are never committed")
     models = {"base": base_model or model, "head": head_model or model}
+    remotes = {"base": bool(remote or base_remote), "head": bool(remote or head_remote)}
+    if any(remotes.values()) and tool != "claude":
+        raise run.RunError("--remote needs --tool claude: the remote sandbox runs Claude Code only")
     for flag, value in (("--base-model", models["base"]), ("--head-model", models["head"])):
         problem = value and cases.alias_problem(flag, value, cases.priced_models())
         if problem:
@@ -129,7 +154,7 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
     for n in range(1, max(runs or c["runs"] for c in loaded) + 1):
         for side, ref in (("base", base), ("head", head)):
             step = run.run_cases(tool, ref, case_dirs, runs=runs, model=models[side], budget_usd=max(left, 0.0),
-                                 results_root=results_root, repo=repo, out=out, only_run=n)
+                                 results_root=results_root, repo=repo, out=out, only_run=n, remote=remotes[side])
             left -= step["spent_usd"]
             for key in ("runs", "skipped"):
                 got[side][key] += step[key]
@@ -154,13 +179,17 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
                   "pricing_as_of": (pricing or {}).get("asOf"),
                   "verdict": verdict.verdict(*(verdict.summarise(e["result"] for e in got[side]["runs"])
                                                for side in SIDES))}
+    where = {side: _where(got[side]["runs"], remotes[side]) for side in SIDES}
     for side, ref in (("base", base), ("head", head)):
         comparison[side] = {"ref": ref, "sha": shas[side]}
         if used["base"] != used["head"]:
             comparison[side]["model"] = ", ".join(used[side])
+        if any(w != "local" for w in where.values()):
+            comparison[side]["where"] = where[side]
 
     md = render.markdown(comparison)
-    out_md = _write(out_md or root / "reports" / f"{tool}-{shas['base'][:12]}-{shas['head'][:12]}.md", md)
+    out_md = _write(out_md or root / "reports" / (
+        f"{tool}-{shas['base'][:12]}{_tag(where['base'])}-{shas['head'][:12]}{_tag(where['head'])}.md"), md)
     print(f"report: {out_md}", file=out, flush=True)
     if out_html:
         out_html = _write(out_html, render.html(comparison))
@@ -178,6 +207,8 @@ def main(argv):
     parser.add_argument("--model")
     parser.add_argument("--base-model")
     parser.add_argument("--head-model")
+    for flag in ("--remote", "--base-remote", "--head-remote"):
+        parser.add_argument(flag, action="store_true")
     parser.add_argument("--budget-usd", type=float, default=10.0)
     parser.add_argument("--results")
     parser.add_argument("--out")
@@ -196,7 +227,8 @@ def main(argv):
         got = compare(args.tool, args.base, args.head, run.find_cases(args.evals, args.cases, args.all),
                       runs=args.runs, model=args.model, base_model=args.base_model, head_model=args.head_model,
                       budget_usd=args.budget_usd, results_root=args.results, out_md=args.out, out_html=args.html,
-                      out=sys.stderr, report_to=sys.stdout)
+                      out=sys.stderr, report_to=sys.stdout, remote=args.remote, base_remote=args.base_remote,
+                      head_remote=args.head_remote)
     except (run.RunError, RuntimeError) as err:
         print(f"compare.py: {err}", file=sys.stderr)
         return 2
