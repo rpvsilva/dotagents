@@ -24,11 +24,11 @@ A `resolve: <files>` line in your prompt makes you a **resolver**: the worktree 
 
 ## When you run remotely
 
-Your worktree is `~/work`: a snapshot of the task worktree, already holding the ticket branch's tip, with one commit and no other branches. The task, `map.md` and the files its `Pointers` name (`spec.md` and `notes/` for build-epic; `findings.md` and `reports/` for security-audit) are under `~/attached`. Skip the branch check in step 1 and all of step 5, and use the test command as given, unless it names a run folder's `env/` that this sandbox lacks: then run `map.md`'s `Setup` once with `BUILD_EPIC_ENV` set to a folder of your own, and the same command with that folder in its place. Every shell command you run there is capped too (a kill shows the same `capped: killed:` line), and the run goes on after one. A `cap:` line in your prompt means a cap killed a command of your last run on this task: build so that command stays under the cap it names (less data, a bounded loop, nothing waiting on input). Do not commit: leave your changes in the files. The orchestrator commits them on your task branch and catches up with the ticket. In the report, `changed:` lists the files.
+Your worktree is `~/work`: a snapshot of the task worktree, already holding the ticket branch's tip, with one commit and no other branches. The task, `map.md` and the files its `Pointers` name (`spec.md` and `notes/` for build-epic; `findings.md` and `reports/` for security-audit) are under `~/attached`. Skip the branch check in step 1 and all of step 5, and use the test command as given, unless it names a run folder's `env/` that this sandbox lacks: then run `map.md`'s `Setup` once with `BUILD_EPIC_ENV` set to a folder of your own, and the same command with that folder in its place. Every shell command you run there is capped too (a kill shows the same `capped: killed:` line), and the run goes on after one. A `cap:` line in your prompt means a cap killed a command of your last run on this task: build so that command stays under the cap it names (less data, a bounded loop, nothing waiting on input). Do not commit: leave your changes in the files. The orchestrator commits them on your task branch and catches up with the ticket. Your report file is `~/out/report.md`, outside `~/work` so it stays out of your changes. In the report, `changed:` lists the files.
 
 ## Report
 
-Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with a `## Follow-ups` section (omitted when empty) and then this block; then your final message is the block alone, at most 400 characters. With no report file named, or running remotely, your final message is the full report, ending with the block as its last four lines, unfenced.
+Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with a `## Follow-ups` section (omitted when empty) and then this block; then your final message is the block alone, at most 400 characters. Running remotely, the report file is `~/out/report.md`. With no report file named, your final message is the full report, ending with the block as its last four lines, unfenced.
 
 The `## Follow-ups` section holds one row per line for work a later task must pick up or a feature the task's change interacts with: `- <severity> <kind> <path[:line]>: <claim>`. Severity is `blocker` (the build is wrong without it), `should-fix` (likely trouble, a missing test) or `nit`; kind is `follow-up` or `interaction` (a cross-cutting feature the change touches that no task of the plan names). Every item of your block's `follow-up:` line is also a row here, so the run records it as data.
 
@@ -43,10 +43,10 @@ A change the task needs in a file only the human edits (one a `path` rule of the
 ```
 ````
 
-The orchestrator records the rows with `followups.py record`; the final report holds each owner-only file's patch for the human. The block's `follow-up:` line stays one line each as below.
+The orchestrator records the rows with `followups.py record`; the final report holds each owner-only file's patch for the human. The block is exactly these four lines, in this order, at most 400 characters in all; every other detail (test counts, mutations, environment notes) goes in the report above it:
 ```
 status: done | blocked | plan-wrong
 changed: <the last commit SHA and the files changed>
-why: <one line, when status is not done>
-follow-up: <one line each, only for work a later task must pick up (e.g. docs for flags it adds)>
+why: <one short line when status is not done; when done, keep the line, empty>
+follow-up: <one short line, only for work a later task must pick up (e.g. docs for flags it adds); empty when none>
 ```
