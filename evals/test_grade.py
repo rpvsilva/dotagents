@@ -136,6 +136,19 @@ class RecheckTest(GradeSandbox):
         self.assertEqual((d / results.RESULT).read_text(), before)
         self.assertIn("error install", self.printed())
 
+    def test_an_auth_error_run_is_skipped_and_no_judge_is_called(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        d = self.ran(case)
+        res = results.read(d)
+        res.update(error="auth", rubric=None, passed=False)
+        results.write(d, res)
+        before = (d / results.RESULT).read_text()
+        self.grade("configure/quick")
+        self.assertEqual(self.roles_called(), [])
+        self.assertEqual((d / results.RESULT).read_text(), before)
+        self.assertIn("error auth", self.printed())
+
 
 class NoToolTest(GradeSandbox):
     def test_with_the_rubric_unchanged_no_tool_binary_is_called(self):
