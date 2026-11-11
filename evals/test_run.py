@@ -527,6 +527,69 @@ class RunsAndReuseTest(RunSandbox):
         self.assertIn(" unknown ", self.printed().splitlines()[0])
         self.assertEqual(got["skipped"], [("configure/quick", 3)])
 
+    def zero_stream(self):
+        """`pass.jsonl` with the result event reporting a cost of 0 and every usage count 0."""
+        events = [json.loads(l) for l in (STREAMS / "pass.jsonl").read_text().splitlines()]
+        for e in events:
+            if e.get("type") == "result":
+                e["total_cost_usd"] = 0
+                e["usage"] = {k: 0 for k in e.get("usage", {"input_tokens": 0})}
+                e["modelUsage"] = {}
+        stream = self.tmp / "zero.jsonl"
+        stream.write_text("".join(json.dumps(e) + "\n" for e in events))
+        return stream
+
+    def test_a_reported_zero_cost_is_saved_as_zero_and_spends_nothing(self):
+        self.passing_claude(self.zero_stream())
+        got = self.run_cases([self.case(caps={"turns": 5, "secs": 60, "cost_usd": 1})], runs=2, budget_usd=0.5)
+        _, res = self.saved(got)
+        self.assertEqual((res["cost_usd"], res["cost_basis"]), (0.0, "reported"))
+        self.assertEqual((self.call_count(), got["skipped"], got["spent_usd"]), (2, [], 0.0))
+        self.assertIn(" $0.0000 ", self.printed().splitlines()[0])
+
+    def auth_claude(self):
+        self.claude("auth-failed.jsonl")
+
+    def test_an_auth_failure_is_saved_unjudged_and_stops_the_command(self):
+        self.auth_claude()
+        a, b = self.rubric_case("configure/a"), self.case("configure/b")
+        got = self.run_cases([a, b], runs=2)
+        self.assertEqual(self.call_count(), 1)
+        self.assertEqual(got["stopped"], "auth")
+        self.assertEqual(got["skipped"], [])
+        _, res = self.saved(got)
+        self.assertEqual((res["error"], res["passed"], res["cost_usd"]), ("auth", False, 0.0))
+        self.assertIsNone(res["rubric"])
+        lines = self.printed().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("error auth", lines[0])
+        self.assertEqual(lines[1], "auth failed for claude: renew CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY ("
+                                   f"{adapters.load('claude').RENEW}); stopped before 3 more run(s)")
+        for path in got["runs"][0]["dir"].rglob("*"):
+            if path.is_file():
+                for token in self.tokens.values():
+                    self.assertNotIn(token.encode(), path.read_bytes(), path)
+        for token in self.tokens.values():
+            self.assertNotIn(token, self.printed())
+
+    def test_an_auth_failure_skips_the_judge(self):
+        self.judging_claude({"verdict": "pass"}, stream="auth-failed.jsonl")
+        got = self.run_cases([self.rubric_case()])
+        self.assertEqual(self.roles_called(), ["case"])
+        self.assertEqual(got["stopped"], "auth")
+
+    def test_the_next_invocation_retries_a_saved_auth_run(self):
+        self.auth_claude()
+        case = self.case()
+        self.run_cases([case])
+        got = self.run_cases([case])
+        self.assertEqual(self.call_count(), 2)
+        self.assertFalse(got["runs"][0]["reused"])
+
+    def test_a_run_without_an_auth_failure_is_not_stopped(self):
+        self.passing_claude()
+        self.assertIsNone(self.run_cases([self.case()], runs=2)["stopped"])
+
     def test_a_tool_not_using_the_case_model_needs_model(self):
         self.passing_claude()
         claude = adapters.load("claude")
@@ -649,6 +712,14 @@ class CliTest(RunSandbox):
                        "--evals", str(self.evals), "configure/a")
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("skipped configure/a run 2", out.stdout)
+
+    def test_cli_exits_3_on_an_auth_stop(self):
+        self.claude("auth-failed.jsonl")
+        self.case("configure/a")
+        out = self.cli("--tool", "claude", "--ref", "HEAD", "--runs", "2", "--evals", str(self.evals), "configure/a")
+        self.assertEqual(out.returncode, 3, out.stderr)
+        self.assertIn("auth failed for claude", out.stdout)
+        self.assertEqual(self.call_count(), 1)
 
     def test_cli_exits_2_on_a_usage_error_before_any_run(self):
         self.passing_claude()
