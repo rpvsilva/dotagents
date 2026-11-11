@@ -16,7 +16,7 @@ sys.path.insert(0, str(HERE / "_runner"))
 
 import compare  # noqa: E402
 import results  # noqa: E402
-from test_run import MODEL, PASS_TOKENS, RUBRIC, SCORES, RunSandbox, git, pricing, priced  # noqa: E402
+from test_run import MODEL, STREAMS, PASS_TOKENS, RUBRIC, SCORES, RunSandbox, git, pricing, priced  # noqa: E402
 
 
 class CompareSandbox(RunSandbox):
@@ -126,6 +126,21 @@ class PricingTest(CompareSandbox):
         self.assertIsNone(res["cost_usd"])
         self.assertEqual(res["cost_basis"], "unknown")
         self.assertIn("unknown", self.report.read_text())
+
+    def test_a_reported_zero_cost_run_stays_zero_not_unknown(self):
+        events = [json.loads(l) for l in (STREAMS / "pass.jsonl").read_text().splitlines()]
+        for e in events:
+            if e.get("type") == "result":
+                e["total_cost_usd"] = 0
+                e["usage"] = {k: 0 for k in e.get("usage", {"input_tokens": 0})}
+                e["modelUsage"] = {}
+        stream = self.tmp / "zero.jsonl"
+        stream.write_text("".join(json.dumps(e) + "\n" for e in events))
+        self.passing_claude(stream)
+        got = self.compare([self.case()])
+        res = got["base"]["runs"][0]["result"]
+        self.assertEqual((res["cost_usd"], res["cost_basis"]), (0.0, "reported"))
+        self.assertNotIn("unknown", self.report.read_text())
 
 
 class ReportTest(CompareSandbox):
@@ -239,6 +254,33 @@ class BudgetTest(CompareSandbox):
         self.assertEqual(got["head"]["skipped"], [])
 
 
+class AuthStopTest(CompareSandbox):
+    def reports(self):
+        return list((self.results / "reports").rglob("*.md")) + ([self.report] if self.report.exists() else [])
+
+    def test_an_auth_stop_on_the_base_never_runs_the_head_and_writes_no_report(self):
+        self.claude("auth-failed.jsonl")
+        got = self.compare([self.case()])
+        self.assertEqual(got["base"]["stopped"], "auth")
+        self.assertEqual(self.call_count(), 1)
+        self.assertEqual(self.reports(), [])
+        self.assertIsNone(got["out_md"])
+        self.assertIn("auth failed for claude", self.printed())
+
+    def test_an_auth_stop_on_the_head_writes_no_report(self):
+        # The first call (the base) passes, the second (the head) fails on auth.
+        marker = self.tmp / "base-done"
+        self.fake_bin("claude", f'echo call >>"{self.calls}"\n'
+                                f'if [ -e "{marker}" ]; then cat "{STREAMS / "auth-failed.jsonl"}"; exit 0; fi\n'
+                                f'touch "{marker}"\nmkdir -p .agents && echo "{{}}" >.agents/settings.json\n'
+                                f'cat "{STREAMS / "pass.jsonl"}"\n')
+        got = self.compare([self.case()])
+        self.assertEqual((got["base"]["stopped"], got["head"]["stopped"]), (None, "auth"))
+        self.assertEqual(self.call_count(), 2)
+        self.assertEqual(self.reports(), [])
+        self.assertIsNone(got["out_md"])
+
+
 class CliTest(RunSandbox):
     def cli(self, *args):
         return subprocess.run([sys.executable, "-I", str(HERE / "compare.py"), *args], capture_output=True, text=True,
@@ -267,6 +309,16 @@ class CliTest(RunSandbox):
         self.assertEqual(len(reports), 1)
         self.assertEqual(reports[0].read_text(), out.stdout)
         self.assertIn(str(reports[0]), out.stderr)
+
+    def test_cli_exits_3_on_an_auth_stop_with_no_report(self):
+        self.claude("auth-failed.jsonl")
+        self.case("configure/a")
+        out = self.cli("--tool", "claude", "--base", "HEAD", "--head", "HEAD", "--runs", "1",
+                       "--evals", str(self.evals), "configure/a")
+        self.assertEqual(out.returncode, 3, out.stderr)
+        self.assertIn("auth failed for claude", out.stderr)
+        self.assertEqual(out.stdout, "")
+        self.assertEqual(list((self.results / "reports").rglob("*.md")), [])
 
     def test_cli_exits_1_when_the_budget_skipped_runs(self):
         self.passing_claude()
