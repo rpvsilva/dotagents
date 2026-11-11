@@ -208,8 +208,9 @@ def line(res, reused=False):
 
 
 def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, results_root=None, fresh=False,
-              repo=REPO, out=None):
-    """Run each case of `case_dirs` `runs` times (default its own `runs`) on `tool` with dotagents at `ref` of `repo`.
+              repo=REPO, out=None, only_run=None):
+    """Run each case of `case_dirs` `runs` times (default its own `runs`) on `tool` with dotagents at `ref` of `repo`;
+    with `only_run`, only run number `only_run` of each case that has that many (`compare.py` alternates the refs so).
     Returns `{ref, sha, runs: [{case, run, dir, result, reused}], skipped: [(case, run)], spent_usd, stopped}`
     (`stopped` is `"auth"` when a run failed on authentication and the rest were not started, else None). Raises
     RunError, before any run, on an unknown tool, a malformed case, a prompt the tool would read as an option,
@@ -247,7 +248,8 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
             if stopped:
                 break
             use_model = model or case["model"]
-            for n in range(1, (runs or case["runs"]) + 1):
+            numbers = range(1, (runs or case["runs"]) + 1)
+            for n in [only_run] if only_run in numbers else [] if only_run else numbers:
                 dest = results.run_dir(root, tool, co.sha, use_model, case_name(case), case["hash"], n)
                 saved = None if fresh or not (dest / results.RESULT).is_file() else results.read(dest)
                 if saved is not None and saved["error"] is None:

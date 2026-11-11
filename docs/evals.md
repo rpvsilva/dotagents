@@ -339,7 +339,7 @@ It runs each named case, or every case with `--all`, on both refs and reports, p
 | `--model` | the case's `model` | The model of every case on both refs, as a full ID. Required on a tool whose adapter does not run the case's Claude model. |
 | `--base-model` | `--model` | The base ref's model alone, e.g. to compare two models on one ref. |
 | `--head-model` | `--model` | The head ref's model alone. |
-| `--budget-usd` | `10` | One cost ceiling for both refs, over 0: the base runs first, and the head gets what the base left ([Cost ceiling](#cost-ceiling)). |
+| `--budget-usd` | `10` | One cost ceiling for both refs, over 0, spent in the order the runs are made ([Cost ceiling](#cost-ceiling)). |
 | `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store, read for saved runs and written with new ones. |
 | `--out` | `<store>/reports/<tool>-<base sha>-<head sha>.md`, with each sha's first 12 characters | Where the Markdown report is written. |
 | `--html` | none | Also writes the report as one self-contained HTML page there. |
@@ -348,6 +348,8 @@ It runs each named case, or every case with `--all`, on both refs and reports, p
 | `-h`, `--help` | | Prints the usage. |
 
 Before any run, it checks both refs as `run.py` would ([Run cases](#run-cases)), so a case the head breaks is refused before the base's runs are paid for. It also refuses a report path (`--out` or `--html`) inside the repo: reports are never committed.
+
+The refs take turns, one run number at a time: run 1 of every case on the base, then on the head, then run 2, and so on. Drift over the session (API load, time of day) then falls on both refs alike instead of on the head alone.
 
 Run lines go to stderr as in [Run cases](#run-cases), then the path of each report written. The Markdown report goes to stdout.
 
@@ -373,11 +375,14 @@ Each case gets one verdict, from its metrics: pass rate, rubric score per criter
 A metric's change is **real** when:
 
 - **pass rate**: the number of passing runs moves by at least two-thirds of the runs per case, rounded up (2 of 3, 4 of 5, 7 of 10). The runs per case are the larger side's;
-- **every other metric**: the two refs' min-max ranges do not overlap.
+- **rubric score**: the two refs' min-max ranges do not overlap;
+- **cost, turns and time**: the ranges do not overlap, and the median moves by at least 10% of the base's. Without that floor, two tight ranges a fraction of a cent apart would count as real.
 
-Otherwise it is noise. The first metric with a real change, in the order pass rate, rubric, cost, turns, time, decides the verdict: `better` or `worse`. So a pass rate gain outranks a higher cost. Rubric criteria that are real in both directions decide nothing, and the next metric is tried. With no real change, the verdict is `noise`. A case that ran on one ref only is `unknown`.
+Otherwise it is noise. Below **5 runs** on either ref, only the pass rate can be real: rubric, cost, turns and time are shown but count as noise. With 3 runs a side, two sets of runs of the same skill fall fully apart by chance once in 10 tries per metric (2 of the 20 orderings), so with several metrics per case a compare of unchanged skills showed 2 false verdicts in 7 cases; at 5 runs it is 2 in 252. Give `--runs 5` or more when a change should show in cost or the rubric.
 
-A `noise` case is **worth more runs** when a median or the pass rate differs between the refs: there may be a change too small to show at this many runs. Run it again with a higher `--runs`; the saved runs are reused and only the new ones are made.
+The first metric with a real change, in the order pass rate, rubric, cost, turns, time, decides the verdict: `better` or `worse`. So a pass rate gain outranks a higher cost. Rubric criteria that are real in both directions decide nothing, and the next metric is tried. With no real change, the verdict is `noise`. A case that ran on one ref only is `unknown`.
+
+A `noise` case is **worth more runs** when the pass rate or a rubric median differs between the refs, or a cost, turns or time median moves by at least 10%: there may be a change too small to show at this many runs. Run it again with a higher `--runs`; the saved runs are reused and only the new ones are made.
 
 ### Reading the report
 
@@ -394,7 +399,9 @@ Then one row per case, and one row per rubric criterion under it:
 
 Each cell reads `base → head (difference)`. A metric shows its median, with its min-max in brackets when the runs differ; the difference is head's median less base's. Each rubric criterion's row gives its score from 1 to 5 the same way ([Rubrics and re-grading](#rubrics-and-re-grading)) and that criterion's own verdict. A value no run gave prints `unknown`, never 0.
 
-In the example, the pass count moved from 1 to 3 of 3, a real change, so the case is `better`; the rubric's ranges overlap, so that criterion alone is `noise`.
+In the example, the pass count moved from 1 to 3 of 3, a real change, so the case is `better`; with 3 runs, the rubric, cost, turns and time cannot decide, so the criterion is `noise`.
+
+Under the table, a line names the cases judged on pass rate alone, those with fewer than 5 runs on a ref.
 
 The report ends with **Worth more runs**: the cases to run again, or `No case.`
 

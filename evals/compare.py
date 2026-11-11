@@ -7,8 +7,9 @@
 
 Each ref runs through `run.py`'s `run_cases`, so a saved run of the same tool, ref commit, model and case files is
 reused and `main` is not paid for again; a changed case file changes its hash and runs again. `--model` sets both
-refs' model, `--base-model` and `--head-model` one ref's (default: each case's own). One `--budget-usd` covers both
-refs: the head gets what the base left. Every run, saved or new, is priced again from its tokens with the current
+refs' model, `--base-model` and `--head-model` one ref's (default: each case's own). The refs take turns, one run
+number at a time (run 1 of every case on the base, then on the head, then run 2), so drift over the session falls on
+both alike. One `--budget-usd` covers both refs, spent in that order. Every run, saved or new, is priced again from its tokens with the current
 `skills/telemetry/pricing.json` (cost `unknown` without tokens or a price), and the report names that table's date.
 
 The Markdown report (`_runner/render.py`) is printed on stdout and written to `--out`, by default
@@ -120,13 +121,25 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
     for side, ref in (("base", base), ("head", head)):
         _check_side(tool, ref, case_dirs, models[side], repo)
 
-    got, left = {}, budget_usd
-    for side, ref in (("base", base), ("head", head)):
-        got[side] = run.run_cases(tool, ref, case_dirs, runs=runs, model=models[side], budget_usd=max(left, 0.0),
-                                  results_root=results_root, repo=repo, out=out)
-        left -= got[side]["spent_usd"]
-        if got[side]["stopped"]:
-            return {**got, "comparison": None, "out_md": None, "out_html": None}
+    # Run n of every case on the base, then on the head, then run n+1: drift over the session (API load, time of
+    # day) then falls on both refs alike, not on the head alone. An auth stop ends the loop at once.
+    got = {side: {"ref": ref, "sha": shas[side], "runs": [], "skipped": [], "spent_usd": 0.0, "stopped": None}
+           for side, ref in (("base", base), ("head", head))}
+    left = budget_usd
+    for n in range(1, max(runs or c["runs"] for c in loaded) + 1):
+        for side, ref in (("base", base), ("head", head)):
+            step = run.run_cases(tool, ref, case_dirs, runs=runs, model=models[side], budget_usd=max(left, 0.0),
+                                 results_root=results_root, repo=repo, out=out, only_run=n)
+            left -= step["spent_usd"]
+            for key in ("runs", "skipped"):
+                got[side][key] += step[key]
+            got[side]["spent_usd"] += step["spent_usd"]
+            if step["stopped"]:
+                got[side]["stopped"] = step["stopped"]
+                return {**got, "comparison": None, "out_md": None, "out_html": None}
+    for side in SIDES:
+        got[side]["runs"].sort(key=lambda e: (e["case"], e["run"]))
+        got[side]["skipped"].sort()
 
     extract = run._extract()
     pricing = extract.load_pricing(run.PRICING)

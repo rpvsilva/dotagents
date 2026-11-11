@@ -8,10 +8,13 @@ difference and the verdict, one sub-row per rubric criterion, then the cases wor
 """
 import html as _html
 
+import verdict
 from verdict import METRICS
 
 COLUMNS = ("case", "pass rate", "cost", "turns", "time", "rubric", "verdict")
 UNKNOWN = "unknown"
+PASS_RATE_ONLY = ("Under {MIN_RUNS} runs a side, only the pass rate decides; cost, turns, time and rubric are shown but "
+                  "cannot make a case better or worse")
 
 
 def _num(n):
@@ -102,6 +105,8 @@ def markdown(comparison):
     lines += [f"- {k}: {_md_cell(val)}" for k, val in _header(comparison)]
     lines += ["", "| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)]
     lines += ["| " + " | ".join(_md_cell(c) for c in row) + " |" for row in _rows(v)]
+    lines += ["", PASS_RATE_ONLY.format(MIN_RUNS=verdict.MIN_RUNS) + ": " + ", ".join(map(_md_cell, v["pass_rate_only"]))
+              ] if v.get("pass_rate_only") else []
     lines += ["", "## Worth more runs", ""]
     lines += [f"- {_md_cell(c)}" for c in v["more_runs"]] or ["No case."]
     return "\n".join(lines) + "\n"
@@ -123,7 +128,10 @@ def html(comparison):
     out += [f"<li>{_h(k)}: {_h(val)}</li>" for k, val in _header(comparison)]
     out += ["</ul>", "<table>", "<tr>" + "".join(f"<th>{_h(c)}</th>" for c in COLUMNS) + "</tr>"]
     out += ["<tr>" + "".join(f"<td>{_h(c)}</td>" for c in row) + "</tr>" for row in _rows(v)]
-    out += ["</table>", "<h2>Worth more runs</h2>"]
+    out += ["</table>"]
+    if v.get("pass_rate_only"):
+        out += [f"<p>{_h(PASS_RATE_ONLY.format(MIN_RUNS=verdict.MIN_RUNS))}: {_h(', '.join(v['pass_rate_only']))}</p>"]
+    out += ["<h2>Worth more runs</h2>"]
     more = v["more_runs"]
     out += ["<ul>"] + [f"<li>{_h(c)}</li>" for c in more] + ["</ul>"] if more else ["<p>No case.</p>"]
     out += ["</body></html>"]
