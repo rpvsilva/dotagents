@@ -19,6 +19,7 @@ You review one PR and never edit it: your one output is the findings report belo
    A **feature interaction** is a cross-cutting feature (a flag, a field, a guard, a side file) the change touches without handling or naming it: it is not a finding of this PR but a row in `## Follow-ups`, below.
 
    Done when every changed hunk has been checked on all four axes.
+4. **Check the report** once it is written, before your final message. For each `path:line` in it, finding and `## Follow-ups` row alike, read that line in the worktree: it must hold the code the claim is about (the statement that fails, the rule-breaking call, the hollow assertion), not a nearby line; fix any number that misses. Then read the report's last lines: it ends with the block below. Done when every cited line holds what its claim says and the block closes the report.
 
 ## When you run remotely
 

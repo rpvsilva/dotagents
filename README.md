@@ -10,7 +10,7 @@
 ![Cursor](https://img.shields.io/badge/Cursor-partial-000000?logo=cursor&logoColor=white)
 ![Shell](https://img.shields.io/badge/shell-bash_3.2+-4EAA25?logo=gnubash&logoColor=white)
 
-🧩 14 skills · 🧑‍🤝‍🧑 10 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
+🧩 14 skills · 🧑‍🤝‍🧑 9 subagents · 🪝 4 hooks · 🔌 2 MCP servers · ☁️ remote runs
 
 [What's included](#-whats-included) · [Install](#-install) · [Use](#-use) · [Docs](#-docs) · [Contributing](#-contributing)
 
@@ -101,7 +101,6 @@ Some skills start **subagents**: focused helpers, each with a fresh context. Eac
 | `source-reader` | `to-epic` | Reads one source and notes its needs, decisions and open questions |
 | `pr-fixer` | `fix-pr`, `renovate-prs` | Takes one PR's failing checks to green |
 | `pr-reviewer` | `review-pr`, `build-epic` | Finds bugs, rule breaks and missing tests in one PR |
-| `pr-reviewer-light` | `review-pr`, `build-epic` | The same review on a small model: task PRs and re-reviews of fixes |
 | `security-mapper` | `security-audit` | Maps the attack surface into areas and flows |
 | `security-reviewer` | `security-audit`, `review-pr` | Hunts security issues in one PR, area or flow |
 | `test-tuner` | `tune-tests`, `build-epic` | Makes tests faster and widens coverage |
