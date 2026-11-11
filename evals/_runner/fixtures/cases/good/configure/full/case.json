@@ -1,0 +1,1 @@
+{"prompt": "ask.md", "model": "claude-sonnet-5-5", "runs": 5, "caps": {"turns": 30, "secs": 900, "cost_usd": 2.5}, "settings": {"build-epic": {"max_parallel": 2}}, "install": ["configure", "remember"], "rubric": "criteria.md", "judge_model": "claude-sonnet-5-5"}

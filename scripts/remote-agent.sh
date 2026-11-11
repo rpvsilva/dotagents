@@ -2,12 +2,14 @@
 # Runs one subagent task on a remote sandbox for compute only, and applies its changes to a local worktree. The
 # sandbox comes from a backend (scripts/remote-backends/<name>.sh; the cluster by default) and never touches a
 # repo: it gets this machine's setup and a snapshot of the worktree, and only a patch comes back.
-# Usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--] <brief | @brief-file | -> [worktree]   (default worktree:
+# Usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--home DIR] [--model NAME] [--] <brief | @brief-file | -> [worktree]   (default worktree:
 # the current one; - reads the brief from stdin; -h or --help prints this usage on stdout and exits 0; any other
 # argument starting with -- before the brief is refused with the usage, exit 1, and so is a brief, however given,
 # whose text starts with -, which claude would read as an option). --agent names the subagent whose brief this is:
 # the run uses the model its Claude wrapper (adapters/claude/agents/<agent>.md) sets in its `model:` line, as a local
-# run of it does; an agent with no wrapper is refused, and without --agent the sandbox's default model runs.
+# run of it does; an agent with no wrapper is refused, and without --agent the sandbox's default model runs. --model
+# NAME runs that model instead (it wins over --agent's). --home DIR ships the setup found under DIR (its .claude and
+# .agents pieces and .claude.json) in place of $HOME's; Settings, the token and the backend's client stay the real ones.
 #        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
@@ -212,11 +214,12 @@ fi
 
 usage_text() {
   cat <<'EOF'
-usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--] <brief | @brief-file | -> [worktree]
+usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--home DIR] [--model NAME] [--] <brief | @brief-file | -> [worktree]
        remote-agent setup | check | ready [dir] | resume <run> [worktree] | result <name|run> [dir]
        remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]
 Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
-from stdin. --agent runs the model the agent's Claude wrapper sets, as a local run does. Exit 0 applied, 3 no
+from stdin. --agent runs the model the agent's Claude wrapper sets, as a local run does. --model NAME runs that
+model instead, and wins over --agent's. --home DIR ships the setup under DIR in place of $HOME's. Exit 0 applied, 3 no
 changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
 EOF
 }
@@ -239,6 +242,8 @@ agent_model() {
 attach=()
 name=""
 model=""
+model_flag=""
+setup_home="$HOME"
 while [ $# -gt 0 ]; do
   case "$1" in
     --attach)
@@ -254,6 +259,16 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || usage
       model="$(agent_model "$2")" || exit 1
       ;;
+    --home)
+      [ $# -ge 2 ] || usage
+      [ -d "$2" ] || { echo "remote-agent: --home needs an existing folder: $2" >&2; exit 1; }
+      setup_home="$(cd "$2" && pwd)"
+      ;;
+    --model)
+      [ $# -ge 2 ] || usage
+      case "$2" in *[!A-Za-z0-9._-]* | "" | -*) echo "remote-agent: --model needs a model name ([A-Za-z0-9._-]): $2" >&2; exit 1 ;; esac
+      model_flag="$2"
+      ;;
     -h | --help) usage_text; exit 0 ;;
     --) shift; break ;;
     # An unknown option would otherwise become the brief and start a real run.
@@ -262,6 +277,7 @@ while [ $# -gt 0 ]; do
   esac
   shift 2
 done
+[ -z "$model_flag" ] || model="$model_flag"
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then usage; fi
 case "$1" in
   -) brief="$(cat)" ;;
@@ -443,7 +459,7 @@ trap 'exit 143' TERM
 
 [ -z "$leftovers" ] || say "remote.env still sets $leftovers, now ignored: run \`remote-agent setup\` to move them to settings.json"
 # The setup, the attachments and the snapshot are built before anything reaches the backend.
-with_progress "$REPO/scripts/remote-agent-pack.sh" "$stage/home"
+with_progress "$REPO/scripts/remote-agent-pack.sh" "$stage/home" "$setup_home"
 for a in "${attach[@]+"${attach[@]}"}"; do
   name="$(basename "$a")"
   [ ! -e "$stage/home/attached/$name" ] || { say "two attachments named $name"; exit 1; }

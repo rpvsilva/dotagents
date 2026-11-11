@@ -78,12 +78,41 @@ pyexpect() {
 PYALL="$(cd "$REPO" && PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')"
 pyexpect "a file in a folder" "skills/telemetry " skills/telemetry/report.py
 pyexpect "the deepest of nested folders" "skills/build-epic/scripts " skills/build-epic/scripts/steplib/core.py
-pyexpect "the outer of nested folders" "skills/build-epic " skills/build-epic/plan_check.py
+pyexpect "the outer of nested folders" "skills/build-epic " skills/build-epic/test_plan_check.py
+pyexpect "a file another folder reads" "evals skills/build-epic " skills/build-epic/plan_check.py
+pyexpect "settings files the configure pilot reads" "evals " scripts/settings.sh skills/_shared/settings.json
 pyexpect "two folders" "adapters/claude/telemetry skills/telemetry " skills/telemetry/a.py adapters/claude/telemetry/b.json
 pyexpect "a .py in no folder" "$PYALL" skills/telemetry/a.py scripts/x.py
 pyexpect "a file Python tests read" "$PYALL" scripts/hooks/secret-patterns.txt
 pyexpect "a file no Python test reads is ignored" "skills/telemetry " docs/x.md skills/telemetry/a.py
 pyexpect "--all" "$PYALL" --all
+pyexpect "a file other folders' tests run by path" "adapters/claude/telemetry evals evals/_runner/adapters " \
+  adapters/claude/telemetry/extract.py
+pyexpect "a file other folders' tests read by path" "evals evals/_runner evals/_runner/adapters skills/telemetry " \
+  skills/telemetry/pricing.json
+# This repo's own suites.txt: a fixture a Python test reads selects python.test.sh, and its test folder.
+case " $(cd "$REPO" && tests/affected.sh -- evals/_runner/fixtures/cases/good/configure/minimal/case.json | tr '\n' ' ')" in
+  *" python.test.sh "*) ;; *) fail "suites.txt: an evals fixture does not select python.test.sh" ;;
+esac
+# The real repo files the evals tests extract from HEAD and run select python.test.sh, and the folders running them.
+for f in install.sh scripts/parts.sh scripts/capped skills/configure/SKILL.md skills/configure/needs.json \
+  skills/build-epic/needs.json; do
+  case " $(cd "$REPO" && tests/affected.sh -- "$f" | tr '\n' ' ')" in
+    *" python.test.sh "*) ;; *) fail "suites.txt: $f, run by the evals tests, does not select python.test.sh" ;;
+  esac
+done
+pyexpect "install.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " install.sh
+pyexpect "parts.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/parts.sh
+pyexpect "capped, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/capped
+pyexpect "the configure skill, installed by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/SKILL.md
+pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/needs.json
+pyexpect "the build-epic skill's needs, read by the evals tests" "evals evals/_runner/adapters skills/build-epic " \
+  skills/build-epic/needs.json
+case " $(cd "$REPO" && tests/affected.sh -- docs/evals.md | tr '\n' ' ')" in
+  *" python.test.sh "*) ;; *) fail "suites.txt: docs/evals.md, read by the evals tests, does not select python.test.sh" ;;
+esac
+pyexpect "the evals doc, read by the evals tests" "evals evals/_runner " docs/evals.md
+pyexpect "an evals fixture" "evals/_runner " evals/_runner/fixtures/cases/good/configure/minimal/case.json
 [ "$(cd "$REPO" && PYTHON_TEST_FILES="" PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')" = "$PYALL" ] ||
   fail "python.test.sh, no files given: not every folder"
 case "$PYALL" in *"skills/telemetry "*) ;; *) fail "python.test.sh: every folder is missing skills/telemetry: '$PYALL'" ;; esac

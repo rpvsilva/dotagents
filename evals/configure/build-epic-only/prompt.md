@@ -1,0 +1,1 @@
+For build-epic only, use 1 agent in this repo: set build-epic's max_parallel to 1 at the repo Level, and leave the shared max_parallel as it is. I approve the change, so apply it without asking me again, and leave it uncommitted: no commit, no branch, no PR.

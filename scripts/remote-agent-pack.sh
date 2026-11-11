@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stages the parts of this machine's agent setup a remote sandbox needs into <dir>, laid out like $HOME.
-# Usage: scripts/remote-agent-pack.sh <dir>
+# Usage: scripts/remote-agent-pack.sh <dir> [home]   (home: where the setup is read from, default $HOME)
 # Copies, following links: ~/.claude/{CLAUDE.md,skills,agents,commands,rules} and ~/.agents/{skills,hooks}, and
 # this repo's scripts/capped as ~/.agents/bin/capped, which the sandbox runs the agent's shell commands under.
 # Writes a filtered ~/.claude/settings.json (hooks that call ~/.agents/hooks, permissions, model, enabled
@@ -12,13 +12,14 @@ set -euo pipefail
 # shellcheck source=hooks/lib.sh disable=SC1091
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hooks/lib.sh"
 
-out="${1:?usage: $0 <dir>}"
+out="${1:?usage: $0 <dir> [home]}"
+home="${2:-$HOME}"
 mkdir -p "$out/.claude" "$out/.agents"
 note() { echo "remote-agent-pack: $*" >&2; }
 
 for p in .claude/CLAUDE.md .claude/skills .claude/agents .claude/commands .claude/rules .agents/skills .agents/hooks; do
-  [ -e "$HOME/$p" ] || continue
-  cp -RL "$HOME/$p" "$out/$p" 2>/dev/null || note "some of ~/$p could not be copied (broken links?)"
+  [ -e "$home/$p" ] || continue
+  cp -RL "$home/$p" "$out/$p" 2>/dev/null || note "some of ~/$p could not be copied (broken links?)"
 done
 
 # Secret-looking files never leave the machine, wherever they sit.
@@ -31,7 +32,7 @@ mkdir -p "$out/.agents/bin"
 cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capped" "$out/.agents/bin/capped"
 chmod +x "$out/.agents/bin/capped"
 
-settings="$HOME/.claude/settings.json"
+settings="$home/.claude/settings.json"
 if [ -f "$settings" ]; then
   jq '{
     hooks: ((.hooks // {})
@@ -48,11 +49,11 @@ if [ -f "$settings" ]; then
   [ "$dropped" = 0 ] || note "settings left out $dropped hook(s) that do not call ~/.agents/hooks"
 fi
 
-if [ -f "$HOME/.claude.json" ]; then
+if [ -f "$home/.claude.json" ]; then
   jq '.mcpServers // {} | with_entries(select(((.value.env // {}) | length) == 0 and ((.value.headers // {}) | length) == 0))' \
-    "$HOME/.claude.json" >"$out/.claude/remote-mcp.json"
+    "$home/.claude.json" >"$out/.claude/remote-mcp.json"
   left="$(jq -r '.mcpServers // {} | to_entries[] | select(((.value.env // {}) | length) > 0 or ((.value.headers // {}) | length) > 0) | .key' \
-    "$HOME/.claude.json" | paste -sd, -)"
+    "$home/.claude.json" | paste -sd, -)"
   [ -z "$left" ] || note "MCP servers left out (they need env or headers): $left"
 fi
 
