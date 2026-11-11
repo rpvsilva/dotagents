@@ -14,7 +14,9 @@ refs: the head gets what the base left. Every run, saved or new, is priced again
 The Markdown report (`_runner/render.py`) is printed on stdout and written to `--out`, by default
 `<results root>/reports/<tool>-<base sha>-<head sha>.md`; `--html` also writes the HTML page. A report path inside
 the repo is refused: reports are never committed. Each run's line and the report paths go to stderr. Exits 0, 1 when
-the budget skipped runs (the report still written), 2 on a usage error (no run made).
+the budget skipped runs (the report still written), 2 on a usage error (no run made), 3 when a run failed on
+authentication: the stop line `run_cases` printed is the last word, the head is not run after a base stop, and no
+report is written.
 """
 import argparse
 import subprocess
@@ -36,7 +38,10 @@ SIDES = ("base", "head")
 
 
 def reprice(result, pricing, extract):
-    """`result` with `cost_usd`, `cost_basis` and `pricing_as_of` from its tokens and the price table `pricing`."""
+    """`result` with `cost_usd`, `cost_basis` and `pricing_as_of` from its tokens and the price table `pricing`; a run whose tool
+    reported its cost (`cost_basis: "reported"`, a $0 run) keeps it."""
+    if result.get("cost_basis") == "reported":
+        return result
     tokens = result.get("tokens")
     cost = extract.cost(tokens, pricing) if tokens else None
     return {**result, "cost_usd": cost, "cost_basis": "pricing" if cost is not None else "unknown",
@@ -91,7 +96,8 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
             results_root=None, out_md=None, out_html=None, repo=REPO, out=None, report_to=None):
     """Run `case_dirs` on `base` and `head` of `repo` and write the report. Returns `{base, head}` (each
     `run_cases()`'s output, its results repriced), `comparison` (the dict `render.py` takes) and the report paths
-    `out_md` and `out_html`. Raises run.RunError before any run on an unknown ref, tool, case or model, or a report
+    `out_md` and `out_html`. When a side stops on an auth failure the other is not run if it is the base, no report
+    is written, and `comparison`, `out_md` and `out_html` are None. Raises run.RunError before any run on an unknown ref, tool, case or model, or a report
     path inside the repo, and on a case either ref's `run_cases` would refuse. Run lines go to `out`, the Markdown
     report to `report_to` (default `out`)."""
     out = out or sys.stdout
@@ -119,6 +125,8 @@ def compare(tool, base, head, case_dirs, runs=None, model=None, base_model=None,
         got[side] = run.run_cases(tool, ref, case_dirs, runs=runs, model=models[side], budget_usd=max(left, 0.0),
                                   results_root=results_root, repo=repo, out=out)
         left -= got[side]["spent_usd"]
+        if got[side]["stopped"]:
+            return {**got, "comparison": None, "out_md": None, "out_html": None}
 
     extract = run._extract()
     pricing = extract.load_pricing(run.PRICING)
@@ -179,6 +187,8 @@ def main(argv):
     except (run.RunError, RuntimeError) as err:
         print(f"compare.py: {err}", file=sys.stderr)
         return 2
+    if got["base"]["stopped"] or got["head"]["stopped"]:
+        return 3
     return 1 if got["base"]["skipped"] or got["head"]["skipped"] else 0
 
 
