@@ -7,9 +7,10 @@ value is left out; a metric with no values is `None` (unknown), never 0.
 `verdict(base, head)` takes two summaries and gives each case `better`, `worse`, `noise` or `unknown` (a case one
 side lacks). A metric's change is real when its min-max ranges do not overlap, and for cost, turns and time also when
 its median moves by at least `MIN_CHANGE` of the base's, so a gap of a hundredth of a cent between two tight ranges is
-noise; the pass rate's when it moves by at least `ceil(2/3 * runs)` runs (spec open question 10); otherwise it is
-noise. Below `MIN_RUNS` runs on either side only the pass rate can be real: two sets of 3 runs of the same skill fall
-apart by chance once in 10 tries per metric, so cost, turns, time and rubric are shown there but are noise. Higher pass rate and rubric are better;
+noise; the pass rate's when it moves by at least `ceil(2/3 * runs)` runs (spec open question 10), counted on the side
+with fewer judged runs, so a case whose passing runs have not moved is never better or worse; otherwise it is noise.
+Below `MIN_RUNS` runs on either side only the pass rate can be real: two sets of 3 runs of the same skill fall apart
+by chance once in 10 tries per metric, so cost, turns, time and rubric are shown there but are noise. Higher pass rate and rubric are better;
 lower cost, turns and time are better. The first metric in `ORDER` with a real change decides the case, so a
 pass-rate change outranks a cost change of the other sign; rubric criteria real in both directions decide nothing. A `noise` case is worth more runs when its pass rate or a rubric
 median differs, or a cost, turns or time median moves by at least `MIN_CHANGE`.
@@ -39,7 +40,8 @@ def _scores(result):
 
 
 def summarise(runs):
-    """Per case: `runs`, `passed`, `pass_rate`, a `spread()` per metric of `METRICS` and `rubric` per criterion."""
+    """Per case: `runs`, `judged` (the runs with a `passed` value), `passed`, `pass_rate`, a `spread()` per metric of
+    `METRICS` and `rubric` per criterion."""
     by_case = {}
     for result in runs:
         by_case.setdefault(result["case"], []).append(result)
@@ -50,7 +52,7 @@ def summarise(runs):
         for r in rs:
             for criterion, score in _scores(r):
                 criteria.setdefault(criterion, []).append(score)
-        out[case] = {"runs": len(rs), "passed": sum(1 for p in judged if p),
+        out[case] = {"runs": len(rs), "judged": len(judged), "passed": sum(1 for p in judged if p),
                      "pass_rate": sum(1 for p in judged if p) / len(judged) if judged else None,
                      **{m: spread(r.get(m) for r in rs) for m in METRICS},
                      "rubric": {c: spread(s) for c, s in sorted(criteria.items())}}
@@ -88,7 +90,7 @@ def _pass_rate(base, head):
     b, h = base["pass_rate"], head["pass_rate"]
     if b is None or h is None:
         return {"base": b, "head": h, "diff": None, "verdict": "unknown"}
-    runs = max(base["runs"], head["runs"])
+    runs = min(base["judged"], head["judged"])
     diff = h - b
     real = abs(diff) * runs >= needed_moves(runs) - 1e-9
     return {"base": b, "head": h, "diff": diff, "verdict": ("better" if diff > 0 else "worse") if real else "noise"}
