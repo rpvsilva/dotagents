@@ -125,10 +125,13 @@ That is the case, the run number, `pass` or `fail`, the cost (`unknown` when it 
 | `0` | Every run was made or reused, whatever its checks gave. |
 | `1` | The cost ceiling skipped runs; the last line names them. |
 | `2` | A usage error: nothing ran. |
+| `3` | A run failed on authentication; see [Auth](#auth). |
 
 ### Auth
 
 The tool authenticates from env vars only, the ones its adapter names: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex, `CURSOR_API_KEY` for Cursor. They reach the tool's process and nothing else: not its argv, not the checks, and not a saved file, where every value is replaced by `[redacted]`. No credentials file is copied into the run.
+
+A run that fails on authentication stops the command. It is saved with `error: auth` and no judge, no further run or judge starts, and `run.py` prints one line naming the adapter's env vars to renew and how, such as `auth failed for claude: renew CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY (claude setup-token, then export CLAUDE_CODE_OAUTH_TOKEN, or set a new ANTHROPIC_API_KEY); stopped before 4 more run(s)`, then exits 3. Claude Code and Codex detect it (Claude Code from a 401 or `authentication_failed` event, Codex from a `401 Unauthorized` error); Cursor does not yet, so a Cursor auth failure is saved as `error: tool`. `auth` is an `error` value like the others, so [errored runs are never reused](#reuse-and---fresh): after you renew the variable, the same command makes the stopped run again and reuses the runs it already saved.
 
 ### What a run starts from
 
@@ -157,7 +160,7 @@ After the tool exits, `evals/_runner/checks.py` runs each check in `work/`, with
 
 ### Cost ceiling
 
-`--budget-usd` caps what one invocation spends. Once the summed cost of the runs and judges it made reaches it, no new run or judge starts: the results saved so far stay, the remaining runs are named on the last line, and the command exits 1. The judge's cost ([The judge](#the-judge)) counts like the run's, so a judge can be what tips the budget. A reused run and an install failure cost nothing against it, unless the reused run is judged again (below); a run whose cost is unknown counts as its case's `cost_usd` cap, a judge whose cost is unknown as its $0.50 cap.
+`--budget-usd` caps what one invocation spends. Once the summed cost of the runs and judges it made reaches it, no new run or judge starts: the results saved so far stay, the remaining runs are named on the last line, and the command exits 1. The judge's cost ([The judge](#the-judge)) counts like the run's, so a judge can be what tips the budget. A reused run and an install failure cost nothing against it, unless the reused run is judged again (below); a run whose cost is unknown counts as its case's `cost_usd` cap, a judge whose cost is unknown as its $0.50 cap. The exception is a run whose tool reported zero tokens and zero cost: it is saved with `cost_basis: reported` and counts $0, since a reported $0 costs $0. Only an unknown cost (`null`) counts the cap.
 
 ### Results
 
@@ -177,7 +180,7 @@ Results live in the store, never in the repo, and are never committed:
 
 ### Reuse and `--fresh`
 
-A saved run is reused, with no tool call, when the tool, the ref's commit, the model and the case hash are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
+A saved run is reused, with no tool call, when the tool, the ref's commit, the model and the case hash are unchanged and its `result.json` exists with no `error`. So a second run of `main` costs nothing, and a run that errored (an install, auth or tool failure, often the environment's) is made again. A change to any of them makes a new folder, and `--fresh` runs again over a saved one.
 
 The case hash covers only what changes a run: every file of the case except `checks/` and the rubric (`rubric.md`, or the file `case.json`'s `rubric` names), and every field of `case.json` except `rubric`, `judge_model` and `runs`. Those are graded, not run, so editing them never pays for the case again: a reused run whose `checks_hash`, `rubric_hash` or `judge_model` differs from the case's is re-graded first, as [`grade.py`](#grade-runs) does. Its checks run again on its kept state, the judge runs again only when the rubric or `judge_model` changed, and the case's tool is never called. A changed `runs` reuses the saved runs it still counts and makes only the new ones.
 
@@ -353,6 +356,7 @@ Run lines go to stderr as in [Run cases](#run-cases), then the path of each repo
 | `0` | Every run was made or reused. |
 | `1` | The cost ceiling skipped runs; the report is still written, from the runs made. |
 | `2` | A usage error, an unknown ref, tool or case, a model alias, or a report path inside the repo: nothing ran. |
+| `3` | A run failed on authentication ([Auth](#auth)): the command stops at once, runs nothing more (the head is not run after a base stop) and writes no report. |
 
 ### Saved runs are reused
 
