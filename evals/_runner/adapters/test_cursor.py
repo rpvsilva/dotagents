@@ -73,6 +73,9 @@ class ParseTest(EvalSandbox):
         self.assertEqual(self.parse("pass"), {"tokens": None, "turns": 3, "duration_s": 9.25, "capped": None,
                                               "tool_version": None, "spawned_agents": 0, "error": None})
 
+    def test_renew_names_the_new_key(self):
+        self.assertIn("CURSOR_API_KEY", self.cursor.RENEW)
+
     def test_a_stream_with_no_result_is_a_tool_error(self):
         self.assertEqual(self.parse("no-result"), {"tokens": None, "turns": 1, "duration_s": None, "capped": None,
                                                    "tool_version": None, "spawned_agents": 0, "error": "tool"})

@@ -15,6 +15,7 @@ from . import TRANSCRIPT
 INSTALL_WORD = "cursor"
 AUTH_VARS = ("CURSOR_API_KEY",)
 USES_CASE_MODEL = False
+RENEW = "a new CURSOR_API_KEY"
 
 # A started `tool_call` naming one of these starts an agent: a typed `<name>ToolCall` key, or a generic `function`.
 SPAWN_KEYS = ("taskToolCall", "agentToolCall")
