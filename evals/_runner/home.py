@@ -5,6 +5,9 @@
 fresh git repo, the tool's cwd), `scratch/`, `input/`, and `bin/gh`, a stub first on the tool's `PATH` that records
 its arguments in `gh-calls` and fails. `Run.env()` is the tool's environment, `Run.prompt()` fills the placeholders and
 `Run.keep()` copies the state into the result folder with every auth value replaced by `[redacted]`.
+A remote run (`remote=True`) fills `{work}`, `{input}` and `{scratch}` as the sandbox sees them (`~/work`,
+`~/attached/input`, `~/work/.eval-scratch`); `Run.collect_scratch()` then moves the returned `work/.eval-scratch/`
+into `scratch/`, so `work/` reads as after a local run.
 Everything lives in temp folders outside the dotagents checkout; `close()` removes them.
 """
 import json
@@ -22,6 +25,8 @@ PASS_THROUGH = ("LANG", "TMPDIR")
 REDACTED = b"[redacted]"
 PLACEHOLDERS = ("work", "scratch", "input", "home")
 KEPT = ("work", "scratch", "home", "gh-calls")
+SCRATCH_DIR = ".eval-scratch"
+REMOTE_PATHS = {"work": "~/work", "input": "~/attached/input", "scratch": "~/work/" + SCRATCH_DIR}
 
 
 class InstallError(RuntimeError):
@@ -167,12 +172,13 @@ def _redact(data, values):
     return data
 
 
-def keep(src, dest, auth_vars):
+def keep(src, dest, auth_vars, extra=()):
     """Copy `work/`, `scratch/`, `home/` and `gh-calls` of run folder `src` into `dest`: real files only (symlinks,
     such as installed links into the checkout, dropped), every value of an auth var in env replaced by
-    `[redacted]` in every file."""
+    `[redacted]` in every file, and so is each value of `extra` (bytes)."""
     src, dest = Path(src), Path(dest)
-    values = sorted({os.environ[v].encode() for v in auth_vars if os.environ.get(v)}, key=len, reverse=True)
+    values = sorted({os.environ[v].encode() for v in auth_vars if os.environ.get(v)} | set(extra), key=len,
+                    reverse=True)
     for name in KEPT:
         top = src / name
         if top.is_symlink() or not top.exists():
@@ -198,8 +204,9 @@ def _copy(path, to, values):
 class Run:
     """One run's folder: `home/`, `work/`, `scratch/`, `input/`, `bin/` and `gh-calls`, in a temp folder."""
 
-    def __init__(self, root):
+    def __init__(self, root, remote=False):
         self.root = Path(root)
+        self.remote = remote
         self.home, self.work, self.scratch = self.root / "home", self.root / "work", self.root / "scratch"
         self.input, self.bin, self.gh_calls = self.root / "input", self.root / "bin", self.root / "gh-calls"
 
@@ -207,14 +214,30 @@ class Run:
     def paths(self):
         return {"work": self.work, "scratch": self.scratch, "input": self.input, "home": self.home}
 
+    @property
+    def prompt_paths(self):
+        """The paths the prompt names: the run's own, or for a remote run the sandbox's (`{home}` stays the run's)."""
+        return {**self.paths, **REMOTE_PATHS} if self.remote else self.paths
+
+    def collect_scratch(self):
+        """Move the scratch a remote run wrote in `work/.eval-scratch/` (untracked: the patch applies unstaged) to
+        `scratch/`, leaving `work/` with no trace of it. Nothing to move when the run wrote none."""
+        src = self.work / SCRATCH_DIR
+        if src.is_symlink() or not src.is_dir():
+            if src.is_symlink() or src.exists():
+                src.unlink()
+            return
+        shutil.rmtree(self.scratch, ignore_errors=True)
+        shutil.move(str(src), str(self.scratch))
+
     def env(self, auth_vars):
         return tool_env(self.home, auth_vars, self.bin)
 
     def prompt(self, text):
-        return fill_prompt(text, self.paths)
+        return fill_prompt(text, self.prompt_paths)
 
-    def keep(self, dest, auth_vars):
-        keep(self.root, dest, auth_vars)
+    def keep(self, dest, auth_vars, extra=()):
+        keep(self.root, dest, auth_vars, extra)
 
     def close(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -226,12 +249,12 @@ class Run:
         self.close()
 
 
-def prepare(case, checkout_dir, tool_word, parts=None, prepare_home=None):
+def prepare(case, checkout_dir, tool_word, parts=None, prepare_home=None, remote=False):
     """A Run for `case` (as `cases.load()` returns it): its parts (default `case["install"]`) installed for
     `tool_word` from `checkout_dir`, the fixture as a git repo, `input/` a copy of the case's (else empty),
-    `scratch/` empty and the `gh` stub. `prepare_home(home)`, when given (an adapter's), runs just before the
+    `scratch/` empty and the `gh` stub (`remote`: a run whose prompt names the sandbox's paths). `prepare_home(home)`, when given (an adapter's), runs just before the
     install. Raises InstallError, leaving nothing behind."""
-    run = Run(Path(tempfile.mkdtemp(prefix="evals-run-")).resolve())
+    run = Run(Path(tempfile.mkdtemp(prefix="evals-run-")).resolve(), remote=remote)
     try:
         run.home.mkdir()
         run.scratch.mkdir()

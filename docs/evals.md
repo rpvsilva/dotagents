@@ -108,6 +108,7 @@ It runs each named case, or every case with `--all`, against dotagents at a comm
 | `--budget-usd` | `10` | The cost ceiling for the whole invocation, over 0 (see below). |
 | `--results` | `EVALS_RESULTS`, else `~/.agents/evals/results` | The results store. |
 | `--fresh` | off | Runs again even when a saved run matches; the saved run is replaced only once the new one has its result. |
+| `--remote` | off | Runs each case through the backend `remote-agent` is set up for (`claude` only): the run is stored under `claude@<backend>`, saved with `remote: true`, and ends its line `remote <backend>`. A fuller section comes with the docs task. |
 | `--evals` | this repo's `evals/` | Another folder of cases. |
 | `--all` | off | Every case under `--evals`. Give `--all` or case names, not both. |
 | `-h`, `--help` | | Prints the usage. |

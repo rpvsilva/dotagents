@@ -16,7 +16,7 @@ from pathlib import Path
 
 class EvalSandbox(unittest.TestCase):
     TOKEN_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "CODEX_API_KEY", "CURSOR_API_KEY")
-    VARS = ("HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "EVALS_RESULTS", "PATH") + TOKEN_VARS
+    VARS = ("HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "EVALS_RESULTS", "EVALS_REMOTE_AGENT", "PATH") + TOKEN_VARS
 
     def setUp(self):
         super().setUp()
