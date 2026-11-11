@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Passes when the pass B report ends with the block whose status is done.
+set -euo pipefail
+report="$EVAL_SCRATCH/reports/plan-B.md"
+[ -f "$report" ]
+[ "$(tail -n 8 "$report" | grep -E '^status:' | tail -n 1 | tr -d '[:space:]`')" = "status:done" ]

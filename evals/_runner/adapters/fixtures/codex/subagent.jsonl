@@ -1,0 +1,8 @@
+{"type": "thread.started", "thread_id": "0199a213-81c0-7800-8aa1-5ab0a6e00001"}
+{"type": "turn.started"}
+{"type": "item.started", "item": {"id": "item_0", "type": "collab_tool_call", "tool": "spawn_agent", "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_0", "type": "collab_tool_call", "tool": "spawn_agent", "status": "completed"}}
+{"type": "item.started", "item": {"id": "item_1", "type": "collab_tool_call", "tool": "spawn_agent", "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_2", "type": "collab_tool_call", "tool": "wait", "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": "Both subagents reported."}}
+{"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10, "reasoning_output_tokens": 0}}

@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Runs the checks CI runs that cover the changed files, as tests/affected.sh picks them; its arguments pass through
 # (--all for every check, -- <path>... for given files). Lint tools that are not installed are skipped with a warning.
+# Evals bill a model, so they run last and only when asked: EVALS=1 compares the cases evals/pick.py picks on HEAD
+# against origin/main, EVALS=all every case; unset, the picked cases are named and skipped.
 set -uo pipefail
+
+case "${EVALS:-}" in
+  "" | 1 | all) ;;
+  *) echo "usage: EVALS=1|all tests/run.sh [--all | --base <ref> | -- <path>...] (got EVALS=$EVALS)" >&2; exit 2 ;;
+esac
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
@@ -65,6 +72,35 @@ if [ "$(uname -s)" = Darwin ] && [ -x /bin/bash ] && [ "${#suites[@]}" -gt 0 ]; 
   ln -s /bin/bash "$shim/bash"
   step "tests/*.test.sh (bash 3.2)" env PATH="$shim:$PATH" /bin/bash tests/parallel.sh "${suites[@]}"
 fi
+
+# Once, outside the bash 3.2 pass, which would bill every run twice. Runs commit HEAD, not the working tree.
+picked() {
+  local found
+  command -v python3 >/dev/null && [ -f evals/pick.py ] && found="$(python3 -I evals/pick.py "$@" | tr '\n' ' ')" \
+    && printf '%s' "${found% }"
+}
+compare() {
+  step "evals: HEAD against origin/main" python3 -I evals/compare.py --tool claude --base origin/main --head HEAD "$@"
+}
+case "${EVALS:-}" in
+  all) compare --all ;;
+  1)
+    if ! cases="$(picked "$@")"; then
+      echo "== evals: cannot pick the cases (needs python3 and evals/pick.py)"
+      status=1
+    elif [ -z "$cases" ]; then
+      echo "== evals: no case picked"
+    else
+      # One word per case, split without globbing.
+      read -r -a picks <<<"$cases"
+      compare "${picks[@]}"
+    fi
+    ;;
+  *)
+    cases="$(picked "$@")" || cases="unknown (needs python3 and evals/pick.py)"
+    echo "== evals: skipped (EVALS=1 runs the picked ones, EVALS=all every one): ${cases:-none picked}"
+    ;;
+esac
 
 [ -z "$skipped" ] || echo "== not run, no changed file they cover (tests/suites.txt; --all runs them):$skipped"
 exit "$status"
