@@ -919,7 +919,7 @@ status="$(git -C "$EVAL_WORK" status --porcelain --untracked-files=all)"
         for k in configure:
             self.assertIn("EVAL_HOME", named[k], k)
         build = {k: v for k, v in named.items() if k.startswith("build-epic/")}
-        self.assertEqual(len(build), 3)
+        self.assertEqual(len(build), 8)
         self.assertEqual(set(build.values()), {None})
 
     def test_a_home_case_is_named_and_skipped_while_a_scratch_case_runs(self):
