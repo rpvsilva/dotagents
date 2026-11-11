@@ -97,6 +97,23 @@ class ReuseTest(CompareSandbox):
         self.assertEqual(self.call_count(), 1)
 
 
+class OrderTest(CompareSandbox):
+    def test_the_refs_take_turns_one_run_number_at_a_time(self):
+        made, real = [], compare.run.run_once
+
+        def record(case, n, adapter, tool, model, co, *rest):
+            made.append((co.sha, n))
+            return real(case, n, adapter, tool, model, co, *rest)
+
+        base, head = (git(self.repo, "rev-parse", r) for r in ("HEAD~1", "HEAD"))
+        with mock.patch.object(compare.run, "run_once", record):
+            got = self.compare([self.case("configure/a", runs=2), self.case("configure/b", runs=1)], runs=None)
+        self.assertEqual(made,
+                         [(base, 1), (base, 1), (head, 1), (head, 1), (base, 2), (head, 2)])
+        self.assertEqual([r["run"] for r in got["base"]["runs"]], [1, 2, 1])
+        self.assertEqual(got["base"]["sha"], base)
+
+
 class PricingTest(CompareSandbox):
     def test_both_sides_are_priced_with_the_current_table_and_its_date_is_in_the_report(self):
         case = self.case()
