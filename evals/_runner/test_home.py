@@ -241,6 +241,43 @@ class Prompt(EvalSandbox):
         self.assertEqual(run.prompt(text), f"in {self.tmp / 'work'}, write {self.tmp / 'scratch'}/a, read "
                                            f"{self.tmp / 'input'}, home {self.tmp / 'home'}, keep {{other}} and {{}}")
 
+    def test_a_remote_run_fills_the_sandbox_paths_but_keeps_home(self):
+        run = home.Run(self.tmp, remote=True)
+        self.assertEqual(run.prompt("{work} {input} {scratch} {home}"),
+                         f"~/work ~/attached/input ~/work/.eval-scratch {self.tmp / 'home'}")
+        self.assertEqual(run.paths["work"], self.tmp / "work")
+
+
+class CollectScratch(EvalSandbox):
+    def test_the_scratch_written_in_work_moves_to_scratch_leaving_no_trace_in_work(self):
+        run = home.Run(self.tmp, remote=True)
+        (self.tmp / "fixture").mkdir()
+        (self.tmp / "fixture" / "a.txt").write_text("a\n")
+        home.make_work(self.tmp / "fixture", run.work)
+        run.scratch.mkdir()
+        (run.work / ".eval-scratch" / "deep").mkdir(parents=True)
+        (run.work / ".eval-scratch" / "deep" / "areas.md").write_text("x\n")
+        run.collect_scratch()
+        self.assertEqual((run.scratch / "deep" / "areas.md").read_text(), "x\n")
+        self.assertFalse((run.work / ".eval-scratch").exists())
+        status = subprocess.run(["git", "-C", str(run.work), "status", "--porcelain", "--untracked-files=all"],
+                                capture_output=True, text=True).stdout
+        self.assertEqual(status, "")
+
+    def test_a_run_that_wrote_no_scratch_leaves_scratch_empty(self):
+        run = home.Run(self.tmp, remote=True)
+        run.work.mkdir()
+        run.scratch.mkdir()
+        run.collect_scratch()
+        self.assertEqual(list(run.scratch.iterdir()), [])
+
+    def test_keep_redacts_extra_values(self):
+        run = home.Run(self.tmp)
+        run.work.mkdir()
+        (run.work / "f").write_text("a SECRET b")
+        home.keep(self.tmp, self.tmp / "dest", [], extra=[b"SECRET"])
+        self.assertEqual((self.tmp / "dest" / "work" / "f").read_text(), "a [redacted] b")
+
 
 if __name__ == "__main__":
     unittest.main()
