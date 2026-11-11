@@ -53,6 +53,21 @@ cat >"$H/.claude.json" <<'EOF'
 EOF
 
 # --- remote-agent-pack.sh
+# With a home argument it stages that home's files and nothing of $HOME's.
+H2="$SANDBOX/home2"
+mkdir -p "$H2/.claude/skills/only-here" "$H2/.agents/hooks"
+printf -- '---\nname: only-here\n---\n' >"$H2/.claude/skills/only-here/SKILL.md"
+printf 'other instructions\n' >"$H2/.claude/CLAUDE.md"
+printf '{"model":"sonnet"}' >"$H2/.claude/settings.json"
+printf '{"mcpServers":{"other":{"type":"http","url":"https://o.example.com"}}}' >"$H2/.claude.json"
+P2="$SANDBOX/packed2"
+HOME="$H" "$REPO/scripts/remote-agent-pack.sh" "$P2" "$H2" 2>"$SANDBOX/pack2.err" || fail "pack home: exited non-zero: $(cat "$SANDBOX/pack2.err")"
+[ -f "$P2/.claude/skills/only-here/SKILL.md" ] || fail "pack home: the given home's skill not copied"
+[ ! -e "$P2/.claude/skills/skill-a" ] && [ ! -e "$P2/.agents/hooks/guard.sh" ] || fail "pack home: a file of \$HOME was copied"
+[ "$(cat "$P2/.claude/CLAUDE.md")" = "other instructions" ] || fail "pack home: CLAUDE.md not the given home's"
+jq -e '.model == "sonnet" and .enabledPlugins == null' "$P2/.claude/settings.json" >/dev/null || fail "pack home: settings not the given home's"
+jq -e 'keys == ["other"]' "$P2/.claude/remote-mcp.json" >/dev/null || fail "pack home: MCP servers not the given home's"
+[ -x "$P2/.agents/bin/capped" ] || fail "pack home: capped missing"
 P="$SANDBOX/packed"
 HOME="$H" "$REPO/scripts/remote-agent-pack.sh" "$P" 2>"$SANDBOX/pack.err" || fail "pack: exited non-zero: $(cat "$SANDBOX/pack.err")"
 if [ ! -f "$P/.claude/CLAUDE.md" ] || [ -L "$P/.claude/CLAUDE.md" ]; then fail "pack: CLAUDE.md not copied as a file"; fi
@@ -666,6 +681,31 @@ grep -qx "\[model\] == claude ($want)" "$SANDBOX/err" || fail "agent model: not 
 rm -f "$W/hello.txt"
 run 0 "" --name nomodel || fail "no agent: exited non-zero: $(cat "$SANDBOX/out")"
 grep -qx -- "--model" "$SANDBOX/claude-args" && fail "no agent: claude run with a model: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+rm -f "$W/hello.txt"
+# --model runs that model, and wins over --agent's; a bad name is refused before any backend call.
+run 0 "" --name model2 --agent epic-implementer --model my-model.1 || fail "--model: exited non-zero: $(cat "$SANDBOX/out")"
+grep -qxF -- "my-model.1" "$SANDBOX/claude-args" || fail "--model: claude not run with it: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+grep -qxF -- "$want" "$SANDBOX/claude-args" && fail "--model: --agent's model used too: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+grep -q "remote-agent-sandbox auto 300 my-model.1\$" "$SANDBOX/calls" || fail "--model: not the argument after the caps"
+rm -f "$W/hello.txt"
+for bad in "-x" "a b" "a/b" ""; do
+  code=0; run 0 "" --model "$bad" || code=$?
+  [ "$code" = 1 ] || fail "--model '$bad': wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q "^remote-agent: --model needs" "$SANDBOX/err" || fail "--model '$bad': no reason: $(cat "$SANDBOX/err")"
+  [ ! -e "$SANDBOX/calls" ] || fail "--model '$bad': kubectl was called: $(cat "$SANDBOX/calls")"
+done
+# --home ships that home's setup in place of $HOME's, with the token still only on stdin; a missing folder is refused first.
+run 0 "" --name home --home "$H2" || fail "--home: exited non-zero: $(cat "$SANDBOX/out")"
+[ -f "$POD/.claude/skills/only-here/SKILL.md" ] || fail "--home: the given home's skill not in the sandbox"
+[ ! -e "$POD/.claude/skills/skill-a" ] || fail "--home: a file of \$HOME reached the sandbox"
+[ "$(sed -n 1p "$SANDBOX/stdin")" = "sk-claude-secret" ] || fail "--home: stdin line 1 is not the Claude token"
+grep -rq --exclude-dir=projects "sk-claude-secret" "$POD/.claude" "$POD/.agents" && fail "--home: the token was shipped in the setup"
+grep -q "sk-claude-secret" "$SANDBOX/calls" && fail "--home: the token leaked into kubectl arguments"
+rm -f "$W/hello.txt"
+code=0; run 0 "" --home "$SANDBOX/no-such-home" || code=$?
+[ "$code" = 1 ] || fail "--home missing: wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+grep -q "^remote-agent: --home needs" "$SANDBOX/err" || fail "--home missing: no reason: $(cat "$SANDBOX/err")"
+[ ! -e "$SANDBOX/calls" ] || fail "--home missing: kubectl was called: $(cat "$SANDBOX/calls")"
 # The appended rules state facts about the sandbox only: how the agent ends is its brief's to say, as in a local run.
 rules="$(grep -A1 -x -- "--append-system-prompt" "$SANDBOX/claude-args" | tail -1)"
 case "$rules" in
