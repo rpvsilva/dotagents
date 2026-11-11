@@ -5,7 +5,8 @@
 # Fields: run, name (from run.json); exit_code; status (done on exit 0 or 3, else failed, as run.json's state);
 # report_status (the report's `status:` line in summary.md, null without one); changed (the files changes.patch
 # touches; [] when it is empty, as on exit 3; null when no patch came back); follow_up (the report's `follow-up:`
-# lines, [] when none); report_path (summary.md, null when none came back); duration_ms, num_turns, total_cost_usd,
+# lines, [] when none; both from the final message, summary.md); report_path (report.md when the agent wrote
+# ~/out/report.md, else summary.md; null when none came back); duration_ms, num_turns, total_cost_usd,
 # usage (from the last result event of transcript.jsonl; duration_ms from run.json's started and ended without one);
 # model (the init event's, else the first of the result's modelUsage); claude_version (the init event's
 # claude_code_version: the sandbox's Claude Code); complete (true only on exit 0, 3 or 4 with a
@@ -109,6 +110,8 @@ if [ -f "$keep/summary.md" ]; then
   report="$(printf '%s' "$keep/summary.md" | jq -Rs . | tr -d '\r')"
   cp "$keep/summary.md" "$tmp/summary"
 fi
+# The report file the agent wrote, with its final message after it (remote-agent.sh), is the full report.
+[ ! -f "$keep/report.md" ] || report="$(printf '%s' "$keep/report.md" | jq -Rs . | tr -d '\r')"
 
 # The caps' kills, and whether the sandbox was lost: from the progress lines, CRs dropped.
 : >"$tmp/progress"

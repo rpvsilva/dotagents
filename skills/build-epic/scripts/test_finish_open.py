@@ -145,6 +145,15 @@ class FinishTaskTest(StepCase):
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
         self.assertEqual((self.kit.run_dir / "reports" / "01-02.md").read_text(encoding="utf-8"), report.read_text(encoding="utf-8"))
 
+    def test_the_last_block_decides_when_a_report_holds_two(self):
+        """A remote report is the agent's report file, ending with its block, then its final message: the block checked."""
+        report = self.kit.tmp / "report.md"
+        report.write_text("Built it.\nstatus: done\nchanged: a.txt\nwhy:\nfollow-up:\n\n"
+                          "status: blocked\nchanged: none\nwhy: the API is missing\nfollow-up:\n", encoding="utf-8")
+        p = self.kit.step(FINISH, "../run", "01-02", "--report", "../report.md", cwd=self.kit.home)
+        self.assert_fail(p, "FAIL 01-02 blocked the API is missing (log: ")
+        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+
     def test_an_unknown_flag_or_a_missing_report_fails_before_touching_the_task(self):
         self.write(self.wt, "a.txt", "a\n")
         for args, prefix in ((["--force", "x"], "FAIL 01-02 usage: finish_task.py "), (["--title"], "FAIL 01-02 usage: "),
