@@ -25,6 +25,8 @@ STUB = """#!/bin/sh
 set -e
 out="$ACCEPT_RESULTS"
 printf '%s\\n' "$ACCEPT_CHECKOUT" > "$(dirname "$out")/seen"
+for a; do last="$a"; done
+[ -z "$EXPECT_ACCEPTANCE" ] || [ "$last" = "$EXPECT_ACCEPTANCE" ] || exit 3
 rows=""
 for f in subtasks notes snooze dependencies next; do
   o=failed; [ -f "$ACCEPT_CHECKOUT/$f" ] && o=passed
@@ -117,6 +119,42 @@ class Quality(unittest.TestCase):
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.tip)
         self.assertEqual(git(self.repo, "status", "--porcelain"), status_before)
         self.assertEqual(len(git(self.repo, "worktree", "list").splitlines()), 1)
+
+    def test_another_acceptance_folder_with_its_own_features(self):
+        folder = self.tmp / "acceptance-16"
+        folder.mkdir()
+        (folder / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+        (folder / "features.json").write_text(
+            json.dumps({"accept_subtasks.py": "17-a", "accept_next.py": "18-b"}), encoding="utf-8")
+        os.environ["EXPECT_ACCEPTANCE"] = str(folder.resolve())
+        self.addCleanup(os.environ.pop, "EXPECT_ACCEPTANCE", None)
+        rc, out = self.main(self.repo, "main", "--python", self.stub, "--acceptance", folder)
+        self.assertEqual(rc, 0, out)
+        acc = out["acceptance"]
+        self.assertEqual(list(acc["feature"]), ["17-a", "18-b"])
+        self.assertEqual((acc["feature"]["17-a"]["pass_rate"], acc["feature"]["18-b"]["pass_rate"]), (1.0, 0.0))
+        self.assertEqual(acc["feature_weighted"], 0.5)
+        self.assertEqual(acc["total"], 6)  # every row counts in the totals, mapped to a feature or not
+        rc, out = self.main(self.repo, "main", "--python", self.stub)  # the default folder is not the one expected
+        self.assertEqual(rc, 1)
+        self.assertIn("exit 3", out["error"])
+
+    def test_a_bad_acceptance_folder_is_refused(self):
+        rc, out = self.main(self.repo, "main", "--python", self.stub, "--acceptance", self.tmp / "nothing")
+        self.assertEqual(rc, 1)
+        self.assertIn("not an acceptance folder", out["error"])
+        folder = self.tmp / "bad"
+        folder.mkdir()
+        (folder / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+        (folder / "features.json").write_text("[1]", encoding="utf-8")
+        rc, out = self.main(self.repo, "main", "--python", self.stub, "--acceptance", folder)
+        self.assertEqual(rc, 1)
+        self.assertIn("features.json", out["error"])
+
+    def test_default_features_weigh_each_feature_the_same(self):
+        rc, out = self.main(self.repo, "main", "--python", self.stub)
+        # 403 1/1, 404 1/1, 405 0/1, 406 0/1, 407 0/2
+        self.assertEqual(out["acceptance"]["feature_weighted"], 0.4)
 
     def test_a_bare_clone_works_too(self):
         bare = self.tmp / "bare"

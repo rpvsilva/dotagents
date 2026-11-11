@@ -20,6 +20,7 @@ skills/build-epic/needs.json evals evals/_runner/adapters
 skills/build-epic/plan_check.py evals evals/_baseline/402
 skills/build-epic/scripts/status.py evals/_baseline/402
 skills/build-epic/scripts/resume.py evals/_baseline/402
+evals/_baseline/402/quality.py evals/_baseline/402 evals/_baseline/16
 scripts/settings.sh evals
 skills/_shared/settings.json evals
 skills/build-epic/settings.json evals
