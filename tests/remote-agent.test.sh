@@ -130,6 +130,8 @@ case " \$* " in
     [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
     mkdir -p "\$pod/out"; cp "\$patch" "\$pod/out/changes.patch"
     if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "\$pod/out/summary.md"; else echo "did the thing" >"\$pod/out/summary.md"; fi
+    # With $SANDBOX/reportfile, the report file the agent wrote as ~/out/report.md.
+    [ ! -e "$SANDBOX/reportfile" ] || cp "$SANDBOX/reportfile" "\$pod/out/report.md"
     # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
     # it read the victim in as the session, and a forged run.json.
     if [ -e "$SANDBOX/evil" ]; then
@@ -322,6 +324,19 @@ result_is "result on exit 0" '.exit_code == 0 and .status == "done" and .complet
   and .claude_version == "9.8.7" and .changed == ["hello.txt"] and .report_status == "done"
   and .follow_up == ["document --flag", "token [redacted]"] and (.report_path | endswith("/summary.md"))'
 rm -f "$W/hello.txt"
+
+# A report file the agent wrote as ~/out/report.md: stdout and report_path give it, then the final message (the
+# block); the status and follow-ups still come from the final message. The token is redacted in it too.
+printf 'Built hello.txt.\nkey sk-claude-secret\n' >"$SANDBOX/reportfile"
+printf 'status: done\nchanged: hello.txt\nwhy:\nfollow-up: document --flag\n' >"$SANDBOX/summary"
+run 0 "$patch" --name "08-report-file" || fail "report file: exited non-zero: $(cat "$SANDBOX/out")"
+want="$(printf 'Built hello.txt.\nkey [redacted]\n\nstatus: done\nchanged: hello.txt\nwhy:\nfollow-up: document --flag')"
+[ "$(cat "$SANDBOX/report")" = "$want" ] || fail "report file: stdout is not the report then the block: $(cat "$SANDBOX/report")"
+result_is "report file" '.report_status == "done" and .follow_up == ["document --flag"]
+  and (.report_path | endswith("/report.md"))'
+rf="$(jq -r .report_path "$(kept)/result.json" | tr -d '\r')"
+[ "$(cat "$rf")" = "$want" ] || fail "report file: report_path does not hold the report then the block: $(cat "$rf")"
+rm -f "$W/hello.txt" "$SANDBOX/reportfile"
 
 # No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
