@@ -138,6 +138,25 @@ class PassRateRule(unittest.TestCase):
         self.assertEqual(compare(runs(5, passes=1), runs(5, passes=5))["cases"]["c"]["verdict"], "better")
         self.assertEqual(compare(runs(5, passes=5), runs(5, passes=1))["cases"]["c"]["verdict"], "worse")
 
+    def test_different_run_counts_judge_by_the_smaller_side(self):
+        # 1 of 1 against 1 of 3: one passing run on each side, so nothing moved.
+        v = compare(runs(1, passes=1), runs(3, passes=1))
+        self.assertEqual(v["cases"]["c"]["metrics"]["pass_rate"]["verdict"], "noise")
+        self.assertEqual(v["cases"]["c"]["verdict"], "noise")
+        self.assertEqual(compare(runs(3, passes=1), runs(1, passes=1))["cases"]["c"]["verdict"], "noise")
+        # 3 of 3 against 4 of 10: on 3 runs that is 1.8 runs moved, under the 2 needed.
+        self.assertEqual(compare(runs(3, passes=3), runs(10, passes=4))["cases"]["c"]["verdict"], "noise")
+        # 3 of 3 against 2 of 6: on 3 runs that is 2 runs moved, enough.
+        self.assertEqual(compare(runs(3, passes=3), runs(6, passes=2))["cases"]["c"]["verdict"], "worse")
+        self.assertEqual(compare(runs(6, passes=2), runs(3, passes=3))["cases"]["c"]["verdict"], "better")
+
+    def test_unjudged_runs_do_not_count_toward_the_runs(self):
+        # 3 runs a side, but 2 of the head's are unjudged: 1 of 1 against 0 of 3 is judged on 1 run.
+        head = runs(3, passes=1)
+        head[1]["passed"] = head[2]["passed"] = None
+        self.assertEqual(compare(runs(3, passes=0), head)["cases"]["c"]["verdict"], "better")
+        self.assertEqual(compare(runs(3, passes=1), head)["cases"]["c"]["verdict"], "noise")
+
     def test_pass_rate_change_outranks_cost_of_the_other_sign(self):
         cheaper_but_failing = compare(runs(N, passes=N, cost=5.0), runs(N, passes=0, cost=1.0))
         self.assertEqual(cheaper_but_failing["cases"]["c"]["metrics"]["cost_usd"]["verdict"], "better")

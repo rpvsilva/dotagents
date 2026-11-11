@@ -397,7 +397,7 @@ Each case gets one verdict, from its metrics: pass rate, rubric score per criter
 
 A metric's change is **real** when:
 
-- **pass rate**: the number of passing runs moves by at least two-thirds of the runs per case, rounded up (2 of 3, 4 of 5, 7 of 10). The runs per case are the larger side's;
+- **pass rate**: the number of passing runs moves by at least two-thirds of the runs per case, rounded up (2 of 3, 4 of 5, 7 of 10). The runs per case are the side with fewer judged runs, so with 1 run on one ref and 3 on the other a case passing once on each is noise, not worse;
 - **rubric score**: the two refs' min-max ranges do not overlap;
 - **cost, turns and time**: the ranges do not overlap, and the median moves by at least 10% of the base's. Without that floor, two tight ranges a fraction of a cent apart would count as real.
 
