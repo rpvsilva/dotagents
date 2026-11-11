@@ -6,7 +6,7 @@ Usage: python3 -I review_plan.py <run>
 Reads `<run>/tickets/*.md`, `<run>/tasks/*.md` and `decisions.md`'s `review_before_agent_merge:` (missing: `no`).
 - `task` (small model): one per task when `review_before_agent_merge: yes`, or when the task is estimated high.
   The hub task (one with a `ticket NN` blocker) gets none: its review is the first half of the `hub` run.
-- `hub` (large) for a ticket with a hub task, else `ticket` (large): the ticket's one deep review.
+- `hub` (small model) for a ticket with a hub task, else `ticket` (small model): the ticket's one deep review.
 - `security` (large): only on a ticket estimated high, i.e. one with a task estimated high.
 Orchestrator tasks (`-tests`, `-review-fixes`, `-fix-ci`) count for nothing: a tuning PR is checked by a script.
 
@@ -26,7 +26,7 @@ from steplib import core, runfolder  # noqa: E402
 
 ORCHESTRATOR_TASKS = ("-tests", "-review-fixes", "-fix-ci")
 STORAGE = (".json", ".jsonl", ".yml", ".yaml", ".toml", ".ini", ".csv", ".sql", ".db", ".sqlite", ".xml")
-MODELS = {"task": "small", "hub": "large", "ticket": "large", "security": "large"}
+MODELS = {"task": "small", "hub": "small", "ticket": "small", "security": "large"}
 
 
 def ticket_num(path):
