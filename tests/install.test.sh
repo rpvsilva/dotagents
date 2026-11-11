@@ -342,7 +342,7 @@ jq -e '.hooks.Stop[0].hooks[0].command == "orca"' "$home/.claude/settings.json" 
 jq -e '.permissions == null' "$home/.claude/settings.json" >/dev/null || fail "a selective install without personal merged the deny rules"
 [ "$(sed -n '/^== .claude\/settings.json/,/^== /p' "$SANDBOX/safety.configs" | sed '$d')" = \
   "$(configs "$home" | sed -n '/^== .claude\/settings.json/,/^== /p' | sed '$d')" ] || fail "install.sh pr-loop changed the merged hooks"
-[ "$(names_in "$home" .claude/agents)" = "pr-fixer pr-reviewer pr-reviewer-light " ] ||
+[ "$(names_in "$home" .claude/agents)" = "pr-fixer pr-reviewer " ] ||
   fail "pr-loop Claude agents: $(names_in "$home" .claude/agents)"
 [ "$(names_in "$home" .agents/skills)" = "_shared address-review configure fix-pr remote-subagents renovate-prs review-pr ship-pr " ] ||
   fail "pr-loop on top of remote skills: $(names_in "$home" .agents/skills)"
@@ -350,7 +350,7 @@ for f in .claude/CLAUDE.md .codex/AGENTS.md .codex/rules; do [ ! -e "$home/$f" ]
 
 # claude epics: the epics and pr-loop agents (epics requires pr-loop parts), for Claude only.
 home="$SANDBOX/epics"
-[ "$(names_in "$home" .claude/agents)" = "epic-explorer epic-implementer epic-planner pr-fixer pr-reviewer pr-reviewer-light source-reader test-tuner " ] ||
+[ "$(names_in "$home" .claude/agents)" = "epic-explorer epic-implementer epic-planner pr-fixer pr-reviewer source-reader test-tuner " ] ||
   fail "install.sh claude epics agents: $(names_in "$home" .claude/agents)"
 [ -z "$(find "$home/.codex" "$home/.cursor" -mindepth 1)" ] || fail "install.sh claude epics touched codex or cursor"
 if grep -q "security\|remote-agent\|remote-runs\|hooks/guard" "$SANDBOX/epics.links"; then

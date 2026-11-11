@@ -128,7 +128,7 @@ uninstall "$home" pr-loop >"$SANDBOX/pr-loop.out" || fail "uninstall pr-loop exi
 for s in review-pr ship-pr fix-pr build-epic; do
   [ -L "$home/.agents/skills/$s" ] && [ -L "$home/.claude/skills/$s" ] || fail "uninstall pr-loop removed $s, which epics requires"
 done
-for a in pr-fixer pr-reviewer pr-reviewer-light; do
+for a in pr-fixer pr-reviewer; do
   [ -L "$home/.claude/agents/$a.md" ] && [ -L "$home/.codex/agents/$a.toml" ] && [ -L "$home/.cursor/agents/$a.md" ] ||
     fail "uninstall pr-loop removed agent $a, which epics requires"
 done

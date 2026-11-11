@@ -46,9 +46,9 @@ class ReviewPlanTest(unittest.TestCase):
         write(self.run_dir / "tasks" / "02-01-b.md", task("02-01", "src/b.py"))
         lines = self.plan()
         alpha, beta = self.line(lines, "01"), self.line(lines, "02")
-        self.assertIn("hub 1 (large)", alpha)
+        self.assertIn("hub 1 (small)", alpha)
         self.assertNotIn("ticket", alpha.split(":", 1)[1])
-        self.assertIn("ticket 1 (large)", beta)
+        self.assertIn("ticket 1 (small)", beta)
         self.assertNotIn("hub", beta)
 
     def test_the_hub_task_gets_no_task_run_of_its_own_when_reviews_are_required(self):
@@ -98,8 +98,8 @@ class ReviewPlanTest(unittest.TestCase):
         write(self.run_dir / "tasks" / "01-02-hub.md", task("01-02", "README.md", blocked="01, ticket 02"))
         write(self.run_dir / "tasks" / "02-01-b.md", task("02-01", "src/b.py"))
         lines = self.plan()
-        # 01: task 1 + hub 1 + security 1; 02: task 1 + ticket 1. 5 runs over 2 tickets, 3 of them large.
-        self.assertEqual(lines[-1], "total: 5 runs over 2 tickets, 2.5 per ticket, 3 on the large model")
+        # 01: task 1 + hub 1 + security 1; 02: task 1 + ticket 1. 5 runs over 2 tickets, only security on the large model.
+        self.assertEqual(lines[-1], "total: 5 runs over 2 tickets, 2.5 per ticket, 1 on the large model")
 
     def test_no_decisions_file_counts_as_no_review_before_agent_merge(self):
         write(self.run_dir / "tasks" / "01-01-a.md", task("01-01", "src/a.py"))
