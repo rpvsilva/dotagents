@@ -10,6 +10,8 @@ Remote subagents never talk to each other ([agent-communication.md](agent-commun
 
 This page is the overview. Every flag, file and backend detail is in [remote/README.md](../remote/README.md).
 
+For running eval cases on the same backend, see [evals.md](evals.md#remote).
+
 ## When a subagent runs remotely
 
 Only **remote-capable** subagents can run remotely: ones that only change their own worktree. Each is declared once, in the `remote` list of the `needs.json` beside its brief, as [remote-subagents](../skills/remote-subagents/SKILL.md) says. Before each one starts, the skill runs `remote-agent ready` in the repo:
