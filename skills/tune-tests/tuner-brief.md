@@ -32,7 +32,7 @@ Speed and coverage pull against each other: the cheap way to a fast suite is del
 
 ## When you run remotely
 
-Your worktree is `~/work`, a snapshot with one commit; the notes file and anything else attached are under `~/attached`. Do not commit: leave your changes in the files, and whoever started you commits them. In the report, `changed:` lists the files.
+Your worktree is `~/work`, a snapshot with one commit; the notes file and anything else attached are under `~/attached`. Do not commit: leave your changes in the files, and whoever started you commits them. Your report file is `~/out/report.md`, outside `~/work` so it stays out of your changes. In the report, `changed:` lists the files.
 
 ## Report
 
@@ -51,6 +51,6 @@ why: <one line, when status is blocked>
 follow-up: <one line: the suites' total time before -> after, and the count of gaps closed>
 ```
 
-With a report file named, write the full report there, then your final message is the block alone (its last four lines), at most 400 characters. With none, or running remotely, your final message is the full report, its block as the last four lines, unfenced.
+With a report file named (`~/out/report.md` when you run remotely), write the full report there, then your final message is the block alone (its last four lines), at most 400 characters. With none, your final message is the full report, its block as the last four lines, unfenced. A `reissue:` line in your prompt names your last run's report on this task, which broke this section: the work is done, so change no file, run nothing, and write that report again as this section says, then end with the block.
 
 A key with several values takes one per line, each indented or as a `- ` item under the key; `none` means no value. Each `mutations:` entry names a line of the code under test in your worktree (`file` relative to its root, `line` its line number there), the first `old` text on that line and the `new` text that replaces it (empty to delete it), e.g. `src/parse.py:42 >= 0 -> > 0`. A removed or merged assertion that `moved:` does not name, or a mutation that leaves the suites green, sends the PR to an agent review.
