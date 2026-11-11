@@ -92,6 +92,25 @@ class RecheckTest(GradeSandbox):
         self.assertFalse(Path(checkout).exists())
         self.assertTrue(results.read(d)["checks"]["settings-written"])
 
+    def test_a_run_saved_under_a_backend_folder_is_found_and_regraded_through_its_tool(self):
+        self.judging_claude(SCORES)
+        case = self.rubric_case()
+        local = self.ran(case)
+        res = results.read(local)
+        remote = results.run_dir(results.store_root(None), "claude", res["ref_sha"], res["model"], "configure/quick",
+                                 res["case_hash"], 1, backend="docker")
+        remote.parent.mkdir(parents=True)
+        shutil.move(str(local), str(remote))
+        results.write(remote, {**results.read(remote), "remote": True, "backend": "docker"})
+        (case / "checks" / "settings-written.sh").write_text(FAILING)
+        got = self.grade("configure/quick", rejudge=True)
+        self.assertEqual([d for d, _ in got["graded"]], [remote])
+        after = results.read(remote)
+        self.assertEqual(after["tool"], "claude")
+        self.assertFalse(after["checks"]["settings-written"])
+        self.assertEqual(after["backend"], "docker")
+        self.assertEqual(self.roles_called(), ["judge"])
+
     def test_a_kept_gh_call_still_fails_no_github(self):
         self.judging_claude(SCORES)
         d = self.ran(self.case())

@@ -3,7 +3,10 @@
 Store root: `--results`, else `EVALS_RESULTS`, else `~/.agents/evals/results`; never inside the repo. One run's folder:
 `<root>/<tool>/<ref sha>/<model>/<case>/<case hash>/run-<n>/`, so a saved run is reused only when the tool, the
 ref's commit, the model and every case file that changes a run (`case_hash`) are unchanged (spec open question
-20). A run is finished once its `result.json` exists: `write()` puts it in place last, in one rename.
+20). A remote run adds its backend to the tool folder: `<root>/<tool>@<backend>/...` (`claude@docker`, one segment, so the
+depth is the same), so local and remote runs, and runs of two backends, are never reused for each other; its
+`result.json` keeps `tool` plain (the judge loads the adapter from it) and says `remote: true` and the `backend`.
+A run is finished once its `result.json` exists: `write()` puts it in place last, in one rename.
 
 Unknown values are `null`, never 0: a field the caller leaves out is saved as `null`.
 """
@@ -17,7 +20,7 @@ SCHEMA = 1
 RESULT = "result.json"
 FIELDS = ("schema", "tool", "tool_version", "model", "ref", "ref_sha", "case", "case_hash", "run", "checks",
           "checks_hash", "passed", "tokens", "cost_usd", "cost_basis", "pricing_as_of", "turns", "duration_s", "capped",
-          "subagents", "error", "rubric", "transcript")
+          "subagents", "error", "rubric", "transcript", "remote", "backend", "unenforced")
 
 
 def write(result_dir, result):
@@ -90,24 +93,32 @@ def _parts(value):
     return parts
 
 
-def key_dir(root, tool, sha, model, case, case_hash):
-    """The folder holding every run of one key; `case` may hold a `/` (`<skill>/<case>`)."""
+BACKEND = re.compile(r"[a-z][a-z0-9_-]*")
+
+
+def key_dir(root, tool, sha, model, case, case_hash, backend=None):
+    """The folder holding every run of one key; `case` may hold a `/` (`<skill>/<case>`). With a `backend` (one plain
+    segment, `[a-z][a-z0-9_-]*`) the tool folder is `<tool>@<backend>`."""
     for value in (tool, sha, model, case_hash):
         if len(_parts(value)) != 1:
             raise ValueError(f"not a store key: {value!r}")
+    if backend is not None:
+        if not isinstance(backend, str) or not BACKEND.fullmatch(backend):
+            raise ValueError(f"not a backend: {backend!r}")
+        tool = f"{tool}@{backend}"
     return Path(root).joinpath(tool, sha, model, *_parts(case), case_hash)
 
 
-def run_dir(root, tool, sha, model, case, case_hash, n):
+def run_dir(root, tool, sha, model, case, case_hash, n, backend=None):
     """The folder of run `n` (from 1) of one key."""
     if isinstance(n, bool) or not isinstance(n, int) or n < 1:
         raise ValueError(f"not a run number: {n!r}")
-    return key_dir(root, tool, sha, model, case, case_hash) / f"run-{n}"
+    return key_dir(root, tool, sha, model, case, case_hash, backend) / f"run-{n}"
 
 
-def saved_runs(root, tool, sha, model, case, case_hash):
+def saved_runs(root, tool, sha, model, case, case_hash, backend=None):
     """The folders of the key's finished runs (those holding `result.json`), in run order."""
-    d = key_dir(root, tool, sha, model, case, case_hash)
+    d = key_dir(root, tool, sha, model, case, case_hash, backend)
     if not d.is_dir():
         return []
     runs = [(int(m.group(1)), p) for p in d.iterdir() if (m := re.fullmatch(r"run-([1-9][0-9]*)", p.name))]
