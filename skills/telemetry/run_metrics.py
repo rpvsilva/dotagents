@@ -23,8 +23,9 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
   folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network (the
   epic's `issue view` below goes through it too). Also
   `first_created`, `last_merged` and the minutes between them.
-- `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, and the minutes from its first task PR's
-  opening to its own PR's merge.
+- `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, `first_task_pr_opened` and `ticket_merged`
+  (its first task PR's opening and its own PR's merge) and the wall-clock minutes between them, waits included;
+  `compare_runs.py` keeps only the active ones, from the run's telemetry.
 - `lead_time`: hours from the epic's issue opening (`run.md`'s `Epic: #<n>`, read with `<cmd> issue view <n>`) to
   the last ticket PR's merge, `null` until every ticket's PR has merged (`unmerged_tickets` names the rest).
 - `human_round_trips`: the dated quotes under `decisions.md`'s Decisions recorded after approval. Approval is placed
@@ -450,16 +451,20 @@ def minutes(start, end):
 
 
 def per_ticket(tickets, tasks, prs_, times):
-    """Per ticket: its tasks, its PR and the minutes from its first task PR's opening to its own PR's merge."""
+    """Per ticket: its tasks, its PR, when its first task PR opened and its own PR merged, and the wall-clock
+    minutes between them."""
     out = {}
     for ticket in tickets:
         mine = [t for t in tasks if t["id"].split("-", 1)[0] == ticket["id"]]
         row = next((r for r in prs_["list"] if r["id"] == ticket["id"]), {})
         opened = [times[t["id"]][0] for t in mine if t["id"] in times and times[t["id"]][0]]
+        first = min(opened, default=None)
         merged = times.get(ticket["id"], (None, None))[1]
         out[ticket["id"]] = {"tasks": len(mine), "fix_tasks": sum(1 for t in mine if t["kind"] == "fix"),
                              "pr": row.get("pr"), "state": row.get("state"),
-                             "minutes_first_task_pr_to_ticket_merge": minutes(min(opened, default=None), merged)}
+                             "first_task_pr_opened": first.isoformat() if first else None,
+                             "ticket_merged": merged.isoformat() if merged else None,
+                             "wall_minutes_first_task_pr_to_ticket_merge": minutes(first, merged)}
     return out
 
 

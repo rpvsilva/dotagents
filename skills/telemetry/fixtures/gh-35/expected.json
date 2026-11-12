@@ -46,7 +46,22 @@
     "localVsRemotePct": -1.6,
     "better": "local"
    },
-   "perTicketMedianMinutes": {
+   "humanWaitMinutes": {
+    "remote": null,
+    "local": null,
+    "unit": "min"
+   },
+   "perTicketActiveMedianMinutes": {
+    "remote": null,
+    "local": null,
+    "unit": "min"
+   },
+   "perTicketActiveMaxMinutes": {
+    "remote": null,
+    "local": null,
+    "unit": "min"
+   },
+   "perTicketWallMedianMinutes": {
     "remote": 95.9,
     "local": 100.0,
     "unit": "min",
@@ -54,7 +69,7 @@
     "localVsRemotePct": 4.3,
     "better": "remote"
    },
-   "perTicketMaxMinutes": {
+   "perTicketWallMaxMinutes": {
     "remote": 178.9,
     "local": 273.7,
     "unit": "min",
@@ -525,13 +540,16 @@
     "buildEpicSpanMinutes": 278.1,
     "activeMinutes": null,
     "agentsAtOnce": null,
+    "humanWaitMinutes": null,
+    "humanWaits": null,
     "leadTimeHours": null,
     "runStartToLastTicketMergeMinutes": null,
     "firstPrCreated": "2026-11-05T20:18:12+00:00",
     "lastPrMerged": "2026-11-06T00:26:39+00:00",
     "firstPrToLastMergeMinutes": 248.4,
     "sessionStartToFirstPrMinutes": 24.8,
-    "perTicketFirstTaskPrToMergeMinutes": {
+    "perTicketActiveMinutes": null,
+    "perTicketWallMinutes": {
      "n": 30,
      "sum": 2642.5,
      "min": 32.4,
@@ -1810,217 +1828,248 @@
      "review_fix_tasks": 1,
      "pr": 184,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 125.6
+     "minutes_first_task_pr_to_ticket_merge": 125.6,
+     "active_minutes": null
     },
     "02": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 187,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 127.2
+     "minutes_first_task_pr_to_ticket_merge": 127.2,
+     "active_minutes": null
     },
     "03": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 185,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 100.9
+     "minutes_first_task_pr_to_ticket_merge": 100.9,
+     "active_minutes": null
     },
     "04": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 198,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 100.2
+     "minutes_first_task_pr_to_ticket_merge": 100.2,
+     "active_minutes": null
     },
     "05": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 197,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 101.3
+     "minutes_first_task_pr_to_ticket_merge": 101.3,
+     "active_minutes": null
     },
     "06": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 186,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 105.1
+     "minutes_first_task_pr_to_ticket_merge": 105.1,
+     "active_minutes": null
     },
     "07": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 201,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 104.4
+     "minutes_first_task_pr_to_ticket_merge": 104.4,
+     "active_minutes": null
     },
     "08": {
      "tasks": 5,
      "review_fix_tasks": 1,
      "pr": 188,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 137.4
+     "minutes_first_task_pr_to_ticket_merge": 137.4,
+     "active_minutes": null
     },
     "09": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 192,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 98.2
+     "minutes_first_task_pr_to_ticket_merge": 98.2,
+     "active_minutes": null
     },
     "10": {
      "tasks": 5,
      "review_fix_tasks": 1,
      "pr": 190,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 109.2
+     "minutes_first_task_pr_to_ticket_merge": 109.2,
+     "active_minutes": null
     },
     "11": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 202,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 108.7
+     "minutes_first_task_pr_to_ticket_merge": 108.7,
+     "active_minutes": null
     },
     "12": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 189,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 91.2
+     "minutes_first_task_pr_to_ticket_merge": 91.2,
+     "active_minutes": null
     },
     "13": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 191,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 95.8
+     "minutes_first_task_pr_to_ticket_merge": 95.8,
+     "active_minutes": null
     },
     "14": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 200,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 94.6
+     "minutes_first_task_pr_to_ticket_merge": 94.6,
+     "active_minutes": null
     },
     "15": {
      "tasks": 5,
      "review_fix_tasks": 1,
      "pr": 193,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 178.9
+     "minutes_first_task_pr_to_ticket_merge": 178.9,
+     "active_minutes": null
     },
     "16": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 195,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 91.5
+     "minutes_first_task_pr_to_ticket_merge": 91.5,
+     "active_minutes": null
     },
     "17": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 194,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 112.0
+     "minutes_first_task_pr_to_ticket_merge": 112.0,
+     "active_minutes": null
     },
     "18": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 196,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 96.0
+     "minutes_first_task_pr_to_ticket_merge": 96.0,
+     "active_minutes": null
     },
     "19": {
      "tasks": 4,
      "review_fix_tasks": 0,
      "pr": 199,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 116.1
+     "minutes_first_task_pr_to_ticket_merge": 116.1,
+     "active_minutes": null
     },
     "20": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 256,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 32.4
+     "minutes_first_task_pr_to_ticket_merge": 32.4,
+     "active_minutes": null
     },
     "21": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 254,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 39.6
+     "minutes_first_task_pr_to_ticket_merge": 39.6,
+     "active_minutes": null
     },
     "22": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 252,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 41.2
+     "minutes_first_task_pr_to_ticket_merge": 41.2,
+     "active_minutes": null
     },
     "23": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 253,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 43.3
+     "minutes_first_task_pr_to_ticket_merge": 43.3,
+     "active_minutes": null
     },
     "24": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 255,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 56.2
+     "minutes_first_task_pr_to_ticket_merge": 56.2,
+     "active_minutes": null
     },
     "25": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 264,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 53.0
+     "minutes_first_task_pr_to_ticket_merge": 53.0,
+     "active_minutes": null
     },
     "26": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 263,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 44.9
+     "minutes_first_task_pr_to_ticket_merge": 44.9,
+     "active_minutes": null
     },
     "27": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 265,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 53.7
+     "minutes_first_task_pr_to_ticket_merge": 53.7,
+     "active_minutes": null
     },
     "28": {
      "tasks": 3,
      "review_fix_tasks": 1,
      "pr": 271,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 57.9
+     "minutes_first_task_pr_to_ticket_merge": 57.9,
+     "active_minutes": null
     },
     "29": {
      "tasks": 4,
      "review_fix_tasks": 0,
      "pr": 272,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 65.4
+     "minutes_first_task_pr_to_ticket_merge": 65.4,
+     "active_minutes": null
     },
     "30": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 273,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 60.6
+     "minutes_first_task_pr_to_ticket_merge": 60.6,
+     "active_minutes": null
     },
     "31": {
      "tasks": 8,
      "review_fix_tasks": 2,
      "pr": null,
      "state": null,
-     "minutes_first_task_pr_to_ticket_merge": null
+     "minutes_first_task_pr_to_ticket_merge": null,
+     "active_minutes": null
     }
    },
    "subagentList": [
@@ -6197,13 +6246,16 @@
     "buildEpicSpanMinutes": 410.3,
     "activeMinutes": null,
     "agentsAtOnce": null,
+    "humanWaitMinutes": null,
+    "humanWaits": null,
     "leadTimeHours": null,
     "runStartToLastTicketMergeMinutes": null,
     "firstPrCreated": "2026-11-06T11:43:35+00:00",
     "lastPrMerged": "2026-11-06T18:07:47+00:00",
     "firstPrToLastMergeMinutes": 384.2,
     "sessionStartToFirstPrMinutes": 24.4,
-    "perTicketFirstTaskPrToMergeMinutes": {
+    "perTicketActiveMinutes": null,
+    "perTicketWallMinutes": {
      "n": 32,
      "sum": 3706.4,
      "min": 4.6,
@@ -7532,224 +7584,256 @@
      "review_fix_tasks": 1,
      "pr": 299,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 52.7
+     "minutes_first_task_pr_to_ticket_merge": 52.7,
+     "active_minutes": null
     },
     "02": {
      "tasks": 5,
      "review_fix_tasks": 1,
      "pr": 305,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 25.7
+     "minutes_first_task_pr_to_ticket_merge": 25.7,
+     "active_minutes": null
     },
     "03": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 313,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 93.4
+     "minutes_first_task_pr_to_ticket_merge": 93.4,
+     "active_minutes": null
     },
     "04": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 325,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 18.0
+     "minutes_first_task_pr_to_ticket_merge": 18.0,
+     "active_minutes": null
     },
     "05": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 337,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 27.9
+     "minutes_first_task_pr_to_ticket_merge": 27.9,
+     "active_minutes": null
     },
     "06": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 343,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 10.7
+     "minutes_first_task_pr_to_ticket_merge": 10.7,
+     "active_minutes": null
     },
     "07": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 351,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 16.3
+     "minutes_first_task_pr_to_ticket_merge": 16.3,
+     "active_minutes": null
     },
     "08": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 353,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 56.2
+     "minutes_first_task_pr_to_ticket_merge": 56.2,
+     "active_minutes": null
     },
     "09": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 355,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 61.0
+     "minutes_first_task_pr_to_ticket_merge": 61.0,
+     "active_minutes": null
     },
     "10": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 357,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 64.8
+     "minutes_first_task_pr_to_ticket_merge": 64.8,
+     "active_minutes": null
     },
     "11": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 359,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 65.2
+     "minutes_first_task_pr_to_ticket_merge": 65.2,
+     "active_minutes": null
     },
     "12": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 361,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 69.1
+     "minutes_first_task_pr_to_ticket_merge": 69.1,
+     "active_minutes": null
     },
     "13": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 363,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 77.0
+     "minutes_first_task_pr_to_ticket_merge": 77.0,
+     "active_minutes": null
     },
     "14": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 365,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 82.4
+     "minutes_first_task_pr_to_ticket_merge": 82.4,
+     "active_minutes": null
     },
     "15": {
      "tasks": 1,
      "review_fix_tasks": 0,
      "pr": 367,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 4.6
+     "minutes_first_task_pr_to_ticket_merge": 4.6,
+     "active_minutes": null
     },
     "16": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 369,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 95.9
+     "minutes_first_task_pr_to_ticket_merge": 95.9,
+     "active_minutes": null
     },
     "17": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 371,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 104.0
+     "minutes_first_task_pr_to_ticket_merge": 104.0,
+     "active_minutes": null
     },
     "18": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 373,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 112.8
+     "minutes_first_task_pr_to_ticket_merge": 112.8,
+     "active_minutes": null
     },
     "19": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 375,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 120.2
+     "minutes_first_task_pr_to_ticket_merge": 120.2,
+     "active_minutes": null
     },
     "20": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 377,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 127.5
+     "minutes_first_task_pr_to_ticket_merge": 127.5,
+     "active_minutes": null
     },
     "21": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 379,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 134.2
+     "minutes_first_task_pr_to_ticket_merge": 134.2,
+     "active_minutes": null
     },
     "22": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 381,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 140.0
+     "minutes_first_task_pr_to_ticket_merge": 140.0,
+     "active_minutes": null
     },
     "23": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 383,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 149.2
+     "minutes_first_task_pr_to_ticket_merge": 149.2,
+     "active_minutes": null
     },
     "24": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 385,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 161.4
+     "minutes_first_task_pr_to_ticket_merge": 161.4,
+     "active_minutes": null
     },
     "25": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 387,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 174.5
+     "minutes_first_task_pr_to_ticket_merge": 174.5,
+     "active_minutes": null
     },
     "26": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 389,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 181.5
+     "minutes_first_task_pr_to_ticket_merge": 181.5,
+     "active_minutes": null
     },
     "27": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 391,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 215.0
+     "minutes_first_task_pr_to_ticket_merge": 215.0,
+     "active_minutes": null
     },
     "28": {
      "tasks": 3,
      "review_fix_tasks": 0,
      "pr": 393,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 232.8
+     "minutes_first_task_pr_to_ticket_merge": 232.8,
+     "active_minutes": null
     },
     "29": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 395,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 245.1
+     "minutes_first_task_pr_to_ticket_merge": 245.1,
+     "active_minutes": null
     },
     "30": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 397,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 251.4
+     "minutes_first_task_pr_to_ticket_merge": 251.4,
+     "active_minutes": null
     },
     "31": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 399,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 262.2
+     "minutes_first_task_pr_to_ticket_merge": 262.2,
+     "active_minutes": null
     },
     "32": {
      "tasks": 2,
      "review_fix_tasks": 0,
      "pr": 401,
      "state": "MERGED",
-     "minutes_first_task_pr_to_ticket_merge": 273.7
+     "minutes_first_task_pr_to_ticket_merge": 273.7,
+     "active_minutes": null
     }
    },
    "subagentList": [
