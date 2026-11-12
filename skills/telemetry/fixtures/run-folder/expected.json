@@ -31,7 +31,8 @@
  "reviews": {
   "reports": 3,
   "prs": 2,
-  "re_reviews": 1
+  "re_reviews": 1,
+  "security": 0
  },
  "follow_ups": {
   "rows": 3,
@@ -209,6 +210,16 @@
    "state": null,
    "minutes_first_task_pr_to_ticket_merge": null
   }
+ },
+ "lead_time": {
+  "epic": 5,
+  "epic_opened": "2026-10-31T16:00:00+00:00",
+  "last_ticket_merged": null,
+  "hours": null,
+  "unmerged_tickets": [
+   "02",
+   "03"
+  ]
  },
  "human_round_trips": 2,
  "hand_written_scripts": 2,

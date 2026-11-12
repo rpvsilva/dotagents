@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+todo.json
+.venv/
+# Compiled code is never committed; `git add -f` bypasses this, so AGENTS.md and CI also refuse it.
+*.pyc
+*.pyd
+*.so

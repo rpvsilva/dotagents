@@ -20,10 +20,13 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
   `review-<PR>-<sha7>` and `security-<PR>-<sha7>`, `task` for `<TT-NN>-...` and `<TT>-tests-...`, else `other`.
   `claude_versions` counts them by the sandbox's Claude Code version (`claude_version`; `unknown` without one).
 - `prs`: each ticket's and task's `PR:` line, read with `<cmd> pr view <PR> --json ...` run in `run.md`'s `Repo:`
-  folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network. Also
+  folder. `--gh` is that command (default `gh`), split like a shell would; nothing else reaches the network (the
+  epic's `issue view` below goes through it too). Also
   `first_created`, `last_merged` and the minutes between them.
 - `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, and the minutes from its first task PR's
   opening to its own PR's merge.
+- `lead_time`: hours from the epic's issue opening (`run.md`'s `Epic: #<n>`, read with `<cmd> issue view <n>`) to
+  the last ticket PR's merge, `null` until every ticket's PR has merged (`unmerged_tickets` names the rest).
 - `human_round_trips`: the dated quotes under `decisions.md`'s Decisions recorded after approval. Approval is placed
   from `logs/decisions-decide.log`, where each `decide.py` call logs `== decide ... at <time>` and, once recorded,
   `OK decisions <set|clause|quote>`: build-epic step 5 records the clauses, then the approval reply's own decisions
@@ -121,10 +124,17 @@ def fix_rounds(run, tasks):
             "fix_tasks": sum(1 for t in tasks if t["kind"] == "fix")}
 
 
+# A reviewer's own report, `<PR>-<sha7>.md`; the posted copy (`.posted.md`), the numbered findings
+# (`-findings.md`) and the security report (`-security.md`) beside it are not reviews of their own.
+REVIEW_REPORT = re.compile(r"(\d+)-[0-9a-f]{7}\.md")
+
+
 def reviews(run):
-    per_pr = tally(p.stem.split("-", 1)[0] for p in sorted((run / "reviews").glob("*.md")))
+    names = [p.name for p in sorted((run / "reviews").glob("*.md"))]
+    per_pr = tally(m.group(1) for n in names if (m := REVIEW_REPORT.fullmatch(n)))
     total = sum(per_pr.values())
-    return {"reports": total, "prs": len(per_pr), "re_reviews": total - len(per_pr)}
+    return {"reports": total, "prs": len(per_pr), "re_reviews": total - len(per_pr),
+            "security": sum(1 for n in names if re.fullmatch(r"\d+-[0-9a-f]{7}-security\.md", n))}
 
 
 def follow_ups(run, gaps):
@@ -342,28 +352,61 @@ def when(stamp):
 
 def pr_view(gh, pr, cwd, gaps):
     """`gh pr view <pr> --json ...` as a dict, or None (named in `gaps`) when the command fails or answers no JSON."""
+    return gh_view(gh, ["pr", "view", pr, "--json", PR_FIELDS], pr, cwd, gaps)
+
+
+def gh_view(gh, args, name, cwd, gaps):
+    """`<gh> <args>` as a dict, or None (named in `gaps` as `github: <name>: ...`) on failure or no JSON object."""
     try:
-        res = subprocess.run(gh + ["pr", "view", pr, "--json", PR_FIELDS], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+        res = subprocess.run(gh + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
                              stdin=subprocess.DEVNULL, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as e:
-        gaps.append(f"github: {pr}: {e}")
+        gaps.append(f"github: {name}: {e}")
         return None
     if res.returncode != 0:
-        gaps.append(f"github: {pr}: exit {res.returncode}")
+        gaps.append(f"github: {name}: exit {res.returncode}")
         return None
     try:
         data = json.loads(res.stdout)
     except ValueError:
         data = None
     if not isinstance(data, dict):
-        gaps.append(f"github: {pr}: no JSON")
+        gaps.append(f"github: {name}: no JSON")
         return None
     return data
 
 
-def prs(run, gh, items, gaps):
+def lead_time(run, gh, tickets, times, gaps):
+    """From the epic's issue opening (`run.md`'s `Epic: #<n>`) to the last ticket PR's merge, in hours; `null` until
+    every ticket's PR has merged."""
+    out = {"epic": None, "epic_opened": None, "last_ticket_merged": None, "hours": None, "unmerged_tickets": []}
+    epic = header(run / "run.md", "Epic") if (run / "run.md").is_file() else None
+    m = re.fullmatch(r"#?(\d+)", epic or "")
+    out["unmerged_tickets"] = [t["id"] for t in tickets if not times.get(t["id"], (None, None))[1]]
+    merged = [times[t["id"]][1] for t in tickets if times.get(t["id"], (None, None))[1]]
+    if tickets and not out["unmerged_tickets"]:
+        out["last_ticket_merged"] = max(merged).isoformat()
+    if not m:
+        gaps.append("lead time: no Epic line in run.md")
+        return out
+    out["epic"] = int(m.group(1))
+    data = gh_view(gh, ["issue", "view", m.group(1), "--json", "number,createdAt"], f"issue #{out['epic']}",
+                   repo_dir(run), gaps) or {}
+    opened = when(data.get("createdAt"))
+    out["epic_opened"] = opened.isoformat() if opened else None
+    if opened and out["last_ticket_merged"]:
+        out["hours"] = round((max(merged) - opened).total_seconds() / 3600, 2)
+    return out
+
+
+def repo_dir(run):
+    """`run.md`'s `Repo:` folder when it exists, else None (the current folder)."""
     repo = header(run / "run.md", "Repo") if (run / "run.md").is_file() else None
-    cwd = repo if repo and Path(repo).is_dir() else None
+    return repo if repo and Path(repo).is_dir() else None
+
+
+def prs(run, gh, items, gaps):
+    cwd = repo_dir(run)
     rows, times = [], {}
     for item in items:
         if not item["pr"]:
@@ -440,6 +483,7 @@ def metrics(run, gh):
         "remote": remote_,
         "prs": prs_,
         "per_ticket": per_ticket(tickets, tasks, prs_, times),
+        "lead_time": lead_time(run, gh, tickets, times, gaps),
         "human_round_trips": human_round_trips(run, gaps),
         "hand_written_scripts": hand_written_scripts(run),
         "gaps": gaps,

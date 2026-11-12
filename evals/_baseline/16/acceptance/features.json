@@ -1,0 +1,8 @@
+{
+ "accept_create.py": "17-create",
+ "accept_next.py": "18-next-occurrence",
+ "accept_skip.py": "19-skip",
+ "accept_stop.py": "20-stop",
+ "accept_remind_export.py": "21-remind-export",
+ "accept_sync.py": "22-sync"
+}

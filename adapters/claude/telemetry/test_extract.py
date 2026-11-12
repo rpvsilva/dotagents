@@ -99,6 +99,20 @@ class Spans(unittest.TestCase):
         self.assertEqual(span["wallClockSeconds"], 120)
         self.assertEqual(span["tokensByModel"], {"claude-opus-5-5": times(OPUS_TURN, 3)})
 
+    def test_each_span_saves_its_active_time_and_agents_at_once(self):
+        # No gap in the fixture reaches 15 minutes, so active time is the wall clock.
+        for span in self.out["spans"]:
+            self.assertEqual(span["activeSeconds"], span["wallClockSeconds"])
+        self.assertEqual(self.spans["renovate-prs"]["agentsAtOnce"]["peak"], 1)
+        self.assertIsNone(self.spans["grill-with-docs"]["agentsAtOnce"])
+        self.assertEqual(self.out["activeSeconds"], sum(s["activeSeconds"] for s in self.out["spans"]))
+
+    def test_each_span_saves_what_the_human_typed_inside_it(self):
+        # "yes" answers grill-with-docs; the /model typed inside it is a command, not an answer.
+        self.assertEqual(self.spans["grill-with-docs"]["humanMessages"], 1)
+        self.assertEqual(self.spans["renovate-prs"]["humanMessages"], 0)
+        self.assertEqual(self.out["humanMessages"], sum(s["humanMessages"] for s in self.out["spans"]))
+
     def test_a_subagent_belongs_to_the_span_that_started_it(self):
         # q5, q6 plus the subagent's t1, t2; the background subagent ends at 09:06:00.
         span = self.spans["renovate-prs"]
@@ -246,8 +260,8 @@ class Steps(unittest.TestCase):
         cls.steps = cls.out["steps"]
         cls.by_label = {(s["tool"], s["label"]): s for s in cls.steps}
 
-    def test_the_run_is_schema_version_4(self):
-        self.assertEqual(self.out["schemaVersion"], 4)
+    def test_the_run_is_schema_version_5(self):
+        self.assertEqual(self.out["schemaVersion"], 5)
 
     def test_a_session_with_no_version_saves_none(self):
         self.assertEqual(self.out["claudeVersions"], [])
@@ -737,5 +751,54 @@ class DamagedLog(unittest.TestCase):
         self.assertSameRun(proc)
 
 
+class Interruptions(unittest.TestCase):
+    def user(self, content, **extra):
+        return {"type": "user", "message": {"content": content}, **extra}
+
+    def test_counts_what_the_human_typed_after_the_span_started(self):
+        entries = [self.user("<command-name>/build-epic</command-name>"),  # starts the span
+                   self.user("Keep going"),
+                   self.user("Yes, approve the plan")]
+        self.assertEqual(extractor.human_messages(entries), 2)
+
+    def test_hand_backs_notifications_commands_and_tool_results_are_not_the_human(self):
+        entries = [self.user("start"),
+                   self.user("Another Claude session sent a message: hand-back", isMeta=True),
+                   self.user("<task-notification> <task-id>a1</task-id> </task-notification>"),
+                   self.user("<system-reminder> summary </system-reminder>"),
+                   self.user("<command-name>/clear</command-name>"),
+                   self.user("This session is being continued from a previous conversation", isCompactSummary=True),
+                   self.user([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]),
+                   {"type": "assistant", "message": {"content": [{"type": "text", "text": "Keep going"}]}}]
+        self.assertEqual(extractor.human_messages(entries), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ActiveTime(unittest.TestCase):
+    def at(self, *minutes):
+        from datetime import datetime, timedelta, timezone
+        base = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
+        return [base + timedelta(minutes=m) for m in minutes]
+
+    def test_gaps_over_fifteen_minutes_are_stalls_and_left_out(self):
+        # 0-10 counts, 10-70 is a stall (laptop closed), 70-85 counts; a 15-minute gap still counts.
+        self.assertEqual(extractor.active_seconds(self.at(0, 10, 70, 85)), 25 * 60)
+
+    def test_no_moments_or_one_is_zero(self):
+        self.assertEqual(extractor.active_seconds([]), 0)
+        self.assertEqual(extractor.active_seconds(self.at(5)), 0)
+
+    def test_agents_at_once_gives_the_peak_and_the_average_while_any_ran(self):
+        a, b, c, d = self.at(0, 10, 20, 30)
+        # One alone 0-10, two at once 10-20, one alone 20-30: average 4/3 over 30 busy minutes.
+        self.assertEqual(extractor.at_once([(a, c), (b, d)]), {"peak": 2, "average": 1.33})
+
+    def test_agents_at_once_leaves_idle_time_out_of_the_average(self):
+        a, b, c, d = self.at(0, 10, 50, 60)
+        self.assertEqual(extractor.at_once([(a, b), (c, d)]), {"peak": 1, "average": 1.0})
+
+    def test_no_subagents_is_none(self):
+        self.assertIsNone(extractor.at_once([]))

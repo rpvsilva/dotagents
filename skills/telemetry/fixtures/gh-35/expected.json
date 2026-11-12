@@ -10,6 +10,26 @@
     "localVsRemotePct": 47.5,
     "better": "remote"
    },
+   "activeMinutes": {
+    "remote": null,
+    "local": null,
+    "unit": "min"
+   },
+   "averageAgentsAtOnce": {
+    "remote": null,
+    "local": null,
+    "unit": "agents"
+   },
+   "leadTimeHours": {
+    "remote": null,
+    "local": null,
+    "unit": "h"
+   },
+   "runStartToLastTicketMergeMinutes": {
+    "remote": null,
+    "local": null,
+    "unit": "min"
+   },
    "firstPrToLastMergeMinutes": {
     "remote": 248.4,
     "local": 384.2,
@@ -405,6 +425,11 @@
     "localVsRemotePct": -13.3,
     "better": "local"
    },
+   "interruptions": {
+    "remote": null,
+    "local": null,
+    "unit": "stops"
+   },
    "findingsSaved": {
     "remote": 119,
     "local": 91,
@@ -498,6 +523,10 @@
     "sessionEnd": "2026-11-06T00:31:49.842Z",
     "sessionMinutes": 278.4,
     "buildEpicSpanMinutes": 278.1,
+    "activeMinutes": null,
+    "agentsAtOnce": null,
+    "leadTimeHours": null,
+    "runStartToLastTicketMergeMinutes": null,
     "firstPrCreated": "2026-11-05T20:18:12+00:00",
     "lastPrMerged": "2026-11-06T00:26:39+00:00",
     "firstPrToLastMergeMinutes": 248.4,
@@ -1683,6 +1712,7 @@
      "note": "Saved findings only (kept for later fixes); findings fixed in the same round are not all recorded."
     },
     "humanDecisions": 15,
+    "interruptions": null,
     "testsFromRunFolder": {
      "local_suite_runs": 157,
      "red_runs": 0,
@@ -6165,6 +6195,10 @@
     "sessionEnd": "2026-11-06T18:09:55.339Z",
     "sessionMinutes": 410.7,
     "buildEpicSpanMinutes": 410.3,
+    "activeMinutes": null,
+    "agentsAtOnce": null,
+    "leadTimeHours": null,
+    "runStartToLastTicketMergeMinutes": null,
     "firstPrCreated": "2026-11-06T11:43:35+00:00",
     "lastPrMerged": "2026-11-06T18:07:47+00:00",
     "firstPrToLastMergeMinutes": 384.2,
@@ -7445,6 +7479,7 @@
      "note": "Saved findings only (kept for later fixes); findings fixed in the same round are not all recorded."
     },
     "humanDecisions": 13,
+    "interruptions": null,
     "testsFromRunFolder": {
      "local_suite_runs": 0,
      "red_runs": 0,
