@@ -18,6 +18,9 @@ from testlib import EvalSandbox  # noqa: E402
 
 PASS_A = ("pass-a-remove", "pass-a-rename")
 PASS_B = ("pass-b-top",)
+# Cases with checks of their own, not this pilot's run-folder checks: the implementer cases and the planner traps.
+OTHERS = ("implement-block-unblock", "implement-command-discovery", "implement-item-fields", "implement-note",
+          "pass-a-traps")
 
 SPEC = """# Spec: tally remove
 
@@ -156,7 +159,7 @@ class PilotBuildEpicTest(EvalSandbox):
 
     def test_cases_are_well_formed(self):
         self.assertEqual(cases.check(HERE), [])
-        self.assertEqual(sorted(p.name for p in CASES.iterdir()), sorted(PASS_A + PASS_B))
+        self.assertEqual(sorted(p.name for p in CASES.iterdir()), sorted(PASS_A + PASS_B + OTHERS))
 
     def test_pass_a_cases_check_spec_areas_report_and_repo(self):
         for name in PASS_A:

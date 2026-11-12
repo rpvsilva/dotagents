@@ -208,6 +208,7 @@ def analyse(name, tel, met, branch, prices):
     per_ticket = met.get("per_ticket")
     per_ticket_min = [t.get("minutes_first_task_pr_to_ticket_merge") for t in (per_ticket or {}).values()]
     first_pr = prs.get("first_created")
+    last_ticket = dig(met, "lead_time", "last_ticket_merged")
     remote_runs, _, remote_cost = remote_counts(met)
 
     return {
@@ -221,6 +222,13 @@ def analyse(name, tel, met, branch, prices):
                 "sessionStart": tel["start"], "sessionEnd": tel["end"],
                 "sessionMinutes": r(tel["wallClockSeconds"] / 60, 1),
                 "buildEpicSpanMinutes": r(span["wallClockSeconds"] / 60, 1),
+                # Saved since schemaVersion 5: the span's time minus stalls, and its subagents running at once.
+                "activeMinutes": r(span["activeSeconds"] / 60, 1) if span.get("activeSeconds") is not None else None,
+                "agentsAtOnce": span.get("agentsAtOnce"),
+                # From run_metrics.py: the epic's issue opening to its last ticket's merge, and this run's share.
+                "leadTimeHours": dig(met, "lead_time", "hours"),
+                "runStartToLastTicketMergeMinutes": r((ts(last_ticket) - ts(span["start"])).total_seconds() / 60, 1)
+                if last_ticket else None,
                 "firstPrCreated": first_pr, "lastPrMerged": prs.get("last_merged"),
                 "firstPrToLastMergeMinutes": prs.get("wall_minutes_first_pr_to_last_merge"),
                 "sessionStartToFirstPrMinutes": r((ts(first_pr) - ts(tel["start"])).total_seconds() / 60, 1)
@@ -281,6 +289,9 @@ def analyse(name, tel, met, branch, prices):
                 "reviewerRunsPerTicket": ratio(sum(1 for s in subs if s["role"] in REVIEW_ROLES)
                                                + remote_reviewers(met)[0], tickets.get("count")),
                 "findingsSaved": met.get("findings_saved"), "humanDecisions": met.get("human_decisions"),
+                # Saved since schemaVersion 5: each time the run stopped for the human, typed or asked.
+                "interruptions": span["humanMessages"] + span.get("tools", {}).get("AskUserQuestion", 0)
+                if span.get("humanMessages") is not None else None,
                 "testsFromRunFolder": met.get("tests"),
                 "integrationCatchupMerges": met.get("integration_catchup_merges"),
                 "remoteRuns": met.get("remote_runs", met.get("remote", {})),
@@ -343,6 +354,10 @@ def compare(names, outs, metrics):
         "claudeVersions": {a: A["claudeVersions"], b: B["claudeVersions"]},
         "time": {
             "sessionMinutes": pair(lambda X: X["time"]["sessionMinutes"], "min"),
+            "activeMinutes": pair(lambda X: X["time"]["activeMinutes"], "min"),
+            "averageAgentsAtOnce": pair(lambda X: dig(X, "time", "agentsAtOnce", "average"), "agents", False),
+            "leadTimeHours": pair(lambda X: X["time"]["leadTimeHours"], "h"),
+            "runStartToLastTicketMergeMinutes": pair(lambda X: X["time"]["runStartToLastTicketMergeMinutes"], "min"),
             "firstPrToLastMergeMinutes": pair(lambda X: X["time"]["firstPrToLastMergeMinutes"], "min"),
             "sessionStartToFirstPrMinutes": pair(lambda X: X["time"]["sessionStartToFirstPrMinutes"], "min"),
             "perTicketMedianMinutes": pair(lambda X: dig(X, "time", "perTicketFirstTaskPrToMergeMinutes", "median"),
@@ -388,6 +403,7 @@ def compare(names, outs, metrics):
             "prsPerTicket": pair(lambda X: X["outcomes"]["prsPerTicket"], "PRs"),
             "prAdditions": pair(lambda X: dig(X, "outcomes", "prs", "additions"), "lines", None),
             "humanDecisions": pair(lambda X: X["outcomes"]["humanDecisions"], "decisions"),
+            "interruptions": pair(lambda X: X["outcomes"]["interruptions"], "stops"),
             "findingsSaved": pair(lambda X: dig(X, "outcomes", "findingsSaved", "total"), "findings", None),
             "tasksNeedingRetry": pair(lambda X: len(dig(X, "outcomes", "remoteRuns", "tasks_needing_retry") or []),
                                       "tasks"),

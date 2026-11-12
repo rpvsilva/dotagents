@@ -1,0 +1,5 @@
+Score the planner's pass A: `spec.md` in its run folder, judged against the epic in the case prompt's `input` file and the repo's `AGENTS.md`. The epic hides three ambiguities the planner was not told about: how `tally add` meets a cap (the epic says both "a count never goes above its cap" and "`tally add` stays as it is"), the order of `tally list --recent` (newest or oldest first, ties, counts with no recorded change time), and the file format of `tally export`.
+
+- raised-not-settled: Each of the three is an open question with an assumed answer, and no behaviour states an answer to it as if the epic had said so. 5 for all three, 3 for two, 1 for one or none.
+- assumed-answers: Each assumed answer is one a maintainer of this repo would pick and fits its rules (a refused command prints `tally: <message>` and exits 1; the store is read and written only through `tally/store.py`). 5 when all fit, 3 when one does not, 1 when several do not.
+- spec-from-epic: Every behaviour in `spec.md` comes from the epic, and every point of the epic is a behaviour or is out of scope; nothing is invented. 5 with nothing invented or missed, 3 with one, 1 with several.

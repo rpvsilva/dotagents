@@ -10,18 +10,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import run_metrics as run_metrics_module
+
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "run_metrics.py"
 FIXTURE = HERE / "fixtures" / "run-folder"
 
-# Answers `pr view <PR> --json ...` from `<answers>/<PR number>.json`, logging each call's argv; no file, exit 1.
+# Answers `pr view <PR> --json ...` from `<answers>/<PR number>.json` and `issue view <n> --json ...` from
+# `<answers>/issue-<n>.json`, logging each call's argv; no file, exit 1.
 STUB = """import json, pathlib, sys
 answers, log = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 args = sys.argv[3:]
 with log.open("a") as f:
     f.write(json.dumps(args) + "\\n")
-answer = answers / (args[2].rstrip("/").rsplit("/", 1)[-1] + ".json")
-if args[:2] != ["pr", "view"] or not answer.is_file():
+prefix = {"pr": "", "issue": "issue-"}.get(args[0], "?") if args else "?"
+answer = answers / (prefix + args[2].rstrip("/").rsplit("/", 1)[-1] + ".json") if len(args) > 2 else answers / "?"
+if args[1:2] != ["view"] or not answer.is_file():
     sys.exit(1)
 sys.stdout.write(answer.read_text(encoding="utf-8"))
 """
@@ -58,6 +62,17 @@ class FixtureRun(unittest.TestCase):
         cls.got = json.loads(res.stdout)
         cls.calls = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
 
+    def test_reviews_count_reviewer_reports_only(self):
+        # A posted copy, numbered findings and a security report sit beside a review; none is a review.
+        run = self.tmp / "reviews-run"
+        (run / "reviews").mkdir(parents=True)
+        for name in ("10-abc1234.md", "10-abc1234.posted.md", "10-abc1234-findings.md",
+                     "10-def5678.md", "10-abc1234-security.md", "10-abc1234-security.posted.md",
+                     "11-aaa1111.md", "11-aaa1111.posted.md"):
+            (run / "reviews" / name).write_text("x", encoding="utf-8")
+        self.assertEqual(run_metrics_module.reviews(run),
+                         {"reports": 3, "prs": 2, "re_reviews": 1, "security": 1})
+
     def test_fixture_run_folder_gives_the_expected_metrics(self):
         expected = json.loads((FIXTURE / "expected.json").read_text(encoding="utf-8"))
         self.assertEqual(self.got, expected)
@@ -77,8 +92,16 @@ class FixtureRun(unittest.TestCase):
     def test_github_is_read_only_through_the_given_command(self):
         self.assertFalse((self.tmp / "path-gh-ran").exists(), "the gh on PATH ran")
         calls = self.calls
-        self.assertEqual(sorted(c[2].rsplit("/", 1)[-1] for c in calls), ["10", "11", "12", "13", "20", "21"])
-        self.assertTrue(all(c[:2] == ["pr", "view"] and c[3] == "--json" for c in calls), calls)
+        prs = [c for c in calls if c[0] == "pr"]
+        self.assertEqual(sorted(c[2].rsplit("/", 1)[-1] for c in prs), ["10", "11", "12", "13", "20", "21"])
+        self.assertTrue(all(c[:2] == ["pr", "view"] and c[3] == "--json" for c in prs), calls)
+        self.assertEqual([c[:3] for c in calls if c[0] != "pr"], [["issue", "view", "5"]])
+
+    def test_lead_time_waits_for_every_ticket_to_merge(self):
+        # Epic #5 opened 2026-10-31T16:00; ticket 02's PR is open and ticket 03 has none, so the work is not merged.
+        self.assertEqual(self.got["lead_time"], {"epic": 5, "epic_opened": "2026-10-31T16:00:00+00:00",
+                                                 "last_ticket_merged": None, "hours": None,
+                                                 "unmerged_tickets": ["02", "03"]})
 
     def test_round_trips_are_the_quotes_recorded_after_approval(self):
         # Four dated quotes (one spanning two lines): the first recorded before the clauses, the second in the
@@ -106,7 +129,7 @@ class RunMetrics(unittest.TestCase):
     def test_without_gh_flag_the_gh_on_path_is_the_command(self):
         got = self.metrics(FIXTURE / "run")
         self.assertTrue((self.tmp / "path-gh-ran").exists())
-        self.assertEqual(sum(1 for g in got["gaps"] if g.startswith("github: ")), 6)
+        self.assertEqual(sum(1 for g in got["gaps"] if g.startswith("github: ")), 7)
 
     def test_an_empty_run_folder_names_its_gaps(self):
         (self.tmp / "empty").mkdir()
@@ -114,8 +137,21 @@ class RunMetrics(unittest.TestCase):
         self.assertEqual(got["tickets"]["count"], 0)
         self.assertEqual(got["remote"]["runs"], 0)
         self.assertEqual(got["gaps"], ["plan: no tickets/*.md or tasks/*.md", "suite results: no reports/*.checks.json",
-                                       "human round trips: no decisions.md"])
+                                       "lead time: no Epic line in run.md", "human round trips: no decisions.md"])
+        self.assertEqual(got["lead_time"], {"epic": None, "epic_opened": None, "last_ticket_merged": None,
+                                            "hours": None, "unmerged_tickets": []})
         self.assertFalse(self.calls.exists())
+
+    def test_lead_time_is_the_epic_opening_to_the_last_ticket_merge(self):
+        # Only ticket 01 (PR #20, merged 2026-11-01T16:00), all merged: 24 hours after epic #5 opened.
+        run = self.tmp / "merged"
+        shutil.copytree(FIXTURE / "run", run)
+        for ticket in ("02-export.md", "03-docs.md"):
+            (run / "tickets" / ticket).unlink()
+        got = self.metrics(run, "--gh", self.gh)
+        self.assertEqual(got["lead_time"], {"epic": 5, "epic_opened": "2026-10-31T16:00:00+00:00",
+                                            "last_ticket_merged": "2026-11-01T16:00:00+00:00", "hours": 24.0,
+                                            "unmerged_tickets": []})
 
     def test_a_run_without_decisions_has_no_round_trips_to_count(self):
         run = self.tmp / "nodecisions"
@@ -244,7 +280,7 @@ class RunMetrics(unittest.TestCase):
         self.assertEqual(got["gaps"], ["suite results: 01-01.checks.json is not JSON",
                                        "remote: 01-01.json is not a result", "remote: 01-02.json is not a result",
                                        "remote: 2 run(s) without cost", "github: https://x/o/r/pull/7: no JSON",
-                                       "human round trips: no decisions.md"])
+                                       "lead time: no Epic line in run.md", "human round trips: no decisions.md"])
         self.assertEqual((got["suites"]["merges"], got["suites"]["runs"], got["suites"]["passed"]), (1, 1, 3))
         remote = got["remote"]
         self.assertEqual((remote["runs"], remote["runs_without_cost"], remote["cost_usd"], remote["by_status"]),
