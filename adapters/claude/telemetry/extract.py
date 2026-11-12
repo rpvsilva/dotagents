@@ -371,8 +371,9 @@ def at_once(intervals):
 
 def human_messages(entries):
     """What the human typed after the span's first entry (which started it): each one is a time the run stopped
-    for them. Subagent hand-backs (isMeta), task notifications, reminders and commands (tagged text) are not."""
-    return sum(1 for e in entries[1:] if typed(e) and not e.get("isMeta")
+    for them. Subagent hand-backs (isMeta), compaction summaries, task notifications, reminders and commands
+    (tagged text) are not."""
+    return sum(1 for e in entries[1:] if typed(e) and not e.get("isMeta") and not e.get("isCompactSummary")
                and not e["message"]["content"].lstrip().startswith("<"))
 
 

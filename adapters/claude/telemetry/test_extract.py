@@ -767,6 +767,7 @@ class Interruptions(unittest.TestCase):
                    self.user("<task-notification> <task-id>a1</task-id> </task-notification>"),
                    self.user("<system-reminder> summary </system-reminder>"),
                    self.user("<command-name>/clear</command-name>"),
+                   self.user("This session is being continued from a previous conversation", isCompactSummary=True),
                    self.user([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]),
                    {"type": "assistant", "message": {"content": [{"type": "text", "text": "Keep going"}]}}]
         self.assertEqual(extractor.human_messages(entries), 0)
