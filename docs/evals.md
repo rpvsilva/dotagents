@@ -483,7 +483,7 @@ To see what the update changed, compare the same ref on both models: `evals/comp
 
 ## Baselines
 
-A baseline measures a whole build-epic run rather than one case: `evals/_baseline/402/` replays a fixed plan of the sandbox's epic #402 into a fresh integration branch and scores the result with hidden acceptance tests, the run's review findings, red merges and hand fixes. Its [README](../evals/_baseline/402/README.md) holds the replay commands and the calibration on the four earlier builds. It bills a real build-epic run, so it runs only by hand.
+A baseline measures a whole build-epic run rather than one case: `evals/_baseline/402/` replays a fixed plan of the sandbox's epic #402 into a fresh integration branch and scores the result with hidden acceptance tests, the run's review findings, red merges and hand fixes. Its [README](../evals/_baseline/402/README.md) holds the replay commands and the calibration on the four earlier builds; `evals/_baseline/16/` is the second epic, and [RESULTS.md](../evals/_baseline/RESULTS.md) the recorded baseline. It bills a real build-epic run, so it runs only by hand.
 
 ## Pilot
 

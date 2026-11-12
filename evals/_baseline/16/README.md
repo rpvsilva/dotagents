@@ -89,7 +89,6 @@ python3 -I evals/_baseline/402/quality.py <sandbox> <ref> --python <python> --ac
 
 What the sync tests catch: with `46b4cb8`'s occurrence dedupe switched off, only the two "a later skip wins" tests fail. When both machines complete the same occurrence, both next occurrences get the same id (both sides start from one synced file, and the id collision of items made on both sides, SUP-4118, is out of the epic's scope), so the id merge alone already leaves one.
 
-## Not verified
+## Verified by the first run
 
-- A real run: no build-epic run was started (no spend), so nothing here shows build-epic resuming a run folder made by `init_run.py` without a plan, or how a run handles #16's issues, which the first build closed (reopening them is the safe guess; a run on closed issues is untested).
-- That the base commit `fcef2c7` is on the sandbox remote: it was made in a local clone; push it (any branch) before the first run.
+`gh-16-baseline-r1` (2026-11-12) resumed a run folder made by `init_run.py` without a plan: it planned, asked for approval and built all five tickets. The base was pushed as `baseline-16-r1`, and #16–#22 were reopened first. Its scores are in [`../RESULTS.md`](../RESULTS.md).
