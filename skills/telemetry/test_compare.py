@@ -78,14 +78,14 @@ class Compare(unittest.TestCase):
                                                input=2000, output=300, cache_read=40000, cache_write=500)),
                   run("a", "2026-10-01", span("deploy", input=1000)))
         rows = self.rows(self.ok(), "deploy")
-        self.assertEqual(rows[0][:5], ["2026-10-01", "$0.00", "60 s", "5", "10"])
-        self.assertEqual(rows[1], ["2026-10-02", "$0.01", "90 s", "7", "12", "2.0k", "300", "40k", "500"])
+        self.assertEqual(rows[0][:6], ["2026-10-01", "$0.00", "60 s", "unknown", "5", "10"])
+        self.assertEqual(rows[1], ["2026-10-02", "$0.01", "90 s", "unknown", "7", "12", "2.0k", "300", "40k", "500"])
 
     def test_a_run_that_ran_the_skill_twice_gives_one_summed_row(self):
         self.save(run("a", "2026-10-01", span("deploy", wall=60, turns=5, tool_calls=10, input=1000),
                       span(None, wall=30), span("deploy", wall=40, turns=2, tool_calls=3, input=500)))
         rows = self.rows(self.ok(), "deploy")
-        self.assertEqual(rows, [["2026-10-01", "$0.00", "100 s", "7", "13", "1.5k", "0", "0", "0"]])
+        self.assertEqual(rows, [["2026-10-01", "$0.00", "100 s", "unknown", "7", "13", "1.5k", "0", "0", "0"]])
         self.assertEqual(self.rows(self.ok(), "no skill")[0][2], "30 s")
 
     def test_skill_limits_output_and_the_short_name_works(self):
@@ -134,8 +134,16 @@ class Compare(unittest.TestCase):
                   run("c", "2026-10-03", span("deploy", wall=90, turns=5, tool_calls=6,
                                                input=1500, output=500_000, cache_read=3000, cache_write=1000)))
         change = self.rows(self.ok(), "deploy")[-1]
-        self.assertEqual(change, ["change", "-$5.00 (-50%)", "+30 s (+50%)", "-5 (-50%)", "+2 (+50%)",
+        self.assertEqual(change, ["change", "-$5.00 (-50%)", "+30 s (+50%)", "unknown", "-5 (-50%)", "+2 (+50%)",
                                   "+500 (+50%)", "-500k (-50%)", "+3.0k", "-1.0k (-50%)"])
+
+    def test_active_sums_the_spans_and_is_unknown_when_a_span_lacks_it(self):
+        self.save(run("a", "2026-10-01", {**span("deploy", wall=600), "activeSeconds": 300},
+                      {**span("deploy", wall=100), "activeSeconds": 60}),
+                  run("b", "2026-10-02", {**span("deploy", wall=900), "activeSeconds": 180}),
+                  run("c", "2026-10-03", {**span("deploy"), "activeSeconds": 30}, span("deploy")))
+        rows = self.rows(self.ok(), "deploy")
+        self.assertEqual([r[3] for r in rows], ["6m 00s", "3m 00s", "unknown", "unknown"])
 
     def test_no_change_row_with_one_run(self):
         self.save(run("a", "2026-10-01", span("deploy")))
