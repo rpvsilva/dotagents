@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "tool": "claude-code",
   "sessionId": "5678efgh-0000-0000-0000-000000000000",
   "skill": null,
@@ -8,6 +8,7 @@
   "wallClockSeconds": 180,
   "activeSeconds": 180,
   "humanMessages": 0,
+  "humanWaitSeconds": 0,
   "pricingAsOf": "2026-01-01",
   "claudeVersions": [],
   "repo": "/home/dev/projects/shop",
@@ -21,8 +22,16 @@
       "end": "2026-10-24T09:01:30.000Z",
       "wallClockSeconds": 90,
       "activeSeconds": 90,
+      "activeIntervals": [
+        [
+          "2026-10-24T09:00:00.000Z",
+          "2026-10-24T09:01:30.000Z"
+        ]
+      ],
       "agentsAtOnce": null,
       "humanMessages": 0,
+      "humanWaitSeconds": 0,
+      "humanWaits": [],
       "turns": 6,
       "toolCalls": 4,
       "tools": {
@@ -48,11 +57,19 @@
       "end": "2026-10-24T09:03:00.000Z",
       "wallClockSeconds": 90,
       "activeSeconds": 90,
+      "activeIntervals": [
+        [
+          "2026-10-24T09:01:30.000Z",
+          "2026-10-24T09:03:00.000Z"
+        ]
+      ],
       "agentsAtOnce": {
         "peak": 1,
         "average": 1.0
       },
       "humanMessages": 0,
+      "humanWaitSeconds": 0,
+      "humanWaits": [],
       "turns": 5,
       "toolCalls": 4,
       "tools": {
