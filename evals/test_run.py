@@ -5,6 +5,7 @@ import io
 import json
 import re
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -291,6 +292,49 @@ class RunTest(RunSandbox):
             if path.is_file():
                 for token in self.tokens.values():
                     self.assertNotIn(token.encode(), path.read_bytes(), path)
+
+    def config_token(self, mode=0o600):
+        """A remote.env in the sandbox's config folder holding a Claude token; the env's auth vars unset."""
+        token = "config-secret-" + secrets.token_hex(8)
+        conf = self.home / ".config" / "dotagents"
+        conf.mkdir(parents=True, exist_ok=True)
+        (conf / "remote.env").write_text(f"export CLAUDE_CODE_OAUTH_TOKEN='{token}'\nOTHER=1\n")
+        (conf / "remote.env").chmod(mode)
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        return token
+
+    def test_a_local_run_with_no_auth_var_takes_the_token_from_remote_env(self):
+        token = self.config_token()
+        seen = self.tmp / "seen"
+        self.passing_claude(extra=f'echo "$CLAUDE_CODE_OAUTH_TOKEN" >"{seen}"; echo "$CLAUDE_CODE_OAUTH_TOKEN" >leak.txt\n')
+        d, res = self.saved(self.run_cases([self.case()]))
+        self.assertTrue(res["passed"])
+        self.assertEqual(seen.read_text().strip(), token)
+        self.assertIn("auth: CLAUDE_CODE_OAUTH_TOKEN from ", self.printed())
+        self.assertNotIn(token, self.printed())
+        for path in d.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(token.encode(), path.read_bytes(), path)
+
+    def test_an_exported_auth_var_wins_over_remote_env(self):
+        token = self.config_token()
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = self.tokens["CLAUDE_CODE_OAUTH_TOKEN"]
+        seen = self.tmp / "seen"
+        self.passing_claude(extra=f'echo "$CLAUDE_CODE_OAUTH_TOKEN" >"{seen}"\n')
+        self.run_cases([self.case()])
+        self.assertEqual(seen.read_text().strip(), self.tokens["CLAUDE_CODE_OAUTH_TOKEN"])
+        self.assertNotIn(token, seen.read_text())
+        self.assertNotIn("auth:", self.printed())
+
+    def test_a_remote_env_others_may_read_is_not_read(self):
+        token = self.config_token(mode=0o644)
+        seen = self.tmp / "seen"
+        self.passing_claude(extra=f'echo "x$CLAUDE_CODE_OAUTH_TOKEN" >"{seen}"\n')
+        self.run_cases([self.case()])
+        self.assertEqual(seen.read_text().strip(), "x")
+        self.assertIn("is not private to you (chmod 600 it); not read", self.printed())
+        self.assertNotIn(token, self.printed())
 
     def test_prints_one_line_per_run(self):
         self.passing_claude()

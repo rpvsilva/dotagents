@@ -216,20 +216,51 @@ def check_remote(tool, loaded, out):
     return runnable, _remote_ready()
 
 
-def _remote_values():
-    """The remote token, from `remote.env` of the runner's config folder and the caller's env, as bytes."""
-    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "dotagents" / "remote.env"
-    found = set()
+def _config_env():
+    """`remote.env` of the runner's config folder (`$XDG_CONFIG_HOME/dotagents`, else `~/.config/dotagents`)."""
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "dotagents" / "remote.env"
+
+
+def _env_values(path, keys):
+    """`{key: value}` of each of `keys` set to a non-empty value in the `KEY=value` file `path`; {} when unreadable."""
+    found = {}
     try:
-        for text in config.read_text().splitlines():
+        for text in path.read_text().splitlines():
             key, _, value = text.removeprefix("export ").partition("=")
-            if key.strip() == TOKEN_KEY and value.strip().strip("'\""):
-                found.add(value.strip().strip("'\"").encode())
+            value = value.strip().strip("'\"")
+            if key.strip() in keys and value:
+                found[key.strip()] = value
     except OSError:
         pass
+    return found
+
+
+def _remote_values():
+    """The remote token, from `remote.env` of the runner's config folder and the caller's env, as bytes."""
+    found = {v.encode() for v in _env_values(_config_env(), (TOKEN_KEY,)).values()}
     if os.environ.get(TOKEN_KEY):
         found.add(os.environ[TOKEN_KEY].encode())
     return found
+
+
+def _auth_from_config(adapter, out):
+    """When none of the adapter's auth vars is set, sets in this process each one `remote.env` holds (where
+    `remote-agent setup` keeps the Claude token), so a local run needs no export; prints which, never a value. A file
+    another user owns, or one group or others may read, is not read (chmod 600 it, as `remote-agent setup` does)."""
+    if any(os.environ.get(v) for v in adapter.AUTH_VARS):
+        return
+    path = _config_env()
+    try:
+        st = path.stat()
+    except OSError:
+        return
+    if (hasattr(os, "getuid") and st.st_uid != os.getuid()) or st.st_mode & 0o077:
+        print(f"auth: {path} is not private to you (chmod 600 it); not read", file=out, flush=True)
+        return
+    found = _env_values(path, adapter.AUTH_VARS)
+    os.environ.update(found)
+    if found:
+        print(f"auth: {', '.join(sorted(found))} from {path}", file=out, flush=True)
 
 
 def _remote_transcript(work):
@@ -358,6 +389,8 @@ def run_cases(tool, ref, case_dirs, runs=None, model=None, budget_usd=10.0, resu
     backend = None
     if remote:
         loaded, backend = check_remote(tool, loaded, out)
+    else:
+        _auth_from_config(adapter, out)
     root = results.store_root(results_root)
     extract = _extract()
     pricing = extract.load_pricing(PRICING)
