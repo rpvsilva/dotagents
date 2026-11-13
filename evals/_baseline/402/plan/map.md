@@ -8,7 +8,7 @@ No `notes/` (areas.md: no exploration needed); the planner read `todo/` and `tes
 - `todo/cli/app.py:24-26` (`build_parser`) and `todo/cli/app.py:46` read `COMMANDS` and stay as they are.
 - Tests covering it: every `cli(...)` test in `tests/cli/test_cli.py` (dispatch), `tests/cli/test_cli.py:141` (`test_usage_error_exits_2` patches `COMMANDS["list"]`).
 - Tests to add: `tests/cli/test_registry.py`: the discovered names equal the current eleven commands; `list_cmd`/`sync_cmd` map to `list`/`sync`.
-- `tests/cli/test_registry.py` is a hub file (`Lanes`): each feature task that adds a command (02-01, 02-02, 03-01, 04-01, 05-01) may add its name to the `names` line, so a hub sync conflict there is settled by the union resolution (both sides kept, ours first, committed only when `test_command` is green). The file keeps the sorted + subset form from 01-01 on (`assert list(COMMANDS) == sorted(COMMANDS)`, `assert set(names) <= set(COMMANDS)`), never an exact `assert list(COMMANDS) == names`, so the union of two branches' copies still passes. Each hub task (03-03, 04-03, 05-02) then tidies the file to one `names` list and one sorted + subset check. No code is copied between tickets.
+- `tests/cli/test_registry.py` is a hub file (`Lanes`): no feature task edits it, not even the tasks that add a command (02-01, 02-02, 03-01, 04-01, 05-01), so a hub task's sync of the base never conflicts there. The file keeps the sorted + subset form from 01-01 on (`assert list(COMMANDS) == sorted(COMMANDS)`, `assert set(names) <= set(COMMANDS)`), never an exact `assert list(COMMANDS) == names`, so a new command passes before its name is listed. Each hub task (03-03, 04-03, 05-02), after its sync, sets the `names` line to every command on its branch, sorted. No code is copied between tickets.
 
 ## Area: item model and JSON form (prefactor, #403 ticket)
 
@@ -101,7 +101,7 @@ Done when each rule an earlier feature set and a new task could break is one lin
 - Writes go through `JsonStore.save`'s temp file and `os.replace` (`todo/storage/json_store.py:184-196`); no command writes the todo file another way.
 - Package code never exits or replaces the process and never imports `pytest`/`_pytest`/`pluggy` (`AGENTS.md`); new commands report through `UsageError`, not `SystemExit`.
 - `todo` user-facing docs stay current with each command and flag (`AGENTS.md`: keep `README.md` current).
-- `tests/cli/test_registry.py` keeps the sorted + subset form (`assert list(COMMANDS) == sorted(COMMANDS)`, `assert set(names) <= set(COMMANDS)`), never an exact `list(COMMANDS) == names`, so a union of two branches' copies still passes; it is a hub file, and only hub tasks tidy its `names` lines after a sync.
+- `tests/cli/test_registry.py` keeps the sorted + subset form (`assert list(COMMANDS) == sorted(COMMANDS)`, `assert set(names) <= set(COMMANDS)`), never an exact `list(COMMANDS) == names`, so a new command passes before its name is listed; it is a hub file, and only hub tasks edit its `names` line, after a sync.
 
 ## Field matrix
 
@@ -150,7 +150,7 @@ Done when every `Env:` name in a task has a line here.
 
 - Lane 1: 01 -> 02, 03, 04, 05. Tickets 02-05 need ticket 01's prefactors (command discovery, the item fields, `Store.update`, `is_snoozed`, `waiting_on`, `format_list_item(item, items, depth)`), so they start once 01 is merged, then build in parallel: their feature tasks write disjoint files (02: `todo/storage/notes.py`, `todo/cli/commands/note.py`, `show.py`; 03: `todo/storage/snooze.py`, `todo/cli/commands/snooze.py`, `todo/cli/select.py`, `list_cmd.py`, `export.py`, `remind.py`; 04: `todo/storage/blocks.py`, `block.py`, `unblock.py`, `todo/cli/format.py`; 05: `todo/cli/commands/next.py`). Only their hub tasks wait, each for the ticket before it.
 
-`tests/cli/test_registry.py` is a hub file beside `README.md`: feature tasks may add their command's name to it, and each hub task (03-03, 04-03, 05-02) lists it in `Writes` and tidies it after its sync. The overlaps `plan_check.py` would report on that file are hub-file overlaps, settled by the union resolution.
+`tests/cli/test_registry.py` is a hub file beside `README.md`: no feature task edits it, and each hub task (03-03, 04-03, 05-02) lists it in `Writes` and edits it after its sync. Hub tasks run one at a time in the hub order, so its overlaps are never in flight together.
 
 Hub files: `README.md`, `tests/cli/test_registry.py`
 Hub order: 01, 02, 03, 04, 05
