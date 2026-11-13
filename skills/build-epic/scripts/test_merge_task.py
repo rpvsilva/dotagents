@@ -1,4 +1,4 @@
-"""Tests for `merge_task.py`: Checks, the merge rule, Ticket CI and the tuning task, against a stub `gh`."""
+"""Tests for `merge_task.py`: Checks, the merge rule and Ticket CI, against a stub `gh`."""
 import json
 import os
 import subprocess
@@ -399,30 +399,6 @@ class MergeTaskTest(unittest.TestCase):
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nci: off\n", encoding="utf-8")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
         self.assertEqual(self.calls("pr", "create") + self.calls("pr", "list"), [])
-
-    # The tuning task
-
-    def test_last_task_with_a_suite_over_the_minimum_writes_the_tuning_task(self):
-        self.setting("tune_min_seconds", "0")
-        main = self.kit.git("rev-parse", "origin/main", cwd=self.kit.clone)
-        tip = self.push_to_ticket("merged.txt", "as the squash merge left it\n")
-        self.merge()
-        text = (self.kit.run_dir / "tasks" / "01-tests.md").read_text(encoding="utf-8")
-        self.assertTrue(text.startswith("# 01-tests: tune Merge JSON things\n"), text)
-        self.assertEqual(runfolder.get(self.kit.run_dir / "tasks" / "01-tests.md", "Status"), "ready")
-        self.assertEqual(runfolder.get(self.kit.run_dir / "tasks" / "01-tests.md", "Range"), f"{main}..{tip}")
-
-    def test_no_tuning_task_when_every_suite_was_quicker_than_the_minimum(self):
-        self.push_to_ticket("merged.txt", "x\n")
-        self.merge()
-        self.assertFalse((self.kit.run_dir / "tasks" / "01-tests.md").exists())
-
-    def test_no_tuning_task_while_another_implementer_task_is_open(self):
-        self.setting("tune_min_seconds", "0")
-        (self.kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", status="ready"), encoding="utf-8")
-        self.push_to_ticket("merged.txt", "x\n")
-        self.merge()
-        self.assertFalse((self.kit.run_dir / "tasks" / "01-tests.md").exists())
 
 
 if __name__ == "__main__":

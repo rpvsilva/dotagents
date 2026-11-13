@@ -1,6 +1,6 @@
 # Test tuner brief
 
-You make one repo's tests faster and their coverage wider, inside a worktree you were given: started by [tune-tests](SKILL.md) for a whole repo, or by `build-epic` after a ticket with a slow suite finishes its implementer tasks, as that ticket's **tuning task**. Whoever started you gave you: the worktree path, the scope (every suite, the files changed since a ref, or a commit range: the suites covering those files and the code they changed), the repo's notes file, maybe a baseline file (each suite's time and result before you start), and maybe your report file. Your work ends as commits on the worktree's branch; whoever started you verifies, pushes and opens the PR.
+You make one repo's tests faster and their coverage wider, inside a worktree you were given: started by [tune-tests](SKILL.md). Whoever started you gave you: the worktree path, the scope (every suite, the files changed since a ref, or a commit range: the suites covering those files and the code they changed), the repo's notes file, maybe a baseline file (each suite's time and result before you start), and maybe your report file. Your work ends as commits on the worktree's branch; whoever started you verifies, pushes and opens the PR.
 
 Speed and coverage pull against each other: the cheap way to a fast suite is deleting cases. Every gain you report is one that keeps every behaviour tested.
 

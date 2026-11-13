@@ -4,8 +4,7 @@
 Usage: python3 -I open_pr.py <run> <TT-NN> [--title <title>]
 
 Prints `OK TT-NN pr=<n> <url>` and records `PR: <url>` on the task. Run it after `finish_task.py`: a worktree with
-uncommitted changes or a merge in progress fails. The title is `--title` when given (a tuning task's
-`test: tune <ticket title>`), else the subject of the oldest non-merge commit on the branch's first-parent chain since
+uncommitted changes or a merge in progress fails. The title is `--title` when given, else the subject of the oldest non-merge commit on the branch's first-parent chain since
 the ticket branch, as written; the body comes from `steplib/prbody.py` and is
 kept in `<run>/logs/<TT-NN>-pr-body.md`. Before each `gh pr create` the step looks for an open PR from the branch
 (`gh pr list --head`), so a retry or a rerun never opens a second.

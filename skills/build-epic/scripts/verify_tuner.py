@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decides a test-only tuning PR with no agent: build-epic step 6's Merge of a `TT-tests` task (behaviour 49).
+"""Decides a test-only tuning change with no agent: tune-tests' Verify step (behaviour 49).
 
 Usage: python3 -I verify_tuner.py <run> <TT-tests> [--report <file>] [--timeout <secs>]
 

@@ -255,7 +255,6 @@ class StartTaskTest(StartCase):
                                             encoding="utf-8")
         (tasks / "01-02-hub.md").write_text("# 01-02: Hub\nStatus: ready\nTicket: 01\nBlocked by: 01, ticket 02\n",
                                             encoding="utf-8")
-        (tasks / "01-tests.md").write_text("# 01-tests: Tune\nStatus: ready\n", encoding="utf-8")
 
     def task(self, name):
         return self.kit.run_dir / "tasks" / name
@@ -272,12 +271,6 @@ class StartTaskTest(StartCase):
         self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=wt), tip)
         self.assertEqual(self.kit.git("branch", "--show-current", cwd=wt), "task/gh-1-v1.2-json/01")
         self.assertEqual(self.status(self.task("01-01-lib.md")), "in-progress")
-
-    def test_a_tuning_task_gets_the_tests_worktree_and_branch(self):
-        line = self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-tests"))
-        wt = self.kit.run_dir / "worktrees" / "01-tests"
-        self.assertTrue(line.startswith(f"OK 01-tests in-progress wt={wt} tip="), line)
-        self.assertEqual(self.kit.git("branch", "--show-current", cwd=wt), "task/gh-1-v1.2-json/tests")
 
     def test_a_hub_task_also_merges_the_default_branch(self):
         self.commit("main", "hub.md", "merged ticket\n", "another ticket")

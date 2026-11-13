@@ -18,8 +18,7 @@ the tasks in flight, what needs a human (every `blocked` task, or one whose repo
 its `why`; every `in-review` or `blocked` ticket; past MAX_HUMAN lines, the rest as `- +N more`) and the next actions.
 Prints `OK run state <path>`.
 A report counts only when it is not older than its task file, which `start_task.py` and a re-plan rewrite: a report
-from before the task's last dispatch or re-plan is stale. A `blocked` tuning task (`TT-tests`) counts as done for
-shipping: the ticket ships without it.
+from before the task's last dispatch or re-plan is stale.
 """
 import json
 import os
@@ -104,10 +103,6 @@ MAX_LINE = 160
 MAX_HUMAN = 10
 
 
-def tuning(ident):
-    return ident.endswith("-tests")
-
-
 class Run:
     """The run folder's tickets and tasks, read once: `tickets[TT]` and `tasks[TT][NN]` hold (id, path, text)."""
 
@@ -190,8 +185,7 @@ class Run:
         if status == "claimed":
             return f"{runfolder.header(text, 'Claimed by') or 'another developer'} (claimed)"
         tasks = self.tasks.get(tt, {}).values()
-        # A blocked tuning task counts as done: the human was told, and the ticket ships without it.
-        done = {i for i, _, t in tasks if self.status(t) == "done" or (tuning(i) and self.status(t) == "blocked")}
+        done = {i for i, _, t in tasks if self.status(t) == "done"}
         stuck = [(i, s, w) for i, s, w in self.stuck(tt) if i not in done]
         if stuck:
             return "human: " + ", ".join(f"task {i} {s}" for i, s, _ in stuck)

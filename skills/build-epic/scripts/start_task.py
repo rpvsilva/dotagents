@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Starts a `ready` task of a `building` ticket: its own worktree and branch, cut from the ticket branch.
 
-Usage: python3 -I start_task.py <run> <TT-NN|TT-tests>
+Usage: python3 -I start_task.py <run> <TT-NN>
 Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from `origin/<ticket-branch>` and sets the task
 `in-progress`. Prints `OK TT-NN in-progress wt=<path> tip=<sha7>`. A hub task (one `ticket NN` blocker) also merges
 `origin/<base>` there (`decisions.md`'s `base:`, else the default branch), adding `synced=<sha7>` (the tip it merged);
@@ -76,7 +76,7 @@ def git_in(ctx, repo, where, *args):
 
 def step(ctx):
     if ctx.args:
-        raise core.Fail("usage: start_task.py <run> <TT-NN|TT-tests>")
+        raise core.Fail("usage: start_task.py <run> <TT-NN>")
     task = runfolder.task_file(ctx.run_dir, ctx.id)
     status = runfolder.get(task, "Status")
     if status != "ready":

@@ -169,16 +169,6 @@ class StateTest(unittest.TestCase):
         _, text = self.state()
         self.assertIn("- task 07-02 blocked: no report", text.splitlines())
 
-    def test_a_blocked_tuning_task_counts_as_done_so_the_ticket_ships(self):
-        write(self.run_dir / "tasks" / "05-tests.md", task("05-tests", "blocked"))
-        self.assertRegex(self.line("05"), r"next: ship$")
-        _, text = self.state()
-        self.assertIn("- ship: 05", text.splitlines())
-
-    def test_a_blocked_tuning_task_does_not_ship_a_ticket_with_open_tasks(self):
-        write(self.run_dir / "tasks" / "09-tests.md", task("09-tests", "blocked"))
-        self.assertNotRegex(self.line("09"), r"next: ship$")
-
     def test_a_stale_report_on_a_re_planned_task_is_not_stuck(self):
         # 09-01's plan-wrong report predates the re-plan that set the task back to ready.
         report = self.run_dir / "reports" / "09-01.md"
