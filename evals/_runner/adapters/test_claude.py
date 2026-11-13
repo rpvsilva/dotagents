@@ -108,6 +108,21 @@ class ParseTest(EvalSandbox):
                     {"type": "result", "is_error": True, "total_cost_usd": 0.1}])
         self.assertEqual(self.claude.parse(self.run_dir, self.eval_home, self.work)["error"], "auth")
 
+    def test_no_token_at_all_is_an_auth_error(self):
+        # Claude Code 2.1.323 with no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY: one synthetic assistant error, no retry.
+        self.write([{"type": "system", "subtype": "init", "session_id": "s1"},
+                    {"type": "assistant", "error": "authentication_failed", "is_api_error_message": True,
+                     "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Not logged in"}]}},
+                    {"type": "result", "is_error": True, "total_cost_usd": 0, "num_turns": 1,
+                     "terminal_reason": "api_error", "result": "Not logged in"}])
+        self.assertEqual(self.claude.parse(self.run_dir, self.eval_home, self.work)["error"], "auth")
+
+    def test_an_api_error_message_of_another_kind_is_not_an_auth_error(self):
+        self.write([{"type": "assistant", "error": "rate_limit", "is_api_error_message": True,
+                     "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "authentication_failed"}]}},
+                    {"type": "result", "is_error": True, "total_cost_usd": 0}])
+        self.assertEqual(self.claude.parse(self.run_dir, self.eval_home, self.work)["error"], "tool")
+
     def test_assistant_text_about_authentication_is_not_an_auth_error(self):
         self.write([{"type": "assistant", "message": {"content": [
                         {"type": "text", "text": "Failed to authenticate: 401 authentication_failed"}]}},
