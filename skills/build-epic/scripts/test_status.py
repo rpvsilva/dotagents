@@ -220,59 +220,6 @@ class ResumeTest(unittest.TestCase):
                          ["merged", "ready", "done", "in-progress"])
         self.assertEqual(self.resume(), "OK run resumed 0 actions")
 
-    # Dispatcher pin
-
-    def pin(self):
-        sha = self.kit.git("rev-parse", "origin/main", cwd=self.clone)
-        write(self.run_dir / "dispatcher.sha", sha + "\n")
-        newer = self.kit.tmp / "newer"
-        self.kit.git("clone", "-q", str(self.kit.origin), str(newer))
-        write(newer / "later.txt", "later\n")
-        self.kit.git("add", "later.txt", cwd=newer)
-        self.kit.git("commit", "-qm", "later", cwd=newer)
-        self.kit.git("push", "-q", "origin", "main", cwd=newer)
-        return sha
-
-    def test_a_missing_dispatcher_worktree_is_recreated_at_the_pinned_sha_not_a_newer_one(self):
-        sha = self.pin()
-        self.kit.git("fetch", "-q", "origin", cwd=self.clone)
-        self.assertEqual(self.resume(), "OK run resumed 1 actions")
-        wt = self.run_dir / "worktrees" / "dispatcher"
-        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=wt), sha)
-        self.assertEqual((self.run_dir / "dispatcher.sha").read_text(encoding="utf-8").strip(), sha)
-
-    def test_a_pinned_sha_the_clone_has_not_fetched_is_fetched_and_used(self):
-        newer = self.kit.tmp / "newer"
-        self.pin()
-        sha = self.kit.git("rev-parse", "HEAD", cwd=newer)
-        write(self.run_dir / "dispatcher.sha", sha + "\n")
-        self.assertEqual(self.resume(), "OK run resumed 1 actions")
-        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=self.run_dir / "worktrees" / "dispatcher"), sha)
-
-    def test_an_existing_dispatcher_worktree_is_reused(self):
-        sha = self.pin()
-        wt = self.run_dir / "worktrees" / "dispatcher"
-        self.kit.git("worktree", "add", "-q", "--detach", str(wt), sha, cwd=self.clone)
-        self.assertEqual(self.resume(), "OK run resumed 0 actions")
-        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=wt), sha)
-
-    def test_a_dispatcher_worktree_at_another_commit_is_moved_back_to_the_pin(self):
-        sha = self.pin()
-        wt = self.run_dir / "worktrees" / "dispatcher"
-        self.kit.git("fetch", "-q", "origin", cwd=self.clone)
-        self.kit.git("worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=self.clone)
-        self.assertEqual(self.resume(), "OK run resumed 1 actions")
-        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=wt), sha)
-
-    def test_no_dispatcher_sha_pins_nothing(self):
-        self.resume()
-        self.assertFalse((self.run_dir / "worktrees" / "dispatcher").exists())
-        self.assertFalse((self.run_dir / "dispatcher.sha").exists())
-
-    def test_a_bad_dispatcher_sha_fails(self):
-        write(self.run_dir / "dispatcher.sha", "not-a-sha\n")
-        self.assertRegex(self.resume(), r"^FAIL run bad-dispatcher-sha .*\(log: .+\)$")
-
     # Contract
 
     def test_a_missing_run_folder_fails_and_is_not_created(self):

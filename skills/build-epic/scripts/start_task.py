@@ -1,28 +1,20 @@
 #!/usr/bin/env python3
 """Starts a `ready` task of a `building` ticket: its own worktree and branch, cut from the ticket branch.
 
-Usage: python3 -I start_task.py <run> <TT-NN|TT-tests>
+Usage: python3 -I start_task.py <run> <TT-NN>
 Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from `origin/<ticket-branch>` and sets the task
 `in-progress`. Prints `OK TT-NN in-progress wt=<path> tip=<sha7>`. A hub task (one `ticket NN` blocker) also merges
 `origin/<base>` there (`decisions.md`'s `base:`, else the default branch), adding `synced=<sha7>` (the tip it merged);
-a conflict only in hub files that `steplib/union.py` settles (both sides kept, `decisions.md`'s `test_command:` green)
-is committed and adds `union=<file>,..`; any other conflict removes the worktree and branch, leaves the task `ready` and
+a conflict removes the worktree and branch, leaves the task `ready` and
 prints `FAIL TT-NN sync-conflict <files>`.
-After the sync, it copies each `interaction` row of its ticket in `<run>/followups.jsonl` not yet carried into its
-`## Acceptance criteria` as `- [ ] <file[:line]>: <claim> (from <source>)`, marks those rows carried by TT-NN and adds
-`carried=<n>`. It then appends `{task, waited_on, ready_at, started_at, minutes}` to `<run>/waits.jsonl`: `waited_on`
-its `ticket NN` blockers, `ready_at` the latest `Done:` of its task blockers (null, and `minutes` null, when one has none,
-as in a run from before `merge_task.py` wrote it), times in UTC ISO; `status.py --report` reads it.
 A task not `ready`, or whose worktree or branch already exists, is refused.
 """
-import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ci, core, followups, gitops, runfolder, union  # noqa: E402
+from steplib import ci, core, gitops, runfolder  # noqa: E402
 
 
 def names(task):
@@ -36,51 +28,6 @@ def slug(branch):
     return branch[len("feat/"):] if branch.startswith("feat/") else branch
 
 
-def carry(run, task, tt, task_id):
-    """Copies ticket `tt`'s uncarried interaction rows into the task's acceptance criteria and marks them carried by
-    `task_id`; returns how many rows it carried."""
-    rows = followups.uncarried(run, tt, "interaction")
-    runfolder.append_criteria(task, [
-        f"- [ ] {r['file']}{'' if r.get('line') is None else ':' + str(r['line'])}: {r['claim']} (from {r['source']})"
-        for r in rows])
-    return followups.mark(run, [r["id"] for r in rows], "carried", task_id)
-
-
-STAMP = "%Y-%m-%dT%H:%M:%SZ"
-
-
-def ticket_name(run, n, width):
-    """Ticket number `n` as its file names it (`02`), else zero-padded to `width`."""
-    try:
-        return runfolder.ticket_file(run, n).stem.split("-", 1)[0]
-    except core.Fail:
-        return n.zfill(width)
-
-
-def done_at(run, task_id):
-    """The task's `Done:` time, or None when it has no task file or no readable `Done:`."""
-    try:
-        return datetime.strptime(runfolder.get(runfolder.task_file(run, task_id), "Done") or "", STAMP).replace(
-            tzinfo=timezone.utc)
-    except (core.Fail, ValueError):
-        return None
-
-
-def record_wait(run, task, tt, task_id):
-    """Appends the hub task's wait row to `<run>/waits.jsonl`."""
-    on_tasks, on_tickets = runfolder.task_blockers(task)
-    done = [done_at(run, f"{tt}-{n}") for n in sorted(on_tasks)]
-    started = datetime.now(timezone.utc).replace(microsecond=0)
-    ready = max(done) if done and all(done) else None
-    row = {"task": task_id,
-           "waited_on": [ticket_name(run, n, len(tt)) for n in sorted(on_tickets, key=lambda n: (len(n), n))],
-           "ready_at": ready and ready.strftime(STAMP), "started_at": started.strftime(STAMP),
-           "minutes": ready and round((started - ready).total_seconds() / 60)}
-    with core.file_lock(run / ".waits.lock"):
-        with open(run / "waits.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
-
-
 def git_in(ctx, repo, where, *args):
     """`git -C <where> <args>` under the repo's lock, its `Result` returned whatever the exit code."""
     with gitops.lock(repo):
@@ -89,7 +36,7 @@ def git_in(ctx, repo, where, *args):
 
 def step(ctx):
     if ctx.args:
-        raise core.Fail("usage: start_task.py <run> <TT-NN|TT-tests>")
+        raise core.Fail("usage: start_task.py <run> <TT-NN>")
     task = runfolder.task_file(ctx.run_dir, ctx.id)
     status = runfolder.get(task, "Status")
     if status != "ready":
@@ -118,16 +65,13 @@ def step(ctx):
         base = f"refs/remotes/origin/{ci.base(ctx.run_dir, info['Default'])}"
         synced = git.tip(base)
         merge = git_in(ctx, info["Repo"], wt, "merge", "--no-edit", base)
-        unioned = union.resolve(ctx.run_dir, wt, ctx.log) if merge.rc != 0 else None
-        if merge.rc != 0 and not unioned:
+        if merge.rc != 0:
             conflicted = git_in(ctx, info["Repo"], wt, "diff", "--name-only", "--diff-filter=U").out.split()
             git_in(ctx, info["Repo"], wt, "merge", "--abort")
             git.worktree_remove(wt)
             git.branch_delete(branch)
             raise core.Fail(f"sync-conflict {' '.join(conflicted)}" if conflicted else "sync-failed")
-        details = f" synced={synced[:7]}" + (f" union={','.join(unioned)}" if unioned else "")
-        details += f" carried={carry(ctx.run_dir, task, tt, f'{tt}-{nn}')}"
-        record_wait(ctx.run_dir, task, tt, f"{tt}-{nn}")
+        details = f" synced={synced[:7]}"
         tip = git.tip(f"refs/heads/{branch}")
     runfolder.set_header(task, "Status", "in-progress")
     return "in-progress", f"wt={wt} tip={tip[:7]}{details}"

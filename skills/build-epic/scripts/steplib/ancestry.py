@@ -100,12 +100,10 @@ def check(git, base_tip, head, reviewed, base, heads=()):
     return tree
 
 
-def record(git, branch, base, reviewed, base_tip=None, heads=()):
+def record(git, branch, base, reviewed, heads=()):
     """Returns the ticket branch's head on origin after recording `origin/<base>` as its ancestor (the head itself when
-    it already contains it). `git` is a `gitops.Git` whose remote refs are fetched; `reviewed` is a commit.
-    `base_tip` is the commit to record instead of `origin/<base>`'s tip: a batch (`ship_batch.py`) passes the tip it
-    started from, since each ticket it lands moves the base on. `heads` goes to `check`."""
-    base_tip = base_tip or git.tip(f"refs/remotes/origin/{base}")
+    it already contains it). `git` is a `gitops.Git` whose remote refs are fetched; `reviewed` is a commit. `heads` goes to `check`."""
+    base_tip = git.tip(f"refs/remotes/origin/{base}")
     head = git.tip(f"refs/remotes/origin/{branch}")
     tree = check(git, base_tip, head, reviewed, base, heads)
     if git.is_ancestor(base_tip, head):

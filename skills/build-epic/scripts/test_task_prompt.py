@@ -92,23 +92,6 @@ class TaskPromptTest(unittest.TestCase):
         report.write_text("status: done\n", encoding="utf-8")
         self.assertEqual(kept.read_text(encoding="utf-8"), "Built it.\nstatus: done\nchanged: a.txt\n")
 
-    def test_tuning_task_gets_the_tuner_with_its_range_and_the_repo_notes(self):
-        notes = self.kit.clone / ".agents" / "build-epic-notes.md"
-        notes.parent.mkdir()
-        notes.write_text("notes\n", encoding="utf-8")
-        _, fields, lines = self.ok("01-tests", "--remote")
-        self.assertEqual(lines, [
-            "You are a test-tuner. Follow ~/.agents/skills/tune-tests/tuner-brief.md.",
-            "worktree: ~/work", "scope: abc1234..def5678", "notes: ~/attached/build-epic-notes.md",
-            f"test_command: {TEST_COMMAND}", "report: ~/out/report.md"])
-        self.assertEqual(shlex.split(fields["args"]), [
-            "--name", "01-tests", "--agent", "test-tuner", "--attach", str(notes),
-            f"@{fields['prompt']}", str(self.kit.run_dir / "worktrees" / "01-tests")])
-        _, _, here = self.ok("01-tests")
-        self.assertEqual(here[1:4], [f"worktree: {self.kit.run_dir / 'worktrees' / '01-tests'}",
-                                     "scope: abc1234..def5678", f"notes: {notes}"])
-        self.assertEqual(here[-1], f"report: {self.kit.run_dir / 'reports' / '01-tests.md'}")
-
     def test_bad_options_and_missing_files_fail_and_write_nothing(self):
         for args, prefix in ((["--resolve"], "FAIL 01-02 usage: "), (["--bogus"], "FAIL 01-02 usage: "),
                              (["--failure", "/nowhere.log"], "FAIL 01-02 no-failure-file: "),

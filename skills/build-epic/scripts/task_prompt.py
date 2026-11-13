@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Writes the prompt that starts a task's agent, here or remote, from one template.
 
-Usage: python3 -I task_prompt.py <run> <TT-NN|TT-tests> [--remote] [--resolve <files>] [--cap <note>]
+Usage: python3 -I task_prompt.py <run> <TT-NN> [--remote] [--resolve <files>] [--cap <note>]
                                  [--failure <file>] [--reissue]
 
-The agent is the `epic-implementer`, or the `test-tuner` for a tuning task (`TT-tests`). The prompt is the brief's
+The agent is the `epic-implementer`. The prompt is the brief's
 path, then one `<input>: <value>` line per input, the report file last. Here, every input is its path on this
 machine and the report file is `<run>/reports/<id>.md`. With `--remote`, the same lines name `~/work` for the
 worktree, `~/attached/<name>` for every file sent along (attached by the printed arguments), and `~/out/report.md`
@@ -29,12 +29,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, decisions, runfolder, taskwt  # noqa: E402
+from steplib import core, decisions, taskwt  # noqa: E402
 
 USAGE = "[--remote] [--resolve <files>] [--cap <note>] [--failure <file>] [--reissue]"
 IMPLEMENTER = ("epic-implementer", "You are an epic-implementer. Follow ~/.agents/skills/build-epic/implementer-brief.md.")
-TUNER = ("test-tuner", "You are a test-tuner. Follow ~/.agents/skills/tune-tests/tuner-brief.md.")
-NOTES = Path(".agents") / "build-epic-notes.md"
 
 
 def options(args):
@@ -60,8 +58,7 @@ def next_number(prompts, ident):
 def step(ctx):
     opts = options(ctx.args)
     task = taskwt.Task(ctx)
-    tuner = ctx.id.endswith("-tests")
-    agent, first = TUNER if tuner else IMPLEMENTER
+    agent, first = IMPLEMENTER
     run = ctx.run_dir
     prompts = run / "prompts"
     prompts.mkdir(exist_ok=True)
@@ -90,25 +87,15 @@ def step(ctx):
 
     test_command = decisions.get(run, "test_command")
     lines = [first]
-    if tuner:
-        scope = taskwt.clean(runfolder.get(task.path, "Range"))
-        if not scope:
-            raise core.Fail("no-range")
-        notes = task.repo / NOTES
-        lines.append(f"worktree: {'~/work' if opts['remote'] else task.worktree}")
-        lines.append(f"scope: {scope}")
-        if notes.is_file():
-            lines.append(f"notes: {sent(notes)}")
+    lines.append(f"task: {sent(task.path)}")
+    if opts["remote"]:
+        for name in ("spec.md", "map.md", "notes"):
+            if (run / name).exists():
+                lines.append(f"{Path(name).stem}: {sent(run / name)}")
     else:
-        lines.append(f"task: {sent(task.path)}")
-        if opts["remote"]:
-            for name in ("spec.md", "map.md", "notes"):
-                if (run / name).exists():
-                    lines.append(f"{Path(name).stem}: {sent(run / name)}")
-        else:
-            lines.append(f"run: {run}")
-        lines.append(f"worktree: {'~/work' if opts['remote'] else task.worktree}")
-        lines.append(f"ticket branch: {task.upstream}")
+        lines.append(f"run: {run}")
+    lines.append(f"worktree: {'~/work' if opts['remote'] else task.worktree}")
+    lines.append(f"ticket branch: {task.upstream}")
     if test_command:
         lines.append(f"test_command: {test_command}")
     if opts["resolve"]:
