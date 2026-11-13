@@ -38,8 +38,7 @@ class CiOffBodyTest(unittest.TestCase):
 
     def bodies(self):
         run = self.kit.run_dir
-        return (prbody.task_body(run, "01-02", self.task, self.ticket),
-                prbody.ticket_body(run, self.ticket))
+        return (prbody.ticket_body(run, self.ticket),)
 
     def test_ci_off_bodies_say_the_local_checks_run_is_the_proof(self):
         decide(self.kit.run_dir, "ci", "off")

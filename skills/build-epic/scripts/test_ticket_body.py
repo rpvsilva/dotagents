@@ -121,12 +121,6 @@ class SuiteResultTest(FixtureRun):
         self.assertIn("- `old-red`: failed\n", testing)
         self.assertIn("- `old-green`: passed\n", testing)
 
-    def test_the_task_body_reads_the_new_shape_too(self):
-        self.save("07-01", [{"command": "red", "rc": 2, "passed": 3, "failed": 0}])
-        task = self.run_dir / "tasks" / "07-01-prbody.md"
-        body = prbody.task_body(self.run_dir, "07-01", task, self.ticket)
-        self.assertIn("- `red`: failed (3 passed, 0 failed)", prbody.section(body, "Result"))
-
 
 class ShipOpenBodyTest(Base):
     def open(self, *args):
