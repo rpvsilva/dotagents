@@ -22,6 +22,9 @@ Dev tooling, like the rest of `evals/_*`: no part ships it, nothing installs it,
 - Dropped tasks, all added after the first approval:
   - `02-04-review-fixes.md`, `03-05-review-fixes.md`: the run's fix rounds.
   - `03-04-registry-subset.md`, `04-04-registry-subset.md`: added by mid-run re-plans (`logs/rejection-1.md`, `-2.md` of that run) to switch `tests/cli/test_registry.py` to a form the hub-file union could merge. Kept, they make `plan_check.py` report two `Writes` overlaps on that file, and step 4 then starts a revise planner instead of resuming. The re-plan's lasting part stays: `tests/cli/test_registry.py` is a hub file in `map.md`'s `Lanes`, and `map.md`'s Invariants require the sorted + subset form from 01-01 on, so the two tasks have nothing left to do. So 03-03 and 04-03 lose their blocker `04`, and `map.md`'s two re-plan paragraphs are rewritten without the dropped tasks or the rejection logs.
+- Edited after the baseline, when #501 removed the layers the plan named (the baseline replays r1–r3 ran the earlier text):
+  - 05-02 no longer runs `docs_check.py`; in the baseline it printed `skipped` (`docs_commands` unset), so it built nothing.
+  - `tests/cli/test_registry.py`: the plan let feature tasks add their command's name to its `names` line and left the hub sync conflicts that followed to the hub-file union. The union never merged them: r1 and r3 stopped on them, and so did the step B replay, with a re-plan. Now no feature task edits the file, and each hub task (03-03, 04-03, 05-02) sets the `names` line to every command on its branch after its sync. Hub tasks run one at a time, so the sync never conflicts there.
 
 No tuning task (`TT-tests.md`) existed. `plan_check.py` on the seeded folder prints `plan ok: 16 tasks, 1 lanes`.
 
