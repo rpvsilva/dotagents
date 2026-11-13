@@ -24,7 +24,7 @@ class MergedToLabelTest(Base):
         (kit.run_dir / "decisions.md").write_text(f"# Decisions\nbase: {NEW}\n", encoding="utf-8")
         (kit.answers / "pr-base").write_text(NEW, encoding="utf-8")
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
-        self.set_setting("task_merge_method", "merge")
+        (kit.run_dir / "logs" / "PR20-review.json").write_text('{"commit_id": "%s"}' % self.head(), encoding="utf-8")
         p = kit.step(SHIP, kit.run_dir, "01", "merge")
         self.assertEqual(self.one_line(p), "OK 01 merged pr=20")
         self.assertEqual(self.calls("issue", "close"), [])
@@ -107,9 +107,10 @@ class CatchUpTest(CatchUpCase):
     def test_with_apply_a_started_ticket_branch_gets_the_new_base_merged_in(self):
         before = self.remote("feat/a")
         self.catch_up(NEW, "--apply")
-        tip = self.remote("feat/a")
+        tip = self.kit.git("rev-parse", "refs/heads/feat/a", cwd=self.kit.clone)  # where its tasks merge
         self.assertEqual(self.kit.git("rev-parse", f"{tip}^1", cwd=self.kit.clone), before)
         self.assertEqual(self.kit.git("rev-parse", f"{tip}^2", cwd=self.kit.clone), self.new_tip)
+        self.assertEqual(self.remote("feat/a"), before)  # no PR yet: pushed when the ticket ships
         self.assertEqual(self.remote("feat/e"), self.new_tip)
         self.assertEqual(self.catch_up(NEW), "OK run catch-up 2 unstarted 0 started unstarted=02,03 started=none")
 
@@ -125,6 +126,9 @@ class CatchUpTest(CatchUpCase):
         self.pr("main")
         self.catch_up(NEW, "--apply")
         self.assertEqual(self.edits(), [["pr", "edit", "20", "--base", NEW]])
+        # A ticket with a PR is pushed, so the PR shows the catch-up.
+        self.assertEqual(self.remote("feat/a"), self.kit.git("rev-parse", "refs/heads/feat/a", cwd=self.kit.clone))
+        self.kit.git("--git-dir", str(self.kit.origin), "merge-base", "--is-ancestor", self.new_tip, "feat/a")
 
     def test_with_apply_a_ticket_already_holding_the_new_base_still_gets_its_pr_moved(self):
         self.ticket("05", "building", "feat/e", "PR: https://github.com/o/r/pull/21\n")
@@ -165,7 +169,7 @@ class CatchUpTest(CatchUpCase):
         before = self.remote("feat/a")
         self.assertRegex(self.catch_up(NEW, "--apply"), r"^FAIL run conflict 01: x\.txt \(log: ")
         self.assertEqual(self.remote("feat/a"), before)
-        self.kit.git("--git-dir", str(self.kit.origin), "merge-base", "--is-ancestor", self.new_tip, "feat/g")
+        self.kit.git("merge-base", "--is-ancestor", self.new_tip, "refs/heads/feat/g", cwd=self.kit.clone)
 
     def test_a_base_missing_on_origin_is_refused_and_nothing_changes(self):
         line = self.catch_up("int/none", "--apply")

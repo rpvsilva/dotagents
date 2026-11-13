@@ -5,8 +5,8 @@ A ticket body holds no prose but the run's. It has one `## ` section per heading
 template, `Summary` and `Testing`), each filled by what its name asks for: a summary (the ticket's title, its issues and
 task count), testing (each task's saved suite results), risk (the files the tasks write) and how to revert (the commit
 the PR lands on the base). A heading naming none of those takes the ticket's own section of that name. A section the run
-cannot fill is left empty, so `empty_sections` names it. Then come the tasks with their `PR:` links, their acceptance
-criteria, the skipped tests' reasons under `## Not exercised here`, and `Closes #n` for each issue.
+cannot fill is left empty, so `empty_sections` names it. Then come the tasks with their merge commits (`Commit:`), their
+acceptance criteria, the skipped tests' reasons under `## Not exercised here`, and `Closes #n` for each issue.
 
 It holds a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the human's
 own login), into which branch (`base:` or the run's default branch), on what proof (`review_before_agent_merge` and
@@ -243,7 +243,7 @@ def _criteria(tasks):
 
 def ticket_body(run, ticket_path, *, template=None):
     """The ticket PR body: one section per heading of `template` (the repo's PR template text, or None), then the
-    tasks with their PR links and acceptance criteria, `## Not exercised here`, the `## Merge` section, and
+    tasks with their merge commits and acceptance criteria, `## Not exercised here`, the `## Merge` section, and
     `Closes #n`."""
     tasks = ticket_tasks(run, ticket_path)
     names = re.findall(r"^##[ \t]+(.+?)[ \t]*$", template, re.MULTILINE) if template is not None else \
@@ -252,7 +252,8 @@ def ticket_body(run, ticket_path, *, template=None):
     for name in names:
         text = _fill(name, run, ticket_path, tasks)
         parts += [f"## {name}", text or ("" if template is not None else NO_RESULT)]
-    rows = [f"- {title(f)}: {clean(runfolder.get(f, 'PR')) or 'no PR'}" for f in tasks]
+    rows = [f"- {_ident(f)} {title(f)}: " + (f"merged in `{commit[:7]}`" if (commit := clean(runfolder.get(f, "Commit")))
+                                             else "not merged") for f in tasks]
     parts += ["## Tasks", "\n".join(rows) or "None."]
     criteria = _criteria(tasks)
     if criteria:

@@ -5,11 +5,12 @@ Usage: python3 -I catch_up.py <run> <new-base> [--apply]
 
 Lists the unstarted tickets (`ready`, their branch not on origin), which `start_ticket.py` will cut from the new base
 once it is recorded, and the started ones (`building` or `in-review`, their branch on origin) whose branch lacks the
-new base's tip on origin. Without `--apply` it changes nothing and prints
+new base's tip on origin: the local branch, where their tasks merge (`gitops.ticket_tip`). Without `--apply` it changes nothing and prints
 `OK run catch-up <n> unstarted <m> started unstarted=<TT,..|none> started=<TT,..|none>`.
 
 With `--apply` it records `base: <new-base>` in `decisions.md`, then, for each started ticket listed, merges
-`origin/<new-base>` into its branch in a scratch worktree and pushes it (a fast-forward, never a force). Every started
+`origin/<new-base>` into its local branch in a scratch worktree, and pushes it when the ticket has a PR (a fast-forward,
+never a force; a ticket with none is pushed when it ships). Every started
 ticket whose branch holds the new base's tip, merged now or before, then has its open PR (its `PR:` line) moved to the
 new base when it is on another one. Prints `OK run caught-up base=<new-base> <n> unstarted <m> started ...`. A conflicted merge is aborted and leaves that branch and its PR as they were; the others still merge, and it prints
 `FAIL run conflict <TT>: <files>[; <TT>: <files>]`. A PR that will not move fails `pr-edit <TT>`. Rerun it once those
@@ -49,7 +50,7 @@ def plan(run, git, tip):
             unstarted.append((tt, path, branch))
         elif status in STARTED and pushed:
             started.append((tt, path, branch))
-            if not git.is_ancestor(tip, f"refs/remotes/origin/{branch}"):
+            if not git.is_ancestor(tip, git.ticket_tip(branch)):
                 behind.append((tt, path, branch))
     return unstarted, started, behind
 
@@ -61,11 +62,13 @@ def record(run, base):
         decisions.save(run, d)
 
 
-def catch_up(ctx, git, repo, tt, branch, base):
-    """Merges `origin/<base>` into the ticket branch and pushes it; returns the conflicted files, or None."""
+def catch_up(ctx, git, repo, tt, path, branch, base):
+    """Merges `origin/<base>` into the local ticket branch, pushing it when the ticket has a PR; returns the conflicted
+    files, or None."""
     wt = ctx.run_dir / "worktrees" / f"catch-up-{tt}"
     wt.parent.mkdir(parents=True, exist_ok=True)
-    git.worktree_add(wt, f"refs/remotes/origin/{branch}", detach=True)
+    old = git.ticket_tip(branch)
+    git.worktree_add(wt, old, detach=True)
     try:
         with gitops.lock(repo):
             merged = ctx.run(["git", "-C", wt, "merge", "--no-edit", f"refs/remotes/origin/{base}"])
@@ -73,7 +76,8 @@ def catch_up(ctx, git, repo, tt, branch, base):
             with gitops.lock(repo):  # the worktree's removal below drops the half-done merge
                 files = ctx.run(["git", "-C", wt, "diff", "--name-only", "--diff-filter=U"]).out.split()
             return files or ["(merge failed)"]
-        if git.push("origin", f"{_head(ctx, repo, wt)}:refs/heads/{branch}").rc != 0:
+        git.advance(branch, _head(ctx, repo, wt), old)
+        if runfolder.get(path, "PR") and git.push("origin", f"refs/heads/{branch}:refs/heads/{branch}").rc != 0:
             raise core.Fail(f"push {tt}")
     finally:
         git.worktree_remove(wt)
@@ -118,7 +122,7 @@ def step(ctx):
     record(ctx.run_dir, base)
     conflicts = []
     for tt, path, branch in started:
-        files = catch_up(ctx, git, repo, tt, branch, base) if (tt, path, branch) in behind else None
+        files = catch_up(ctx, git, repo, tt, path, branch, base) if (tt, path, branch) in behind else None
         if files:
             conflicts.append(f"{tt}: {' '.join(files)}")
         else:

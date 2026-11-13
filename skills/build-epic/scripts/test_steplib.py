@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, ci, core, gh, gitops, runfolder  # noqa: E402
+from steplib import checks, core, gh, gitops, runfolder  # noqa: E402
 from testkit import SCRIPTS, Kit, git, skip_without_zsh, zsh  # noqa: E402
 
 INIT_RUN = SCRIPTS / "init_run.py"
@@ -462,35 +462,6 @@ class ChecksCommandsTest(unittest.TestCase):
                 self.commands(text)
             self.assertTrue(e.exception.reason.startswith("no-checks: "), e.exception.reason)
 
-
-class TicketChecksTest(KitCase):
-    """`ci.checks`: the ticket PR's checks, read against the stub `gh` in this process."""
-
-    def setUp(self):
-        super().setUp()
-        patcher = mock.patch.dict(os.environ, self.kit.env, clear=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        self.log = io.StringIO()
-
-    def checks(self):
-        return ci.checks("9", self.log, self.kit.tmp)
-
-    def test_checks_still_pending_after_the_last_poll_time_out(self):
-        self.kit.answer("pr-checks", out='[{"name": "ci", "bucket": "pending", "link": ""}]', rc=8)
-        with mock.patch.object(ci, "POLLS", 3), self.assertRaises(core.Fail) as e:
-            self.checks()
-        self.assertEqual(e.exception.reason, "ticket-ci-timeout")
-        self.assertEqual(self.kit.gh_calls(), [["pr", "checks", "9", "--json", "name,bucket,link"]] * 3)
-        self.assertIn("checks pending, poll 3/3", self.log.getvalue())
-
-    def test_no_checks_reported_is_no_checks_and_unreadable_output_fails(self):
-        self.kit.answer("pr-checks", err="no checks reported on the 'feat/t' branch\n", rc=1, n=1)
-        self.assertEqual(self.checks(), [])
-        self.kit.answer("pr-checks", out="<html>rate limited</html>", rc=1, n=2)
-        with self.assertRaises(core.Fail) as e:
-            self.checks()
-        self.assertEqual(e.exception.reason, "ticket-ci")
 
 class GitOpsTest(KitCase):
     def setUp(self):

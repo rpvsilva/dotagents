@@ -4,13 +4,15 @@
 Usage: python3 -I resume.py <run>
 
 - An `in-review` ticket whose PR merged becomes `merged`.
-- An `in-progress` task with no `PR:` goes back to `ready`, its worktree and branch removed.
-- A task not `done` whose PR merged becomes `done`, its worktree and branch removed, then Ticket CI: the draft ticket
-  PR is opened when the ticket has none (unless `decisions.md` says `ci: off`).
-- A task with an open PR is left as it is, for the orchestrator to take to Merge.
+- An `in-progress` task whose branch head is on the local ticket branch (`merge_task.py` merged it, then stopped)
+  becomes `done`, with the merge commit as its `Commit:` line, its worktree and branch removed.
+- Any other `in-progress` task with a `Finished:` line (`finish_task.py` committed its work) is left as it is, for the
+  orchestrator to take to Merge.
+- An `in-progress` task with neither goes back to `ready`, its worktree and branch removed: its implementer had not
+  reported.
 
 Prints `OK run resumed <n> actions`, `n` counting each status set; a rerun prints `0 actions`. Fails `pr-view` when a
-PR's state cannot be read.
+ticket PR's state cannot be read.
 """
 import sys
 from pathlib import Path
@@ -62,21 +64,33 @@ class Resume:
             git.branch_delete(f"task/{slug(branch)}/{nn}")
         return ticket
 
+    def landed(self, path):
+        """The merge commit that landed the task's branch head on the local ticket branch, or None."""
+        tt, nn = names(path)
+        branch = runfolder.get(runfolder.ticket_file(self.run, tt), "Branch")
+        git = self.git()
+        task_ref, ticket_ref = f"refs/heads/task/{slug(branch or '')}/{nn}", f"refs/heads/{branch}"
+        for ref in (task_ref, ticket_ref):
+            if not branch or git._git("rev-parse", "--verify", "--quiet", ref, check=False).rc != 0:
+                return None
+        head = git.tip(task_ref)
+        if not git.is_ancestor(head, ticket_ref):
+            return None
+        out = git._git("rev-list", "--first-parent", "--merges", "--parents", ticket_ref).out
+        return next((line.split()[0] for line in out.splitlines() if head in line.split()[2:]), None)
+
     def tasks(self):
         for path in sorted((self.run / "tasks").glob("*.md")):
-            status = runfolder.get(path, "Status")
-            pr = ci.pr_number(runfolder.get(path, "PR"))
-            if status == "done":
+            if runfolder.get(path, "Status") != "in-progress":
                 continue
-            if not pr:
-                if status == "in-progress":
-                    self.drop_worktree(path)
-                    self.set_status(path, "ready")
-            elif self.merged(pr):
-                ticket = self.drop_worktree(path)
+            commit = self.landed(path)
+            if commit:
+                self.drop_worktree(path)
+                runfolder.set_header(path, "Commit", commit)
                 self.set_status(path, "done")
-                if ci.enabled(self.run):
-                    ci.open_draft(ticket, self.info["Default"], self.ctx.log, self.info["Repo"])
+            elif not runfolder.get(path, "Finished"):
+                self.drop_worktree(path)
+                self.set_status(path, "ready")
 
 
 def step(ctx):

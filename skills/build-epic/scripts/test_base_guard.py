@@ -37,10 +37,10 @@ class TicketBaseGuardTest(test_ship.Base):
         self.assertTrue(line.startswith("FAIL 01 wrong-base feat/u (log: "), line)
         self.assertEqual(self.calls("pr", "merge"), [])
 
-    def test_a_ticket_pr_into_the_base_merges_and_squashes_whatever_the_task_merge_method(self):
+    def test_a_ticket_pr_into_the_base_merges_and_squashes(self):
         self.kit.branch_from_main("int/x")  # the merge guard reads its rules from origin/<base>
         (self.kit.answers / "pr-base").write_text("int/x", encoding="utf-8")
-        self.set_setting("task_merge_method", "merge")
+        (self.kit.run_dir / "logs" / "PR20-review.json").write_text('{"commit_id": "%s"}' % self.head(), encoding="utf-8")
         self.assertEqual(self.ship(), "OK 01 merged pr=20")
         self.assertIn("--squash", self.calls("pr", "merge")[0])
 

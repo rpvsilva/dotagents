@@ -27,7 +27,6 @@ Exports the list as JSON.
 ## Check
 `test_export.py` against the kit.
 """
-URL = "https://github.com/o/r/pull/7"
 
 
 class StepCase(unittest.TestCase):
@@ -95,6 +94,12 @@ class FinishTaskTest(StepCase):
         self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "")
         self.assertEqual(self.kit.git("log", "-1", "--format=%s", cwd=self.wt), "JSON export")
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+        first = runfolder.get(self.task, "Finished")
+        self.assertRegex(first, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        runfolder.set_header(self.task, "Finished", "2000-01-01T00:00:00Z")  # a fix round keeps the first one
+        self.write(self.wt, "a.txt", "fixed\n")
+        self.assertEqual(self.one_line(self.kit.step(FINISH, self.kit.run_dir, "01-02")), "OK 01-02 committed files=3")
+        self.assertEqual(runfolder.get(self.task, "Finished"), "2000-01-01T00:00:00Z")
 
     def test_merges_the_ticket_branch_tip(self):
         tip = self.advance_ticket("t.txt", "t\n")
@@ -170,13 +175,13 @@ class FinishTaskTest(StepCase):
 
 
 class PrBodyTest(StepCase):
-    def test_ticket_body_lists_tasks_with_pr_links_and_closes_the_issue(self):
-        runfolder.set_header(self.task, "PR", URL)
+    def test_ticket_body_lists_tasks_with_their_merge_commits_and_closes_the_issue(self):
+        runfolder.set_header(self.task, "Commit", "abcdef0" + "1" * 33)
         (self.kit.run_dir / "tasks" / "01-03-csv.md").write_text("# 01-03: CSV import\nStatus: ready\n",
                                                                  encoding="utf-8")
         (self.kit.run_dir / "tasks" / "02-01-other.md").write_text("# 02-01: Other\nStatus: ready\n", encoding="utf-8")
         body = prbody.ticket_body(self.kit.run_dir, self.kit.run_dir / "tickets" / "01-alpha.md")
-        self.assertIn(f"- JSON export: {URL}\n- CSV import: no PR", body)
+        self.assertIn("- 01-02 JSON export: merged in `abcdef0`\n- 01-03 CSV import: not merged", body)
         self.assertNotIn("Other", body)
         self.assertTrue(body.rstrip().endswith("Closes #42"), body)
         self.assertNotIn("Part of", body)

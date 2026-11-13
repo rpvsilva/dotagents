@@ -27,9 +27,9 @@ Revert the commit this PR lands on `main`: `git revert <commit>`.
 
 ## Tasks
 
-- Bodies from the run folder: https://github.com/o/r/pull/41
-- Shipping takes no prose: https://github.com/o/r/pull/42
-- Docs for the new body: no PR
+- 07-01 Bodies from the run folder: merged in `a1b2c3d`
+- 07-02 Shipping takes no prose: merged in `e4f5a6b`
+- 07-03 Docs for the new body: not merged
 
 ## Acceptance criteria
 

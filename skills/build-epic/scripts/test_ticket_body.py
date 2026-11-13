@@ -67,12 +67,12 @@ class TicketBodyTest(FixtureRun):
         shutil.rmtree(self.run_dir / "reports")
         self.assertEqual(prbody.section(self.body(None), "Testing"), prbody.NO_RESULT)
 
-    def test_the_body_lists_each_task_pr_and_its_acceptance_criteria_then_closes_the_issues(self):
+    def test_the_body_lists_each_task_and_its_merge_commit_and_criteria_then_closes_the_issues(self):
         body = self.body(None)
         self.assertEqual(prbody.section(body, "Tasks").splitlines(), [
-            "- Bodies from the run folder: https://github.com/o/r/pull/41",
-            "- Shipping takes no prose: https://github.com/o/r/pull/42",
-            "- Docs for the new body: no PR",
+            "- 07-01 Bodies from the run folder: merged in `a1b2c3d`",
+            "- 07-02 Shipping takes no prose: merged in `e4f5a6b`",
+            "- 07-03 Docs for the new body: not merged",
         ])
         criteria = prbody.section(body, "Acceptance criteria")
         self.assertIn("- `ship_ticket.py` accepts no body argument.", criteria)
