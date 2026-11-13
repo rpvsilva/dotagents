@@ -1,0 +1,1 @@
+{"model": "claude-opus-5-5", "caps": {"turns": 250, "secs": 3600, "cost_usd": 6}, "settings": {"build-epic": {"max_parallel": 3}}}
