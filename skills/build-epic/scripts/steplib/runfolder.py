@@ -70,39 +70,6 @@ def _write(path, lines):
         raise
 
 
-def append_criteria(path, new):
-    """Adds each line of `new` not already in the task file's `## Acceptance criteria` section at its end (before
-    its trailing blank lines), adding the section at the end of the file when it is missing. Returns how many it added.
-    The write is atomic and locked per folder, like `set_header`."""
-    path = core.resolve(path)
-    with core.file_lock(path.parent / ".headers.lock"):
-        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        start = next((i + 1 for i, line in enumerate(lines)
-                      if re.match(r"^## Acceptance criteria[ \t]*$", line.rstrip("\n"))), None)
-        if start is None:
-            if lines and lines[-1].strip():
-                lines.append("\n")
-            lines.append("## Acceptance criteria\n")
-            start = len(lines)
-        end = next((i for i in range(start, len(lines)) if lines[i].startswith("## ")), len(lines))
-        have = {line.rstrip("\n") for line in lines[start:end]}
-        added = []
-        for line in new:
-            if "\n" in line or "\r" in line:
-                raise ValueError("a criteria line has a newline")
-            if line not in have:
-                have.add(line)
-                added.append(f"{line}\n")
-        if added:
-            while end > start and not lines[end - 1].strip():
-                end -= 1
-            lines[end:end] = added
-            _write(path, lines)
-        return len(added)
-
-
 def _one(found, what):
     if not found:
         raise core.Fail(f"no-{what}")

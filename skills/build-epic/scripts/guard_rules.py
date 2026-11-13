@@ -6,7 +6,7 @@ Usage: python3 -I guard_rules.py <run>
 Fetches the run's default branch (`Default:` in `run.md`), where every merge's guard reads its rules whatever the
 merge's base, and prints one line per rule of the `agent-merge-guard` block on `origin/<default>` (format:
 `../merge-guard.md`): `rule <name> <kind> <pattern>`, the pattern as written. A repo with no block prints nothing. The
-built-in `merge-guard` rule (a diff changing the block) is not printed. Like `permissions.py`, it prints several stdout lines; git's output
+built-in `merge-guard` rule (a diff changing the block) is not printed. It prints several stdout lines; git's output
 goes to `<run>/logs/run-guard_rules.log`. Exits 0, or prints `FAIL run <reason>` and exits 1:
 - `no-run-folder`, `no-run-md`, `run-md-missing`: the run folder is not initialised.
 - `git-fetch`: the default branch could not be fetched.

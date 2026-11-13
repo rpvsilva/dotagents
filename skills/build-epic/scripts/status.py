@@ -5,11 +5,8 @@ Usage: python3 -I status.py <run> [--report | --line <TT> | --write]
 
 Each line is `<id> <status> <PR> <blocked by> <title>`, columns aligned, tasks indented under their ticket; `-` marks
 no PR or no blocker. `--report` adds, for the final report, a `## Not exercised here` section listing each ticket's
-saved skip reasons under `<id> <title>`, as its ticket PR body does, then a `## Hub waits` section, one line per hub
-task in `<run>/waits.jsonl` (`start_task.py` writes it; its last row wins): `- <id>: <minutes> min on ticket(s) <TT>, ..`,
-`unknown` for the minutes when its start had no `Done:` to time from. A run with none prints no such section. The one
-step that prints several stdout lines. Exits 0, or prints
-`FAIL run no-run-folder: <path>` and exits 1.
+saved skip reasons under `<id> <title>`, as its ticket PR body does; a run with none prints no such section. The one
+step that prints several stdout lines. Exits 0, or prints `FAIL run no-run-folder: <path>` and exits 1.
 
 `--line <TT>` prints the ticket's one status line for the human, at most 160 characters:
 `<TT> <status> <PR> <title>  next: <what it waits on>` (`FAIL TT no-ticket` when there is none).
@@ -18,10 +15,8 @@ the tasks in flight, what needs a human (every `blocked` task, or one whose repo
 its `why`; every `in-review` or `blocked` ticket; past MAX_HUMAN lines, the rest as `- +N more`) and the next actions.
 Prints `OK run state <path>`.
 A report counts only when it is not older than its task file, which `start_task.py` and a re-plan rewrite: a report
-from before the task's last dispatch or re-plan is stale. A `blocked` tuning task (`TT-tests`) counts as done for
-shipping: the ticket ships without it.
+from before the task's last dispatch or re-plan is stale.
 """
-import json
 import os
 import re
 import sys
@@ -82,30 +77,9 @@ def not_exercised(run):
     return ["", "## Not exercised here"] + lines if lines else []
 
 
-def hub_waits(run):
-    """The `## Hub waits` lines for the final report, one per hub task (its last row), in task order; [] when none."""
-    path = run / "waits.jsonl"
-    rows = {}
-    for line in (path.read_text(encoding="utf-8").splitlines() if path.is_file() else ()):
-        if line.strip():
-            row = json.loads(line)
-            rows[row["task"]] = row
-    lines = []
-    for ident in sorted(rows, key=lambda i: [(not p.isdigit(), int(p) if p.isdigit() else 0, p) for p in i.split("-")]):
-        row = rows[ident]
-        minutes = "unknown" if row.get("minutes") is None else f"{row['minutes']} min"
-        tickets = row.get("waited_on") or []
-        lines.append(f"- {ident}: {minutes} on ticket{'s' if len(tickets) > 1 else ''} {', '.join(tickets)}")
-    return ["", "## Hub waits", ""] + lines if lines else []
-
-
 MAX_LINE = 160
 # Lines of `state.md`'s "Needs a human", the `+N more` line included: keeps a 10-ticket run within 40 lines.
 MAX_HUMAN = 10
-
-
-def tuning(ident):
-    return ident.endswith("-tests")
 
 
 class Run:
@@ -190,8 +164,7 @@ class Run:
         if status == "claimed":
             return f"{runfolder.header(text, 'Claimed by') or 'another developer'} (claimed)"
         tasks = self.tasks.get(tt, {}).values()
-        # A blocked tuning task counts as done: the human was told, and the ticket ships without it.
-        done = {i for i, _, t in tasks if self.status(t) == "done" or (tuning(i) and self.status(t) == "blocked")}
+        done = {i for i, _, t in tasks if self.status(t) == "done"}
         stuck = [(i, s, w) for i, s, w in self.stuck(tt) if i not in done]
         if stuck:
             return "human: " + ", ".join(f"task {i} {s}" for i, s, _ in stuck)
@@ -291,7 +264,7 @@ def main(argv):
     elif len(argv) == 2 and argv[1] == "--write":
         print(f"OK run state {write_state(run)}")
     else:
-        for line in table(run) + (not_exercised(run) + hub_waits(run) if len(argv) == 2 else []):
+        for line in table(run) + (not_exercised(run) if len(argv) == 2 else []):
             print(line.rstrip())
     return 0
 
