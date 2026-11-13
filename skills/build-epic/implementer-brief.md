@@ -30,7 +30,7 @@ Your worktree is `~/work`: a snapshot of the task worktree, already holding the 
 
 Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to the report file your prompt names (what you built, the tests and the break each went red on, each suite's baseline and final time, every check's result), ending with a `## Follow-ups` section (omitted when empty) and then this block; then your final message is the block alone, at most 400 characters. Running remotely, the report file is `~/out/report.md`. A `reissue:` line in your prompt names your last run's report on this task, which broke this section: the work is done, so change no file, run nothing, and write that report again as this section says, then end with the block. With no report file named, your final message is the full report, ending with the block as its last four lines, unfenced.
 
-The `## Follow-ups` section holds one row per line for work a later task must pick up or a feature the task's change interacts with: `- <severity> <kind> <path[:line]>: <claim>`. Severity is `blocker` (the build is wrong without it), `should-fix` (likely trouble, a missing test) or `nit`; kind is `follow-up` or `interaction` (a cross-cutting feature the change touches that no task of the plan names). Every item of your block's `follow-up:` line is also a row here, so the run records it as data.
+The `## Follow-ups` section holds one row per line for work a later task must pick up or a feature the task's change interacts with: `- <severity> <kind> <path[:line]>: <claim>`. Severity is `blocker` (the build is wrong without it), `should-fix` (likely trouble, a missing test) or `nit`; kind is `follow-up` or `interaction` (a cross-cutting feature the change touches that no task of the plan names).
 
 A change the task needs in a file only the human edits (one a `path` rule of the repo's [merge guard](merge-guard.md) names) is never made in the worktree: the guard would refuse the merge. Propose it as an `owner-doc` row, `- <severity> owner-doc <path>#<item>: <claim>`, `<item>` naming the part of the file it changes (e.g. a heading), followed at once by its ready-to-apply patch in a fenced `diff` block:
 
@@ -43,7 +43,7 @@ A change the task needs in a file only the human edits (one a `path` rule of the
 ```
 ````
 
-The orchestrator records the rows with `followups.py record`; the final report holds each owner-only file's patch for the human. The block is exactly these four lines, in this order, at most 400 characters in all; every other detail (test counts, mutations, environment notes) goes in the report above it:
+The final report names your report file, so the human finds each owner-only file's patch there. The block is exactly these four lines, in this order, at most 400 characters in all; every other detail (test counts, mutations, environment notes) goes in the report above it:
 ```
 status: done | blocked | plan-wrong
 changed: <the last commit SHA and the files changed>

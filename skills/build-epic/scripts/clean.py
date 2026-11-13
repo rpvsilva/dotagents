@@ -2,7 +2,7 @@
 """Cleans up after a run: its worktrees, its task branches and the run's labels on the issues it closed.
 
 Usage: python3 -I clean.py <run>
-Removes every worktree under `<run>/worktrees/` (`dispatcher/` included), every local `task/<ticket-slug>/*` branch
+Removes every worktree under `<run>/worktrees/`, every local `task/<ticket-slug>/*` branch
 of the run's tickets, and the `in progress` and `blocked` labels from each closed issue of the run's tickets (unless
 the `tracker` Setting names another tracker). Prints `OK run clean <n> removed`, `n` counting worktrees, branches and
 labels. The run folder's files stay. Refused while a task is `in-progress`: `FAIL run in-progress <ids>`.
