@@ -194,6 +194,40 @@ class Runs(unittest.TestCase):
         self.assertIsNone(out["runs"]["remote"]["outcomes"]["interruptions"])
         self.assertIsNone(out["runs"]["remote"]["time"]["leadTimeHours"])
 
+    def test_per_ticket_time_keeps_only_active_time_and_waits_on_the_human_stand_alone(self):
+        run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))
+        span = next(s for s in run["spans"] if s["skill"] == "build-epic")
+        # Work 10:00-10:30, an overnight wait for the human, work again 08:00-08:20 the next day.
+        span.update(activeSeconds=50 * 60, humanWaitSeconds=(21 * 60 + 30) * 60,
+                    activeIntervals=[["2026-11-01T10:00:00.000Z", "2026-11-01T10:30:00.000Z"],
+                                     ["2026-11-02T08:00:00.000Z", "2026-11-02T08:20:00.000Z"]],
+                    humanWaits=[{"answered": "2026-11-02T08:00:00.000Z", "seconds": (21 * 60 + 30) * 60}])
+        tel = self.tmp / "tel-active.json"
+        tel.write_text(json.dumps(run), encoding="utf-8")
+        met = json.loads(RUN_METRICS.read_text(encoding="utf-8"))
+        met["per_ticket"] = {
+            # Opened 10:10, merged 08:10 the next day: 22 h of wall clock, 20 + 10 minutes of work.
+            "01": {"first_task_pr_opened": "2026-11-01T10:10:00+00:00", "ticket_merged": "2026-11-02T08:10:00+00:00",
+                   "wall_minutes_first_task_pr_to_ticket_merge": 1320.0},
+            "02": {"first_task_pr_opened": "2026-11-01T10:00:00+00:00", "ticket_merged": "2026-11-01T10:20:00+00:00",
+                   "wall_minutes_first_task_pr_to_ticket_merge": 20.0},
+            "03": {"first_task_pr_opened": None, "ticket_merged": None,
+                   "wall_minutes_first_task_pr_to_ticket_merge": None}}
+        metrics = self.tmp / "met-active.json"
+        metrics.write_text(json.dumps(met), encoding="utf-8")
+        out = compare(gh35_args(**{"b": tel, "b-metrics": metrics}))
+        local = out["runs"]["local"]
+        self.assertEqual([t["active_minutes"] for t in local["perTicket"].values()], [30.0, 20.0, None])
+        self.assertEqual((local["time"]["perTicketActiveMinutes"]["max"], local["time"]["perTicketWallMinutes"]["max"]),
+                         (30.0, 1320.0))
+        self.assertEqual(local["time"]["humanWaitMinutes"], 1290.0)
+        self.assertEqual(local["time"]["humanWaits"], [{"answered": "2026-11-02T08:00:00.000Z", "minutes": 1290.0}])
+        self.assertEqual(out["comparison"]["time"]["perTicketActiveMaxMinutes"]["local"], 30.0)
+        self.assertEqual(out["comparison"]["time"]["humanWaitMinutes"]["local"], 1290.0)
+        # Saved before schemaVersion 6: unknown, never 0.
+        self.assertIsNone(out["runs"]["remote"]["time"]["perTicketActiveMinutes"])
+        self.assertIsNone(out["runs"]["remote"]["time"]["humanWaitMinutes"])
+
     def test_a_saved_role_wins_over_the_description(self):
         run = json.loads((GH35 / "local-telemetry.json").read_text(encoding="utf-8"))
         span = next(s for s in run["spans"] if s["skill"] == "build-epic")

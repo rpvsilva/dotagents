@@ -100,9 +100,8 @@ class Spans(unittest.TestCase):
         self.assertEqual(span["tokensByModel"], {"claude-opus-5-5": times(OPUS_TURN, 3)})
 
     def test_each_span_saves_its_active_time_and_agents_at_once(self):
-        # No gap in the fixture reaches 15 minutes, so active time is the wall clock.
-        for span in self.out["spans"]:
-            self.assertEqual(span["activeSeconds"], span["wallClockSeconds"])
+        # No gap in the fixture reaches 15 minutes, so a span nobody answered is active for its whole wall clock.
+        self.assertEqual(self.spans["renovate-prs"]["activeSeconds"], self.spans["renovate-prs"]["wallClockSeconds"])
         self.assertEqual(self.spans["renovate-prs"]["agentsAtOnce"]["peak"], 1)
         self.assertIsNone(self.spans["grill-with-docs"]["agentsAtOnce"])
         self.assertEqual(self.out["activeSeconds"], sum(s["activeSeconds"] for s in self.out["spans"]))
@@ -112,6 +111,16 @@ class Spans(unittest.TestCase):
         self.assertEqual(self.spans["grill-with-docs"]["humanMessages"], 1)
         self.assertEqual(self.spans["renovate-prs"]["humanMessages"], 0)
         self.assertEqual(self.out["humanMessages"], sum(s["humanMessages"] for s in self.out["spans"]))
+
+    def test_the_wait_for_the_humans_answer_is_not_active_time(self):
+        # grill-with-docs runs 09:01:00-09:03:00; its last reply is at 09:01:10 and "yes" comes at 09:02:00.
+        span = self.spans["grill-with-docs"]
+        self.assertEqual(span["humanWaits"], [{"answered": "2026-10-23T09:02:00.000Z", "seconds": 50}])
+        self.assertEqual(span["humanWaitSeconds"], 50)
+        self.assertEqual(span["activeSeconds"], 120 - 50)
+        self.assertEqual(span["activeIntervals"], [["2026-10-23T09:01:00.000Z", "2026-10-23T09:01:10.000Z"],
+                                                   ["2026-10-23T09:02:00.000Z", "2026-10-23T09:03:00.000Z"]])
+        self.assertEqual(self.out["humanWaitSeconds"], sum(s["humanWaitSeconds"] for s in self.out["spans"]))
 
     def test_a_subagent_belongs_to_the_span_that_started_it(self):
         # q5, q6 plus the subagent's t1, t2; the background subagent ends at 09:06:00.
@@ -260,8 +269,8 @@ class Steps(unittest.TestCase):
         cls.steps = cls.out["steps"]
         cls.by_label = {(s["tool"], s["label"]): s for s in cls.steps}
 
-    def test_the_run_is_schema_version_5(self):
-        self.assertEqual(self.out["schemaVersion"], 5)
+    def test_the_run_is_schema_version_6(self):
+        self.assertEqual(self.out["schemaVersion"], 6)
 
     def test_a_session_with_no_version_saves_none(self):
         self.assertEqual(self.out["claudeVersions"], [])
@@ -773,10 +782,6 @@ class Interruptions(unittest.TestCase):
         self.assertEqual(extractor.human_messages(entries), 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ActiveTime(unittest.TestCase):
     def at(self, *minutes):
         from datetime import datetime, timedelta, timezone
@@ -802,3 +807,32 @@ class ActiveTime(unittest.TestCase):
 
     def test_no_subagents_is_none(self):
         self.assertIsNone(extractor.at_once([]))
+
+    def test_a_wait_on_the_human_ends_a_stretch_at_any_length(self):
+        # Work 0-10, the human answers at 12 (a 2-minute wait), work 12-20, then an overnight wait answered at 620.
+        intervals, waits = extractor.timeline(self.at(0, 10, 12, 20, 620, 625), self.at(12, 620))
+        self.assertEqual(intervals, [tuple(self.at(0, 10)), tuple(self.at(12, 20)), tuple(self.at(620, 625))])
+        self.assertEqual(waits, [(self.at(12)[0], 120), (self.at(620)[0], 600 * 60)])
+        self.assertEqual(extractor.active_seconds(self.at(0, 10, 12, 20, 620, 625), self.at(12, 620)), 23 * 60)
+
+    def test_a_subagent_working_through_the_wait_shortens_it(self):
+        # The orchestrator asks at 10, a subagent logs at 15, the human answers at 30: only 15 minutes are a wait.
+        intervals, waits = extractor.timeline(self.at(0, 10, 15, 30, 40), self.at(30))
+        self.assertEqual(waits, [(self.at(30)[0], 15 * 60)])
+        self.assertEqual(intervals, [tuple(self.at(0, 15)), tuple(self.at(30, 40))])
+
+    def test_answers_are_typed_messages_and_question_results(self):
+        def entry(t, **kw):
+            return {"timestamp": f"2026-11-10T09:{t:02d}:00.000Z", **kw}
+        entries = [entry(0, type="user", message={"content": "/build-epic"}),  # starts the span: not an answer
+                   entry(1, type="assistant", message={"content": [
+                       {"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {}}]}),
+                   entry(5, type="user", message={"content": [{"type": "tool_result", "tool_use_id": "q1"}]}),
+                   entry(6, type="user", message={"content": [{"type": "tool_result", "tool_use_id": "other"}]}),
+                   entry(7, type="user", message={"content": "<task-notification>done</task-notification>"}),
+                   entry(9, type="user", message={"content": "Keep going"})]
+        self.assertEqual(extractor.answers(entries), self.at(5, 9))
+
+
+if __name__ == "__main__":
+    unittest.main()
