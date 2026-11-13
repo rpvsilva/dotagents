@@ -98,9 +98,12 @@ def answer(run_dir):
 
 
 def auth_failed(stream):
-    """True when an `api_retry` event reports a 401 or `authentication_failed`; event fields only, never text."""
-    return any(e.get("type") == "system" and e.get("subtype") == "api_retry"
-               and (e.get("error_status") == 401 or e.get("error") == "authentication_failed") for e in stream)
+    """True when an `api_retry` event reports a 401 or `authentication_failed`, or an assistant event is the API's
+    `authentication_failed` error (no token at all: "Not logged in"); event fields only, never text."""
+    return any((e.get("type") == "system" and e.get("subtype") == "api_retry"
+                and (e.get("error_status") == 401 or e.get("error") == "authentication_failed"))
+               or (e.get("type") == "assistant" and e.get("is_api_error_message") is True
+                   and e.get("error") == "authentication_failed") for e in stream)
 
 
 def zero_cost(result):
