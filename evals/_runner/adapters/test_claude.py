@@ -98,6 +98,11 @@ class ParseTest(EvalSandbox):
         self.assertEqual(got["error"], "auth")
         self.assertIs(got["zero_cost"], True)
 
+    def test_a_not_logged_in_run_is_an_auth_error_with_a_reported_zero_cost(self):
+        got = self.parse("not-logged-in")
+        self.assertEqual(got["error"], "auth")
+        self.assertIs(got["zero_cost"], True)
+
     def test_an_authentication_failed_retry_without_a_status_is_an_auth_error(self):
         self.write([{"type": "system", "subtype": "api_retry", "error": "authentication_failed"},
                     {"type": "result", "is_error": True, "total_cost_usd": 0.1}])
@@ -149,9 +154,10 @@ class ParseTest(EvalSandbox):
         self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", self.claude.RENEW)
         self.assertIn("ANTHROPIC_API_KEY", self.claude.RENEW)
 
-    def test_the_auth_fixture_holds_no_token_like_value(self):
-        text = (FIXTURES / "auth-failed.jsonl").read_text()
-        self.assertNotRegex(text, r"sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{8,}|Bearer ")
+    def test_the_auth_fixtures_hold_no_token_like_value(self):
+        for name in ("auth-failed.jsonl", "not-logged-in.jsonl"):
+            text = (FIXTURES / name).read_text()
+            self.assertNotRegex(text, r"sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{8,}|Bearer ", name)
 
     def test_without_a_session_log_tokens_come_from_the_result_event(self):
         self.assertEqual(self.parse("pass")["tokens"], RESULT_TOKENS)
