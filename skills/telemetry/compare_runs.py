@@ -69,6 +69,14 @@ def ratio(a, b, n=2):
     return r(a / b, n) if a is not None and b else None
 
 
+def overlap_minutes(start, end, intervals):
+    """Minutes of [start, end] inside the run's active intervals; None without the window or the intervals."""
+    if not start or not end or intervals is None:
+        return None
+    a, b = ts(start), ts(end)
+    return r(sum(max(0.0, (min(b, ts(y)) - max(a, ts(x))).total_seconds()) for x, y in intervals) / 60, 1)
+
+
 def stats(values, n=2):
     v = sorted(x for x in values if x is not None)
     if not v:
@@ -206,7 +214,16 @@ def analyse(name, tel, met, branch, prices):
 
     prs, tasks, tickets = met.get("prs") or {}, met.get("tasks") or {}, met.get("tickets") or {}
     per_ticket = met.get("per_ticket")
-    per_ticket_min = [t.get("minutes_first_task_pr_to_ticket_merge") for t in (per_ticket or {}).values()]
+    if per_ticket:
+        # Each ticket's window, its first task PR's opening to its merge, keeps only the run's active time (saved
+        # since schemaVersion 6); tickets building at once share that time.
+        per_ticket = {k: {**t, "active_minutes": overlap_minutes(t.get("first_task_pr_opened"), t.get("ticket_merged"),
+                                                                 span.get("activeIntervals"))}
+                      for k, t in per_ticket.items()}
+    # Metrics saved before the rename call the wall-clock minutes `minutes_first_task_pr_to_ticket_merge`.
+    per_ticket_min = [t.get("wall_minutes_first_task_pr_to_ticket_merge", t.get("minutes_first_task_pr_to_ticket_merge"))
+                      for t in (per_ticket or {}).values()]
+    per_ticket_active = [t["active_minutes"] for t in (per_ticket or {}).values()]
     first_pr = prs.get("first_created")
     last_ticket = dig(met, "lead_time", "last_ticket_merged")
     remote_runs, _, remote_cost = remote_counts(met)
@@ -225,6 +242,11 @@ def analyse(name, tel, met, branch, prices):
                 # Saved since schemaVersion 5: the span's time minus stalls, and its subagents running at once.
                 "activeMinutes": r(span["activeSeconds"] / 60, 1) if span.get("activeSeconds") is not None else None,
                 "agentsAtOnce": span.get("agentsAtOnce"),
+                # Saved since schemaVersion 6: the idle time before each answer of the human, out of activeMinutes.
+                "humanWaitMinutes": r(span["humanWaitSeconds"] / 60, 1) if span.get("humanWaitSeconds") is not None
+                else None,
+                "humanWaits": [{"answered": w["answered"], "minutes": r(w["seconds"] / 60, 1)}
+                               for w in span["humanWaits"]] if span.get("humanWaits") is not None else None,
                 # From run_metrics.py: the epic's issue opening to its last ticket's merge, and this run's share.
                 "leadTimeHours": dig(met, "lead_time", "hours"),
                 "runStartToLastTicketMergeMinutes": r((ts(last_ticket) - ts(span["start"])).total_seconds() / 60, 1)
@@ -233,7 +255,8 @@ def analyse(name, tel, met, branch, prices):
                 "firstPrToLastMergeMinutes": prs.get("wall_minutes_first_pr_to_last_merge"),
                 "sessionStartToFirstPrMinutes": r((ts(first_pr) - ts(tel["start"])).total_seconds() / 60, 1)
                 if first_pr else None,
-                "perTicketFirstTaskPrToMergeMinutes": stats(per_ticket_min, 1),
+                "perTicketActiveMinutes": stats(per_ticket_active, 1),
+                "perTicketWallMinutes": stats(per_ticket_min, 1),
                 "stepSecondsTotal": {"orchestrator": r(sum(s["seconds"] or 0 for s in orch_steps), 1),
                                      "subagents": r(sum(s["seconds"] or 0 for s in steps if s["subagent"]), 1)},
             },
@@ -360,9 +383,11 @@ def compare(names, outs, metrics):
             "runStartToLastTicketMergeMinutes": pair(lambda X: X["time"]["runStartToLastTicketMergeMinutes"], "min"),
             "firstPrToLastMergeMinutes": pair(lambda X: X["time"]["firstPrToLastMergeMinutes"], "min"),
             "sessionStartToFirstPrMinutes": pair(lambda X: X["time"]["sessionStartToFirstPrMinutes"], "min"),
-            "perTicketMedianMinutes": pair(lambda X: dig(X, "time", "perTicketFirstTaskPrToMergeMinutes", "median"),
-                                           "min"),
-            "perTicketMaxMinutes": pair(lambda X: dig(X, "time", "perTicketFirstTaskPrToMergeMinutes", "max"), "min"),
+            "humanWaitMinutes": pair(lambda X: X["time"]["humanWaitMinutes"], "min"),
+            "perTicketActiveMedianMinutes": pair(lambda X: dig(X, "time", "perTicketActiveMinutes", "median"), "min"),
+            "perTicketActiveMaxMinutes": pair(lambda X: dig(X, "time", "perTicketActiveMinutes", "max"), "min"),
+            "perTicketWallMedianMinutes": pair(lambda X: dig(X, "time", "perTicketWallMinutes", "median"), "min"),
+            "perTicketWallMaxMinutes": pair(lambda X: dig(X, "time", "perTicketWallMinutes", "max"), "min"),
         },
         "cost": {
             "measuredUSD": pair(lambda X: X["cost"]["recomputedSessionUSD"], "USD"),
