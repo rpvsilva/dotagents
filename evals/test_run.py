@@ -132,6 +132,11 @@ cat "{STREAMS / stream}"
         return entry["dir"], results.read(entry["dir"])
 
 
+# Both forms of an auth failure: a 401 `api_retry` (a revoked token) and an assistant event marked
+# `authentication_failed` (no login at all, as Claude Code 2.1.322 reports it).
+AUTH_STREAMS = ("auth-failed.jsonl", "not-logged-in.jsonl")
+
+
 class RunTest(RunSandbox):
     def test_a_passing_run_saves_every_field_of_its_result(self):
         self.passing_claude()
@@ -596,8 +601,8 @@ class RunsAndReuseTest(RunSandbox):
         self.assertEqual((self.call_count(), got["skipped"], got["spent_usd"]), (2, [], 0.0))
         self.assertIn(" $0.0000 ", self.printed().splitlines()[0])
 
-    def auth_claude(self):
-        self.claude("auth-failed.jsonl")
+    def auth_claude(self, stream="auth-failed.jsonl"):
+        self.claude(stream)
 
     def test_an_auth_failure_is_saved_unjudged_and_stops_the_command(self):
         self.auth_claude()
@@ -628,12 +633,16 @@ class RunsAndReuseTest(RunSandbox):
         self.assertEqual(got["stopped"], "auth")
 
     def test_the_next_invocation_retries_a_saved_auth_run(self):
-        self.auth_claude()
-        case = self.case()
-        self.run_cases([case])
-        got = self.run_cases([case])
-        self.assertEqual(self.call_count(), 2)
-        self.assertFalse(got["runs"][0]["reused"])
+        for n, stream in enumerate(AUTH_STREAMS):
+            with self.subTest(stream=stream):
+                self.auth_claude(stream)
+                case = self.case(f"configure/retry-{n}")
+                before = self.call_count()
+                self.run_cases([case])
+                got = self.run_cases([case])
+                self.assertEqual(self.call_count() - before, 2)
+                self.assertFalse(got["runs"][0]["reused"])
+                self.assertEqual(got["runs"][0]["result"]["error"], "auth")
 
     def test_a_run_without_an_auth_failure_is_not_stopped(self):
         self.passing_claude()
@@ -1095,12 +1104,16 @@ class CliTest(RunSandbox):
         self.assertIn("skipped configure/a run 2", out.stdout)
 
     def test_cli_exits_3_on_an_auth_stop(self):
-        self.claude("auth-failed.jsonl")
-        self.case("configure/a")
-        out = self.cli("--tool", "claude", "--ref", "HEAD", "--runs", "2", "--evals", str(self.evals), "configure/a")
-        self.assertEqual(out.returncode, 3, out.stderr)
-        self.assertIn("auth failed for claude", out.stdout)
-        self.assertEqual(self.call_count(), 1)
+        for n, stream in enumerate(AUTH_STREAMS):
+            with self.subTest(stream=stream):
+                self.claude(stream)
+                self.case(f"configure/a{n}")
+                before = self.call_count()
+                out = self.cli("--tool", "claude", "--ref", "HEAD", "--runs", "2", "--evals", str(self.evals),
+                               f"configure/a{n}")
+                self.assertEqual(out.returncode, 3, out.stderr)
+                self.assertIn("auth failed for claude", out.stdout)
+                self.assertEqual(self.call_count() - before, 1)
 
     def test_cli_exits_2_on_a_usage_error_before_any_run(self):
         self.passing_claude()
