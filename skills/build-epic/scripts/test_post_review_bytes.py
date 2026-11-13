@@ -57,6 +57,12 @@ class PostReviewBytesTest(Base):
         self.assertNotIn(self.head()[:7], header)
         self.assertNotIn("git diff", header)
 
+    def test_a_task_report_on_the_ticket_pr_names_the_task_and_the_head_it_reviewed(self):
+        header, _ = self.split(self.post("12", self.report("ok\n", "01-02-abc1234.md"), "--base", "feat/t"), "ok\n")
+        self.assertIn("Review of task 01-02 at `abc1234`, before it merged, posted on PR #12", header)
+        self.assertIn("`git diff feat/t...abc1234`", header)
+        self.assertNotIn("PR #01", header)
+
     def test_a_security_report_names_the_head_in_its_name(self):
         header, _ = self.split(self.post("12", self.report("ok\n", "30-abc1234-security.md")), "ok\n")
         self.assertIn("Review of PR #30 at `abc1234`, posted on PR #12", header)

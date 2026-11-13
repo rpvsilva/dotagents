@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Prints a reviewer's prompt for one review mode, from file pointers only: no summary of the change.
 
-Usage: python3 -I review_prompt.py <mode> --pr <n> --worktree <path> --head <sha> --base <ref>
+Usage: python3 -I review_prompt.py <mode> [--pr <n>] --worktree <path> --head <sha> --base <ref>
          [--run <run>] [--decisions <file>] [--task <file>] [--findings <file>] [--ticket <file>] [--task-base <ref>]
          [--report <file> | --remote <dir> --allow-author <login>...]
 
-Modes: `task` (one task PR), `hub` (section A: the hub task PR against `--task-base`, the ticket branch; section B:
+Modes: `task` (one task PR; with no `--pr`, a task's local commits before they merge, `--base` its ticket branch and
+`--task` required: build-epic's review of a high-tier task, which has no PR), `hub` (section A: the hub task PR against `--task-base`, the ticket branch; section B:
 the whole ticket against `--base`; needs `--ticket` and `--task-base`), `ticket` (`--task` is the ticket file),
 `re-review` (`--base` is the head last reviewed; needs `--findings`, the numbered earlier findings) and `security`.
 Every mode diffs against `git merge-base <base> <head>` and runs tests only after the whole diff is read. With
@@ -27,7 +28,7 @@ a PR whose author is one of the `--allow-author` logins (repeatable, as `gh pr v
 aside): the human's and the run's identity. Any other author is refused before the diff is written, and that reviewer
 runs locally, reading the whole diff before it runs anything.
 
-Exits 2 with a usage line on an unknown mode, a missing option, a `--findings` file that does not exist, or
+Exits 2 with a usage line on an unknown mode, a missing option (`--pr` in any review but a local `task` one), a `--findings` file that does not exist, or
 `--remote` with `--report` or without `--allow-author`; with `--remote`, exits 1 with a reason on stderr when
 `gh pr view`, the merge base or the diff fails, the PR's author is not allowed, or an input to attach is missing.
 """
@@ -63,7 +64,7 @@ def absolute(path):
 def parse(argv):
     p = argparse.ArgumentParser(prog="review_prompt.py")
     p.add_argument("mode", choices=MODES)
-    p.add_argument("--pr", required=True)
+    p.add_argument("--pr")
     p.add_argument("--worktree", required=True, type=absolute)
     p.add_argument("--head", required=True)
     p.add_argument("--base", required=True)
@@ -81,6 +82,8 @@ def parse(argv):
         p.error("--remote takes no --report: a remote reviewer returns its report as its final message")
     if args.remote and not args.allow_author:
         p.error("--remote needs --allow-author: only a PR by the human or the run's identity is reviewed remotely")
+    if not args.pr and (args.mode != "task" or not args.task or args.remote):
+        p.error("--pr is required, except in a local task review with --task")
     if args.mode == "re-review" and not args.findings:
         p.error("re-review needs --findings")
     if args.findings and not os.path.isfile(args.findings):
@@ -215,8 +218,12 @@ def render(args):
         task, ticket, findings, worktree = args.task, args.ticket, args.findings, args.worktree
     if task and args.mode != "hub":
         reads.append(f"- {task}: what the change was asked to do")
+    subject = (f"task PR #{args.pr}. The worktree {worktree} is checked out at its head, {args.head}" if args.pr else
+               f"the commits of task {task}, before they merge into {args.base}. There is no PR: read what the task is "
+               f"for in its file, not `gh pr view`. The worktree {worktree} is at the task's head, {args.head}")
     values = {
         "pr": args.pr,
+        "subject": subject,
         "worktree": worktree,
         "head": args.head,
         "base": args.base,
