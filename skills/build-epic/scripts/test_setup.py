@@ -27,8 +27,9 @@ jobs:
       - run: echo hi
 """
 
-# The caps every test command runs under, from the machine-level cap_mb each case sets and cap_secs' default.
-CAPS = 'export CAPPED_MB="${CAPPED_MB:-1500}" CAPPED_SECS="${CAPPED_SECS:-300}" && '
+# What every test command starts with: `capped` on PATH, then the caps it runs under, from the machine-level cap_mb
+# each case sets and cap_secs' default.
+CAPS = 'export PATH="$PATH:$HOME/.agents/bin" && export CAPPED_MB="${CAPPED_MB:-1500}" CAPPED_SECS="${CAPPED_SECS:-300}" && '
 
 MAP = """# Map
 
@@ -226,7 +227,8 @@ class CapsFollowTheMachine(SetupCase):
         self.setting("cap_secs", "900")
         self.setup()
         self.assertEqual(self.decided("caps"), "1500 900")
-        self.assertTrue(self.decided("test_command").startswith('export CAPPED_MB="${CAPPED_MB:-1500}" '
+        self.assertTrue(self.decided("test_command").startswith('export PATH="$PATH:$HOME/.agents/bin" && '
+                                                               'export CAPPED_MB="${CAPPED_MB:-1500}" '
                                                                'CAPPED_SECS="${CAPPED_SECS:-900}" && '))
 
     def test_the_test_command_exports_the_caps_unless_already_set(self):
@@ -238,6 +240,20 @@ class CapsFollowTheMachine(SetupCase):
         self.assertEqual(mine.out.strip(), "1500 300")
         sandbox = core.run(["bash", "-c", command], io.StringIO(), env={**env, "CAPPED_MB": "7000", "CAPPED_SECS": "60"})
         self.assertEqual(sandbox.out.strip(), "7000 60")
+
+    def test_the_test_command_finds_capped_with_agents_bin_off_path(self):
+        capped = self.kit.home / ".agents" / "bin" / "capped"
+        capped.write_text('#!/bin/sh\n[ "$1" = -- ] && shift\nexec "$@"\n')
+        capped.chmod(0o755)
+        self.write_map("capped -- echo capped ran")
+        self.setup()
+        bare = {"PATH": "/usr/bin:/bin", "HOME": str(self.kit.home)}  # no ~/.agents/bin, as in the #16 baseline run
+        for command in (self.decided("test_command"), checks.in_env(self.run_dir, "capped -- echo capped ran")):
+            res = core.run(["bash", "-c", command], io.StringIO(), env=bare)
+            self.assertEqual((res.rc, res.out.strip()), (0, "capped ran"), res.err)
+            # `$HOME` stays unexpanded, so a remote sandbox finds its own ~/.agents/bin/capped.
+            self.assertIn("$HOME/.agents/bin", command)
+            self.assertNotIn(str(self.kit.home), command)
 
     def test_a_merge_runs_its_checks_under_the_recorded_caps(self):
         self.setup()

@@ -77,10 +77,15 @@ def caps_prefix(run, caps=None):
     return [f'export CAPPED_MB="${{CAPPED_MB:-{int(mb)}}}" CAPPED_SECS="${{CAPPED_SECS:-{int(secs)}}}"']
 
 
+# Puts `capped` (`~/.agents/bin/capped`) within reach whatever PATH the shell has, appended so it shadows nothing.
+# `$HOME` expands where the line runs, so a remote sandbox finds its own copy.
+CAPPED_PATH = 'export PATH="$PATH:$HOME/.agents/bin"'
+
+
 def in_env(run, command, caps=None):
-    """`command` run under the run's caps (`caps_prefix`) and inside its environment (`env_prefix`), as one
-    `bash -c` line."""
-    return " && ".join(caps_prefix(run, caps) + env_prefix(run) + [command])
+    """`command` run with `capped` on PATH (`CAPPED_PATH`), under the run's caps (`caps_prefix`) and inside its
+    environment (`env_prefix`), as one `bash -c` line."""
+    return " && ".join([CAPPED_PATH] + caps_prefix(run, caps) + env_prefix(run) + [command])
 
 
 def commands(map_md):

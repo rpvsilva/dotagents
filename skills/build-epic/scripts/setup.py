@@ -18,7 +18,8 @@ overrides the probe).
   on every run, and exported as CAPPED_MB and CAPPED_SECS defaults ahead of every suite, so a Checks line's
   `capped` with no flags runs under them (a sandbox's own exports win there).
 - **Test command**: `map.md`'s `Checks` joined with `&&`, under the caps and inside the run's environment (`steplib/checks.py`'s
-  `in_env`: `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` (`Scripts/activate` on
+  `in_env`: `$HOME/.agents/bin` appended to PATH so `capped` is found whatever PATH the shell has, then
+  `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` (`Scripts/activate` on
   Windows) when it made a virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`;
   every agent is given that exact line.
 - **CI**: `ci: on` when the repo's Actions are enabled and a `.github/workflows/*.yml` on the base (`decisions.md`'s
