@@ -194,21 +194,27 @@
    "fix_tasks": 1,
    "pr": 20,
    "state": "MERGED",
-   "minutes_first_task_pr_to_ticket_merge": 360.0
+   "first_task_pr_opened": "2026-11-01T10:00:00+00:00",
+   "ticket_merged": "2026-11-01T16:00:00+00:00",
+   "wall_minutes_first_task_pr_to_ticket_merge": 360.0
   },
   "02": {
    "tasks": 2,
    "fix_tasks": 1,
    "pr": 21,
    "state": "OPEN",
-   "minutes_first_task_pr_to_ticket_merge": null
+   "first_task_pr_opened": null,
+   "ticket_merged": null,
+   "wall_minutes_first_task_pr_to_ticket_merge": null
   },
   "03": {
    "tasks": 0,
    "fix_tasks": 0,
    "pr": null,
    "state": null,
-   "minutes_first_task_pr_to_ticket_merge": null
+   "first_task_pr_opened": null,
+   "ticket_merged": null,
+   "wall_minutes_first_task_pr_to_ticket_merge": null
   }
  },
  "lead_time": {

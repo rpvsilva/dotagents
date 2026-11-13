@@ -343,11 +343,33 @@ def segment(entries, skills):
 STALL_SECONDS = 15 * 60
 
 
-def active_seconds(moments):
-    """Seconds between the first and last moment, minus every gap over STALL_SECONDS."""
-    moments = sorted(moments)
-    gaps = ((b - a).total_seconds() for a, b in zip(moments, moments[1:]))
-    return round(sum(g for g in gaps if g <= STALL_SECONDS))
+def timeline(moments, answers=()):
+    """(intervals, waits) over every logged moment. `intervals` are the stretches of work, as [(start, end)]: a gap
+    over STALL_SECONDS ends one, and so does a gap ending with the human's answer (a moment in `answers`), at any
+    length, since the run sat waiting on them. `waits` are those gaps, as [(answered at, seconds)]."""
+    moments = sorted(set(moments) | set(answers))
+    answers = set(answers)
+    intervals, waits = [], []
+    start = last = None
+    for moment in moments:
+        if last is not None:
+            gap = (moment - last).total_seconds()
+            if moment in answers:
+                waits.append((moment, round(gap)))
+            if moment in answers or gap > STALL_SECONDS:
+                intervals.append((start, last))
+                start = moment
+        else:
+            start = moment
+        last = moment
+    if start is not None:
+        intervals.append((start, last))
+    return [(a, b) for a, b in intervals if b > a], waits
+
+
+def active_seconds(moments, answers=()):
+    """Seconds of work between the first and last moment: stalls and waits on the human left out."""
+    return round(sum((b - a).total_seconds() for a, b in timeline(moments, answers)[0]))
 
 
 def at_once(intervals):
@@ -369,12 +391,32 @@ def at_once(intervals):
     return {"peak": peak, "average": round(weighted / busy, 2) if busy else float(peak)}
 
 
+def is_human(entry):
+    """What the human typed: subagent hand-backs (isMeta), compaction summaries, task notifications, reminders and
+    commands (tagged text) are not."""
+    return (typed(entry) and not entry.get("isMeta") and not entry.get("isCompactSummary")
+            and not entry["message"]["content"].lstrip().startswith("<"))
+
+
 def human_messages(entries):
     """What the human typed after the span's first entry (which started it): each one is a time the run stopped
-    for them. Subagent hand-backs (isMeta), compaction summaries, task notifications, reminders and commands
-    (tagged text) are not."""
-    return sum(1 for e in entries[1:] if typed(e) and not e.get("isMeta") and not e.get("isCompactSummary")
-               and not e["message"]["content"].lstrip().startswith("<"))
+    for them."""
+    return sum(1 for e in entries[1:] if is_human(e))
+
+
+def answers(entries):
+    """When the human answered the run: each message they typed after the span's first entry, and each result of
+    a question the run asked them (AskUserQuestion)."""
+    asked = {b["id"] for e in entries for b in blocks(e)
+             if b.get("type") == "tool_use" and tool_name(b.get("name")) == "AskUserQuestion"}
+    out = []
+    for i, e in enumerate(entries):
+        if not e.get("timestamp"):
+            continue
+        if (i > 0 and is_human(e)) or any(b.get("type") == "tool_result" and b.get("tool_use_id") in asked
+                                          for b in blocks(e)):
+            out.append(parse_time(e["timestamp"]))
+    return out
 
 
 def span(entries, skill, pool, done, rules, pricing):
@@ -390,6 +432,7 @@ def span(entries, skill, pool, done, rules, pricing):
         add(totals, {k: numbers[k] for k in ("turns", "toolCalls", "tools", "tokensByModel")})
     start = parse_time(next(e["timestamp"] for e in entries if e.get("timestamp")))
     end = max(parse_time(e["timestamp"]) for e in timed)
+    intervals, waits = timeline([parse_time(e["timestamp"]) for e in timed], answers(entries))
     lives = []
     for _, _, log, _ in agents:
         moments = [parse_time(e["timestamp"]) for e in log if e.get("timestamp")]
@@ -400,9 +443,12 @@ def span(entries, skill, pool, done, rules, pricing):
         "start": stamp(start),
         "end": stamp(end),
         "wallClockSeconds": round((end - start).total_seconds()),
-        "activeSeconds": active_seconds(parse_time(e["timestamp"]) for e in timed),
+        "activeSeconds": round(sum((b - a).total_seconds() for a, b in intervals)),
+        "activeIntervals": [[stamp(a), stamp(b)] for a, b in intervals],
         "agentsAtOnce": at_once(lives),
         "humanMessages": human_messages(entries),
+        "humanWaitSeconds": sum(seconds for _, seconds in waits),
+        "humanWaits": [{"answered": stamp(moment), "seconds": seconds} for moment, seconds in waits],
         **totals,
         "subagents": [{"type": meta.get("agentType"), "description": meta.get("description"),
                        "role": role(meta.get("description")), **numbers,
@@ -511,7 +557,7 @@ def main():
     start = parse_time(spans[0]["start"] if args.skill else next(e["timestamp"] for e in window if e.get("timestamp")))
     end = max(parse_time(s["end"]) for s in spans)
     json.dump({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "tool": "claude-code",
         "sessionId": Path(args.session).stem,
         "skill": args.skill,
@@ -523,6 +569,7 @@ def main():
         "wallClockSeconds": round((end - start).total_seconds()),
         "activeSeconds": sum(s["activeSeconds"] for s in spans),
         "humanMessages": sum(s["humanMessages"] for s in spans),
+        "humanWaitSeconds": sum(s["humanWaitSeconds"] for s in spans),
         "pricingAsOf": pricing.get("asOf") if pricing else None,
         "claudeVersions": claude_versions(window),
         "spans": spans,
