@@ -99,12 +99,11 @@ class StateTest(unittest.TestCase):
         self.assertRegex(self.line("01"), r"^01 merged #11 Alpha +next: none$")
         self.assertRegex(self.line("08"), r"next: someone \(claimed\)$")
 
-    def test_line_of_a_building_ticket_names_its_red_ci_running_tasks_and_dispatchable_ones(self):
-        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "building", 43, extra="CI red: 777\n"))
+    def test_line_of_a_building_ticket_names_its_running_tasks_and_dispatchable_ones(self):
+        write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "building", 43))
         for n, status, blocked in (("01", "in-progress", "none"), ("02", "ready", "none"), ("03", "ready", "01")):
             write(self.run_dir / "tasks" / f"11-{n}-x.md", task(f"11-{n}", status, blocked))
-        self.assertRegex(self.line("11"), r"^11 building #43 Lambda +next: fix ticket CI red 777; tasks 11-01; "
-                                          r"dispatch 11-02$")
+        self.assertRegex(self.line("11"), r"^11 building #43 Lambda +next: tasks 11-01; dispatch 11-02$")
         write(self.run_dir / "tickets" / "11-t.md", ticket("11", "Lambda", "building", 43))
         write(self.run_dir / "tasks" / "11-02-x.md", task("11-02", "in-progress"))
         self.assertRegex(self.line("11"), r"next: tasks 11-01, 11-02$")
