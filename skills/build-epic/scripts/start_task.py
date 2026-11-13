@@ -2,7 +2,8 @@
 """Starts a `ready` task of a `building` ticket: its own worktree and branch, cut from the ticket branch.
 
 Usage: python3 -I start_task.py <run> <TT-NN>
-Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from `origin/<ticket-branch>` and sets the task
+Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from the ticket branch's local tip
+(`gitops.ticket_tip`, where earlier tasks merged) and sets the task
 `in-progress`. Prints `OK TT-NN in-progress wt=<path> tip=<sha7>`. A hub task (one `ticket NN` blocker) also merges
 `origin/<base>` there (`decisions.md`'s `base:`, else the default branch), adding `synced=<sha7>` (the tip it merged);
 a conflict removes the worktree and branch, leaves the task `ready` and
@@ -57,7 +58,7 @@ def step(ctx):
     if git_in(ctx, info["Repo"], info["Repo"], "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").rc == 0:
         raise core.Fail(f"already-started branch={branch}")
     git.fetch()
-    tip = git.tip(f"refs/remotes/origin/{ticket_branch}")
+    tip = git.ticket_tip(ticket_branch)
     wt.parent.mkdir(parents=True, exist_ok=True)
     git.worktree_add(wt, tip, branch=branch)
     details = ""

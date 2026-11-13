@@ -1,84 +1,16 @@
-"""Tests for the base guard and the task merge method in `steplib/merge.py`, through `merge_task.py` and
-`ship_ticket.py merge` against a stub `gh`: a task PR merges only into its own ticket branch, a ticket PR only into the
-run's base."""
+"""Tests for the base guard in `steplib/merge.py`, through `ship_ticket.py merge` against a stub `gh`: a ticket PR
+merges only into the run's base."""
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import test_merge_task  # noqa: E402
 import test_ship  # noqa: E402
 from steplib import runfolder  # noqa: E402
 from testkit import SCRIPTS  # noqa: E402
 
 SHIP = SCRIPTS / "ship_ticket.py"
-
-
-class TaskBaseGuardTest(test_merge_task.MergeTaskTest):
-    """The merge_task sandbox; the base class's own tests run from test_merge_task.py only (see the end)."""
-
-    def into(self, base):
-        (self.kit.answers / "pr-base").write_text(base, encoding="utf-8")
-
-    def assert_wrong_base(self, line, base):
-        self.assertTrue(line.startswith(f"FAIL 01-01 wrong-base {base} (log: "), line)
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
-
-    def test_a_pr_into_the_default_branch_while_the_base_is_another_branch_is_refused(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
-        self.into("main")
-        self.assert_wrong_base(self.merge(), "main")
-
-    def test_a_pr_into_an_unrelated_branch_is_refused(self):
-        self.into("feat/other")
-        self.assert_wrong_base(self.merge(), "feat/other")
-
-    def test_a_pr_into_its_ticket_branch_merges(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
-        self.into("feat/t")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(len(self.calls("pr", "merge")), 1)
-
-    def test_a_pr_into_another_ticket_branch_of_the_run_is_refused(self):
-        (self.kit.run_dir / "tickets" / "02-u.md").write_text("# 02: U\nStatus: building\nBranch: feat/u\n", encoding="utf-8")
-        self.into("feat/u")
-        self.assert_wrong_base(self.merge(), "feat/u")
-
-    def test_a_task_pr_into_the_runs_base_is_refused(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: int/x\n", encoding="utf-8")
-        self.into("int/x")
-        self.assert_wrong_base(self.merge(), "int/x")
-
-    # task_merge_method
-
-    def test_merge_method_merges_a_task_pr_with_a_merge_commit(self):
-        self.setting("task_merge_method", "merge")
-        head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(self.calls("pr", "merge"),
-                         [["pr", "merge", "5", "--merge", "--delete-branch", "--match-head-commit", head]])
-
-    def test_merge_method_passes_merge_to_merge_pr_sh(self):
-        log = self.kit.tmp / "rule.log"
-        rule = self.kit.tmp / "merge-pr.sh"
-        rule.write_text(f'#!/usr/bin/env bash\necho "$*" >>"{log}"\n', encoding="utf-8")
-        rule.chmod(0o755)
-        self.setting("merge_command", f"{rule} {{pr}}")
-        self.setting("task_merge_method", "merge")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(log.read_text(encoding="utf-8"), "--merge 5\n")
-
-    def test_merge_method_with_a_rule_that_has_no_merge_option_merges_nothing(self):
-        log = self.kit.tmp / "rule.log"
-        rule = self.kit.tmp / "my-merge"
-        rule.write_text(f'#!/usr/bin/env bash\necho "$*" >>"{log}"\n', encoding="utf-8")
-        rule.chmod(0o755)
-        self.setting("merge_command", f"{rule} {{pr}}")
-        self.setting("task_merge_method", "merge")
-        self.assertTrue(self.merge().startswith("FAIL 01-01 merge-method (log: "))
-        self.assertFalse(log.exists())
 
 
 class TicketBaseGuardTest(test_ship.Base):
@@ -112,9 +44,6 @@ class TicketBaseGuardTest(test_ship.Base):
         self.assertEqual(self.ship(), "OK 01 merged pr=20")
         self.assertIn("--squash", self.calls("pr", "merge")[0])
 
-
-for _name in [n for n in dir(test_merge_task.MergeTaskTest) if n.startswith("test_")]:
-    setattr(TaskBaseGuardTest, _name, None)
 
 if __name__ == "__main__":
     unittest.main()
