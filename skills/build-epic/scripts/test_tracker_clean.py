@@ -1,7 +1,6 @@
-"""Tests for `tracker_cmd.py`, `clean.py` and `pin_dispatcher.py`, against a bare origin and a stub `gh`."""
+"""Tests for `tracker_cmd.py` and `clean.py`, against a bare origin and a stub `gh`."""
 import io
 import re
-import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -13,7 +12,6 @@ from testkit import SCRIPTS, Kit  # noqa: E402
 
 TRACKER = SCRIPTS / "tracker_cmd.py"
 CLEAN = SCRIPTS / "clean.py"
-PIN = SCRIPTS / "pin_dispatcher.py"
 START_TASK = SCRIPTS / "start_task.py"
 MARKER = "<!-- build-epic-plan -->"
 
@@ -258,81 +256,6 @@ class CleanTest(RunCase):
         self.assertEqual(p.returncode, 1)
         self.assertTrue(self.one_line(p).startswith("FAIL run in-progress 01-01 (log: "), p.stdout)
         self.assertTrue((self.kit.run_dir / "worktrees" / "01-01").is_dir())
-
-
-class PinDispatcherTest(RunCase):
-    def setUp(self):
-        super().setUp()
-        script = self.kit.clone / "scripts" / "remote-agent.sh"
-        script.parent.mkdir()
-        script.write_text("#!/bin/sh\n", encoding="utf-8")
-        self.kit.git("add", "scripts", cwd=self.kit.clone)
-        self.kit.git("commit", "-qm", "dispatcher", cwd=self.kit.clone)
-        self.kit.git("push", "-q", "origin", "HEAD:main", cwd=self.kit.clone)
-        self.link = self.kit.home / ".agents" / "bin" / "remote-agent"
-        self.link.parent.mkdir(parents=True)
-        self.wt = self.kit.run_dir / "worktrees" / "dispatcher"
-
-    def main_tip(self):
-        return self.kit.git("ls-remote", str(self.kit.origin), "refs/heads/main").split()[0]
-
-    def push_main(self, name):
-        (self.kit.clone / name).write_text(name, encoding="utf-8")
-        self.kit.git("add", name, cwd=self.kit.clone)
-        self.kit.git("commit", "-qm", name, cwd=self.kit.clone)
-        self.kit.git("push", "-q", "origin", "HEAD:main", cwd=self.kit.clone)
-
-    def test_a_link_into_the_epics_repo_pins_the_default_tip(self):
-        self.link.symlink_to(self.kit.clone / "scripts" / "remote-agent.sh")
-        old = self.main_tip()
-        self.push_main("later")
-        self.kit.git("update-ref", "refs/remotes/origin/main", old, cwd=self.kit.clone)  # a stale last fetch
-        tip = self.main_tip()
-        self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), f"OK dispatcher pinned {tip[:7]}")
-        self.assertEqual((self.kit.run_dir / "dispatcher.sha").read_text(encoding="utf-8").strip(), tip)
-        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), tip)
-        self.assertTrue((self.wt / "scripts" / "remote-agent.sh").is_file())
-
-    def test_an_existing_pin_is_reused_and_its_worktree_recreated(self):
-        self.link.symlink_to(self.kit.clone / "scripts" / "remote-agent.sh")
-        old = self.main_tip()
-        self.ok(self.kit.step(PIN, self.kit.run_dir))
-        shutil.rmtree(str(self.wt))  # deleted by hand: git still lists it until pruned
-        self.push_main("newer")
-        self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), f"OK dispatcher pinned {old[:7]}")
-        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), old)
-        self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), f"OK dispatcher pinned {old[:7]}")
-
-    def test_a_dispatcher_worktree_moved_off_its_pin_or_a_bad_pin_is_refused(self):
-        self.link.symlink_to(self.kit.clone / "scripts" / "remote-agent.sh")
-        pin = self.main_tip()
-        self.ok(self.kit.step(PIN, self.kit.run_dir))
-        self.push_main("newer")
-        self.kit.git("fetch", "-q", "origin", cwd=self.wt)
-        self.kit.git("checkout", "-q", "--detach", "origin/main", cwd=self.wt)
-        p = self.kit.step(PIN, self.kit.run_dir)
-        self.assertEqual(p.returncode, 1)
-        line = self.one_line(p)
-        self.assertTrue(line.startswith(f"FAIL dispatcher dispatcher-moved: {self.wt} is not at {pin[:7]} (log: "),
-                        line)
-        self.assertNotEqual(self.kit.git("rev-parse", "HEAD", cwd=self.wt), pin)  # reported, never moved back
-        sha_file = self.kit.run_dir / "dispatcher.sha"
-        sha_file.write_text("main\n", encoding="utf-8")
-        line = self.one_line(self.kit.step(PIN, self.kit.run_dir))
-        self.assertTrue(line.startswith(f"FAIL dispatcher bad-dispatcher-sha: {sha_file} (log: "), line)
-
-    def test_a_link_into_another_checkout_needs_no_pin(self):
-        other = self.kit.tmp / "other" / "scripts" / "remote-agent.sh"
-        other.parent.mkdir(parents=True)
-        other.write_text("#!/bin/sh\n", encoding="utf-8")
-        self.link.symlink_to(other)
-        self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), "OK dispatcher installed")
-        self.assertFalse((self.kit.run_dir / "dispatcher.sha").exists())
-        self.assertFalse(self.wt.exists())
-
-    def test_a_missing_link_needs_no_pin(self):
-        self.assertEqual(self.ok(self.kit.step(PIN, self.kit.run_dir)), "OK dispatcher installed")
-        self.assertFalse((self.kit.run_dir / "dispatcher.sha").exists())
 
 
 if __name__ == "__main__":

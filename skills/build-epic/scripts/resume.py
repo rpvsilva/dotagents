@@ -8,13 +8,10 @@ Usage: python3 -I resume.py <run>
 - A task not `done` whose PR merged becomes `done`, its worktree and branch removed, then Ticket CI: the draft ticket
   PR is opened when the ticket has none (unless `decisions.md` says `ci: off`).
 - A task with an open PR is left as it is, for the orchestrator to take to Merge.
-- When `dispatcher.sha` exists, `worktrees/dispatcher/` is re-created at that SHA if it is gone (or moved back to it),
-  never at a newer commit.
 
-Prints `OK run resumed <n> actions`, `n` counting each status set and each dispatcher worktree fixed; a rerun prints
-`0 actions`. Fails `pr-view` when a PR's state cannot be read, `bad-dispatcher-sha <value>` on a pin that is no commit.
+Prints `OK run resumed <n> actions`, `n` counting each status set; a rerun prints `0 actions`. Fails `pr-view` when a
+PR's state cannot be read.
 """
-import re
 import sys
 from pathlib import Path
 
@@ -81,31 +78,6 @@ class Resume:
                 if ci.enabled(self.run):
                     ci.open_draft(ticket, self.info["Default"], self.ctx.log, self.info["Repo"])
 
-    def dispatcher(self):
-        pin = self.run / "dispatcher.sha"
-        if not pin.exists():
-            return
-        sha = pin.read_text(encoding="utf-8").strip()
-        if not re.fullmatch(r"[0-9a-f]{7,64}", sha):
-            raise core.Fail(f"bad-dispatcher-sha {sha.split()[0] if sha.split() else 'empty'}")
-        git = self.git()
-        if self.ctx.run(["git", "-C", self.info["Repo"], "cat-file", "-e", f"{sha}^{{commit}}"]).rc != 0:
-            git.fetch()
-        sha = git.tip(sha)
-        wt = self.run / "worktrees" / "dispatcher"
-        if wt.is_dir():
-            if gitops.Git(wt, self.ctx.log).tip() == sha:
-                return
-            with gitops.lock(self.info["Repo"]):
-                if self.ctx.run(["git", "-C", wt, "checkout", "-q", "--detach", sha]).rc != 0:
-                    raise core.Fail("git-checkout")
-        else:
-            git.worktree_remove(wt)  # prunes a registration left by a worktree deleted by hand
-            wt.parent.mkdir(parents=True, exist_ok=True)
-            git.worktree_add(wt, sha, detach=True)
-        self.ctx.note(f"dispatcher worktree at the pinned {sha}")
-        self.actions += 1
-
 
 def step(ctx):
     if ctx.args:
@@ -113,7 +85,6 @@ def step(ctx):
     r = Resume(ctx)
     r.tickets()
     r.tasks()
-    r.dispatcher()
     return "resumed", f"{r.actions} actions"
 
 
