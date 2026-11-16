@@ -3,7 +3,7 @@ Status: done
 Ticket: 07
 Blocked by: none
 Writes: skills/build-epic/scripts/steplib/prbody.py, skills/build-epic/scripts/test_ticket_body.py
-PR: https://github.com/o/r/pull/41
+Commit: a1b2c3d000000000000000000000000000000000
 
 ## What to build
 Renders the ticket body.

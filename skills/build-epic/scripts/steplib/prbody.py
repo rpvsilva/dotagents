@@ -1,20 +1,16 @@
-"""Task and ticket PR bodies, rendered from the run folder's files only (no git, no gh).
-
-A task body holds what the task builds (its `## What to build`), its check (`## Check`) and that check's result
-(`<run>/reports/<id>.checks.json` when a step wrote one), then `Part of #n` for each of its ticket's issues, which
-leaves them open.
+"""The ticket PR body, rendered from the run folder's files only (no git, no gh). Tasks have no PR of their own: they
+merge into the ticket branch (`merge_task.py`).
 
 A ticket body holds no prose but the run's. It has one `## ` section per heading of the repo's PR template (with no
 template, `Summary` and `Testing`), each filled by what its name asks for: a summary (the ticket's title, its issues and
 task count), testing (each task's saved suite results), risk (the files the tasks write) and how to revert (the commit
 the PR lands on the base). A heading naming none of those takes the ticket's own section of that name. A section the run
-cannot fill is left empty, so `empty_sections` names it. Then come the tasks with their `PR:` links, their acceptance
-criteria, the skipped tests' reasons under `## Not exercised here`, and `Closes #n` for each issue.
+cannot fill is left empty, so `empty_sections` names it. Then come the tasks with their merge commits (`Commit:`), their
+acceptance criteria, the skipped tests' reasons under `## Not exercised here`, and `Closes #n` for each issue.
 
-Both bodies hold a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the
-human's own login), into which branch (a task PR into its ticket's `Branch:`, a ticket PR into `base:` or the run's
-default branch), on what proof (a task PR: a green local run of `map.md`'s Checks, since CI and reviews run on ticket
-PRs only; a ticket PR: `review_before_agent_merge` and `ci`), and each Authorizations row quoted as recorded.
+It holds a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the human's
+own login), into which branch (`base:` or the run's default branch), on what proof (`review_before_agent_merge` and
+`ci`), and each Authorizations row quoted as recorded.
 With `ci: off` it also holds `LOCAL_PROOF`, the line saying no CI runs and the local Checks run is the proof.
 With no `decisions.md` the section is left out.
 
@@ -81,11 +77,6 @@ def _skips(s):
     return out
 
 
-def _result(run, ident):
-    suites = _suites(core.resolve(run) / "reports" / f"{ident}.checks.json")
-    return "\n".join(_suite_line(s) for s in suites) or NO_RESULT
-
-
 def base_branch(run, d=None):
     """The branch a ticket PR merges into: `decisions.md`'s `base:`, else the run's default branch."""
     d = d or decisions.load(run)
@@ -120,45 +111,25 @@ def not_exercised(run, ticket_path):
     return ["## Not exercised here", "\n".join(f"- {r}" for r in reasons)] if reasons else []
 
 
-def merge_section(run, into=None):
-    """The `## Merge` section for a PR into `into` (None: a ticket PR, into `base:` or the run's default branch), from
-    `<run>/decisions.md`; [] when the file is missing."""
+def merge_section(run):
+    """The ticket PR's `## Merge` section, from `<run>/decisions.md`; [] when the file is missing."""
     d = decisions.load(run)
     if d is None:
         return []
-    base = base_branch(run, d)
-    task = bool(into) and into != base
-    into = into or base
+    into = base_branch(run, d)
     if d.get("merge_identity") == "human":
         who = d.get("human")
         who = (f"`{who}`, " if who else "") + "the human's own login, with `GH_TOKEN` unset"
     else:
         who = "the App, with its installation token"
-    if task:
-        review, proof = "", "a green local run of map.md's Checks"
-    else:
-        review = "a review and " if d.get("review_before_agent_merge") == "yes" else ""
-        proof = "green CI" if ci.enabled(run) else "a green local run (CI is off for this run)"
+    review = "a review and " if d.get("review_before_agent_merge") == "yes" else ""
+    proof = "green CI" if ci.enabled(run) else "a green local run (CI is off for this run)"
     rows = [f"- {a.clause} (waived: {a.waived}): {a.quote}" for a in d.authorizations]
     lines = [f"Merges as {who}, into `{into}`, after {review}{proof}.", "",
              "Authorizations:\n" + "\n".join(rows) if rows else "Authorizations: none recorded."]
     if not ci.enabled(run):
         lines[1:1] = ["", LOCAL_PROOF]
     return ["## Merge", "\n".join(lines)]
-
-
-def task_body(run, ident, task_path, ticket_path):
-    text = task_path.read_text(encoding="utf-8")
-    parts = [
-        "## What it builds", section(text, "What to build") or title(task_path),
-        "## Check", section(text, "Check") or "None written in the task.",
-        "## Result", _result(run, ident),
-        *merge_section(run, clean(runfolder.get(ticket_path, "Branch")) or "?"),
-    ]
-    refs = [f"Part of #{n}" for n in issues(ticket_path)]
-    if refs:
-        parts.append("\n".join(refs))
-    return "\n\n".join(parts) + "\n"
 
 
 def ticket_tasks(run, ticket_path):
@@ -272,7 +243,7 @@ def _criteria(tasks):
 
 def ticket_body(run, ticket_path, *, template=None):
     """The ticket PR body: one section per heading of `template` (the repo's PR template text, or None), then the
-    tasks with their PR links and acceptance criteria, `## Not exercised here`, the `## Merge` section, and
+    tasks with their merge commits and acceptance criteria, `## Not exercised here`, the `## Merge` section, and
     `Closes #n`."""
     tasks = ticket_tasks(run, ticket_path)
     names = re.findall(r"^##[ \t]+(.+?)[ \t]*$", template, re.MULTILINE) if template is not None else \
@@ -281,7 +252,8 @@ def ticket_body(run, ticket_path, *, template=None):
     for name in names:
         text = _fill(name, run, ticket_path, tasks)
         parts += [f"## {name}", text or ("" if template is not None else NO_RESULT)]
-    rows = [f"- {title(f)}: {clean(runfolder.get(f, 'PR')) or 'no PR'}" for f in tasks]
+    rows = [f"- {_ident(f)} {title(f)}: " + (f"merged in `{commit[:7]}`" if (commit := clean(runfolder.get(f, "Commit")))
+                                             else "not merged") for f in tasks]
     parts += ["## Tasks", "\n".join(rows) or "None."]
     criteria = _criteria(tasks)
     if criteria:

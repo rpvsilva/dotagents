@@ -12,7 +12,7 @@ Input: the PR number. Optional: `--dry-run` to show the findings without posting
 
 | Mode | Reviews | Reviewer | Needs |
 |---|---|---|---|
-| `task` | one task PR, against its base | PR | `--task <file>` optional |
+| `task` | one task PR, against its base; with no PR, a task's own commits before they merge (build-epic's high-tier tasks, reviewed here, never remotely) | PR | `--task <file>` optional; required with no `--pr` |
 | `hub` | A: the hub task PR against `--task-base` (the ticket branch); B: the whole ticket against the base, in one run | PR | `--ticket <file>`, `--task-base <ref>`, `--task <file>` optional |
 | `ticket` | the whole PR, once and in depth | PR | `--task <file>` optional (the ticket file) |
 | `re-review` | only the diff since the head last reviewed (`--base`), checking a numbered list of earlier findings | PR | `--findings <file>` |

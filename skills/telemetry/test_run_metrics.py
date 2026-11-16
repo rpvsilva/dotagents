@@ -73,6 +73,29 @@ class FixtureRun(unittest.TestCase):
         self.assertEqual(run_metrics_module.reviews(run),
                          {"reports": 3, "prs": 2, "re_reviews": 1, "security": 1})
 
+    def test_a_tasks_review_before_its_merge_counts_as_a_review(self):
+        # build-epic's high-tier tasks are reviewed with no PR: `reviews/<TT-NN>-<sha7>.md`.
+        run = self.tmp / "task-reviews-run"
+        (run / "reviews").mkdir(parents=True)
+        for name in ("01-02-abc1234.md", "01-02-abc1234.posted.md", "01-02-bbb2222.md", "20-ccc3333.md"):
+            (run / "reviews" / name).write_text("x", encoding="utf-8")
+        self.assertEqual(run_metrics_module.reviews(run),
+                         {"reports": 3, "prs": 2, "re_reviews": 1, "security": 0})
+
+    def test_with_no_task_prs_a_tickets_clock_starts_when_its_first_task_finished(self):
+        run = self.tmp / "commits-run"
+        for d in ("tickets", "tasks"):
+            (run / d).mkdir(parents=True)
+        (run / "tickets" / "01-a.md").write_text("# 01: A\nStatus: merged\nPR: #20\n", encoding="utf-8")
+        for nn, finished in (("01", "2026-11-01T10:30:00Z"), ("02", "2026-11-01T10:05:00Z"), ("03", None)):
+            (run / "tasks" / f"01-{nn}-x.md").write_text(
+                f"# 01-{nn}: x\nStatus: done\n" + (f"Finished: {finished}\n" if finished else ""), encoding="utf-8")
+        tickets, tasks = run_metrics_module.plan(run)
+        merged = run_metrics_module.when("2026-11-01T11:05:00Z")
+        got = run_metrics_module.per_ticket(tickets, tasks, {"list": []}, {"01": (None, merged)})["01"]
+        self.assertEqual((got["first_task_pr_opened"], got["wall_minutes_first_task_pr_to_ticket_merge"]),
+                         ("2026-11-01T10:05:00+00:00", 60.0))
+
     def test_fixture_run_folder_gives_the_expected_metrics(self):
         expected = json.loads((FIXTURE / "expected.json").read_text(encoding="utf-8"))
         self.assertEqual(self.got, expected)

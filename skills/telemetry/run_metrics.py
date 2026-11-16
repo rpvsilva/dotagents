@@ -6,9 +6,11 @@ Usage: python3 -I run_metrics.py <run> [--gh <cmd>]
 Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `tickets`, `tasks`: counts by `Status:`; tasks also by kind (`implement`, `fix` for `TT-NN-review-fixes` and
   `TT-NN-fix-ci`, `tune` for `TT-tests`), the task file names build-epic's SKILL.md gives them.
-- `fix_rounds`: the `OK <id> pushed` lines in `logs/<id>-push_fix.log`, one per fix pushed to an open PR, the red
+- `fix_rounds`: the `OK <id> pushed` lines in `logs/<id>-push_fix.log`, one per fix pushed to an open task PR (runs from
+  before tasks were commits), the red
   merges (`FAIL <id> red` in `logs/<id>-merge_task.log`) and the fix tasks.
-- `reviews`: the reviewer reports in `reviews/<PR>-<sha7>.md`; each after a PR's first is a re-review.
+- `reviews`: the reviewer reports in `reviews/<PR>-<sha7>.md`, and `reviews/<TT-NN>-<sha7>.md` for a task reviewed
+  before it merged (it has no PR); each after a PR's (or task's) first is a re-review.
 - `follow_ups`: the rows of `followups.jsonl` (build-epic's `followups.py record` writes them), counted by `severity`
   and `kind`, and the reports in `reports/<id>.md` with a `follow-up:`. A line that is not a JSON row is a gap.
 - `suites`: the suites of `reports/<id>.checks.json` (a count may be `null`: output it could not read), or, for an id
@@ -24,7 +26,8 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
   epic's `issue view` below goes through it too). Also
   `first_created`, `last_merged` and the minutes between them.
 - `per_ticket`: per ticket, its tasks and fix tasks, its PR and state, `first_task_pr_opened` and `ticket_merged`
-  (its first task PR's opening and its own PR's merge) and the wall-clock minutes between them, waits included;
+  (its first task PR's opening, or, for tasks with no PR, the first `Finished:` line `finish_task.py` stamps when a
+  task's work is ready to merge, the same moment; and its own PR's merge) and the wall-clock minutes between them, waits included;
   `compare_runs.py` keeps only the active ones, from the run's telemetry.
 - `lead_time`: hours from the epic's issue opening (`run.md`'s `Epic: #<n>`, read with `<cmd> issue view <n>`) to
   the last ticket PR's merge, `null` until every ticket's PR has merged (`unmerged_tickets` names the rest).
@@ -101,7 +104,7 @@ def plan(run):
     tickets = [{"id": f.stem.split("-", 1)[0], "status": header(f, "Status") or "unknown", "pr": header(f, "PR")}
                for f in sorted((run / "tickets").glob("*.md"))]
     tasks = [{"id": task_id(f.stem), "kind": task_kind(f.stem), "status": header(f, "Status") or "unknown",
-              "pr": header(f, "PR")}
+              "pr": header(f, "PR"), "finished": header(f, "Finished")}
              for f in sorted((run / "tasks").glob("*.md"))]
     return tickets, tasks
 
@@ -127,7 +130,7 @@ def fix_rounds(run, tasks):
 
 # A reviewer's own report, `<PR>-<sha7>.md`; the posted copy (`.posted.md`), the numbered findings
 # (`-findings.md`) and the security report (`-security.md`) beside it are not reviews of their own.
-REVIEW_REPORT = re.compile(r"(\d+)-[0-9a-f]{7}\.md")
+REVIEW_REPORT = re.compile(r"(\d+(?:-\d+)?)-[0-9a-f]{7}\.md")  # a PR's, or `<TT-NN>-...`: a task's, before it merged
 
 
 def reviews(run):
@@ -458,6 +461,7 @@ def per_ticket(tickets, tasks, prs_, times):
         mine = [t for t in tasks if t["id"].split("-", 1)[0] == ticket["id"]]
         row = next((r for r in prs_["list"] if r["id"] == ticket["id"]), {})
         opened = [times[t["id"]][0] for t in mine if t["id"] in times and times[t["id"]][0]]
+        opened += [when(t["finished"]) for t in mine if t.get("finished")]  # no task PRs: when its work was ready
         first = min(opened, default=None)
         merged = times.get(ticket["id"], (None, None))[1]
         out[ticket["id"]] = {"tasks": len(mine), "fix_tasks": sum(1 for t in mine if t["kind"] == "fix"),

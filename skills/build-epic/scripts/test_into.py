@@ -1,6 +1,6 @@
 """Tests for a run into a base other than the default branch (`decisions.md`'s `base:`): the ticket branch is cut from
-it, a hub task catches up with it, and the draft ticket PR opens against it. Against a bare origin and a stub `gh`."""
-import json
+it, and a hub task catches up with it. Against a bare origin and a stub `gh`; the ticket PR opening against it is in
+test_ship.py."""
 import subprocess
 import sys
 import unittest
@@ -8,12 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import ci, runfolder  # noqa: E402
-from test_merge_task import PR_VIEW  # noqa: E402
+from steplib import ci  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
 DECIDE = SCRIPTS / "decide.py"
-REPO = SCRIPTS.parents[2]
 BASE = "int/x"
 BRANCH = "feat/t"
 
@@ -88,46 +86,6 @@ class HubTaskIntoTest(IntoCase):
         p = subprocess.run(["git", "-C", str(wt), "merge-base", "--is-ancestor", main_tip, head], env=self.kit.env)
         self.assertEqual(p.returncode, 1, "the default branch's new commit was merged in")
         self.assertEqual((wt / "base.txt").read_text(encoding="utf-8"), "integration work\n")
-
-
-class TicketPrIntoTest(IntoCase):
-    def setUp(self):
-        super().setUp()
-        kit = self.kit
-        (kit.bin / "gh").rename(kit.bin / "gh-kit")
-        (kit.bin / "gh").write_text(PR_VIEW.format(python=sys.executable, kit_gh=str(kit.bin / "gh-kit"),
-                                                   origin=str(kit.origin)), encoding="utf-8")
-        (kit.bin / "gh").chmod(0o755)
-        (kit.home / ".agents" / "bin").mkdir(parents=True)
-        (kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
-        kit.env.pop("XDG_CONFIG_HOME", None)
-        self.decide("ci", "on")
-        kit.git("--git-dir", str(kit.origin), "update-ref", f"refs/heads/{BRANCH}", self.base_tip)
-        kit.git("fetch", "-q", "origin", cwd=kit.clone)
-        self.ticket.write_text(f"# 01: T\nStatus: building\nIssue: #7\nBranch: {BRANCH}\nBlocked by: none\n", encoding="utf-8")
-        task = kit.run_dir / "tasks" / "01-01-a.md"
-        task.write_text("# 01-01: a\nStatus: in-progress\nTicket: 01\nBlocked by: none\nWrites: x\n"
-                        "PR: https://github.com/o/r/pull/5\n", encoding="utf-8")
-        (kit.run_dir / "map.md").write_text("# Map\n\n## Checks\n\n```\ntrue\n```\n", encoding="utf-8")
-        kit.answer("pr-list", out="[]")
-        kit.answer("pr-create", out="https://github.com/o/r/pull/9\n")
-        wt = kit.run_dir / "worktrees" / "01-01"
-        kit.git("worktree", "add", "-q", "-b", "task/t/01", str(wt), f"origin/{BRANCH}", cwd=kit.clone)
-        (wt / "task.txt").write_text("task\n", encoding="utf-8")
-        kit.git("add", "task.txt", cwd=wt)
-        kit.git("commit", "-qm", "feat: task one", cwd=wt)
-
-    def calls(self, *prefix):
-        return [c for c in self.kit.gh_calls() if c[:len(prefix)] == list(prefix)]
-
-    def test_the_draft_ticket_pr_opens_against_the_base(self):
-        self.step("merge_task.py", "01-01")
-        create = self.calls("pr", "create")
-        self.assertEqual(len(create), 1, json.dumps(self.kit.gh_calls()))
-        self.assertEqual(create[0][create[0].index("--base") + 1], BASE)
-        listed = self.calls("pr", "list")
-        self.assertEqual(listed[0][listed[0].index("--base") + 1], BASE)
-        self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/9")
 
 
 class BaseValueTest(unittest.TestCase):

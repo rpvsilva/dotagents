@@ -1,6 +1,5 @@
-"""Tests for `merge_task.py`: Checks, the merge rule and Ticket CI, against a stub `gh`."""
+"""Tests for `merge_task.py`: the Checks, the merge guard and the local merge of a task into its ticket branch."""
 import json
-import os
 import subprocess
 import sys
 import unittest
@@ -14,29 +13,6 @@ from testkit import SCRIPTS, Kit, env_tool_setup  # noqa: E402
 MERGE_TASK = SCRIPTS / "merge_task.py"
 REPO = SCRIPTS.parents[2]
 
-# `gh pr view` answers like GitHub: the PR's head is the task branch's tip on origin (or `answers/pr-head`), its state
-# `answers/pr-state` (default MERGED), its base `answers/pr-base` (default the ticket branch). Every other call goes to the
-# testkit stub.
-PR_VIEW = r'''#!{python} -IS
-import os, sys
-d = os.environ["GH_STUB_DIR"]
-args = sys.argv[1:]
-if args[:2] != ["pr", "view"]:
-    if os.name == "nt":  # Windows starts no `#!` script, and its os.execv returns before the child ends
-        import subprocess
-        sys.exit(subprocess.run([sys.executable, "-IS", {kit_gh!r}, *args]).returncode)
-    os.execv(sys.executable, [sys.executable, "-IS", {kit_gh!r}, *args])
-import json, subprocess
-with open(os.path.join(d, "gh.log"), "a", encoding="utf-8") as f:
-    f.write(json.dumps(args) + "\n")
-def read(name, default):
-    p = os.path.join(d, "answers", name)
-    return open(p, encoding="utf-8").read().strip() if os.path.exists(p) else default
-head = read("pr-head", "") or subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "task/t/01"],
-                                             capture_output=True, text=True, encoding="utf-8").stdout.strip()
-print(json.dumps({{"state": read("pr-state", "MERGED"), "headRefOid": head, "baseRefName": read("pr-base", "feat/t")}}))
-'''
-
 TICKET = "# 01: Merge JSON things\nStatus: building\nIssue: #7\nBranch: feat/t\nBlocked by: none\n"
 TASK = "# 01-{nn}: task {nn}\nStatus: {status}\nTicket: 01\nBlocked by: none\nWrites: x\n"
 
@@ -47,10 +23,6 @@ class MergeTaskTest(unittest.TestCase):
         self.addCleanup(kit.close)
         kit.env.pop("XDG_CONFIG_HOME", None)
         clone = kit.make_origin()
-        (kit.bin / "gh").rename(kit.bin / "gh-kit")
-        (kit.bin / "gh").write_text(PR_VIEW.format(python=sys.executable, kit_gh=str(kit.bin / "gh-kit"),
-                                                   origin=str(kit.origin)), encoding="utf-8")
-        (kit.bin / "gh").chmod(0o755)
         (kit.home / ".agents" / "bin").mkdir(parents=True)
         (kit.home / ".agents" / "bin" / "settings").symlink_to(REPO / "scripts" / "settings.sh")
         kit.branch_from_main("feat/t")
@@ -60,10 +32,8 @@ class MergeTaskTest(unittest.TestCase):
         self.ticket = kit.run_dir / "tickets" / "01-t.md"
         self.ticket.write_text(TICKET, encoding="utf-8")
         self.task = kit.run_dir / "tasks" / "01-01-a.md"
-        self.task.write_text(TASK.format(nn="01", status="in-progress") + "PR: https://github.com/o/r/pull/5\n", encoding="utf-8")
+        self.task.write_text(TASK.format(nn="01", status="in-progress"), encoding="utf-8")
         self.checks("# a comment, not a suite", "true", "echo suite two")
-        kit.answer("pr-list", out="[]")
-        kit.answer("pr-create", out="https://github.com/o/r/pull/9\n")
         self.wt = kit.run_dir / "worktrees" / "01-01"
         kit.git("worktree", "add", "-q", "-b", "task/t/01", str(self.wt), "origin/feat/t", cwd=clone)
         self.commit(self.wt, "task.txt", "task\n", "feat: task one")
@@ -81,19 +51,17 @@ class MergeTaskTest(unittest.TestCase):
         self.kit.git("commit", "-qm", message, cwd=where)
         return self.kit.git("rev-parse", "HEAD", cwd=where)
 
-    def push_to_ticket(self, name, text):
-        """A commit on origin's ticket branch, as another task's merge would leave."""
-        other = self.kit.tmp / "other"
-        if not other.exists():
-            self.kit.git("clone", "-q", "-b", "feat/t", str(self.kit.origin), str(other))
-        self.kit.git("pull", "-q", "origin", "feat/t", cwd=other)
-        sha = self.commit(other, name, text, f"feat: {name}")
-        self.kit.git("push", "-q", "origin", "HEAD:feat/t", cwd=other)
-        return sha
+    def ticket_tip(self):
+        return self.kit.git("rev-parse", "refs/heads/feat/t", cwd=self.kit.clone)
 
-    def setting(self, key, value):
-        p = self.kit.tool(self.kit.home / ".agents/bin/settings", "set", "build-epic", key, value, "--machine")
-        self.assertEqual(p.returncode, 0, p.stderr)
+    def advance_ticket(self, name, text):
+        """A commit on the local ticket branch, as another task's merge would leave."""
+        other = self.kit.tmp / "other-wt"
+        self.kit.git("worktree", "add", "-q", "--detach", str(other), self.ticket_tip(), cwd=self.kit.clone)
+        sha = self.commit(other, name, text, f"feat: {name}")
+        self.kit.git("update-ref", "refs/heads/feat/t", sha, cwd=self.kit.clone)
+        self.kit.git("worktree", "remove", "--force", str(other), cwd=self.kit.clone)
+        return sha
 
     def merge(self, run=None):
         p = self.kit.step(MERGE_TASK, run or self.kit.run_dir, "01-01")
@@ -105,9 +73,6 @@ class MergeTaskTest(unittest.TestCase):
             self.assertTrue(Path(line.rsplit("(log: ", 1)[1][:-1]).is_file(), line)
         return line
 
-    def calls(self, *prefix):
-        return [c for c in self.kit.gh_calls() if c[:len(prefix)] == list(prefix)]
-
     def origin_tip(self, branch):
         return self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", branch)
 
@@ -115,23 +80,56 @@ class MergeTaskTest(unittest.TestCase):
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
         self.assertTrue(self.wt.is_dir())
 
-    # Green
+    def log(self):
+        return (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8")
 
-    def test_green_merges_sets_done_and_removes_worktree_and_branch(self):
+    # Green: a local merge commit, no GitHub call
+
+    def test_green_merges_into_the_local_ticket_branch_with_no_github_call(self):
+        start = self.origin_tip("feat/t")
         head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         line = self.merge()
-        self.assertRegex(line, r"^OK 01-01 done suites=2 \d+s$")
+        self.assertRegex(line, r"^OK 01-01 done suites=2 \d+s commit=[0-9a-f]{7}$")
+        tip = self.ticket_tip()
+        self.assertEqual(self.kit.git("rev-parse", f"{tip}^1", cwd=self.kit.clone), start)
+        self.assertEqual(self.kit.git("rev-parse", f"{tip}^2", cwd=self.kit.clone), head)
+        self.assertEqual(self.kit.git("rev-parse", f"{tip}^{{tree}}", cwd=self.kit.clone),
+                         self.kit.git("rev-parse", f"{head}^{{tree}}", cwd=self.kit.clone))
+        self.assertEqual(self.kit.git("log", "-1", "--format=%s", tip, cwd=self.kit.clone),
+                         "Merge task 01-01: task 01")
+        self.assertTrue(line.endswith(f"commit={tip[:7]}"))
+        self.assertEqual(self.kit.gh_calls(), [])
+        self.assertEqual(self.origin_tip("feat/t"), start)
+        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "branch", "--list", "task/t/01"), "")
         self.assertEqual(runfolder.get(self.task, "Status"), "done")
+        self.assertEqual(runfolder.get(self.task, "Commit"), tip)
+        self.assertRegex(runfolder.get(self.task, "Done"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertFalse(self.wt.exists())
         self.assertEqual(self.kit.git("branch", "--list", "task/t/01", cwd=self.kit.clone), "")
-        self.assertEqual(self.origin_tip("task/t/01"), head)
-        self.assertEqual(self.calls("pr", "merge"),
-                         [["pr", "merge", "5", "--squash", "--delete-branch", "--match-head-commit", head]])
-        log = (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8")
-        self.assertIn("suite two", log)
-        self.assertIn("suite 'true': rc 0", log)
+        self.assertIn("suite two", self.log())
         saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
         self.assertEqual([(s["command"], s["rc"]) for s in saved], [("true", 0), ("echo suite two", 0)])
+
+    def test_a_missing_local_ticket_branch_is_made_from_origins(self):
+        self.assertNotEqual(self.kit.git("branch", "--list", "feat/t", cwd=self.kit.clone), "feat/t")
+        start = self.origin_tip("feat/t")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertEqual(self.kit.git("rev-parse", f"{self.ticket_tip()}^1", cwd=self.kit.clone), start)
+
+    def test_a_shipped_ticket_gets_its_branch_pushed_so_its_pr_updates(self):
+        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/9")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertEqual(self.origin_tip("feat/t"), self.ticket_tip())
+        self.assertEqual(self.kit.gh_calls(), [])
+
+    def test_a_rerun_after_the_merge_landed_does_not_merge_twice(self):
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        tip = self.ticket_tip()
+        # As if the step had stopped after the local merge: the task still in progress on the head it merged.
+        self.kit.git("worktree", "add", "-q", "-b", "task/t/01", str(self.wt), f"{tip}^2", cwd=self.kit.clone)
+        runfolder.set_header(self.task, "Status", "in-progress")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertEqual(self.ticket_tip(), tip)
 
     def test_checks_calling_a_tool_setup_installed_in_the_env_merge_green(self):
         (self.kit.run_dir / "map.md").write_text(
@@ -140,20 +138,47 @@ class MergeTaskTest(unittest.TestCase):
         p = self.kit.step(SCRIPTS / "setup.py", self.kit.run_dir)
         self.assertTrue(p.stdout.startswith("OK run set up "), p.stdout + p.stderr)
         self.assertRegex(self.merge(), r"^OK 01-01 done suites=1 ")
-        self.assertIn("from the env", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
-        saved = json.loads((self.kit.run_dir / "reports" / "01-01.checks.json").read_text(encoding="utf-8"))
-        self.assertEqual([(s["command"], s["rc"]) for s in saved], [("envtool", 0)])
+        self.assertIn("from the env", self.log())
 
     def test_works_through_a_linked_run_path(self):
         self.assertRegex(self.merge(self.kit.link(self.kit.run_dir, "run-link")), r"^OK 01-01 done ")
 
-    # Refusals before any check, push or merge
+    # High-tier tasks (D7): reviewed before they merge
+
+    def high_tier(self):
+        self.task.write_text(TASK.format(nn="01", status="in-progress") + "Tier: high\n", encoding="utf-8")
+
+    def test_a_high_tier_task_with_no_review_of_its_head_is_refused_before_checks(self):
+        self.high_tier()
+        self.checks("echo suite ran")
+        line = self.merge()
+        self.assertTrue(line.startswith("FAIL 01-01 unreviewed (log: "), line)
+        self.assertNotIn("suite ran", self.log())
+        self.assert_not_done()
+
+    def test_a_high_tier_task_reviewed_at_its_head_merges(self):
+        self.high_tier()
+        head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
+        (self.kit.run_dir / "reviews").mkdir()
+        (self.kit.run_dir / "reviews" / f"01-01-{head[:7]}.md").write_text("report\n", encoding="utf-8")
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+
+    def test_a_review_of_an_older_head_does_not_count(self):
+        self.high_tier()
+        old = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
+        (self.kit.run_dir / "reviews").mkdir()
+        (self.kit.run_dir / "reviews" / f"01-01-{old[:7]}.md").write_text("report\n", encoding="utf-8")
+        self.commit(self.wt, "fix.txt", "fix\n", "fix: after the review")
+        self.assertTrue(self.merge().startswith("FAIL 01-01 unreviewed (log: "))
+
+    # Refusals before any check or merge
 
     def assert_refused(self, reason):
+        start = self.origin_tip("feat/t")
         line = self.merge()
         self.assertTrue(line.startswith(f"FAIL 01-01 {reason} (log: "), line)
         self.assertEqual(self.kit.gh_calls(), [])
-        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "branch", "--list", "task/t/01"), "")
+        self.assertEqual(self.origin_tip("feat/t"), start)
         self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
 
     def test_uncommitted_changes_are_refused_and_kept(self):
@@ -177,26 +202,15 @@ class MergeTaskTest(unittest.TestCase):
         self.ticket.write_text(TICKET.replace("Branch: feat/t\n", ""), encoding="utf-8")
         self.assert_refused("ticket-no-branch")
 
-    def test_a_task_without_a_pr_is_refused(self):
-        self.task.write_text(TASK.format(nn="01", status="in-progress"), encoding="utf-8")
-        self.assert_refused("no-pr")
-
-    def test_a_missing_or_failing_settings_tool_is_refused(self):
-        tool = self.kit.home / ".agents" / "bin" / "settings"
-        tool.unlink()
-        self.assert_refused(f"no-settings: {tool} is missing; run install.sh")
-        tool.write_text("#!/bin/sh\necho 'settings: bad value' >&2\nexit 1\n", encoding="utf-8")
-        tool.chmod(0o755)
-        self.assert_refused("setting-merge_command")
-
     # Red checks
 
     def test_a_red_check_fails_naming_the_suite_and_nothing_merges(self):
         self.checks("true", "exit 3", "echo never")
+        start = self.origin_tip("feat/t")
         line = self.merge()
         self.assertTrue(line.startswith("FAIL 01-01 red exit 3 (log: "), line)
-        self.assertNotIn("never", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
-        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertNotIn("never", self.log())
+        self.assertEqual(self.ticket_tip(), start)
         self.assert_not_done()
 
     # The merge guard (behaviours 9, 10)
@@ -216,46 +230,32 @@ class MergeTaskTest(unittest.TestCase):
         (self.wt / "pkg").mkdir()
         self.commit(self.wt, "pkg/run.py", "import sys\n\nsys.exit(1)\n", "feat: exit")
 
-    def test_a_task_deleting_the_rules_is_refused_and_a_waived_deletion_leaves_them_for_the_next_task(self):
-        self.guard_on_main()
-        self.kit.git("merge", "-q", "origin/feat/t", cwd=self.wt)
-        self.commit(self.wt, "AGENTS.md", "# Rules\n", "docs: drop the rules")
-        self.assertRegex(self.merge(), r"^FAIL 01-01 guarded AGENTS.md:1 merge-guard \(log: ")
-        self.assertEqual(self.calls("pr", "merge"), [])
-        p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "clause", "merge-guard", "yes", "Rui: fine")
-        self.assertTrue(p.stdout.startswith("OK decisions clause waived=yes"), p.stdout + p.stderr)
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertNotIn("agent-merge-guard", self.kit.git("--git-dir", str(self.kit.origin), "show",
-                                                             "task/t/01:AGENTS.md"))
-        # The task PR's squash merge, as gh would leave it: the ticket branch without the block.
-        self.push_to_ticket("AGENTS.md", "# Rules\n")
-        self.ticket.write_text(TICKET, encoding="utf-8")
-        self.task.write_text(TASK.format(nn="01", status="in-progress") + "PR: https://github.com/o/r/pull/5\n",
-                             encoding="utf-8")
-        self.kit.git("worktree", "add", "-q", "-b", "task/t/01", str(self.wt), "origin/feat/t", cwd=self.kit.clone)
-        (self.wt / "pkg").mkdir()
-        self.commit(self.wt, "pkg/run.py", "import sys\n\nsys.exit(1)\n", "feat: exit")
-        self.assertRegex(self.merge(), r"^FAIL 01-01 guarded pkg/run.py:3 process-exit \(log: ")
-
     def test_a_guarded_diff_is_refused_before_checks_and_nothing_merges(self):
         self.guard_on_ticket()
         self.checks("echo suite ran")
         line = self.merge()
         self.assertTrue(line.startswith("FAIL 01-01 guarded pkg/run.py:3 process-exit (log: "), line)
-        self.assertNotIn("suite ran", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(self.kit.git("--git-dir", str(self.kit.origin), "branch", "--list", "task/t/01"), "")
+        self.assertNotIn("suite ran", self.log())
         self.assert_not_done()
 
-    def test_an_unreadable_rule_on_the_default_branch_fails_bad_rule_before_checks_and_nothing_merges(self):
+    def test_a_task_deleting_the_rules_is_refused_until_waived(self):
+        self.guard_on_main()
+        self.kit.git("merge", "-q", "origin/feat/t", cwd=self.wt)
+        self.commit(self.wt, "AGENTS.md", "# Rules\n", "docs: drop the rules")
+        self.assertRegex(self.merge(), r"^FAIL 01-01 guarded AGENTS.md:1 merge-guard \(log: ")
+        p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "clause", "merge-guard", "yes", "Rui: fine")
+        self.assertTrue(p.stdout.startswith("OK decisions clause waived=yes"), p.stdout + p.stderr)
+        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertNotIn("agent-merge-guard", self.kit.git("show", "feat/t:AGENTS.md", cwd=self.kit.clone))
+
+    def test_an_unreadable_rule_on_the_default_branch_fails_bad_rule_before_checks(self):
         clone = self.kit.clone
         self.commit(clone, "AGENTS.md", "# Rules\n\n```agent-merge-guard\nprocess-exit added\n```\n", "docs: rules")
         self.kit.git("push", "-q", "origin", "main", cwd=clone)
         self.checks("echo suite ran")
         line = self.merge()
         self.assertTrue(line.startswith("FAIL 01-01 bad-rule: line 4: process-exit added (log: "), line)
-        self.assertNotIn("suite ran", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
-        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertNotIn("suite ran", self.log())
         self.assert_not_done()
 
     def test_a_guarded_diff_whose_rule_is_waived_yes_merges(self):
@@ -263,93 +263,28 @@ class MergeTaskTest(unittest.TestCase):
         p = self.kit.step(SCRIPTS / "decide.py", self.kit.run_dir, "clause", "process-exit", "yes", "Rui: fine here")
         self.assertTrue(p.stdout.startswith("OK decisions clause waived=yes"), p.stdout + p.stderr)
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(len(self.calls("pr", "merge")), 1)
-
-    # Merge failures (bug 10)
-
-    def test_a_failed_gh_merge_is_a_fail_merge(self):
-        self.kit.answer("pr-merge", err="GraphQL: Pull request is not mergeable\n", rc=1)
-        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
-        self.assertTrue(self.merge().startswith("FAIL 01-01 merge (log: "))
-        self.assert_not_done()
-
-    def test_a_merge_that_exits_0_but_reads_back_open_is_a_fail_merge(self):
-        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
-        self.assertTrue(self.merge().startswith("FAIL 01-01 merge (log: "))
-        self.assert_not_done()
-
-    def test_a_merge_command_that_refuses_is_a_fail_merge(self):
-        rule = self.kit.tmp / "refuse.sh"
-        rule.write_text("#!/bin/sh\necho 'gate: refused' >&2\nexit 1\n", encoding="utf-8")
-        rule.chmod(0o755)
-        self.setting("merge_command", f"{rule} {{pr}}")
-        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
-        self.assertTrue(self.merge().startswith("FAIL 01-01 merge (log: "))
-        self.assertIn("gate: refused", (self.kit.run_dir / "logs" / "01-01-merge_task.log").read_text(encoding="utf-8"))
-        self.assert_not_done()
-
-    def test_merged_after_a_nonzero_exit_counts_as_merged(self):
-        # gh exits 1 when it merged but could not delete a branch still checked out in a worktree.
-        self.kit.answer("pr-merge", err="failed to delete local branch task/t/01\n", rc=1)
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-
-    def test_a_head_that_moved_fails_head_moved_and_nothing_merges(self):
-        (self.kit.answers / "pr-head").write_text("0" * 40, encoding="utf-8")
-        self.assertTrue(self.merge().startswith("FAIL 01-01 head-moved (log: "))
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assert_not_done()
-
-    def test_a_match_head_commit_refusal_fails_head_moved(self):
-        self.kit.answer("pr-merge", err="GraphQL: Head branch was modified. Review and try the merge again.\n", rc=1)
-        (self.kit.answers / "pr-state").write_text("OPEN", encoding="utf-8")
-        self.assertTrue(self.merge().startswith("FAIL 01-01 head-moved (log: "))
-
-    # The merge_command Setting
-
-    def test_merge_command_setting_runs_instead_of_gh_pr_merge(self):
-        rule = self.kit.tmp / "merge-rule.sh"
-        out = self.kit.tmp.as_posix()  # a Windows path's backslashes would be escapes in sh
-        rule.write_text(f"#!/bin/sh\n{{ pwd -W 2>/dev/null || pwd; }} > {out}/rule.cwd\necho \"$@\" > {out}/rule.args\n", encoding="utf-8")
-        rule.chmod(0o755)
-        self.setting("merge_command", f"{rule} {{pr}} --head {{sha}}")
-        head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual((self.kit.tmp / "rule.args").read_text(encoding="utf-8"), f"5 --head {head}\n")
-        self.assertEqual(Path((self.kit.tmp / "rule.cwd").read_text(encoding="utf-8").strip()).resolve(), Path(self.kit.clone).resolve())
-        self.assertEqual(self.calls("pr", "merge"), [])
 
     # Catching up with the ticket (bug 4)
 
-    def test_a_resolved_merge_at_the_head_is_kept_not_reset(self):
-        self.push_to_ticket("README.md", "ticket side\n")
-        self.commit(self.wt, "README.md", "task side\n", "feat: task readme")
-        self.kit.git("fetch", "-q", "origin", cwd=self.wt)
-        subprocess.run(["git", "merge", "origin/feat/t"], cwd=self.wt, env=self.kit.env, capture_output=True)
-        (self.wt / "README.md").write_text("resolved\n", encoding="utf-8")
-        self.kit.git("commit", "-qam", "Merge ticket, resolved", cwd=self.wt)
-        resolved = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(self.origin_tip("task/t/01"), resolved)
-        self.assertEqual(self.calls("pr", "merge")[0][-1], resolved)
-
     def test_a_branch_behind_the_ticket_merges_forward_keeping_its_resolution(self):
-        self.push_to_ticket("README.md", "ticket side\n")
+        self.merge_once_to_make_the_local_branch()
+        later = self.advance_ticket("later.txt", "later\n")
         self.commit(self.wt, "README.md", "task side\n", "feat: task readme")
-        self.kit.git("fetch", "-q", "origin", cwd=self.wt)
-        subprocess.run(["git", "merge", "origin/feat/t"], cwd=self.wt, env=self.kit.env, capture_output=True)
-        (self.wt / "README.md").write_text("resolved\n", encoding="utf-8")
-        self.kit.git("commit", "-qam", "Merge ticket, resolved", cwd=self.wt)
-        resolved = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
-        later = self.push_to_ticket("later.txt", "later\n")
+        head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        pushed = self.origin_tip("task/t/01")
-        for ancestor in (resolved, later):
-            self.kit.git("merge-base", "--is-ancestor", ancestor, pushed, cwd=self.kit.clone)
-        self.assertEqual(self.kit.git("show", f"{pushed}:README.md", cwd=self.kit.clone), "resolved")
-        self.assertEqual(self.calls("pr", "merge")[0][-1], pushed)
+        tip = self.ticket_tip()
+        for ancestor in (later, head):
+            self.kit.git("merge-base", "--is-ancestor", ancestor, tip, cwd=self.kit.clone)
+        self.assertEqual(self.kit.git("show", f"{tip}:README.md", cwd=self.kit.clone), "task side")
+        self.assertEqual(self.kit.git("rev-parse", f"{tip}^1", cwd=self.kit.clone), later)
+
+    def merge_once_to_make_the_local_branch(self):
+        """Makes the local ticket branch exist, at origin's tip, as an earlier merge in the run would."""
+        self.kit.git("branch", "--no-track", "feat/t", "origin/feat/t", cwd=self.kit.clone)
 
     def test_a_conflict_with_the_ticket_fails_naming_the_files_and_leaves_the_branch(self):
-        self.push_to_ticket("README.md", "ticket side\n")
+        self.merge_once_to_make_the_local_branch()
+        self.advance_ticket("README.md", "ticket side\n")
         head = self.commit(self.wt, "README.md", "task side\n", "feat: task readme")
         line = self.merge()
         self.assertTrue(line.startswith("FAIL 01-01 conflict README.md (log: "), line)
@@ -357,48 +292,16 @@ class MergeTaskTest(unittest.TestCase):
         self.assertEqual(self.kit.git("status", "--porcelain", cwd=self.wt), "")
         self.assert_not_done()
 
-    # Ticket CI
-
-    def test_first_merge_opens_the_draft_ticket_pr_and_records_it(self):
+    def test_a_resolved_merge_at_the_head_is_kept_not_reset(self):
+        self.merge_once_to_make_the_local_branch()
+        self.advance_ticket("README.md", "ticket side\n")
+        self.commit(self.wt, "README.md", "task side\n", "feat: task readme")
+        subprocess.run(["git", "merge", "feat/t"], cwd=self.wt, env=self.kit.env, capture_output=True)
+        (self.wt / "README.md").write_text("resolved\n", encoding="utf-8")
+        self.kit.git("commit", "-qam", "Merge ticket, resolved", cwd=self.wt)
+        resolved = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(self.calls("pr", "create"), [[
-            "pr", "create", "--draft", "--base", "main", "--head", "feat/t",
-            "--title", "feat: Merge JSON things", "--body", "Part of #7"]])
-        self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/9")
-        self.assertEqual(self.calls("pr", "checks"), [])
-
-    def test_an_open_ticket_pr_is_recorded_not_duplicated(self):
-        self.kit.answer("pr-list", out='[{"number": 4, "url": "https://github.com/o/r/pull/4"}]')
-        self.merge()
-        self.assertEqual(self.calls("pr", "create"), [])
-        self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/4")
-
-    def test_later_merge_waits_on_pending_ticket_checks_first(self):
-        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/9")
-        self.kit.answer("pr-checks", out='[{"name": "ci", "bucket": "pending", "link": ""}]', rc=8, n=1)
-        self.kit.answer("pr-checks", out='[{"name": "ci", "bucket": "pass", "link": ""},'
-                                         '{"name": "old", "bucket": "cancel", "link": ""}]')
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        order = [c[:2] for c in self.kit.gh_calls() if c[:2] in (["pr", "checks"], ["pr", "merge"])]
-        self.assertEqual(order, [["pr", "checks"], ["pr", "checks"], ["pr", "merge"]])
-        self.assertEqual(self.calls("pr", "create"), [])
-
-    def test_a_red_ticket_check_fails_with_its_run_id_once(self):
-        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/9")
-        self.kit.answer("pr-checks", out='[{"name": "ci", "bucket": "fail", '
-                                         '"link": "https://github.com/o/r/actions/runs/4242/job/7"}]', rc=1)
-        line = self.merge()
-        self.assertTrue(line.startswith("FAIL 01-01 ticket-ci-red 4242 (log: "), line)
-        self.assertEqual(self.calls("run", "view"), [["run", "view", "4242", "--log-failed"]])
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assert_not_done()
-        # Reported once: the orchestrator hands it to a later task, and the next merge goes ahead.
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-
-    def test_ci_off_in_decisions_skips_ticket_ci(self):
-        (self.kit.run_dir / "decisions.md").write_text("# Decisions\nci: off\n", encoding="utf-8")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
-        self.assertEqual(self.calls("pr", "create") + self.calls("pr", "list"), [])
+        self.assertEqual(self.kit.git("rev-parse", f"{self.ticket_tip()}^2", cwd=self.kit.clone), resolved)
 
 
 if __name__ == "__main__":
