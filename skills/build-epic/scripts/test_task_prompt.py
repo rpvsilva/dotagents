@@ -81,6 +81,13 @@ class TaskPromptTest(unittest.TestCase):
         _, _, here = self.ok("01-02", "--failure", str(log))
         self.assertEqual(here[-2], f"failure: {log.resolve()}")
 
+    def test_a_base_merge_conflict_adds_a_sync_line_and_runs_here_only(self):
+        _, _, lines = self.ok("01-02", "--sync", "a.txt b.txt")
+        self.assertEqual(lines[-2:], ["sync: a.txt b.txt", f"report: {self.kit.run_dir / 'reports' / '01-02.md'}"])
+        p = self.kit.step(PROMPT, self.run_dir, "01-02", "--remote", "--sync", "a.txt")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertTrue(p.stdout.startswith("FAIL 01-02 sync-remote "), p.stdout)
+
     def test_reissue_keeps_the_broken_report_where_the_next_run_cannot_overwrite_it(self):
         report = self.kit.run_dir / "reports" / "01-02.md"
         report.write_text("Built it.\nstatus: done\nchanged: a.txt\n", encoding="utf-8")
@@ -93,7 +100,7 @@ class TaskPromptTest(unittest.TestCase):
         self.assertEqual(kept.read_text(encoding="utf-8"), "Built it.\nstatus: done\nchanged: a.txt\n")
 
     def test_bad_options_and_missing_files_fail_and_write_nothing(self):
-        for args, prefix in ((["--resolve"], "FAIL 01-02 usage: "), (["--bogus"], "FAIL 01-02 usage: "),
+        for args, prefix in ((["--resolve"], "FAIL 01-02 usage: "), (["--sync"], "FAIL 01-02 usage: "), (["--bogus"], "FAIL 01-02 usage: "),
                              (["--failure", "/nowhere.log"], "FAIL 01-02 no-failure-file: "),
                              (["--reissue"], "FAIL 01-02 no-report: ")):
             p = self.kit.step(PROMPT, self.run_dir, "01-02", *args)
