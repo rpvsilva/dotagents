@@ -6,9 +6,9 @@ Usage: python3 -I post_review.py <run> <PR> <report-file> [--base <ref>] [--note
 `<PR>` is a number, `#n` or a PR URL. The report path is resolved against the caller's folder before anything else runs,
 so a relative path posts the same body as an absolute one. The body is one header line, a blank line, the report file's
 bytes unchanged, then the note when given, as its own paragraph. The header names only what is known about the review:
-the PR and head it reviewed, read from the report's name (`<PR>-<sha7>[-<suffix>].<ext>`; with any other name, the
-reviewed head is not recorded), `posted on PR #<n>` when that PR is not the one posted on (a hub report on its ticket
-PR), the diff read (`git diff <ref>...<sha7>`) only when `--base` gives the base the reviewer was given (for a
+the PR and head it reviewed, read from the report's name (`<PR>-<sha7>[-<suffix>].<ext>`, or `<TT-NN>-<sha7>...` for a
+task reviewed before it merged, which has no PR; with any other name, the reviewed head is not recorded), `posted on
+PR #<n>` when that PR is not the one posted on (a task's or hub report on its ticket PR), the diff read (`git diff <ref>...<sha7>`) only when `--base` gives the base the reviewer was given (for a
 re-review, the head it reviewed before), and the run's `test_command:` from `decisions.md`. There are no inline
 comments: findings cite `path:line` in the report's text. The body is saved beside the report as `<name>.posted<ext>`,
 and the payload `{commit_id, event: COMMENT, body}` is kept in `<run>/logs/PR<n>-review.json` and posted with
@@ -32,6 +32,7 @@ DENIED = re.compile(r"HTTP 403|returned error: 403")
 RATE_LIMIT = re.compile(r"rate limit", re.IGNORECASE)
 USAGE = "post_review.py <run> <PR> <report-file> [--base <ref>] [--note <text>]"
 REPORT_NAME = re.compile(r"(\d+)-([0-9a-f]{7,40})(?:-.*)?")
+TASK_REPORT = re.compile(r"(\d+-\d+)-([0-9a-f]{7,40})(?:-.*)?")  # a task's review before it merged: no PR of its own
 
 
 def parse(args):
@@ -55,10 +56,14 @@ def parse(args):
 
 def header(number, report, base, test_command):
     """The one line above the report: what the reviewer read, as far as its name and `base` say, and what it ran."""
-    m = REPORT_NAME.fullmatch(report.stem)
+    task = TASK_REPORT.fullmatch(report.stem)
+    m = task or REPORT_NAME.fullmatch(report.stem)
     reviewed, sha = (m.group(1), m.group(2)[:7]) if m else (number, None)
-    line = f"Review of PR #{reviewed} at `{sha}`" if sha else f"Review of PR #{reviewed} (reviewed head not recorded)"
-    if reviewed != number:
+    if task:
+        line = f"Review of task {reviewed} at `{sha}`, before it merged"
+    else:
+        line = f"Review of PR #{reviewed} at `{sha}`" if sha else f"Review of PR #{reviewed} (reviewed head not recorded)"
+    if task or reviewed != number:
         line += f", posted on PR #{number}"
     if base and sha:
         line += f": read `git diff {base}...{sha}` (from the merge base)"

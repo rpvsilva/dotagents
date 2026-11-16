@@ -35,7 +35,7 @@ class Task:
         parts = self.path.stem.split("-", 2)
         name = f"{parts[0]}-{parts[1]}" if len(parts) > 1 and parts[1].isdigit() else self.path.stem
         self.worktree = ctx.run_dir / "worktrees" / name
-        self.upstream = f"origin/{self.ticket_branch}"
+        self.upstream = self.ticket_branch  # the local branch: tasks merge there, and origin's waits for the ship
 
     def git(self, *args, check=True):
         """`git <args>` in the worktree; a failure raises `Fail("git-<subcommand>")`."""
@@ -64,10 +64,13 @@ class Task:
         return self.git("rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).rc == 0
 
     def fetch(self):
-        gitops.Git(self.repo, self.ctx.log).fetch()
+        """Fetches origin, and makes the local ticket branch when it is missing (`gitops.ticket_tip`)."""
+        git = gitops.Git(self.repo, self.ctx.log)
+        git.fetch()
+        git.ticket_tip(self.ticket_branch)
 
     def changed(self):
-        """Files the task branch changes against the ticket branch (as fetched)."""
+        """Files the task branch changes against the ticket branch."""
         out = self.git("diff", "--name-only", f"{self.upstream}...HEAD").out
         return [line for line in out.splitlines() if line]
 
@@ -76,7 +79,7 @@ class Task:
         return sorted({line for line in out.splitlines() if line})
 
     def merge_upstream(self):
-        """Merges the fetched ticket branch when HEAD lacks its tip. Returns True when it merged."""
+        """Merges the ticket branch when HEAD lacks its tip. Returns True when it merged."""
         if gitops.Git(self.worktree, self.ctx.log).is_ancestor(self.upstream):
             return False
         res = self.git("merge", "--no-edit", self.upstream, check=False)

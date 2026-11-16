@@ -1,18 +1,18 @@
 """Tests for the identity check before every merge (`steplib/identity.py`, `steplib/merge.py`), through
-`merge_task.py` against a stub `gh`."""
+`ship_ticket.py merge` against a stub `gh`: tasks merge locally, so the ticket PR's merge is the only one."""
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import test_merge_task  # noqa: E402
+import test_ship  # noqa: E402
 from steplib import core, identity, merge, runfolder  # noqa: E402
 from testkit import Kit  # noqa: E402
 
 
-class IdentityTest(test_merge_task.MergeTaskTest):
-    """The merge_task sandbox; the base class's own tests run from test_merge_task.py only (see the end)."""
+class IdentityTest(test_ship.ShipMergeTest):
+    """The ship sandbox, its ticket PR open; the base class's own tests run from test_ship.py only (see the end)."""
 
     def setUp(self):
         super().setUp()
@@ -23,22 +23,23 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         text = f"# Decisions\nmerge_identity: {mode}\n" + (f"human: {human}\n" if human else "")
         (self.kit.run_dir / "decisions.md").write_text(text, encoding="utf-8")
         if setting or mode == "human":
-            self.setting("merge_identity", setting or mode)
+            self.set_setting("merge_identity", setting or mode)
 
     def merge_tokens(self):
         """The `GH_TOKEN` each `gh pr merge` call ran with."""
         return self.tokens("pr", "merge")
 
     def tokens(self, *prefix):
-        """The `GH_TOKEN` each `gh <prefix...>` call ran with. The `pr view` wrapper logs calls but no tokens, so
-        tokens pair with the other calls only."""
-        stub_calls = [c for c in self.kit.gh_calls() if c[:2] != ["pr", "view"]]
-        return [t for c, t in zip(stub_calls, self.kit.gh_tokens()) if c[:len(prefix)] == list(prefix)]
+        """The `GH_TOKEN` each `gh <prefix...>` call ran with."""
+        return [t for c, t in zip(self.kit.gh_calls(), self.kit.gh_tokens()) if c[:len(prefix)] == list(prefix)]
+
+    def merge(self):
+        return self.ship("merge")
 
     def assert_wrong_identity(self, line):
-        self.assertTrue(line.startswith("FAIL 01-01 wrong-identity (log: "), line)
+        self.assertTrue(line.startswith("FAIL 01 wrong-identity (log: "), line)
         self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(runfolder.get(self.task, "Status"), "in-progress")
+        self.assertEqual(runfolder.get(self.ticket, "Status"), "building")
 
     def assert_no_auth_token(self):
         self.assertEqual([c for c in self.kit.gh_calls() if c[:2] == ["auth", "token"]], [])
@@ -48,9 +49,9 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     def test_human_checks_the_login_and_merges_without_gh_token_when_it_is_the_recorded_human(self):
         self.decide("human")
         self.kit.answer("api-user", out="rui\n")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertRegex(self.merge(), r"^OK 01 merged ")
         self.assertIn(["api", "user", "--jq", ".login"], self.kit.gh_calls())
-        self.assertEqual(self.tokens("api", "user"), [""])
+        self.assertEqual(self.tokens("api", "user")[:1], [""])  # the proof; the tracker then acts as the run
         self.assertEqual(self.merge_tokens(), [""])
         self.assert_no_auth_token()
 
@@ -63,20 +64,20 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     def test_human_with_no_recorded_human_merges_as_the_gh_login(self):
         self.decide("human", human=None)
         self.kit.answer("api-user", out="rui\n")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertRegex(self.merge(), r"^OK 01 merged ")
         self.assertEqual(self.merge_tokens(), [""])
 
     def test_human_compares_the_login_case_insensitively(self):
         self.decide("human", human="Rui")
         self.kit.answer("api-user", out="rUI\n")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertRegex(self.merge(), r"^OK 01 merged ")
 
     def test_human_matches_the_recorded_human_in_a_decisions_file_with_crlf_line_ends(self):
         # A text file written on Windows ends its lines with \r\n.
         (self.kit.run_dir / "decisions.md").write_bytes(b"# Decisions\r\nmerge_identity: human\r\nhuman: rui\r\n")
-        self.setting("merge_identity", "human")
+        self.set_setting("merge_identity", "human")
         self.kit.answer("api-user", out="rui\n")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertRegex(self.merge(), r"^OK 01 merged ")
 
     def test_human_refuses_a_bot_login(self):
         self.decide("human", human=None)
@@ -116,7 +117,7 @@ class IdentityTest(test_merge_task.MergeTaskTest):
     def test_app_merges_when_the_token_answers_installation_repositories(self):
         self.decide("app")
         self.kit.answer("api-installation_repositories", out='{"total_count": 1, "repositories": []}\n')
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertRegex(self.merge(), r"^OK 01 merged ")
         self.assertIn(["api", "installation/repositories"], self.kit.gh_calls())
         self.assert_no_auth_token()
 
@@ -131,9 +132,9 @@ class IdentityTest(test_merge_task.MergeTaskTest):
         (self.kit.run_dir / "decisions.md").unlink(missing_ok=True)
         self.kit.answer("api-installation_repositories", rc=1, err="HTTP 401: Bad credentials\n")
         self.assert_wrong_identity(self.merge())
-        self.setting("merge_identity", "human")
+        self.set_setting("merge_identity", "human")
         self.kit.answer("api-user", out="rui\n")
-        self.assertRegex(self.merge(), r"^OK 01-01 done ")
+        self.assertRegex(self.merge(), r"^OK 01 merged ")
         self.assertEqual(self.calls("api", "user")[-1:], [["api", "user", "--jq", ".login"]])
 
 
@@ -175,7 +176,7 @@ class MergeArgvTest(unittest.TestCase):
                          ["scripts/merge-pr.sh", "--yes", "5"])
 
 
-for _name in [n for n in dir(test_merge_task.MergeTaskTest) if n.startswith("test_")]:
+for _name in [n for n in dir(test_ship.ShipMergeTest) if n.startswith("test_")]:
     setattr(IdentityTest, _name, None)
 
 if __name__ == "__main__":

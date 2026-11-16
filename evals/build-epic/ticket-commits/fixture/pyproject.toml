@@ -1,0 +1,11 @@
+[project]
+name = "todo"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Test files are named `<name>_test.py`.
+python_files = ["*_test.py", "test_*.py"]
+# CI runs `python -I -m pytest -c pyproject.toml`, so the repo root is added here, after pytest itself is imported.
+pythonpath = ["."]

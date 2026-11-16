@@ -67,12 +67,12 @@ class TicketBodyTest(FixtureRun):
         shutil.rmtree(self.run_dir / "reports")
         self.assertEqual(prbody.section(self.body(None), "Testing"), prbody.NO_RESULT)
 
-    def test_the_body_lists_each_task_pr_and_its_acceptance_criteria_then_closes_the_issues(self):
+    def test_the_body_lists_each_task_and_its_merge_commit_and_criteria_then_closes_the_issues(self):
         body = self.body(None)
         self.assertEqual(prbody.section(body, "Tasks").splitlines(), [
-            "- Bodies from the run folder: https://github.com/o/r/pull/41",
-            "- Shipping takes no prose: https://github.com/o/r/pull/42",
-            "- Docs for the new body: no PR",
+            "- 07-01 Bodies from the run folder: merged in `a1b2c3d`",
+            "- 07-02 Shipping takes no prose: merged in `e4f5a6b`",
+            "- 07-03 Docs for the new body: not merged",
         ])
         criteria = prbody.section(body, "Acceptance criteria")
         self.assertIn("- `ship_ticket.py` accepts no body argument.", criteria)
@@ -120,12 +120,6 @@ class SuiteResultTest(FixtureRun):
         testing = self.saved_results()
         self.assertIn("- `old-red`: failed\n", testing)
         self.assertIn("- `old-green`: passed\n", testing)
-
-    def test_the_task_body_reads_the_new_shape_too(self):
-        self.save("07-01", [{"command": "red", "rc": 2, "passed": 3, "failed": 0}])
-        task = self.run_dir / "tasks" / "07-01-prbody.md"
-        body = prbody.task_body(self.run_dir, "07-01", task, self.ticket)
-        self.assertIn("- `red`: failed (3 passed, 0 failed)", prbody.section(body, "Result"))
 
 
 class ShipOpenBodyTest(Base):
