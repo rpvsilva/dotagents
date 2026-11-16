@@ -5,13 +5,10 @@ The rule is the `merge_command` Setting (e.g. `scripts/merge-pr.sh {pr}`, run fr
 Before merging, the PR's head must be the pushed `sha` (a fresh push can take a few seconds to show); after, the PR
 must read `MERGED` at that head. Every merge first proves who is merging (`identity.py`).
 
-A PR merges only into the base its caller expects (`check_base`): `merge_task.py` names the task's own ticket branch,
-`ship_ticket.py` the run's base (`ci.base`); any other base fails `wrong-base <branch>` and nothing merges. A task PR
-(one into a base other than the run's) merges by the `task_merge_method` Setting: `squash`, or `merge` for merge
-commits, which the default rule does with `--merge` and a `merge-pr.sh` rule with its `--merge` option; any other rule
-fails `merge-method` rather than squash. A PR into the run's base merges by the rule as it is.
+A PR merges only into the base its caller expects (`check_base`): `ship_ticket.py` names the run's base (`ci.base`);
+any other base fails `wrong-base <branch>` and nothing merges. Tasks have no PR: they merge locally (`merge_task.py`).
 
-Fails `wrong-base <branch>`, `merge-method`, `wrong-identity`, `head-moved` or `merge`; a `merge` failure carries the
+Fails `wrong-base <branch>`, `wrong-identity`, `head-moved` or `merge`; a `merge` failure carries the
 rule's own output in its `said` attribute, so a caller can read the rule's answer and nothing else.
 """
 import json
@@ -19,7 +16,7 @@ import os
 import re
 import time
 
-from . import ci, core, gh, identity
+from . import core, gh, identity
 
 HEAD_TRIES = 6
 HEAD_WAIT = 5
@@ -55,17 +52,11 @@ def check_base(pr, into, expected, log):
         raise core.Fail(f"wrong-base {into or '?'}")
 
 
-def merge_argv(command, pr, sha, method="squash"):
-    """The argv of the merge rule for `pr` at `sha`. A command naming neither `{pr}` nor `{sha}` gets the PR appended.
-    With `method` `merge`, the default rule merges with `--merge` and a `merge-pr.sh` rule gets `--merge` first; any
-    other rule fails `merge-method`, since it may squash."""
+def merge_argv(command, pr, sha):
+    """The argv of the merge rule for `pr` at `sha`. A command naming neither `{pr}` nor `{sha}` gets the PR appended."""
     if not command:
-        return ["gh", "pr", "merge", pr, f"--{method}", "--delete-branch", "--match-head-commit", sha]
+        return ["gh", "pr", "merge", pr, "--squash", "--delete-branch", "--match-head-commit", sha]
     words = core.split(command)
-    if method != "squash":
-        if os.path.basename(words[0]) != "merge-pr.sh":
-            raise core.Fail("merge-method")
-        words = [words[0], f"--{method}", *words[1:]]
     argv = [w.replace("{pr}", pr).replace("{sha}", sha) for w in words]
     if not any("{pr}" in w or "{sha}" in w for w in words):
         argv.append(pr)
@@ -79,8 +70,7 @@ def merge(pr, sha, repo, log, base, command=None, run=None):
     pr, scale = str(pr), float(os.environ.get("BUILD_EPIC_RETRY_SLEEP", "1"))
     got = view(pr, log, repo)
     check_base(pr, got.get("baseRefName"), base, log)
-    method = (setting(repo, "task_merge_method", log) or "squash") if base != ci.base(run) else "squash"
-    argv = merge_argv(command, pr, sha, method)
+    argv = merge_argv(command, pr, sha)
     who = identity.mode(run, lambda: setting(repo, "merge_identity", log))
     env = identity.prove(run, who, repo, log)
     for attempt in range(HEAD_TRIES):

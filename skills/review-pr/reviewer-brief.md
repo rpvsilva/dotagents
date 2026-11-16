@@ -8,7 +8,7 @@ You review one PR and never edit it: your one output is the findings report belo
 - A **merge-path** concern (who approves or merges, under which identity, whether CI or a human review runs before a merge) that the file does not cover is one `process:` line at the end of the report, never a finding and never a `blocker`.
 - With `ci: off`, no CI runs for the run's PRs: a PR with no checks, or no CI run, is not a finding, not a `process:` line, and never a `blocker`. Its body's `## Merge` section says so (`CI is off for this run: the local run of map.md's Checks is the proof.`), and that local run is the proof.
 
-1. **Read the intent**: `gh pr view <n>` (title, description, linked issue). Done when you can say in one sentence what the PR claims to do.
+1. **Read the intent**: `gh pr view <n>` (title, description, linked issue); with no PR (your prompt says so), the task file instead. Done when you can say in one sentence what the PR claims to do.
 2. **Read the change**: the diff from the **merge base**, `git -C <worktree> diff $(git -C <worktree> merge-base <base> HEAD) HEAD` (the command the prompt names, when it names one), not `gh pr diff` and not the base branch's tip: a change the base gained after the merge base is **base drift**, never a finding. Then each changed file in full in the worktree, plus the callers and tests of what changed. Read the **whole diff before running any test**. Done when every changed hunk has been read in context, and nothing has run yet.
 3. **Hunt** along four axes, and only these:
    - **Bugs**: inputs or states that give a wrong result, a crash, data loss, or a security hole.

@@ -171,6 +171,32 @@ class ReviewPromptTest(unittest.TestCase):
     def test_hub_without_its_ticket_and_task_base_fails_with_usage(self):
         self.assert_usage(run("hub", *COMMON, "--task", "/t.md"))
 
+    # A task's commits before they merge, with no PR (build-epic's high-tier tasks)
+
+    NO_PR = ["--worktree", "/runs/r1/worktrees/03-02", "--head", "abc1234", "--base", "feat/03-review", *RUN,
+             "--task", "/runs/r1/tasks/03-02-review-prompt.md", "--report", "/runs/r1/reviews/03-02-abc1234.md"]
+
+    def test_a_task_with_no_pr_is_reviewed_from_its_task_file_and_local_commits(self):
+        out = self.render("task", self.NO_PR)
+        self.assertTrue(out.startswith("Review the commits of task /runs/r1/tasks/03-02-review-prompt.md, before "
+                                       "they merge into feat/03-review. There is no PR"), out)
+        self.assertIn("not `gh pr view`", out)
+        self.assertIn("/runs/r1/tasks/03-02-review-prompt.md: what the change was asked to do", out)
+        self.assertIn("git -C /runs/r1/worktrees/03-02 diff $(git -C /runs/r1/worktrees/03-02 merge-base "
+                      "feat/03-review abc1234) abc1234", out)
+        self.assertNotIn("PR #", out)
+
+    def test_with_no_pr_only_a_local_task_review_runs(self):
+        no_task = [a for a in self.NO_PR if a != "/runs/r1/tasks/03-02-review-prompt.md" and a != "--task"]
+        self.assert_usage(run("task", *no_task))
+        for mode in ("ticket", "re-review", "security"):
+            self.assert_usage(run(mode, *self.NO_PR, "--findings", str(self.findings)))
+        self.assert_usage(run("task", *self.NO_PR[:-2], "--remote", str(self.tmp / "remote"),
+                              "--allow-author", "rui"))
+
+    def test_the_pr_task_prompt_is_unchanged(self):
+        self.assertEqual(self.render("task"), (GOLDEN / "task.txt").read_text(encoding="utf-8"))
+
 
 def git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True,

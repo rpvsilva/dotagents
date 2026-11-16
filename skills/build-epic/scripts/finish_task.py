@@ -4,7 +4,8 @@ amends the task's `Writes` line with every changed path outside it.
 
 Usage: python3 -I finish_task.py <run> <TT-NN> [--report <file>] [--title <commit subject>]
 
-Prints `OK TT-NN committed files=<n>`; or, when the task changed nothing, sets it `done`, removes its worktree and
+Prints `OK TT-NN committed files=<n>`, the first time adding a `Finished: <UTC ISO>` header to the task (when its work
+was first ready to merge: `resume.py` keeps such a task for Merge, and telemetry starts the ticket's clock there); or, when the task changed nothing, sets it `done`, removes its worktree and
 branch and prints `OK TT-NN no-change`. A merge conflict with the ticket branch is left in the worktree for the
 implementer and prints `FAIL TT-NN conflict <files>`; a rerun after the markers are resolved commits the merge.
 `--report` copies the implementer's report to `<run>/reports/<TT-NN>.md`; when its status is `blocked` or
@@ -18,6 +19,7 @@ common git dir's `remote-agent/`, or under the worktree's own git dir for record
 the log says so and the step goes on.
 """
 import fnmatch
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -152,6 +154,8 @@ def step(ctx):
     extra = amend_writes(task, changed)
     if extra:
         ctx.note(f"Writes amended with: {', '.join(extra)}")
+    if not runfolder.get(task.path, "Finished"):
+        runfolder.set_header(task.path, "Finished", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     return "committed", f"files={len(changed)}"
 
 

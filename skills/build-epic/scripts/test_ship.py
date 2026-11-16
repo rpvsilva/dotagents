@@ -42,7 +42,7 @@ print(json.dumps({{"state": answer("pr-state", "MERGED"), "headRefOid": head.std
 '''
 
 TICKET = "# 01: Ship JSON things\nStatus: building\nIssue: #7, #8\nBranch: feat/t\nBlocked by: none\n"
-TASK = "# 01-{nn}: task {nn}\nStatus: done\nTicket: 01\nBlocked by: none\nWrites: x\nPR: https://github.com/o/r/pull/{pr}\n"
+TASK = "# 01-{nn}: task {nn}\nStatus: done\nTicket: 01\nBlocked by: none\nWrites: x\nCommit: {pr:07d}{nn}{zeros}\n"
 GATE = ".review-gate.yml"
 REVIEWS = "api-repos__owner___repo__pulls_{n}_reviews"
 
@@ -65,8 +65,8 @@ class Base(unittest.TestCase):
             (kit.run_dir / d).mkdir()
         self.ticket = kit.run_dir / "tickets" / "01-t.md"
         self.ticket.write_text(TICKET, encoding="utf-8")
-        (kit.run_dir / "tasks" / "01-01-a.md").write_text(TASK.format(nn="01", pr=5), encoding="utf-8")
-        (kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", pr=6), encoding="utf-8")
+        (kit.run_dir / "tasks" / "01-01-a.md").write_text(TASK.format(nn="01", pr=5, zeros="0" * 31), encoding="utf-8")
+        (kit.run_dir / "tasks" / "01-02-b.md").write_text(TASK.format(nn="02", pr=6, zeros="0" * 31), encoding="utf-8")
         # The Checks `ship_ticket.py merge` runs on the ticket head before a merge into a non-default base.
         (kit.run_dir / "map.md").write_text("# Map\n\n## Checks\n\n```\ntrue\n```\n", encoding="utf-8")
 
@@ -172,34 +172,46 @@ class ShipOpenTest(Base):
         create = self.calls("pr", "create")[0]
         self.assertEqual(create[create.index("--base") + 1], "main")
         self.assertEqual(create[create.index("--title") + 1], "feat: Ship JSON things")
+        self.assertNotIn("--draft", create)
         body = Path(create[create.index("--body-file") + 1]).read_text(encoding="utf-8")
-        self.assertIn("task 01: https://github.com/o/r/pull/5", body)
+        self.assertIn("01-01 task 01: merged in `", body)
         self.assertIn("Closes #7\nCloses #8", body)
         self.assertTrue((self.kit.run_dir / "worktrees" / "01").is_dir())
+        self.assertEqual(self.calls("pr", "ready"), [])
 
-    def test_marks_the_draft_ticket_pr_ready_with_the_body(self):
+    def test_open_pushes_the_local_ticket_branch_and_leaves_its_worktree_detached(self):
+        clone = self.kit.clone
+        self.kit.git("branch", "--no-track", "feat/t", "origin/feat/t", cwd=clone)
+        wt = self.kit.tmp / "merge-wt"
+        self.kit.git("worktree", "add", "-q", "--detach", str(wt), "feat/t", cwd=clone)
+        (wt / "x.txt").write_text("x\n", encoding="utf-8")
+        self.kit.git("add", "x.txt", cwd=wt)
+        self.kit.git("commit", "-qm", "task", cwd=wt)
+        self.kit.git("update-ref", "refs/heads/feat/t", self.kit.git("rev-parse", "HEAD", cwd=wt), cwd=clone)
+        tip = self.kit.git("rev-parse", "feat/t", cwd=clone)
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
+        self.assertEqual(self.ship("open"), "OK 01 open pr=30")
+        self.assertEqual(self.head(), tip)
+        ticket_wt = self.kit.run_dir / "worktrees" / "01"
+        self.assertEqual(self.kit.git("rev-parse", "HEAD", cwd=ticket_wt), tip)
+        self.assertEqual(self.kit.git("branch", "--show-current", cwd=ticket_wt), "")
+
+    def test_a_rerun_edits_the_recorded_ticket_pr_with_the_body(self):
         runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
         self.assertEqual(self.ship("open"), "OK 01 open pr=20")
         edit = self.calls("pr", "edit")[0]
         self.assertEqual(edit[:3], ["pr", "edit", "20"])
         self.assertIn("Closes #7", Path(edit[edit.index("--body-file") + 1]).read_text(encoding="utf-8"))
-        self.assertEqual(self.calls("pr", "ready"), [["pr", "ready", "20"]])
+        self.assertEqual(self.calls("pr", "ready"), [])
         self.assertEqual(self.calls("pr", "create"), [])
         self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/20")
-
-    def test_a_pr_already_ready_is_fine_and_any_other_ready_failure_fails(self):
-        runfolder.set_header(self.ticket, "PR", "https://github.com/o/r/pull/20")
-        self.kit.answer("pr-ready", err="! Pull request o/r#20 is already \"ready for review\"\n", rc=1, n=1)
-        self.assertEqual(self.ship("open"), "OK 01 open pr=20")
-        self.kit.answer("pr-ready", err="GraphQL: Resource not accessible by integration\n", rc=1, n=2)
-        self.assertRegex(self.ship("open"), r"^FAIL 01 pr-ready \(log: ")
 
     def test_edits_the_open_pr_from_the_ticket_branch_and_records_it(self):
         self.kit.answer("pr-list", out=json.dumps([{"number": 21, "url": "https://github.com/o/r/pull/21"}]))
         self.assertEqual(self.ship("open"), "OK 01 open pr=21")
         self.assertEqual(self.calls("pr", "list")[0][:6], ["pr", "list", "--head", "feat/t", "--base", "main"])
         self.assertEqual(self.calls("pr", "edit")[0][:3], ["pr", "edit", "21"])
-        self.assertEqual(self.calls("pr", "ready"), [["pr", "ready", "21"]])
         self.assertEqual(self.calls("pr", "create"), [])
         self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/21")
 
@@ -218,7 +230,6 @@ class ShipOpenTest(Base):
         self.kit.answer("pr-list", out=json.dumps([{"number": 21}]))
         self.kit.answer("pr-edit", err="HTTP 422", rc=1)
         self.assertRegex(self.ship("open"), r"^FAIL 01 pr-edit \(log: ")
-        self.assertEqual(self.calls("pr", "ready"), [])
         self.assertIsNone(runfolder.get(self.ticket, "PR"))
 
     def test_an_unknown_action_is_a_usage_failure(self):
@@ -274,8 +285,10 @@ class ShipMergeTest(Base):
         self.assertEqual(self.calls("issue", "close"), [])
 
     def test_without_a_merge_rule_a_gated_repo_still_merges_into_another_base(self):
-        self.set_setting("task_merge_method", "merge")  # no ancestry step: test_ancestry.py covers it
         self.commit_to_base(".review-gate.yml", "default_tier: medium\n")
+        self.kit.git("branch", "-f", "--no-track", "feat/t", "origin/feat/t", cwd=self.kit.clone)  # as if merged here
+        local = self.kit.git("rev-parse", "refs/heads/feat/t", cwd=self.kit.clone)
+        (self.kit.run_dir / "logs" / "PR20-review.json").write_text(json.dumps({"commit_id": local}), encoding="utf-8")
         self.kit.branch_from_main("integ")
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: integ\n", encoding="utf-8")
         (self.kit.answers / "pr-base").write_text("integ", encoding="utf-8")
@@ -455,19 +468,19 @@ class IdentityTest(Base):
 
 
 class ChecksReportTest(unittest.TestCase):
-    def test_saved_suite_results_render_in_the_task_pr_body(self):
+    def test_saved_suite_results_render_in_the_ticket_pr_body(self):
         with Kit() as kit:
             (kit.run_dir / "tickets").mkdir()
             (kit.run_dir / "tasks").mkdir()
             ticket = kit.run_dir / "tickets" / "01-t.md"
             ticket.write_text(TICKET, encoding="utf-8")
             task = kit.run_dir / "tasks" / "01-01-a.md"
-            task.write_text(TASK.format(nn="01", pr=5), encoding="utf-8")
+            task.write_text(TASK.format(nn="01", pr=5, zeros="0" * 31), encoding="utf-8")
             with open(kit.tmp / "log", "w", encoding="utf-8") as log:
                 suites = checks.run_all(["true", "exit 3"], kit.tmp, log)
             checks.save(kit.run_dir, "01-01", suites)
-            body = prbody.task_body(kit.run_dir, "01-01", task, ticket)
-            self.assertRegex(body, r"- `true`: passed in [\d.]+s\n- `exit 3`: failed in [\d.]+s")
+            body = prbody.section(prbody.ticket_body(kit.run_dir, ticket), "Testing")
+            self.assertRegex(body, r"- `true`: passed in [\d.]+s\n  - `exit 3`: failed in [\d.]+s")
 
 
 if __name__ == "__main__":

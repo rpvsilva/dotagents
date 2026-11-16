@@ -175,11 +175,9 @@ class Run:
             return ", ".join(f"ticket {n} ({self.ticket_status(runfolder.norm(n))})" for n in waits) or "start"
         if tasks and len(done) == len(tasks):
             return "ship"
-        red = runfolder.header(text, "CI red")
         running = [i for i, _, t in tasks if self.status(t) == "in-progress"]
         ready = self.dispatchable(tt)
-        parts = ([f"fix ticket CI red {red}"] if red else []) + (["tasks " + ", ".join(running)] if running else []) \
-            + (["dispatch " + ", ".join(ready)] if ready else [])
+        parts = (["tasks " + ", ".join(running)] if running else []) + (["dispatch " + ", ".join(ready)] if ready else [])
         return "; ".join(parts) or "tasks"
 
     def line(self, tt):

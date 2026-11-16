@@ -52,7 +52,7 @@ class TaskPromptTest(unittest.TestCase):
         wt = run / "worktrees" / "01-02"
         self.assertEqual(lines, [
             "You are an epic-implementer. Follow ~/.agents/skills/build-epic/implementer-brief.md.",
-            f"task: {self.task.resolve()}", f"run: {run}", f"worktree: {wt}", "ticket branch: origin/feat/alpha",
+            f"task: {self.task.resolve()}", f"run: {run}", f"worktree: {wt}", "ticket branch: feat/alpha",
             f"test_command: {TEST_COMMAND}", f"report: {run / 'reports' / '01-02.md'}"])
         self.assertEqual(Path(fields["prompt"]), run / "prompts" / "01-02-1.md")
 
@@ -63,7 +63,7 @@ class TaskPromptTest(unittest.TestCase):
         self.assertEqual(lines, [
             "You are an epic-implementer. Follow ~/.agents/skills/build-epic/implementer-brief.md.",
             "task: ~/attached/01-02-json-export.md", "spec: ~/attached/spec.md", "map: ~/attached/map.md",
-            "notes: ~/attached/notes", "worktree: ~/work", "ticket branch: origin/feat/alpha",
+            "notes: ~/attached/notes", "worktree: ~/work", "ticket branch: feat/alpha",
             f"test_command: {TEST_COMMAND}", "report: ~/out/report.md"])
         self.assertEqual(shlex.split(fields["args"]), [
             "--name", "01-02-json-export", "--agent", "epic-implementer",

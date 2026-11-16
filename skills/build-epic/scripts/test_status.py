@@ -111,13 +111,11 @@ class ResumeTest(unittest.TestCase):
         self.t01 = write(self.run_dir / "tickets" / "01-alpha.md", ticket("01", "Alpha", "building", "feat/alpha"))
         self.t02 = write(self.run_dir / "tickets" / "02-beta.md",
                          ticket("02", "Beta", "in-review", "feat/beta", pr="https://github.com/o/r/pull/20"))
-        kit.answer("pr-list", out="[]")
-        kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
 
     # Helpers
 
-    def add_task(self, tid, status, pr=None, worktree=True):
-        path = write(self.run_dir / "tasks" / f"{tid}-x.md", task(tid, "Task", status, pr=pr))
+    def add_task(self, tid, status, worktree=True):
+        path = write(self.run_dir / "tasks" / f"{tid}-x.md", task(tid, "Task", status))
         if worktree:
             wt = self.run_dir / "worktrees" / tid
             self.kit.git("worktree", "add", "-q", "-b", f"task/alpha/{tid.split('-')[1]}", str(wt),
@@ -156,65 +154,68 @@ class ResumeTest(unittest.TestCase):
 
     # Tasks
 
-    def test_an_in_progress_task_with_no_pr_goes_back_to_ready_without_worktree_and_branch(self):
+    def finish(self, tid):
+        """What `finish_task.py` leaves: a commit on the task branch and a `Finished:` header."""
+        wt = self.run_dir / "worktrees" / tid
+        write(wt / f"{tid}.txt", "work\n")
+        self.kit.git("add", f"{tid}.txt", cwd=wt)
+        self.kit.git("commit", "-qm", f"feat: {tid}", cwd=wt)
+        runfolder.set_header(self.run_dir / "tasks" / f"{tid}-x.md", "Finished", "2026-11-13T10:00:00Z")
+        return self.kit.git("rev-parse", "HEAD", cwd=wt)
+
+    def land(self, head):
+        """What `merge_task.py` leaves before it sets the task done: a merge commit of `head` on the local ticket
+        branch."""
+        clone = self.clone
+        if not self.branch_exists("feat/alpha"):
+            self.kit.git("branch", "--no-track", "feat/alpha", "origin/feat/alpha", cwd=clone)
+        merged = self.kit.git("commit-tree", f"{head}^{{tree}}", "-p", "feat/alpha", "-p", head, "-m", "Merge task",
+                              cwd=clone)
+        self.kit.git("update-ref", "refs/heads/feat/alpha", merged, cwd=clone)
+        return merged
+
+    def test_an_unfinished_in_progress_task_goes_back_to_ready_without_worktree_and_branch(self):
         t = self.add_task("01-01", "in-progress")
         self.assertEqual(self.resume(), "OK run resumed 1 actions")
         self.assertEqual(self.status(t), "ready")
         self.assertFalse((self.run_dir / "worktrees" / "01-01").exists())
         self.assertFalse(self.branch_exists("task/alpha/01"))
 
-    def test_an_in_progress_task_with_no_pr_and_no_worktree_goes_back_to_ready(self):
+    def test_an_in_progress_task_with_no_worktree_goes_back_to_ready(self):
         t = self.add_task("01-01", "in-progress", worktree=False)
         self.assertEqual(self.resume(), "OK run resumed 1 actions")
         self.assertEqual(self.status(t), "ready")
 
-    def test_a_task_whose_pr_merged_becomes_done_with_ticket_ci(self):
-        t = self.add_task("01-01", "in-progress", pr="https://github.com/o/r/pull/5")
-        self.merged(5)
-        self.assertEqual(self.resume(), "OK run resumed 1 actions")
-        self.assertEqual(self.status(t), "done")
-        self.assertFalse((self.run_dir / "worktrees" / "01-01").exists())
-        self.assertFalse(self.branch_exists("task/alpha/01"))
-        creates = [c for c in self.kit.gh_calls() if c[:2] == ["pr", "create"]]
-        self.assertEqual(len(creates), 1, creates)
-        self.assertIn("--draft", creates[0])
-        self.assertEqual(runfolder.get(self.t01, "PR"), "https://github.com/o/r/pull/30")
-
-    def test_a_merged_task_on_a_ticket_with_a_pr_opens_no_second_ticket_pr(self):
-        runfolder.set_header(self.t01, "PR", "https://github.com/o/r/pull/12")
-        self.add_task("01-01", "in-progress", pr="https://github.com/o/r/pull/5")
-        self.merged(5)
-        self.resume()
-        self.assertEqual([c for c in self.kit.gh_calls() if c[:2] == ["pr", "create"]], [])
-
-    def test_ticket_ci_off_opens_no_ticket_pr(self):
-        write(self.run_dir / "decisions.md", "# Decisions\nci: off\n")
-        t = self.add_task("01-01", "in-progress", pr="https://github.com/o/r/pull/5")
-        self.merged(5)
-        self.resume()
-        self.assertEqual(self.status(t), "done")
-        self.assertEqual([c for c in self.kit.gh_calls() if c[:2] == ["pr", "create"]], [])
-
-    def test_a_task_with_an_open_pr_is_left_for_merge(self):
-        t = self.add_task("01-01", "in-progress", pr="https://github.com/o/r/pull/5")
+    def test_a_finished_task_not_yet_merged_is_left_for_merge(self):
+        t = self.add_task("01-01", "in-progress")
+        self.finish("01-01")
         self.assertEqual(self.resume(), "OK run resumed 0 actions")
         self.assertEqual(self.status(t), "in-progress")
         self.assertTrue((self.run_dir / "worktrees" / "01-01").is_dir())
 
+    def test_a_task_already_merged_into_the_local_ticket_branch_becomes_done(self):
+        t = self.add_task("01-01", "in-progress")
+        merged = self.land(self.finish("01-01"))
+        self.assertEqual(self.resume(), "OK run resumed 1 actions")
+        self.assertEqual(self.status(t), "done")
+        self.assertEqual(runfolder.get(t, "Commit"), merged)
+        self.assertFalse((self.run_dir / "worktrees" / "01-01").exists())
+        self.assertFalse(self.branch_exists("task/alpha/01"))
+        self.assertEqual([c for c in self.kit.gh_calls() if c[:2] != ["pr", "view"]], [])
+
     def test_ready_and_done_tasks_are_untouched(self):
         ready = self.add_task("01-01", "ready", worktree=False)
-        done = self.add_task("01-02", "done", pr="https://github.com/o/r/pull/6", worktree=False)
-        self.merged(6)
+        done = self.add_task("01-02", "done", worktree=False)
         self.assertEqual(self.resume(), "OK run resumed 0 actions")
         self.assertEqual((self.status(ready), self.status(done)), ("ready", "done"))
-        self.assertEqual([c for c in self.kit.gh_calls() if c[:3] == ["pr", "view", "6"]], [])
 
     def test_every_state_at_once_then_a_rerun_does_nothing(self):
         self.merged(20)
         back = self.add_task("01-01", "in-progress")
-        done = self.add_task("01-02", "in-progress", pr="https://github.com/o/r/pull/5")
-        self.merged(5)
-        left = self.add_task("01-03", "in-progress", pr="https://github.com/o/r/pull/6")
+        done = self.add_task("01-02", "in-progress")
+        self.land(self.finish("01-02"))
+        left = self.add_task("01-03", "in-progress")
+        self.finish("01-03")
         self.assertEqual(self.resume(), "OK run resumed 3 actions")
         self.assertEqual([self.status(p) for p in (self.t02, back, done, left)],
                          ["merged", "ready", "done", "in-progress"])

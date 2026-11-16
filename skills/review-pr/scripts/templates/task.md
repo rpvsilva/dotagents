@@ -1,4 +1,4 @@
-Review task PR #$pr. The worktree $worktree is checked out at its head, $head.
+Review $subject.
 
 Read these, and take everything else from the code:
 $reads

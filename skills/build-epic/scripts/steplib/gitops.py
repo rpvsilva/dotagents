@@ -92,6 +92,26 @@ class Git:
             raise core.Fail("git-merge-base")
         return res.rc == 0
 
+    def ticket_tip(self, branch):
+        """The ticket branch's tip: the local `refs/heads/<branch>`, where its tasks merge, made from
+        `origin/<branch>` (as `start_ticket.py` pushed it) when it is missing."""
+        ref = f"refs/heads/{branch}"
+        got = self._git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+        if got.rc != 0:
+            sha = self.tip(f"refs/remotes/origin/{branch}")
+            with lock(self.repo):
+                if self._git("rev-parse", "--verify", "--quiet", ref, check=False).rc != 0:
+                    self._git("branch", "--no-track", branch, sha)
+            got = self._git("rev-parse", "--verify", f"{ref}^{{commit}}")
+        return got.out.strip()
+
+    def advance(self, branch, new, old):
+        """Moves local branch `branch` from `old` to `new`, under the lock; fails `ticket-moved` when it no longer
+        points at `old` (another merge landed first)."""
+        with lock(self.repo):
+            if self._git("update-ref", f"refs/heads/{branch}", new, old, check=False).rc != 0:
+                raise core.Fail("ticket-moved")
+
     def push(self, *args):
         """`git push <args>` with the retry on transient failures, each try under the lock. Returns the `Result`."""
         return gh.push(list(args), self.log, cwd=self.repo, hold=lambda: lock(self.repo))
