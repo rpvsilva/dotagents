@@ -36,7 +36,7 @@ Your input has `remote: true`. Your worktree is `~/work`, a snapshot with one co
 
 ## Output
 
-Return the `tuner` output object as [Protocol](../_shared/conventions.md#protocol) says: with an `output` input, write the object there as JSON, then your final message is only `{"status": "<status>", "output": "<that path>"}`; with none, your final message is the object itself, and nothing else. Every key below is required; an empty list is `[]`.
+Return the `tuner` output object as [Protocol](../_shared/conventions.md#protocol) says: with an `output` input, write the object there as JSON, then your final message is only `{"status": "<status>", "output": "<that path>"}`; with none, your final message is the object itself, and nothing else. Every key below is required; an empty list is `[]`. Before your final message, run `python3 -I ~/.agents/skills/_shared/protocol/check.py tuner output <file>` on the object and fix each problem it prints until it prints `OK tuner <status>`: with an `output` file, on that file; with none (a remote run), write the object to a file outside the worktree (`/tmp/tuner-output.json`) first.
 
 - `status`: `done`, or `blocked` with `why` (one line, at most 300 characters): a suite red before you changed anything, or a fix you could not make green.
 - `commit`: the last commit's SHA; `""` when you made none or run remotely.

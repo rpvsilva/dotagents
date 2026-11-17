@@ -16,6 +16,7 @@ mkdir "$SANDBOX/bin"
 cat >"$SANDBOX/bin/claude" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >"$SANDBOX/argv"
+printf '%s\n' "\${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-unset}" >"$SANDBOX/compact"
 EOF
 chmod +x "$SANDBOX/bin/claude"
 
@@ -40,6 +41,11 @@ expect "/build-epic https://github.com/o/r/issues/7" https://github.com/o/r/issu
 # A plain-text epic in one quoted word stays one prompt; options inside it are not claude's.
 expect "/build-epic Add due dates --explore" "Add due dates" --explore
 expect "/build-epic"
+
+# Auto-compact at 40% unless the caller set its own percentage.
+[ "$(cat "$SANDBOX/compact")" = 40 ] || fail "auto-compact: got $(cat "$SANDBOX/compact")"
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60 PATH="$SANDBOX/bin:$PATH" "$LAUNCH" '#1'
+[ "$(cat "$SANDBOX/compact")" = 60 ] || fail "auto-compact override: got $(cat "$SANDBOX/compact")"
 
 # Without claude on PATH it says so and exits 127.
 code=0

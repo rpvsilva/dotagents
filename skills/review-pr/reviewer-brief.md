@@ -8,7 +8,7 @@ Your role is `reviewer` in the [Protocol](../_shared/conventions.md#protocol): y
 
 - `task`: one task's change.
 - `ticket`: the whole ticket, once and in depth. Look across its tasks for what each one alone would miss: features that break each other, a contract changed on one side only.
-- `re-review`: `base` is the head last reviewed, so the diff is only what changed since. A change outside it is not a finding unless the diff breaks it. Check each numbered finding in `findings` against the new head and give it one `earlier` entry: its number, `fixed`, `not-fixed` or `partly`, the `path` and `line` that show it, and a one-sentence `note`. `findings` holds only new findings the diff brings in.
+- `re-review`: `base` is the head last reviewed, so the diff is only what changed since. A change outside it is not a finding unless the diff breaks it. Check each numbered finding in `findings` against the new head and give it one `earlier` entry: `n` (its number), `verdict` (`fixed`, `not-fixed` or `partly`), the `path` and `line` that show it, and a one-sentence `note`. `findings` holds only new findings the diff brings in.
 
 **Decisions file.** When the input names `decisions`, read it before hunting. It holds header lines (`ci:` on|off, `merge_identity:` app|human, `review_before_agent_merge:` yes|no, ...), an **Authorizations** table (`clause | waived | quote`, waived yes|no|ask; `\|` and `\\` in a cell are an escaped `|` and `\`) and verbatim, dated **Decisions** (a line indented two spaces continues the one above).
 
@@ -27,7 +27,7 @@ Your role is `reviewer` in the [Protocol](../_shared/conventions.md#protocol): y
    A **feature interaction** is a cross-cutting feature (a flag, a field, a guard, a side file) the change touches without handling or naming it: it is not a finding of this PR but an `interaction` row in `followups`, below.
 
    Done when every changed hunk has been checked on all four axes.
-4. **Check the output** once it is written, before your final message. For each `path` and `line` in it, finding, earlier finding and follow-up alike, read that line in the worktree: it must hold the code the claim is about (the statement that fails, the rule-breaking call, the hollow assertion), not a nearby line; fix any number that misses. With an `output` file, run `python3 -I ~/.agents/skills/_shared/protocol/check.py reviewer output <that file>` and fix each problem it prints until it prints `OK reviewer <status>`. Done when every cited line holds what its claim says and the output passes its check.
+4. **Check the output** once it is written, before your final message. For each `path` and `line` in it, finding, earlier finding and follow-up alike, read that line in the worktree: it must hold the code the claim is about (the statement that fails, the rule-breaking call, the hollow assertion), not a nearby line; fix any number that misses. Before your final message, run `python3 -I ~/.agents/skills/_shared/protocol/check.py reviewer output <file>` on the object and fix each problem it prints until it prints `OK reviewer <status>`: with an `output` file, on that file; with none (a remote run), write the object to a file outside the worktree (`/tmp/reviewer-output.json`) first. Done when every cited line holds what its claim says and the output passes its check.
 
 ## When you run remotely
 
@@ -40,13 +40,13 @@ The input says `remote: true`, and only for a PR by the human or the run's own i
 
 ## Output
 
-One JSON object, as [reviewer.json](../_shared/protocol/schemas/reviewer.json)'s `output` defines it; nothing you write is read by a person as you wrote it, since the review posted on the PR is rendered from this object.
+One JSON object, as [reviewer.json](../_shared/protocol/schemas/reviewer.json)'s `output` defines it, with only the keys below; every sentence field (`claim`, `scenario`, `rule`, `checked`, `note`, each `process` line) is at most 600 characters; nothing you write is read by a person as you wrote it, since the review posted on the PR is rendered from this object.
 
 - `status`: `done`, or `blocked` with a one-line `why` (you could not review: the worktree or diff is missing, say).
 - `mode`: the input's `mode`.
 - `findings`: most severe first, or `[]`. Each has `severity` (`blocker`: wrong result, crash, broken rule; `should-fix`: likely trouble, missing test; `nit`), `axis` (`bugs`, `rules`, `spec` or `tests`), `path` and `line` in the PR head (on a line the diff adds or changes when possible), `claim` (one sentence), `scenario` (the concrete inputs or steps that show it) and, on the rules axis, `rule` (the rule quoted).
 - `checked`: one sentence on what you read and ran; with no findings, it is the evidence for "no findings".
-- `earlier`: in `re-review` mode, one entry per numbered earlier finding (Modes, above).
+- `earlier`: in `re-review` mode, one entry per numbered earlier finding, `{"n": 2, "verdict": "fixed", "path": "a.py", "line": 9, "note": "..."}` (Modes, above).
 - `process`: the merge-path sentences of the decisions file section, or `[]`.
 - `followups`: work this PR should not hold, or `[]`. Each has `severity`, `kind` and `claim`: `interaction` for every feature interaction, `follow-up` for other work left out, with its `path` (and `line`); `owner-doc` for a fix you would propose in a file only the human edits (one a leave-for-human rule of the repo reserves, such as a merge guard `path` rule), with its `path`, `item` (the part of the file it changes, e.g. a heading) and `patch` (the ready-to-apply diff).
 
