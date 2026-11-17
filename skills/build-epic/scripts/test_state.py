@@ -1,4 +1,5 @@
 """Tests for `status.py --line` (one status line per ticket) and `status.py --write` (the run's `state.md`)."""
+import json
 import os
 import sys
 import unittest
@@ -53,9 +54,9 @@ class StateTest(unittest.TestCase):
             write(run / "tickets" / f"{nn}-t.md", ticket(nn, *args))
             for n, status, blocked in tasks:
                 write(run / "tasks" / f"{nn}-{n}-x.md", task(f"{nn}-{n}", status, blocked))
-        write(run / "reports" / "04-03.md", "status: blocked\nchanged: none\nwhy: the API is missing\nfollow-up:\n")
+        write(run / "reports" / "04-03.json", json.dumps({"status": "blocked", "why": "the API is missing"}))
         # 09-01 ended plan-wrong: finish_task.py stored the report and left the task in-progress.
-        write(run / "reports" / "09-01.md", "status: plan-wrong\nchanged: abc\nwhy: the area is wrong\nfollow-up:\n")
+        write(run / "reports" / "09-01.json", json.dumps({"status": "plan-wrong", "why": "the area is wrong"}))
 
     def status(self, *args, run=None):
         p = self.kit.step(STATUS, run or self.run_dir, *args)
@@ -121,7 +122,7 @@ class StateTest(unittest.TestCase):
         self.assertRegex(self.line("11"), r"next: human: ticket blocked$")
 
     def test_a_done_task_with_a_blocked_report_waits_on_no_human(self):
-        write(self.run_dir / "reports" / "05-01.md", "status: blocked\nchanged: none\nwhy: old\nfollow-up:\n")
+        write(self.run_dir / "reports" / "05-01.json", json.dumps({"status": "blocked", "why": "old"}))
         self.assertRegex(self.line("05"), r"next: ship$")
         _, text = self.state()
         self.assertNotIn("05-01", text)
@@ -170,7 +171,7 @@ class StateTest(unittest.TestCase):
 
     def test_a_stale_report_on_a_re_planned_task_is_not_stuck(self):
         # 09-01's plan-wrong report predates the re-plan that set the task back to ready.
-        report = self.run_dir / "reports" / "09-01.md"
+        report = self.run_dir / "reports" / "09-01.json"
         path = write(self.run_dir / "tasks" / "09-01-x.md", task("09-01", "ready"))
         old = report.stat().st_mtime - 60
         os.utime(report, (old, old))

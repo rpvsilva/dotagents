@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Passes when the pass A report ends with the block whose status is done.
+# Passes when the planner's output, plan-A.json, is its role's JSON (skills/_shared/protocol) with status done.
 set -euo pipefail
-report="$EVAL_SCRATCH/reports/plan-A.md"
-[ -f "$report" ]
-[ "$(tail -n 8 "$report" | grep -E '^status:' | tail -n 1 | tr -d '[:space:]`')" = "status:done" ]
+out="$(python3 -I "$EVAL_CHECKOUT/skills/_shared/protocol/check.py" planner output "$EVAL_SCRATCH/reports/plan-A.json")"
+[ "$out" = "OK planner done" ]

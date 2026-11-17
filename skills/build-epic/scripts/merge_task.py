@@ -5,8 +5,8 @@ Usage: python3 -I merge_task.py <run> <task>
 
 The ticket branch's tip is the local `refs/heads/<branch>` (`gitops.ticket_tip`: made from `origin/<branch>` when
 missing); nothing is pushed until the ticket ships. In the task's worktree `<run>/worktrees/<task>`: a task whose file
-says `Tier: high` needs its review first, a report `<run>/reviews/<task>-<sha7>.md` of the head it merges (before
-the catch-up below), else it fails `unreviewed`. Then it merges the ticket branch's tip forward when the task branch
+says `Tier: high` needs its review first, a reviewer's output `<run>/reviews/<task>-<sha7>.json` (`.md` in a run
+from before the agent protocol) of the head it merges (before the catch-up below), else it fails `unreviewed`. Then it merges the ticket branch's tip forward when the task branch
 lacks it (never a reset or a checkout, so an earlier conflict resolution is kept; a conflict is aborted), runs the
 merge guard on `<ticket branch>...HEAD` (`steplib/guard.py`: rules read from the run's default branch on origin, a hit
 passing only when `decisions.md` waives its rule `yes`) and `map.md`'s `Checks`, timing each suite, inside the run's
@@ -51,8 +51,9 @@ def high_tier(task):
 
 
 def reviewed(run, ident, head):
-    """True when `<run>/reviews/<ident>-<sha7>.md` holds a review of `head`."""
-    return (core.resolve(run) / "reviews" / f"{ident}-{head[:7]}.md").is_file()
+    """True when `<run>/reviews/<ident>-<sha7>.json` (`.md` in an older run) holds a review of `head`."""
+    reviews = core.resolve(run) / "reviews"
+    return any((reviews / f"{ident}-{head[:7]}{ext}").is_file() for ext in (".json", ".md"))
 
 
 def step(ctx):
@@ -74,7 +75,7 @@ def step(ctx):
         raise core.Fail("uncommitted-changes")
     root, here = gitops.Git(repo, ctx.log), gitops.Git(wt, ctx.log)
     if high_tier(task) and not reviewed(run, ctx.id, here.tip()):
-        ctx.note(f"Tier: high, and no reviews/{ctx.id}-<sha7>.md reviews the head {here.tip()}")
+        ctx.note(f"Tier: high, and no reviews/{ctx.id}-<sha7>.json reviews the head {here.tip()}")
         raise core.Fail("unreviewed")
 
     ticket_ref = f"refs/heads/{ticket_branch}"

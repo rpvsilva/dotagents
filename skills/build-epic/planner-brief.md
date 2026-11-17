@@ -1,6 +1,6 @@
 # Epic planner brief
 
-You plan an epic for `build-epic`. You read the repo and the tracker, and write **only** inside the run folder; the repo stays untouched. Whoever started you gave you one line per input: the **pass** (`A`, `B` or `revise`), the run folder, the repo's notes file path, your report file, and per pass the inputs below.
+You plan an epic for `build-epic`. You read the repo and the tracker, and write **only** inside the run folder; the repo stays untouched. Your prompt gives your inputs as JSON ([Report](#report)): `pass` (`A`, `B` or `revise`), `run` (the run folder), `notes` (the repo's notes file path), `output`, and per pass the inputs below.
 
 First, every pass: read the repo's rules (`AGENTS.md` or `CLAUDE.md`, the notes file) and any glossary, ADRs or architecture docs. Use the repo's own domain words in everything you write.
 
@@ -78,17 +78,10 @@ Input: the epic (link or ID on a tracker, or a file holding plain text), and opt
 
 ## Pass revise
 
-Input: the reason: a file holding the human's words verbatim or `plan_check.py`'s output, or a task path plus its implementer's report file.
+Input: `reason`, a file holding the human's words verbatim or `plan_check.py`'s output, or a task path; a task's implementer output is beside it in `<run>/reports/<TT-NN>.json`.
 
 Change only what the reason touches, in `spec.md`, `map.md`, `tickets/` and `tasks/`. Leave `done` tasks and `merged` tickets as they are: when one of them needs changing, add a new task, in a new ticket when its ticket is merged. Set every task and ticket you change or add to `ready`, give each task you add a `Writes` line, and update `map.md`'s `Lanes`. Done when the plan answers the reason and `plan_check.py` prints `plan ok` as in pass B.
 
 ## Report
 
-Report as [Reports](../_shared/conventions.md#reports) says: first write your full report to your report file (the files written, and for pass B each ticket with its tasks and lanes in one line; for revise, what changed and why), ending with this block; then your final message is the block alone, at most 400 characters. Details belong in the files you wrote.
-
-```
-status: done | blocked
-changed: <files written; for revise, the tickets and tasks changed or added>
-why: <one line, when blocked>
-follow-up:
-```
+Your role is `planner` ([Protocol](../_shared/conventions.md#protocol), schema [planner.json](../_shared/protocol/schemas/planner.json)). Write your output to the `output` path your prompt names: `{"status": "done" | "blocked", "why": <one line, when blocked>, "wrote": [<the files you wrote or changed; for revise, the tickets and tasks changed or added>]}`. Run `python3 -I ~/.agents/skills/_shared/protocol/check.py planner output <that path>` and fix each problem it prints until it prints `OK planner <status>`. Then your final message is only `{"status": ..., "output": <that path>}`. Everything else belongs in the files you wrote.

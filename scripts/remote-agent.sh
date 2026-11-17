@@ -35,8 +35,8 @@
 # The sandbox is released on exit, also on INT or TERM, once the run's processes here (the backend's client among
 # them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first (SSH bare
 # mode: the first acquire 10 minutes past it kills the run and removes its folder).
-# Prints Claude's progress on stderr and the report on stdout: report.md when the agent wrote ~/out/report.md (that
-# file, then its final message), else the summary (its final message). The progress also goes to the sandbox's own log (its
+# Prints Claude's progress on stderr and its final message (the summary: under the agent protocol, the agent's output
+# object, as JSON) on stdout. The progress also goes to the sandbox's own log (its
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
 # SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
 # and Claude's full stream in <common git dir>/remote-agent/<run>/ (shared by every worktree of the repo, so it stays
@@ -48,7 +48,7 @@
 # run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s, caller;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
-# exit_code, status, report_status, changed, follow_up, report_path, duration_ms, num_turns, total_cost_usd, usage,
+# exit_code, status, report_status, changed, report_path, duration_ms, num_turns, total_cost_usd, usage,
 # model, claude_version, complete, caps, capped_off, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the token's value
 # redacted; and capped.log, the sandbox's own list of the commands its caps killed.
 # Each command the caps killed prints one line on stderr, whatever the exit: [<task>] killed: memory|timeout <command>
@@ -58,8 +58,8 @@
 # Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5 when
 # the run failed because the Claude account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
 # <time> (<time> as Claude gave it, e.g. 5:30pm (UTC), or unknown). Any other failed run exits with the sandbox's code,
-# 1 in place of 3, 4 or 5, so those three always mean the above. The report is printed once,
-# on stdout only, and only on exit 0, 3 or 4; stderr carries the progress lines, never the report.
+# 1 in place of 3, 4 or 5, so those three always mean the above. The final message is printed once,
+# on stdout only, and only on exit 0, 3 or 4; stderr carries the progress lines, never the final message.
 # Settings: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
 # the remote Settings (remote/settings.json: backend, hours, max_mb, keep, and the backend's own) from
 # scripts/settings.sh, each exported as its REMOTE_* variable, which also overrides it for one run (REMOTE_KEEP=1).
@@ -542,17 +542,11 @@ runner=""
 # at the end marker).
 mkdir -p "$stage/out"
 with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$stage/out" 2>/dev/null; cat >/dev/null; } || true
-for f in changes.patch stream.jsonl session.jsonl summary.md report.md capped.log; do
+for f in changes.patch stream.jsonl session.jsonl summary.md capped.log; do
   if [ -L "$stage/out/$f" ] || [ ! -f "$stage/out/$f" ]; then continue; fi
   # The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
   if [ "$f" = changes.patch ]; then cp "$stage/out/$f" "$keep/$f"; else scrub "$stage/out/$f" "$keep/$f"; fi
 done
-# A brief that writes a report file writes it as ~/out/report.md in the sandbox, and its final message (summary.md) is
-# then the block alone: the kept report.md is that file with the final message after it, the full report ending with
-# its block, as a local subagent's report file and final message give.
-if [ -f "$keep/report.md" ] && [ -f "$keep/summary.md" ]; then
-  { echo; cat "$keep/summary.md"; } >>"$keep/report.md"
-fi
 # Each command the caps killed in the sandbox: its `== capped: killed:` lines in progress.log, which came live, so a
 # lost sandbox keeps them; else the `capped: killed:` lines of the capped.log that came back. remote-agent-result.sh
 # reads them the same way.
@@ -577,7 +571,7 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
-if [ -f "$keep/report.md" ]; then cat "$keep/report.md"; elif [ -f "$keep/summary.md" ]; then cat "$keep/summary.md"; fi
+[ ! -f "$keep/summary.md" ] || cat "$keep/summary.md"
 if [ ! -s "$keep/changes.patch" ]; then
   say "no changes"
   exit 3

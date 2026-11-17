@@ -1,17 +1,12 @@
-Review the whole ticket in PR #42, once and in depth. The worktree /wt/pr-42 is checked out at its head, abc1234.
-
-Read these, and take everything else from the code:
-- ~/.agents/skills/review-pr/reviewer-brief.md: follow it
-- /runs/r1/decisions.md: a rule it waives is never a finding
-- its `ci:` line: with `ci: off`, missing CI checks are not a finding
-- its `test_command:` line: the exact command to run the tests with
-- /runs/r1/map.md, its `Checks` section: the commands to run tests with
-- /runs/r1/tickets/03-review.md: what the change was asked to do
-
-Review this diff, from the merge base of origin/main and the head:
-
-    git -C /wt/pr-42 diff $(git -C /wt/pr-42 merge-base origin/main abc1234) abc1234
-
-A change on origin/main after the merge base is base drift, not a finding. Look across the ticket's tasks for what each one alone would miss: features that break each other, a contract changed on one side only. Run tests only after you have read the whole diff and each changed file in context.
-
-Report as the brief says.
+You are a pr-reviewer. Follow ~/.agents/skills/review-pr/reviewer-brief.md.
+{
+ "mode": "ticket",
+ "pr": 42,
+ "worktree": "/wt/pr-42",
+ "head": "abc1234",
+ "base": "origin/main",
+ "diff": "git -C /wt/pr-42 diff $(git -C /wt/pr-42 merge-base origin/main abc1234) abc1234",
+ "task": "/runs/r1/tickets/03-review.md",
+ "decisions": "/runs/r1/decisions.md",
+ "map": "/runs/r1/map.md"
+}

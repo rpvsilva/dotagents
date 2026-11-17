@@ -8,7 +8,8 @@ Usage:
   python3 -I decide.py <run> quote "<verbatim>"
 
 `set` sets one header line (`base`, `ci` on|off, `merge_identity` app|human, `human`, `review_before_agent_merge`
-yes|no, `test_command`) and prints `OK decisions set <key>`; an unknown key or value fails. `clause` adds the
+yes|no, `test_command`, `caps`, `parallel` (the run's slots, N) and `approved` yes, once the human approves the
+plan) and prints `OK decisions set <key>`; an unknown key or value fails. `clause` adds the
 Authorizations row for `<clause>`, or updates it, keeping the quote byte for byte, and prints
 `OK decisions clause waived=<yes|no|ask>`. `quote` appends `<verbatim>` unchanged under Decisions, dated today, and
 prints `OK decisions quote <date>`. A missing file is created.

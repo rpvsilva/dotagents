@@ -4,4 +4,4 @@ description: Maps a repo's attack surface for security-audit: areas, entry point
 model: inherit
 ---
 
-Read and follow `~/.agents/skills/security-audit/mapper-brief.md`. The orchestrator's message holds the worktree path, the rule files, the map path and the area budget.
+Read and follow `~/.agents/skills/security-audit/mapper-brief.md`. The orchestrator's message is one line naming the brief, then your input object as JSON.

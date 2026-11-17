@@ -1,0 +1,172 @@
+{
+ "$comment": "The implementer role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "epic-implementer",
+ "brief": "build-epic/implementer-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "task",
+   "worktree",
+   "ticket_branch"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "task": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "run": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "worktree": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "ticket_branch": {
+    "type": "string",
+    "minLength": 1
+   },
+   "test_command": {
+    "type": "string",
+    "minLength": 1
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "resolve": {
+    "$ref": "common.json#/$defs/paths"
+   },
+   "sync": {
+    "$ref": "common.json#/$defs/paths"
+   },
+   "cap": {
+    "$ref": "common.json#/$defs/sentence"
+   },
+   "failure": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "reissue": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "remote": {
+    "type": "boolean"
+   },
+   "spec": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "map": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "notes": {
+    "$ref": "common.json#/$defs/path"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "commit",
+   "files",
+   "tests",
+   "suites",
+   "followups"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked",
+     "plan-wrong"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "commit": {
+    "type": "string",
+    "pattern": "^([0-9a-f]{7,40})?$"
+   },
+   "files": {
+    "$ref": "common.json#/$defs/paths"
+   },
+   "tests": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "name",
+      "criterion",
+      "broke"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string",
+       "minLength": 1
+      },
+      "criterion": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "broke": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   },
+   "suites": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "command",
+      "passed"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "command": {
+       "type": "string",
+       "minLength": 1
+      },
+      "baseline_s": {
+       "type": [
+        "number",
+        "null"
+       ],
+       "minimum": 0
+      },
+      "final_s": {
+       "type": [
+        "number",
+        "null"
+       ],
+       "minimum": 0
+      },
+      "passed": {
+       "type": "boolean"
+      }
+     }
+    }
+   },
+   "followups": {
+    "$ref": "common.json#/$defs/followups"
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}

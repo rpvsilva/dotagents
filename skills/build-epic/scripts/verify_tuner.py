@@ -8,23 +8,23 @@ uncommitted and untracked changes alike):
 - only test files changed: a file named like `test_*`, `*_test.*`, `*.test.*`, `*.spec.*` or `conftest.py`, any file
   under a `fixtures`, `testdata` (...) folder, or a code file under a `test`, `tests`, `spec` (...) folder. A test
   harness script or config there (`tests/run.sh`, `tests/suites.txt`) is not a test file;
+- the report, the tuner's output object (default `<run>/reports/<TT-tests>.json`; one code fence around it allowed),
+  matches the `tuner` role's output schema (`_shared/protocol/schemas/tuner.json`);
 - no assertion line (`assert...`, `expect(`, `.Fatal(`, a shell `check ...`, `... || fail`, `[ ... ] || exit 1`, ...)
-  is removed unless the diff of tracked files adds the same line back or a `moved:` entry of the report names it, by
+  is removed unless the diff of tracked files adds the same line back or a `moved` entry's `assertion` names it, by
   its text or by its old `file:line`. An untracked file's lines never count as the line added back;
-- the report has at least one `mutations:` entry per `covered:` entry, and no mutation targets a test file;
-- `map.md`'s `Checks` are green, run inside the run's environment as `test_command:` runs them;
-- each `mutations:` entry of the report (default `<run>/reports/<TT-tests>.md`), `file:line old -> new`, turns them
-  red: the first `old` on that line becomes `new`, the Checks run, and the file gets its bytes and times back on any
-  exit, SIGTERM and SIGINT included. A suite killed by its time limit counts as red.
+- the report has at least one `mutations` entry per `covered` entry, and no mutation targets a test file;
+- `map.md`'s `Checks` are green, run inside the run's environment as `test_command` runs them;
+- each `mutations` entry, `{path, line, old, new}`, turns them red: the first `old` on that line becomes `new`, the
+  Checks run, and the file gets its bytes and times back on any exit, SIGTERM and SIGINT included. A suite killed by
+  its time limit counts as red.
 
 Every suite run has a time limit: `--timeout`, else the `--secs N` of a `capped` Checks line, else 600 s for the green
 run and three times its green time (at least 30 s) for a mutated one. The suite runs in its own process group, killed
 whole at the limit, with `PYTHONDONTWRITEBYTECODE=1` so no stale `.pyc` hides a mutation and none is left behind.
 
-Report entries are `key: value` lines; indented or `- ` lines under a key add values to it; `none` is no value.
-
 Prints `OK <TT-tests> verified mutations=<n>`, or `FAIL <TT-tests> <reason> (log: ...)`: `no-report`,
-`bad-mutation <file:line>`, `test-file-mutation <file:line>`, `unproven-covered covered=<n> mutations=<m>`,
+`bad-report <problems>` (`json`, or check.py's `<json path>: <problem>` list), `bad-mutation <file:line>`, `test-file-mutation <file:line>`, `unproven-covered covered=<n> mutations=<m>`,
 `non-test-file <path>`, `assertion-removed <file:line>`, `red <suite>`,
 `timeout <suite>`, `mutation-survived <file:line>`, `interrupted`. FAIL sends the PR to an agent review.
 """
@@ -41,6 +41,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import checks, core, runfolder  # noqa: E402
 
+# The agent protocol's validator, shipped with every group (core): skills/_shared/protocol/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_shared" / "protocol"))
+
+import protocol  # noqa: E402
+
 GREEN_SECS = 600
 # Under these folders every file is test data.
 FIXTURE_DIRS = {"testdata", "fixtures", "__fixtures__", "__snapshots__"}
@@ -54,7 +59,6 @@ ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.(Fatal|Fatalf|Error|Errorf)\(|
                        # Shell: a check helper, or a command whose failure fails the test.
                        r"|^\s*(check|expect|fail_unless|refute)\w*\s"
                        r"|(\|\||&&)\s*(fail|die|bail|false|exit\s+[1-9]|return\s+[1-9])\b")
-ENTRY = re.compile(r"^(?P<file>[^\s:]+):(?P<line>\d+)\s+(?P<old>.+?)\s+->(?:\s+(?P<new>.*))?$")
 
 Mutation = namedtuple("Mutation", "file line old new")
 
@@ -64,31 +68,16 @@ def unquote(text):
     return text[1:-1] if len(text) > 1 and text[0] == text[-1] == "`" else text
 
 
-def report_entries(path):
-    """The report's values by key: `{"mutations": [...], "moved": [...], ...}`."""
-    entries, key = {}, None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("```"):
-            continue
-        m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", line)
-        if m:
-            key, value = m.group(1).lower(), m.group(2)
-        elif key and (line[0].isspace() or line.startswith(("- ", "* "))):
-            value = line.strip()[2:] if line.strip()[:2] in ("- ", "* ") else line.strip()
-        else:
-            key = None
-            continue
-        value = unquote(value)
-        if value and value.lower() not in ("none", "n/a", "-"):
-            entries.setdefault(key, []).append(value)
-    return entries
-
-
-def mutation(entry):
-    m = ENTRY.match(entry)
-    if not m:
-        raise core.Fail(f"bad-mutation {entry.split()[0] if entry.split() else '?'}")
-    return Mutation(m.group("file"), int(m.group("line")), unquote(m.group("old")), unquote(m.group("new") or ""))
+def read_report(path):
+    """The tuner's output object; Fail `bad-report` when it is no JSON object or breaks the role's output schema."""
+    try:
+        out = protocol.parse_json(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise core.Fail("bad-report json")
+    problems = protocol.check("tuner", "output", out)
+    if problems:
+        raise core.Fail(f"bad-report {'; '.join(problems)}")
+    return out
 
 
 def is_test_file(path):
@@ -245,7 +234,7 @@ def step(ctx):
         signal.signal(s, raise_interrupt)
     run = ctx.run_dir
     args = list(ctx.args)
-    report, timeout = run / "reports" / f"{ctx.id}.md", None
+    report, timeout = run / "reports" / f"{ctx.id}.json", None
     while args:
         flag = args.pop(0)
         if flag in ("--report", "--timeout") and args:
@@ -262,8 +251,8 @@ def step(ctx):
     wt = core.resolve(wt)
     if not report.is_file():
         raise core.Fail(f"no-report {report}")
-    entries = report_entries(report)
-    mutations = [mutation(e) for e in entries.get("mutations", [])]
+    out = read_report(report)
+    mutations = [Mutation(m["path"], m["line"], m["old"], m["new"]) for m in out["mutations"]]
     for m in mutations:
         target = core.resolve(wt / m.file)
         if (os.path.isabs(m.file) or (target != wt and wt not in target.parents) or not target.is_file()
@@ -271,7 +260,7 @@ def step(ctx):
             raise core.Fail(f"bad-mutation {m.file}:{m.line}")
         if is_test_file(target.relative_to(wt).as_posix()):
             raise core.Fail(f"test-file-mutation {m.file}:{m.line}")
-    covered = len(entries.get("covered", []))
+    covered = len(out["covered"])
     if covered > len(mutations):
         raise core.Fail(f"unproven-covered covered={covered} mutations={len(mutations)}")
 
@@ -281,7 +270,7 @@ def step(ctx):
     for p in paths:
         if not is_test_file(p):
             raise core.Fail(f"non-test-file {p}")
-    check_assertions(removed, added, entries.get("moved", []))
+    check_assertions(removed, added, [m["assertion"] for m in out["moved"]])
 
     commands = checks.commands(run / "map.md")
     green = {}

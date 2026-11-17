@@ -29,8 +29,10 @@ from . import core
 
 NAME = "decisions.md"
 TITLE = "# Decisions"
-KEYS = ("base", "ci", "merge_identity", "human", "review_before_agent_merge", "test_command", "caps")
-CHOICES = {"ci": ("on", "off"), "merge_identity": ("app", "human"), "review_before_agent_merge": ("yes", "no")}
+KEYS = ("base", "ci", "merge_identity", "human", "review_before_agent_merge", "test_command", "caps", "parallel",
+        "approved")
+CHOICES = {"ci": ("on", "off"), "merge_identity": ("app", "human"), "review_before_agent_merge": ("yes", "no"),
+           "approved": ("yes",)}
 WAIVED = ("yes", "no", "ask")
 AUTHORIZATIONS = "## Authorizations"
 DECISIONS = "## Decisions"
@@ -171,6 +173,8 @@ def check_value(key, value):
         raise core.Fail(f"bad-value: {key} is one of {'|'.join(CHOICES[key])}")
     if key == "caps" and not re.fullmatch(r"[1-9]\d* [1-9]\d*", value):
         raise core.Fail("bad-value: caps is <mb> <secs>")
+    if key == "parallel" and not re.fullmatch(r"[1-9]\d*", value):
+        raise core.Fail("bad-value: parallel is a whole number of slots")
 
 
 def save(run, d):

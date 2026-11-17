@@ -159,6 +159,8 @@ install_claude() {
   done
   if has global; then link "$REPO/global/AGENTS.md" "$HOME/.claude/CLAUDE.md"; fi
   link_each "$HOME/.claude/agents" "$REPO"/adapters/claude/agents/*.md
+  # build-epic's launcher starts Claude Code without the tools and MCP servers a run never calls (docs/build-epic-launcher.md).
+  if has build-epic; then link "$REPO/adapters/claude/build-epic/launch.sh" "$HOME/.agents/bin/build-epic"; fi
   merge --each "$REPO/adapters/claude/hooks" "$HOME/.claude/settings.json"
   if has global; then merge "$REPO/adapters/claude/settings" "$HOME/.claude/settings.json"; fi
   has global || has mcp || return 0
