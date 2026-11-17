@@ -1,0 +1,86 @@
+{
+ "$comment": "The mapper role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "security-mapper",
+ "brief": "security-audit/mapper-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "worktree",
+   "map"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "worktree": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "rules": {
+    "$ref": "common.json#/$defs/paths"
+   },
+   "map": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "map",
+   "areas",
+   "flows",
+   "repo_wide",
+   "not_reviewed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "map": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "areas": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "flows": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "repo_wide": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "not_reviewed": {
+    "type": "integer",
+    "minimum": 0
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}

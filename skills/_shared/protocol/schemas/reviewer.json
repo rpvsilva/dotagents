@@ -1,0 +1,214 @@
+{
+ "$comment": "The reviewer role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "pr-reviewer",
+ "brief": "review-pr/reviewer-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "mode",
+   "worktree",
+   "head",
+   "base",
+   "diff"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "mode": {
+    "enum": [
+     "task",
+     "ticket",
+     "re-review"
+    ]
+   },
+   "pr": {
+    "type": "integer",
+    "minimum": 1
+   },
+   "worktree": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "head": {
+    "type": "string",
+    "minLength": 1
+   },
+   "base": {
+    "type": "string",
+    "minLength": 1
+   },
+   "diff": {
+    "type": "string",
+    "minLength": 1
+   },
+   "pr_facts": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "decisions": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "ci": {
+    "enum": [
+     "on",
+     "off"
+    ]
+   },
+   "test_command": {
+    "type": "string",
+    "minLength": 1
+   },
+   "checks": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "task": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "findings": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "spec": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "map": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "remote": {
+    "type": "boolean"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "mode",
+   "findings",
+   "checked",
+   "process",
+   "followups"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "mode": {
+    "enum": [
+     "task",
+     "ticket",
+     "re-review"
+    ]
+   },
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "severity",
+      "axis",
+      "path",
+      "line",
+      "claim",
+      "scenario"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "severity": {
+       "$ref": "common.json#/$defs/severity"
+      },
+      "axis": {
+       "enum": [
+        "bugs",
+        "rules",
+        "spec",
+        "tests"
+       ]
+      },
+      "path": {
+       "$ref": "common.json#/$defs/path"
+      },
+      "line": {
+       "$ref": "common.json#/$defs/line"
+      },
+      "claim": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "scenario": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "rule": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   },
+   "checked": {
+    "$ref": "common.json#/$defs/sentence"
+   },
+   "earlier": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "n",
+      "verdict",
+      "note"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "n": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "verdict": {
+       "enum": [
+        "fixed",
+        "not-fixed",
+        "partly"
+       ]
+      },
+      "path": {
+       "$ref": "common.json#/$defs/path"
+      },
+      "line": {
+       "$ref": "common.json#/$defs/line"
+      },
+      "note": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   },
+   "process": {
+    "$ref": "common.json#/$defs/sentences"
+   },
+   "followups": {
+    "$ref": "common.json#/$defs/followups"
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}

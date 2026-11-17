@@ -1,0 +1,313 @@
+{
+ "$comment": "The security role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "security-reviewer",
+ "brief": "security-audit/security-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "scope",
+   "worktree"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "scope": {
+    "enum": [
+     "pr",
+     "area",
+     "flow",
+     "repo-wide",
+     "gaps"
+    ]
+   },
+   "name": {
+    "type": "string",
+    "minLength": 1
+   },
+   "worktree": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "rules": {
+    "$ref": "common.json#/$defs/paths"
+   },
+   "map": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "reports": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "known": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "pr": {
+    "type": "integer",
+    "minimum": 1
+   },
+   "head": {
+    "type": "string",
+    "minLength": 1
+   },
+   "base": {
+    "type": "string",
+    "minLength": 1
+   },
+   "diff": {
+    "type": "string",
+    "minLength": 1
+   },
+   "pr_facts": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "decisions": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "checks": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "test_command": {
+    "type": "string",
+    "minLength": 1
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "remote": {
+    "type": "boolean"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "coverage",
+   "complete",
+   "findings",
+   "other_bugs",
+   "process"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "coverage": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "source",
+      "sinks",
+      "cells"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "source": {
+       "type": "string",
+       "minLength": 1
+      },
+      "sinks": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "minLength": 1
+       }
+      },
+      "cells": {
+       "type": "object",
+       "required": [
+        "injection",
+        "secrets",
+        "authz",
+        "privilege",
+        "supply-chain",
+        "unsafe-handling"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "injection": {
+         "oneOf": [
+          {
+           "const": "clean"
+          },
+          {
+           "type": "integer",
+           "minimum": 1
+          }
+         ]
+        },
+        "secrets": {
+         "oneOf": [
+          {
+           "const": "clean"
+          },
+          {
+           "type": "integer",
+           "minimum": 1
+          }
+         ]
+        },
+        "authz": {
+         "oneOf": [
+          {
+           "const": "clean"
+          },
+          {
+           "type": "integer",
+           "minimum": 1
+          }
+         ]
+        },
+        "privilege": {
+         "oneOf": [
+          {
+           "const": "clean"
+          },
+          {
+           "type": "integer",
+           "minimum": 1
+          }
+         ]
+        },
+        "supply-chain": {
+         "oneOf": [
+          {
+           "const": "clean"
+          },
+          {
+           "type": "integer",
+           "minimum": 1
+          }
+         ]
+        },
+        "unsafe-handling": {
+         "oneOf": [
+          {
+           "const": "clean"
+          },
+          {
+           "type": "integer",
+           "minimum": 1
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   },
+   "complete": {
+    "type": "boolean"
+   },
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "n",
+      "severity",
+      "axis",
+      "path",
+      "line",
+      "claim",
+      "attacker",
+      "scenario",
+      "gain",
+      "fix"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "n": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "severity": {
+       "enum": [
+        "blocker",
+        "should-fix"
+       ]
+      },
+      "axis": {
+       "enum": [
+        "injection",
+        "secrets",
+        "authz",
+        "privilege",
+        "supply-chain",
+        "unsafe-handling"
+       ]
+      },
+      "path": {
+       "$ref": "common.json#/$defs/path"
+      },
+      "line": {
+       "$ref": "common.json#/$defs/line"
+      },
+      "claim": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "attacker": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "scenario": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "gain": {
+       "$ref": "common.json#/$defs/sentence"
+      },
+      "fix": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   },
+   "other_bugs": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "path",
+      "claim"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "path": {
+       "$ref": "common.json#/$defs/path"
+      },
+      "line": {
+       "$ref": "common.json#/$defs/line"
+      },
+      "claim": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   },
+   "process": {
+    "$ref": "common.json#/$defs/sentences"
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}
