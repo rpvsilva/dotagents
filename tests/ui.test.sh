@@ -69,10 +69,10 @@ grep -q "usage:" <<<"$out" || fail "usage line dropped: $out"
 # A selection word (a group or part) is no tool word: the run still covers every tool, and the title names it.
 out="$(view install remote <<'PLAIN'
 shared
-  parts: _shared configure remote remote-runs remote-subagents
+  parts: _shared configure remote remote-subagents
   /home/me/.agents/skills/remote-subagents -> /repo/skills/remote-subagents
 claude
-  /home/me/.claude/skills/remote-runs -> /repo/adapters/claude/mods/remote-runs
+  /home/me/.claude/skills/remote-subagents -> /repo/skills/remote-subagents
 codex
 cursor
 PLAIN

@@ -1,6 +1,6 @@
 {
   "core": {"about": "Always installed: Settings, shared conventions, the hooks library and the configure skill."},
-  "remote": {"about": "Run subagents remotely: the remote-agent command, the remote-subagents skill and the remote-runs mod."},
+  "remote": {"about": "Run subagents remotely: the remote-agent command and the remote-subagents skill; the agent-flow group shows the runs."},
   "pr-loop": {"about": "Ship, fix, review and keep PRs moving until they merge."},
   "epics": {"about": "Plan and build an epic from sources to merged tasks, and tune a repo's tests."},
   "security": {"about": "Audit a repo's security and fix what it finds."},

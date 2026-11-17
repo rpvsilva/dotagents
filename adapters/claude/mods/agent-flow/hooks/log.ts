@@ -4,7 +4,7 @@
 // The scrolling (scrollLog, windowLines, appendLines) follows the remote-runs mod's transcript.ts; it is copied, not
 // imported, since each mod is installed as its own plugin.
 
-import { type Agent, type Graph, MAIN, printable, shownStatus, summarize } from './flow.ts'
+import { type Agent, findAgent, type Graph, MAIN, printable, shownStatus, summarize } from './flow.ts'
 import type { Filter, Log, LogLine, View } from './state.d.ts'
 
 export type { Filter, Log, LogLine }
@@ -160,12 +160,12 @@ export function ago(then: number, now: number): string {
 /** An agent counts as old once it ended this long ago: it moves under `── older ──`. */
 export const OLD_MS = 30 * 60_000
 
-export type Section = 'recent' | 'earlier' | 'older'
+export type Section = 'recent' | 'earlier' | 'others' | 'older'
 
-/** One entry of the Agents list: an agent, or a squad's group (its members, and those that need you). */
 /** An agent listed under the one that started it, `depth` levels down (1: its child). */
 export type Kid = { agent: Agent; depth: number }
 
+/** One entry of the Agents list: an agent, or a squad's group (its members, and those that need you). */
 export type Item =
   | { kind: 'agent'; agent: Agent; section: Section; kids: Kid[] }
   | { kind: 'group'; id: string; type: string; members: Agent[]; needing: Agent[]; section: Section }
@@ -194,7 +194,7 @@ export function passes(a: Agent, filter: Filter, g: Graph, now: number): boolean
 
 /** How many agents each filter keeps. */
 export function filterCounts(g: Graph, now: number): Record<Filter, number> {
-  const all = g.agents.filter(a => a.id !== MAIN)
+  const all = [...g.agents.filter(a => a.id !== MAIN), ...g.others]
   const n = (f: Filter) => all.filter(a => passes(a, f, g, now)).length
   return { all: all.length, running: n('running'), needs: n('needs'), failed: n('failed'), done: n('done') }
 }
@@ -241,7 +241,9 @@ export function listItems(g: Graph, now: number, filter: Filter, squadMin: numbe
     const needing = members.filter(a => passes(a, 'needs', g, now))
     ranked.push({ item: { kind: 'group', id, type: lead.type, members, needing, section: sectionOf(lead) }, lead })
   }
-  const rank: Record<Section, number> = { recent: 0, earlier: 1, older: 2 }
+  // The runs other sessions started, after this session's own: live first, then newest.
+  for (const a of g.others.filter(x => passes(x, filter, g, now))) ranked.push({ item: { kind: 'agent', agent: a, section: 'others', kids: [] }, lead: a })
+  const rank: Record<Section, number> = { recent: 0, earlier: 1, others: 2, older: 3 }
   return ranked.sort((x, y) => rank[x.item.section] - rank[y.item.section] || order(x.lead, y.lead)).map(r => r.item)
 }
 
@@ -267,6 +269,6 @@ export function goBack<V extends Nav>(v: V): V {
 /** What Back says: `← ` and the agent type of the log it returns to, else `← Chart` or `← Agents`. */
 export function backLabel(v: Nav, g: Graph): string {
   const last = v.trail.at(-1)
-  if (last !== undefined) return `← ${printable(g.agents.find(a => a.id === last)?.type ?? 'back')}`
+  if (last !== undefined) return `← ${printable(findAgent(g, last)?.type ?? 'back')}`
   return v.origin === 'chart' ? '← Chart' : '← Agents'
 }

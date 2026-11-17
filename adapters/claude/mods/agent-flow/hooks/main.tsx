@@ -5,13 +5,22 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import { type Agent, ctxColor, fmtUsd, ink, TAB_FILL, ctxShare, emptyGraph, type FlowEvent, fmtTokens, gauge, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize } from './flow.ts'
+import { type Agent, ctxColor, findAgent, fmtUsd, ink, TAB_FILL, ctxShare, emptyGraph, type FlowEvent, fmtTokens, gauge, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize } from './flow.ts'
 import { addMessages, ago, backLabel, logText, EARLIER, filterCounts, FIRST_READ, goBack, type Item, type Kid, listItems, type Message, NO_LOG, openFrom, scrollLog, WAITING, windowLines } from './log.ts'
 import { bar, chart, spin, clock, counts as layoutCounts, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS } from './layout.ts'
 import { isMoving } from './lifecycle.ts'
 import {
   applyLiveness,
   costLine,
+  endedRuns,
+  markNotified,
+  notifiedKey,
+  NOTIFIED_MAX,
+  notifyText,
+  pickOthers,
+  resumeCommand,
+  resumeHint,
+  RESUME_WARNING,
   applyStaleness,
   commonOf,
   gitdirOf,
@@ -31,7 +40,7 @@ import {
   scanTranscript,
   upwards,
 } from './remote.ts'
-import type { Filter, Log, LogLine, View } from './state.d.ts'
+import type { Filter, Graph, Log, LogLine, View } from './state.d.ts'
 
 const PANE = 'agent-flow'
 const TICK_MS = 125
@@ -62,7 +71,7 @@ const LOG_AFTER_END_MS = 5000
 const CHROME_ROWS = 11
 const logRows = (bodyRows: number, l: Log) => Math.max(3, bodyRows - CHROME_ROWS - (l.truncated ? 1 : 0))
 
-const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-4' })
+const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-5' })
 const NO_VIEW: View = { tab: 'chart', expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
 const view = atom({ plugin: 'agent-flow', key: 'view' } as const, NO_VIEW, { shape: 'view-4' })
 const log = atom({ plugin: 'agent-flow', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
@@ -86,8 +95,10 @@ let ctxReadAt = 0
 let drawnRows = { agentId: null as string | null, rows: 10 }
 
 // Remote runs. The scan reads the repo's run folders at most every REMOTE_EVERY_MS while a remote-agent call or a
-// run of this session is live (and once after the mod loads), rereading a folder's files only when they changed.
+// run is live or the pane is drawn, else every QUIET_EVERY_MS (so a run that ends is notified), rereading a folder's
+// files only when they changed.
 const REMOTE_EVERY_MS = 1500
+const QUIET_EVERY_MS = 15_000
 // A call sent to the background ends at once; its run may start up to this long after.
 const LAUNCH_WAIT_MS = 120_000
 // $.fs.read refuses a file over 4 MiB: a transcript under this is read whole, a bigger one through `tail`.
@@ -96,11 +107,14 @@ let remoteAt = 0
 let remoteScanned = false
 let repo: { cwd: string; common: string | null } | null = null
 let sessionId: string | null = null
-// Per run folder: the key of the files last read, and what they gave; a finished run of another session is skipped.
-type Seen = { key: string; run: Run; result: Result | null; scan: Scan | null; transcriptSize: number; isFinal: boolean; isOurs: boolean }
+// Per run folder: the key of the files last read, and what they gave; `isDeep` once a finished run's transcript and
+// result were read, after which its folder is not looked at again.
+type Seen = { key: string; run: Run; result: Result | null; scan: Scan | null; transcriptSize: number; isFinal: boolean; isOurs: boolean; isDeep: boolean }
 let seen = new Map<string, Seen>()
 // The open remote log's files as last read, so an unchanged log is not read again.
 let remoteLogKey = ''
+// Whether this process has marked the repo's ended runs once: the first scan notifies none, so a reload repeats none.
+let notifySeeded = false
 let listDrawnAt = 0
 
 async function now($: EngineInterface): Promise<number> {
@@ -139,7 +153,7 @@ async function readLog($: EngineInterface): Promise<void> {
     const was = await read($, log)
     let l: Log = agentId === was.agentId ? was : { ...NO_LOG, agentId }
     const g = await read($, graph)
-    const target = agentId === null ? undefined : g.agents.find(a => a.id === agentId)
+    const target = agentId === null ? undefined : findAgent(g, agentId)
     if (target?.remote) {
       logReadAt = await now($)
       l = await readRemoteLog($, l, target.remote.folder, target.remote.toolUseId)
@@ -251,18 +265,65 @@ async function ps($: EngineInterface, pids: number[]): Promise<string | null> {
   }
 }
 
-/** Whether the run folders are worth reading at `t`: a remote-agent call or a run of this session is live, or none was read yet. */
-function remoteDue(g: { launches: { ended: number | null; at: number; background: boolean }[]; agents: Agent[] }, t: number): boolean {
+const isLiveRun = (a: Agent) => a.remote !== null && a.remote.taskId === null && a.status === 'running'
+
+/**
+ * Whether the run folders are worth reading at `t`: none was read yet, a remote-agent call or a run is live, or the
+ * pane was drawn a moment ago; else every QUIET_EVERY_MS, so a run that ends is noticed and notified.
+ */
+function remoteDue(g: Pick<Graph, 'launches' | 'agents' | 'others'>, t: number): boolean {
   if (t - remoteAt < REMOTE_EVERY_MS) return false
-  if (!remoteScanned) return true
+  if (!remoteScanned || t - remoteAt >= QUIET_EVERY_MS || t - lastDraw < DRAWN_MS) return true
   if (g.launches.some(l => l.ended === null || (l.background && t - l.at < LAUNCH_WAIT_MS) || t - (l.ended ?? l.at) < 10_000)) return true
-  return g.agents.some(a => a.remote !== null && a.remote.taskId === null && a.status === 'running')
+  return g.agents.some(isLiveRun) || g.others.some(isLiveRun)
+}
+
+/** Reads what a listed run's box and row show beyond run.json: its transcript when it grew, and its result once over. */
+async function deepen($: EngineInterface, s: Seen, t: number): Promise<void> {
+  const st = await stamp($, `${s.run.folder}/transcript.jsonl`)
+  const size = Number(st.split(':')[0] ?? -1)
+  if (st !== '' && size !== s.transcriptSize) {
+    const tr = await transcriptText($, `${s.run.folder}/transcript.jsonl`)
+    if (tr) s.scan = scanTranscript(tr.text)
+    s.transcriptSize = size
+  }
+  if (s.isFinal && s.result === null) s.result = parseResult(await text($, `${s.run.folder}/result.json`))
+  // A result.json may land a moment after run.json says it ended: wait a minute for it before letting the run be.
+  s.isDeep = s.isFinal && (s.result !== null || t - (s.run.ended ?? s.run.changed) > 60_000)
 }
 
 /**
- * Reads this session's remote runs into the graph: each run folder whose run.json names this session as its caller,
- * its liveness, result and transcript. A folder's files are reread only when they changed; a finished run of
- * another session is not listed again. Never throws.
+ * Notifies each run that ended since the last scan, once: the notified folders live in $.store under the remote-runs
+ * mod's key, so a reload or a new process does not notify again. The first scan of a process marks every ended run
+ * without notifying. A run is marked even when no notification went out, so a refused one is not tried every scan.
+ */
+async function notifyEnded($: EngineInterface, common: string, runs: readonly Run[]): Promise<void> {
+  let stored: unknown
+  try {
+    stored = await $.store.get(notifiedKey(common))
+  } catch {
+    return // no store, no memory: notifying now would repeat every scan
+  }
+  const notified = Array.isArray(stored) ? stored.filter((f): f is string => typeof f === 'string') : []
+  const ended = endedRuns(runs, new Set(notified))
+  if (ended.length > 0) {
+    for (const r of notifySeeded ? ended : []) {
+      try {
+        await $.ui.notify(notifyText(r), { title: 'remote run' })
+      } catch {
+        // a refused or failed notification: marked all the same
+      }
+    }
+    await $.store.set(notifiedKey(common), markNotified(notified, ended, new Set(runs.map(r => r.folder)), NOTIFIED_MAX))
+  }
+  notifySeeded = true
+}
+
+/**
+ * Reads the repo's remote runs: this session's into the graph (each run folder whose run.json names this session as
+ * its caller, with its liveness, result, transcript and the subagents it ran), the OTHERS_MAX newest of other
+ * sessions into the Agents list; notifies the runs that ended. A folder's files are reread only when they changed,
+ * and a finished run's not at all once read. Never throws.
  */
 async function scanRemote($: EngineInterface, t: number): Promise<void> {
   try {
@@ -273,45 +334,41 @@ async function scanRemote($: EngineInterface, t: number): Promise<void> {
     if (!common) return
     sessionId ??= await $.session.id()
     const kept = new Map<string, Seen>()
-    const ours: Seen[] = []
     for (const { id, folder } of await runFolders($, common)) {
       const was = seen.get(folder)
-      if (was?.isFinal && !was.isOurs) {
+      if (was?.isDeep) {
         kept.set(folder, was)
         continue
       }
-      const key = [await stamp($, `${folder}/run.json`), await stamp($, `${folder}/progress.log`), await stamp($, `${folder}/transcript.jsonl`)].join('|')
-      let s = was
-      if (!was || was.key !== key) {
-        const changed = Math.max(...key.split('|').map(k => Number(k.split(':')[1] ?? 0) || 0))
-        const run = parseRun({ id, folder, runJson: await text($, `${folder}/run.json`), changed })
-        const isOurs = run.session !== null && run.session === sessionId
-        const isFinal = run.state === 'done' || run.state === 'failed'
-        let scan = was?.scan ?? null
-        let size = was?.transcriptSize ?? -1
-        if (isOurs) {
-          const st = await stamp($, `${folder}/transcript.jsonl`)
-          const now = Number(st.split(':')[0] ?? -1)
-          if (st !== '' && now !== size) {
-            const tr = await transcriptText($, `${folder}/transcript.jsonl`)
-            if (tr) scan = scanTranscript(tr.text)
-            size = now
-          }
-        }
-        const result = isOurs && isFinal ? parseResult(await text($, `${folder}/result.json`)) : null
-        s = { key, run, result, scan, transcriptSize: size, isFinal, isOurs }
+      const files = [`${folder}/run.json`, `${folder}/progress.log`, `${folder}/transcript.jsonl`, `${folder}/session.jsonl`]
+      const key = (await Promise.all(files.map(f => stamp($, f)))).join('|')
+      if (was && was.key === key) {
+        kept.set(folder, was)
+        continue
       }
-      kept.set(folder, s!)
-      if (s!.isOurs) ours.push(s!)
+      const stamps = key.split('|')
+      const changed = Math.max(...stamps.slice(0, 3).map(k => Number(k.split(':')[1] ?? 0) || 0))
+      const run = parseRun({ id, folder, runJson: await text($, `${folder}/run.json`), changed, hasSession: Number(stamps[3]!.split(':')[0] ?? 0) > 0 })
+      const isFinal = run.state === 'done' || run.state === 'failed'
+      kept.set(folder, { key, run, result: was?.result ?? null, scan: was?.scan ?? null, transcriptSize: was?.transcriptSize ?? -1, isFinal, isOurs: run.session !== null && run.session === sessionId, isDeep: false })
     }
     seen = kept
-    if (!ours.length) return
+    const all = [...kept.values()]
+    const ours = all.filter(s => s.isOurs)
+    const others = pickOthers(all.filter(s => !s.isOurs).map(s => s.run)).map(r => kept.get(r.folder)!)
+    for (const s of [...ours, ...others]) if (!s.isDeep) await deepen($, s, t)
+    // A finished run of another session too old to be listed is never read: its folder is not looked at again.
+    const listed = new Set(others)
+    for (const s of all) if (s.isFinal && !s.isOurs && !listed.has(s)) s.isDeep = true
     // Liveness: ps where processes run; elsewhere a run whose files went quiet for 5 minutes counts as stopped.
-    const runs = ours.map(s => s.run)
+    const runs = all.map(s => s.run)
     const out = await ps($, livePids(runs))
-    const judged = out === null ? applyStaleness(runs, t) : applyLiveness(runs, out)
-    const evs = ours.flatMap((s, i) => runEvents(remoteRun(judged[i]!, s.result, s.scan, t), s.scan, t))
+    const judged = new Map((out === null ? applyStaleness(runs, t) : applyLiveness(runs, out)).map(r => [r.folder, r]))
+    const now = (s: Seen) => judged.get(s.run.folder) ?? s.run
+    const evs: FlowEvent[] = ours.flatMap(s => runEvents(remoteRun(now(s), s.result, s.scan, t), s.scan, t))
+    evs.push({ kind: 'others', at: t, runs: others.map(s => remoteRun(now(s), s.result, s.scan, t)) })
     await update($, graph, g => evs.reduce(reduce, g))
+    await notifyEnded($, common, [...judged.values()])
   } catch {
     // no runs this time
   }
@@ -392,10 +449,11 @@ const toTab = (tab: View['tab']) => (v: View): View => ({ ...v, tab, agentId: nu
 const toFilter = (filter: Filter) => (v: View): View => ({ ...v, tab: 'agents', filter, agentId: null, trail: [] })
 
 /** Copies `text` on the surface that pressed, and toasts what happened. */
-async function copyText($: EngineInterface, text: string, lines: number, surface: RenderSurface): Promise<void> {
+/** Copies `text`, toasting `copied <what>` or why not. */
+async function copyText($: EngineInterface, text: string, what: string, surface: RenderSurface): Promise<void> {
   try {
     const got = await $.ui.copy({ text, surface })
-    $.ui.toast(got.isCopied ? `copied ${lines} lines` : `not copied: ${got.reason ?? 'refused'}`)
+    $.ui.toast(got.isCopied ? `copied ${what}` : `not copied: ${got.reason ?? 'refused'}`)
   } catch {
     $.ui.toast('not copied')
   }
@@ -415,7 +473,7 @@ async function tick($: EngineInterface): Promise<void> {
     const v = await read($, view)
     if (isDrawn && v.agentId !== null && t - logReadAt >= LOG_EVERY_MS) {
       const g = await read($, graph)
-      if (logIsLive(g.agents.find(a => a.id === v.agentId), t)) await followLog($)
+      if (logIsLive(findAgent(g, v.agentId), t)) await followLog($)
     }
     // The list redraws once a second while an agent runs, for its clock; the chart on every frame something moves.
     if (isDrawn && v.tab === 'agents' && t - listDrawnAt >= LIST_EVERY_MS && (await read($, graph)).agents.some(a => a.id !== MAIN && a.status === 'running')) {
@@ -529,7 +587,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Code } = $.ui.resolve(e)
     await read($, frame) // redrawn on each frame the timer counts
     const g = await read($, graph)
     const v = await read($, view)
@@ -607,7 +665,7 @@ export const register: Register = (on, options) => {
 
     // An agent's log, from the chart, the list or another log: a header card, a rule with the agent and its model,
     // its task, its calls and results, how it ended; under a rule, follow, back and copy.
-    const open = v.agentId === null ? undefined : g.agents.find(a => a.id === v.agentId)
+    const open = v.agentId === null ? undefined : findAgent(g, v.agentId)
     if (open) {
       const l = await read($, log)
       const shown: Log = l.agentId === open.id ? l : { ...NO_LOG, agentId: open.id }
@@ -616,6 +674,11 @@ export const register: Register = (on, options) => {
       const k = look(open)
       const isLive = k.st === 'running' || k.st === 'waiting'
       const run = open.remote && open.remote.taskId === null ? open.remote : null
+      // A finished run can be picked up with remote-agent resume when its session came back.
+      const runRow = run && { id: run.runId, worktree: run.worktree, state: k.st === 'running' || k.st === 'waiting' ? ('running' as const) : open.why === 'stopped' ? ('stopped' as const) : k.st }
+      const resume = runRow && run ? resumeCommand(runRow, run.hasSession) : null
+      const hint = runRow && run ? resumeHint(runRow, run.hasSession) : []
+      const transcriptPath = run ? `${run.folder}/transcript.jsonl` : null
       const parentAgent = open.parent === null || open.parent === MAIN ? undefined : g.agents.find(a => a.id === open.parent)
       const parent = parentAgent ? printable(parentAgent.type) : 'main'
       const badge = k.phase ? k.phase.toUpperCase() : k.st === 'running' ? 'RUNNING' : k.st === 'waiting' ? 'WAITING' : k.st === 'failed' ? 'FAILED' : 'DONE'
@@ -719,7 +782,14 @@ export const register: Register = (on, options) => {
                 {k.st === 'failed' ? chip('✗ failed', 'error') : chip('✓ done', 'success')}
                 <Text dimColor>{k.st === 'failed' ? ` (${open.why ?? 'error'}) after ${k.took}` : how}</Text>
               </Text>
-              {run && <Text color={paint('warning')} wrap="truncate-end">session.jsonl kept, never read: the sandbox wrote it and could have forged turns</Text>}
+              {resume !== null ? (
+                <Box flexDirection="column" borderStyle="round" borderColor={paint('warning')} paddingX={1} marginTop={1}>
+                  <Code source={resume} language="bash" />
+                  <Text color={paint('warning')} wrap="wrap">{RESUME_WARNING}</Text>
+                </Box>
+              ) : (
+                hint.map((h, i) => <Text key={`hint${i}`} dimColor wrap="wrap">{h}</Text>)
+              )}
             </Box>
           )}
           <Text> </Text>
@@ -739,16 +809,32 @@ export const register: Register = (on, options) => {
               {`b back to ${backTo}`}
             </Button>
             <Text dimColor>·</Text>
-            <Button key="copy" hotkey="c" plain dimColor onPress={press => copyText($, logText(shown.lines), shown.lines.length, press.surface)}>
+            <Button key="copy" hotkey="c" plain dimColor onPress={press => copyText($, logText(shown.lines), `${shown.lines.length} lines`, press.surface)}>
               copy log
             </Button>
             <Text dimColor>·</Text>
-            <Button key="transcript" hotkey="v" plain dimColor onPress={async () => {
-              const r = await $.ui.view({ agentId: open.id })
-              if ('deny' in r && r.deny) $.ui.toast(`cannot open its transcript: ${r.deny}`)
-            }}>
-              open transcript
-            </Button>
+            {transcriptPath !== null ? (
+              [
+                <Button key="path" hotkey="p" plain dimColor onPress={press => copyText($, transcriptPath, 'the transcript path', press.surface)}>
+                  copy path
+                </Button>,
+                ...(resume === null
+                  ? []
+                  : [
+                      <Text key="dot" dimColor>·</Text>,
+                      <Button key="resume" hotkey="r" plain dimColor onPress={press => copyText($, resume, 'the resume command', press.surface)}>
+                        copy resume
+                      </Button>,
+                    ]),
+              ]
+            ) : (
+              <Button key="transcript" hotkey="v" plain dimColor onPress={async () => {
+                const r = await $.ui.view({ agentId: open.id })
+                if ('deny' in r && r.deny) $.ui.toast(`cannot open its transcript: ${r.deny}`)
+              }}>
+                open transcript
+              </Button>
+            )}
             <Text dimColor wrap="truncate-end">· ↑↓ scroll</Text>
           </Box>
         </Box>
@@ -883,7 +969,7 @@ export const register: Register = (on, options) => {
           </Box>
         )
       }
-      const sections: [Item['section'], string, boolean][] = [['recent', 'this turn', false], ['earlier', 'earlier this session', false], ['older', '── older ──', true]]
+      const sections: [Item['section'], string, boolean][] = [['recent', 'this turn', false], ['earlier', 'earlier this session', false], ['others', 'other sessions', false], ['older', '── older ──', true]]
       return (
         <Box flexDirection="column" paddingX={1}>
           {tabs}
