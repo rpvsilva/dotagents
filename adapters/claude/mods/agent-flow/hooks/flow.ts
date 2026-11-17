@@ -24,6 +24,8 @@ export type FlowEvent =
   /** A context reading: `used` tokens of a `window` (both from the engine). */
   | { kind: 'ctx'; at: number; agent: string; used: number; window: number }
   | { kind: 'cost'; at: number; agent: string; usd: number }
+  /** The repo's runs of other sessions, as one scan found them (OTHERS_MAX newest): they replace the last list. */
+  | { kind: 'others'; at: number; runs: RemoteRun[] }
 
 /** Agents kept at most: past it the oldest finished ones go (main never). */
 export const MAX_AGENTS = 100
@@ -39,6 +41,7 @@ export function emptyGraph(): Graph {
     turnStarted: 0,
     lastTurn: null,
     launches: [],
+    others: [],
   }
 }
 
@@ -167,6 +170,7 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       const was = g.agents.find(a => a.id === id)
       const remote: Remote = {
         runId: r.runId, folder: r.folder, taskId: null, toolUseId: null, phase: r.phase, exit: r.exit, cost: r.cost, turns: r.turns, files: r.files, linked,
+        worktree: r.worktree, hasSession: r.hasSession,
       }
       const fields = {
         parent: linked ? caller!.agent : MAIN, desc: (linked ? caller!.desc : null) ?? was?.desc ?? r.name ?? 'remote run', model: r.model, status: r.status,
@@ -187,6 +191,7 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       const id = `${parent}:${t.id}`
       const remote: Remote = {
         runId: ev.runId, folder: ev.folder, taskId: t.id, toolUseId: t.toolUseId, phase: null, exit: null, cost: null, turns: null, files: null, linked: true,
+        worktree: null, hasSession: false,
       }
       const fields = {
         parent, type: printable(t.type), desc: printable(t.desc), model: ev.model, status: t.status, why: t.status === 'failed' ? 'failed' : null,
@@ -200,6 +205,22 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
         return cap({ ...g, agents: [...g.agents, agent] })
       }
       return patch(id, a => (same(a, fields) ? a : { ...a, ...fields }))
+    }
+    case 'others': {
+      const others = ev.runs.map((r): Agent => {
+        const id = `remote:${r.runId}`
+        const was = g.others.find(a => a.id === id)
+        const remote: Remote = {
+          runId: r.runId, folder: r.folder, taskId: null, toolUseId: null, phase: r.phase, exit: r.exit, cost: r.cost, turns: r.turns, files: r.files, linked: false,
+          worktree: r.worktree, hasSession: r.hasSession,
+        }
+        const agent: Agent = {
+          id, parent: MAIN, type: `☁ ${r.name ?? 'remote-agent'}`, desc: r.name ?? 'remote run', model: r.model, status: r.status, why: r.why, started: r.started,
+          ended: r.ended, steps: r.steps, tokens: 0, step: r.step, toolUseId: null, turn: -1, checks: {}, ctx: null, window: null, cost: null, remote,
+        }
+        return was && JSON.stringify(was) === JSON.stringify(agent) ? was : agent
+      })
+      return others.length === g.others.length && others.every((a, i) => a === g.others[i]) ? g : { ...g, others }
     }
     case 'spawnFailed': {
       const a = g.agents.find(x => x.toolUseId === ev.toolUseId)
@@ -305,12 +326,20 @@ export function modelColor(id: string | null): string {
   }
 }
 
-/** The status line: `● 3 running · ◐ 1 needs you · ✗ 1 failed`; undefined when no agent runs, waits or failed this turn. */
+/** Agent `id`: one of this session's, else a run of another session; undefined when neither. */
+export const findAgent = (g: Pick<Graph, 'agents' | 'others'>, id: string): Agent | undefined => g.agents.find(a => a.id === id) ?? g.others.find(a => a.id === id)
+
+/**
+ * The status line: `● 3 running · ◐ 1 needs you · ☁ 2 remote · ✗ 1 failed`, the remote part counting the repo's live
+ * remote runs, this session's and others'; undefined when nothing runs, waits or failed this turn.
+ */
 export function statusText(g: Graph, now: number): string | undefined {
   const mine = g.agents.filter(a => a.id !== MAIN && (a.status === 'running' || a.turn === g.turn))
   const waiting = mine.filter(a => shownStatus(a, now) === 'waiting').length
   const running = mine.filter(a => a.status === 'running').length - waiting
   const failed = mine.filter(a => a.status === 'failed').length
-  const parts = [running && `● ${running} running`, waiting && `◐ ${waiting} needs you`, failed && `✗ ${failed} failed`].filter(Boolean)
+  const isRun = (a: Agent) => a.remote !== null && a.remote.taskId === null && a.status === 'running'
+  const remote = g.agents.filter(isRun).length + g.others.filter(isRun).length
+  const parts = [running && `● ${running} running`, waiting && `◐ ${waiting} needs you`, remote && `☁ ${remote} remote`, failed && `✗ ${failed} failed`].filter(Boolean)
   return parts.length ? parts.join(' · ') : undefined
 }

@@ -171,7 +171,7 @@ for h in guard-merge guard-secrets allow-task-cleanup; do
     [ ! -e "$f" ] || ! grep -q "$h.sh" "$f" || fail "uninstall safety-hooks kept $h in $f"
   done
 done
-for l in .agents/bin/remote-agent .agents/skills/remote-subagents .claude/skills/remote-subagents .claude/skills/remote-runs \
+for l in .agents/bin/remote-agent .agents/skills/remote-subagents .claude/skills/remote-subagents \
   .agents/hooks/telemetry-save.sh .agents/hooks/lib.sh; do
   [ -L "$home/$l" ] || fail "uninstall safety-hooks removed $l"
 done
@@ -189,9 +189,11 @@ out="$(uninstall "$home" --purge telemetry)"
 grep -q "^kept telemetry:" <<<"$out" || fail "uninstall telemetry did not say why it kept it: $out"
 [ -d "$home/.config/dotagents" ] && [ -d "$home/.agents/telemetry" ] || fail "--purge with a selection deleted data"
 grep -q "purge applies to a full uninstall only" <<<"$out" || fail "--purge with a selection did not say it kept the data: $out"
-# Removing remote leaves nothing dangling.
+# Removing remote leaves nothing dangling, a stale link to remote-runs (the mod agent-flow replaced) included.
+ln -s "$REPO/adapters/claude/mods/remote-runs" "$home/.claude/skills/remote-runs"
 uninstall "$home" remote >/dev/null
-[ ! -L "$home/.agents/bin/remote-agent" ] && [ ! -L "$home/.claude/skills/remote-runs" ] || fail "uninstall remote kept its links"
+[ ! -L "$home/.claude/skills/remote-runs" ] || fail "uninstall remote kept the stale remote-runs link"
+[ ! -L "$home/.agents/bin/remote-agent" ] || fail "uninstall remote kept its links"
 [ -z "$(dangling "$home")" ] || fail "uninstall remote left dangling links: $(dangling "$home")"
 
 [ "$fails" -eq 0 ] || { echo "uninstall.test.sh: $fails failure(s)"; exit 1; }

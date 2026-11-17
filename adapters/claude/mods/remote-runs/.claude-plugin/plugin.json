@@ -1,7 +1,0 @@
-{
-  "name": "remote-runs",
-  "version": "0.1.0",
-  "description": "Lists the remote-agent runs of the current repo in a pane: /remote-runs",
-  "license": "UNLICENSED",
-  "types": "./hooks/state.d.ts"
-}

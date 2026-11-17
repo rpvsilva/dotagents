@@ -139,7 +139,6 @@ The Settings you're most likely to touch:
 | `remote.cap_mb` | unset | A lower memory cap, in MB, for each shell command the agent runs in the sandbox. Unset, the sandbox's memory limit less 1024 MB for Claude (2000 MB with no limit) |
 | `remote.sandbox_mb`, `remote.sandbox_cpus` | unset | `docker` and `ssh` (container mode): each run's container memory (MB) and CPU limits, its share of a host others may use too. Unset, the host's over `remote.max_sandboxes`. On the cluster, the SandboxTemplate's pod limits set it |
 | `remote.cap_secs` | 300 | Time cap, in seconds, of each shell command the agent runs in the sandbox |
-| `remote.open_pane` | true | Open Claude Code's `/remote-runs` pane when a run starts |
 
 All of them, with each backend's own Settings, are in [remote/settings.json](../remote/settings.json).
 
@@ -161,4 +160,4 @@ To read a run's outcome without its stdout or stderr, run `remote-agent result <
 
 Records are never removed by a run. To clear old ones, run `remote-agent prune --older-than <Nd|Nh>` in the repo (`30d`, `12h`; at most 999999); add `--dry-run` to see what would go first. It removes every run folder, in the common git dir and the old per-worktree locations, whose `run.json` `ended` (else `started`, else the folder's last change) is older than that, printing one line per folder and then the count. A live run is always kept. A run marked running whose process is gone is stopped, and goes.
 
-In Claude Code, the `remote-runs` mod (`/remote-runs`) lists every run of the repo with its state and timings, and opens a run's live log on a keypress.
+In Claude Code, the `agent-flow` mod (`/agent-flow`, install it with `./install.sh claude remote agent-flow`) shows each run this session started under the agent that started it, and lists the repo's runs of other sessions in its Agents tab, each with its state, timings and live log, how to resume it, and a notification when it ends.

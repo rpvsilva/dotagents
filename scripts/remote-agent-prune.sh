@@ -36,7 +36,7 @@ now="$(date +%s)"
 has_lstart=""
 [ -z "$(LC_ALL=C ps -o lstart= -p $$ 2>/dev/null)" ] || has_lstart=1
 # Whether pid $1, recorded as started at $2 (empty when unknown), is the same process still alive. Compares as the
-# remote-runs mod does: whitespace squashed, in the C locale remote-agent wrote it in.
+# agent-flow mod does: whitespace squashed, in the C locale remote-agent wrote it in.
 alive() {
   local now_start
   if [ -z "$has_lstart" ]; then kill -0 "$1" 2>/dev/null; return; fi
