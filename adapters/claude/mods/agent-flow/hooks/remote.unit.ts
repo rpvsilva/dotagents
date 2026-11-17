@@ -5,6 +5,7 @@ import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce } from './flow.ts'
 import { chart, type ChartOpts, newTween } from './layout.ts'
 import {
   endedRuns,
+  withoutJson,
   markNotified,
   notifyText,
   OTHERS_MAX,
@@ -281,4 +282,16 @@ test("a run's last message is shown as said, once: summary.md, which repeats it,
   assert.ok(!lines.includes('── summary ──'))
   assert.ok(!lines.some(l => l.includes('59s')))
   assert.ok(!lines.some(l => l.startsWith('status:')))
+})
+
+test("a run's last message drops its JSON (a task's outcome): all of it when that is all it is, else the JSON lines", () => {
+  const log = (reply: string) => {
+    const tr = [{ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } }].map(e => `${JSON.stringify(e)}\n`).join('')
+    return remoteLog(tr, null, `${reply}\n`, null).filter(l => l.kind === 'text').map(l => l.text)
+  }
+  assert.deepEqual(log('{"status":"done","mode":"ticket","findings":[{"severity":"nit"}]}'), [])
+  assert.deepEqual(log('{\n  "status": "done"\n}'), [])
+  assert.deepEqual(log("The checker isn't here.\n{\"status\": \"done\", \"files\": [\"README.md\"]}"), ["The checker isn't here."])
+  assert.deepEqual(log('Counted 14 skills: {a} and [b].'), ['Counted 14 skills: {a} and [b].'])
+  assert.equal(withoutJson('[1, 2]'), '[1, 2]')
 })
