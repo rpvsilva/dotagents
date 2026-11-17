@@ -37,6 +37,8 @@ export type Agent = {
   ctx: number | null
   /** Its model's context window, in tokens; null before a reading. */
   window: number | null
+  /** What `/cost` credited it, in US dollars, at the last reading (an estimate; the session's total for main); null before one. */
+  cost: number | null
   /** For a remote-agent run (`remote:<run id>`) and the subagents it ran (`remote:<run id>:<task id>`); null for a local agent. */
   remote: Remote | null
 }
@@ -90,12 +92,11 @@ export type Graph = {
 }
 
 /**
- * How the pane draws: the tab (the chart, or the list of agents), the chart or the tree, which squad is expanded
+ * How the pane draws: the tab (the chart, or the list of agents), which squad is expanded
  * under the chart (null: none), and whose log is open on the Agents tab (null: the list).
  */
 export type View = {
   tab: 'chart' | 'agents'
-  tree: boolean
   expanded: string | null
   agentId: string | null
   /** The Agents tab's filter. */

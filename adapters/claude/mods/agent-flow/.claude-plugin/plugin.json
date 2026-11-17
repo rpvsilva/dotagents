@@ -22,7 +22,20 @@
       "title": "Motion",
       "description": "on: spinners, moving dots and gliding boxes; off: a still chart",
       "default": "on",
-      "options": ["on", "off"]
+      "options": [
+        "on",
+        "off"
+      ]
+    },
+    "colors": {
+      "type": "string",
+      "title": "Colors",
+      "description": "plan: the fixed dark palette of the design; theme: your Claude Code theme's colours (light and colour-blind themes)",
+      "default": "plan",
+      "options": [
+        "plan",
+        "theme"
+      ]
     }
   }
 }

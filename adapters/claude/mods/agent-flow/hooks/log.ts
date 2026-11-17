@@ -163,8 +163,11 @@ export const OLD_MS = 30 * 60_000
 export type Section = 'recent' | 'earlier' | 'older'
 
 /** One entry of the Agents list: an agent, or a squad's group (its members, and those that need you). */
+/** An agent listed under the one that started it, `depth` levels down (1: its child). */
+export type Kid = { agent: Agent; depth: number }
+
 export type Item =
-  | { kind: 'agent'; agent: Agent; section: Section }
+  | { kind: 'agent'; agent: Agent; section: Section; kids: Kid[] }
   | { kind: 'group'; id: string; type: string; members: Agent[]; needing: Agent[]; section: Section }
 
 const isLiveAt = (a: Agent, now: number) => {
@@ -204,9 +207,18 @@ export function filterCounts(g: Graph, now: number): Record<Filter, number> {
  * another filter lists the agents that pass it, ungrouped.
  */
 export function listItems(g: Graph, now: number, filter: Filter, squadMin: number): Item[] {
-  const all = g.agents.filter(a => a.id !== MAIN && passes(a, filter, g, now))
+  const listed = g.agents.filter(a => a.id !== MAIN && passes(a, filter, g, now))
+  const ids = new Set(listed.map(a => a.id))
+  // An agent whose parent is listed too goes under it, not on a row of its own.
+  const all = listed.filter(a => a.parent === null || a.parent === MAIN || !ids.has(a.parent))
+  const kidsOf = (id: string, depth: number): Kid[] =>
+    listed
+      .filter(a => a.parent === id)
+      .sort((x, y) => x.started - y.started)
+      .flatMap(a => [{ agent: a, depth }, ...kidsOf(a.id, depth + 1)])
+  // This turn: running, or ended since the prompt started it; a run found late, long over, is not this turn's.
   const sectionOf = (a: Agent): Section =>
-    isLiveAt(a, now) || a.turn === g.turn ? 'recent' : a.ended !== null && now - a.ended > OLD_MS ? 'older' : 'earlier'
+    isLiveAt(a, now) || (a.ended !== null && a.ended >= g.turnStarted) ? 'recent' : a.ended !== null && now - a.ended > OLD_MS ? 'older' : 'earlier'
   const key = (a: Agent) => (isLiveAt(a, now) ? [0, -a.started] : [1, -(a.ended ?? a.started)])
   const order = (x: Agent, y: Agent) => {
     const [p, q] = [key(x), key(y)]
@@ -222,7 +234,7 @@ export function listItems(g: Graph, now: number, filter: Filter, squadMin: numbe
   }
   const grouped = new Set([...groups.values()].flat().map(a => a.id))
   type Ranked = { item: Item; lead: Agent }
-  const ranked: Ranked[] = all.filter(a => !grouped.has(a.id)).map(a => ({ item: { kind: 'agent', agent: a, section: sectionOf(a) }, lead: a }))
+  const ranked: Ranked[] = all.filter(a => !grouped.has(a.id)).map(a => ({ item: { kind: 'agent', agent: a, section: sectionOf(a), kids: kidsOf(a.id, 1) }, lead: a }))
   for (const [id, ms] of groups) {
     const members = ms.slice().sort((x, y) => x.started - y.started)
     const lead = members.slice().sort(order)[0]!

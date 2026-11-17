@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce, WAIT_MS } from './flow.ts'
-import { chart, type ChartOpts, fallback, FIT_HOLD_MS, FIT_MARGIN, GAP, noFallback, headerRow, needsRow, newTween, type Row, SW, tree, TWEEN_MS, W } from './layout.ts'
+import { chart, type ChartOpts, fallback, FIT_HOLD_MS, FIT_MARGIN, GAP, noFallback, headerRow, needsRow, newTween, type Row, SW, TWEEN_MS, W } from './layout.ts'
 
 const T = 1_800_000_000_000
 const OPTS: ChartOpts = { columns: 160, lingerMs: 5000, squadMin: 4, motion: true, expanded: null }
@@ -61,15 +61,6 @@ test('a row too wide folds its finished siblings into one box; when nothing can 
   assert.ok(lines(c.rows).some(l => l.includes('✓ 6 done')))
   const running = Array.from({ length: 6 }, (_, i) => spawn(`r${i}`, T + i, `type${i}`))
   assert.equal(settled(running, T + 2500, { columns: 100 }).fits, false)
-})
-
-test('the tree view lists every agent under main with its status, model and current step', () => {
-  const evs = [spawn('a1', T), spawn('a2', T + 1, 'pr-reviewer', 'a1', 'claude-opus-5-5'), { kind: 'tool', at: T + 2, agent: 'a2', tool: 'Bash', summary: 'Bash gh pr diff' } as FlowEvent]
-  const ls = lines(tree(graphAt(evs, T + 10), T + 10, OPTS))
-  assert.match(ls[0]!, /main/)
-  assert.ok(ls.some(l => /└─ .*Explore/.test(l)))
-  assert.ok(ls.some(l => /└─ .*pr-reviewer .*opus 5\.5/.test(l)))
-  assert.ok(ls.some(l => l.includes('⎿ Bash gh pr diff')))
 })
 
 test('the strips: counts for this turn, the agents that need you, the last turn once a new prompt clears it', () => {
@@ -161,25 +152,25 @@ test('the glide: boxes move together over TWEEN_MS and never come closer than GA
   }
 })
 
-test('the tree fallback never flickers: tree at once on overflow, chart only after it fits with room for a while', () => {
+test('the narrow fallback never flickers: the list at once on overflow, the chart only after it fits with room for a while', () => {
   const cols = 100
   let f = noFallback()
   f = fallback(f, 98, cols, T) // fits exactly
-  assert.equal(f.tree, false)
+  assert.equal(f.narrow, false)
   f = fallback(f, 99, cols, T + 125) // one column over
-  assert.equal(f.tree, true)
-  // On the edge, back and forth: stays a tree.
+  assert.equal(f.narrow, true)
+  // On the edge, back and forth: stays the list.
   for (let t = T + 250; t < T + 10_000; t += 125) {
     f = fallback(f, t % 250 ? 98 : 99, cols, t)
-    assert.equal(f.tree, true, `t=${t - T}`)
+    assert.equal(f.narrow, true, `t=${t - T}`)
   }
-  // Room to spare, but not for long enough: still a tree; then the chart.
+  // Room to spare, but not for long enough: still the list; then the chart.
   const roomy = cols - 2 - FIT_MARGIN
   f = fallback(f, roomy, cols, T + 20_000)
   f = fallback(f, roomy, cols, T + 20_000 + FIT_HOLD_MS - 1)
-  assert.equal(f.tree, true)
+  assert.equal(f.narrow, true)
   f = fallback(f, roomy, cols, T + 20_000 + FIT_HOLD_MS)
-  assert.equal(f.tree, false)
+  assert.equal(f.narrow, false)
 })
 
 test("a box carries its context gauge in its bottom border, coloured by how full; a squad its average and fullest", () => {
