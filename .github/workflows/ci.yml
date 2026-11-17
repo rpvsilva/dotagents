@@ -2,7 +2,7 @@ name: CI
 
 # Runs on PRs into main only: scripts/merge-pr.sh merges a PR's tested head, so main needs no second run. Draft PRs
 # run nothing; marking one ready for review (ready_for_review) starts the run.
-# PRs into other branches (build-epic's task PRs into a ticket branch) run their checks locally, to save runners.
+# PRs into other branches (build-epic's ticket PRs into an integration branch) run their checks locally, to save runners.
 # macOS is tests/run.sh on your machine. Windows is not tested.
 on:
   pull_request:
