@@ -145,11 +145,11 @@ case " \$* " in
     cat >"$SANDBOX/stdin"
     cp "\$pod/main-stdout" "$SANDBOX/log-at-run" 2>/dev/null || true
     if [ -e "$SANDBOX/vanish" ]; then cat "$SANDBOX/vanish" >&2; exit 1; fi
-    # With $SANDBOX/events, Claude's raw events on stdout (the transcript); with $SANDBOX/summary, the report.
+    # With $SANDBOX/events, Claude's raw events on stdout (the transcript); with $SANDBOX/summary, the final message.
     [ ! -e "$SANDBOX/events" ] || cat "$SANDBOX/events"
     mkdir -p "\$pod/out"; cp "\$patch" "\$pod/out/changes.patch"
     if [ -e "$SANDBOX/summary" ]; then cp "$SANDBOX/summary" "\$pod/out/summary.md"; else echo "did the thing" >"\$pod/out/summary.md"; fi
-    # With $SANDBOX/reportfile, the report file the agent wrote as ~/out/report.md.
+    # With $SANDBOX/reportfile, a stray ~/out/report.md, which remote-agent ignores.
     [ ! -e "$SANDBOX/reportfile" ] || cp "$SANDBOX/reportfile" "\$pod/out/report.md"
     # With $SANDBOX/evil, a hostile sandbox: links that aim the host's writes at $SANDBOX/victim, one that would have
     # it read the victim in as the session, and a forged run.json.
@@ -354,34 +354,39 @@ unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
 
 # result.json: what the run came to, for a caller that lost stdout, stderr or the exit code. Its figures come from
 # the transcript's last result event and the init event's model, the changed files from the patch, the report's
-# status and follow-ups from the summary. The events and the summary carry the token, which never reaches it.
+# status from the output object the final message (the summary) holds. The events and the summary carry the token,
+# which never reaches it.
 {
   echo '{"type":"system","subtype":"init","model":"claude-test-1","claude_code_version":"9.8.7","session_id":"s"}'
   echo '{"type":"result","is_error":false,"num_turns":1,"total_cost_usd":0.01,"usage":{"input_tokens":1}}'
   echo '{"type":"assistant","message":{"content":[{"type":"text","text":"key sk-claude-secret"}]}}'
   echo '{"type":"result","is_error":false,"duration_ms":4200,"num_turns":7,"total_cost_usd":1.25,"result":"sk-claude-secret","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300}}'
 } >"$SANDBOX/events"
-printf 'status: done\nchanged: abc hello.txt\nfollow-up: document --flag\nfollow-up: token sk-claude-secret\n' >"$SANDBOX/summary"
+printf '{"status": "done", "files": ["hello.txt"], "why": "token sk-claude-secret"}\n' >"$SANDBOX/summary"
 run 0 "$patch" --name "08-result" || fail "result on exit 0: exited non-zero: $(cat "$SANDBOX/out")"
 result_is "result on exit 0" '.exit_code == 0 and .status == "done" and .complete == true and .name == "08-result"
   and (.run | startswith("agent-")) and .num_turns == 7 and .total_cost_usd == 1.25 and .duration_ms == 4200
   and .usage == {"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":300} and .model == "claude-test-1"
   and .claude_version == "9.8.7" and .changed == ["hello.txt"] and .report_status == "done"
-  and .follow_up == ["document --flag", "token [redacted]"] and (.report_path | endswith("/summary.md"))'
+  and (has("follow_up") | not) and (.report_path | endswith("/summary.md"))'
+[ "$(cat "$SANDBOX/report")" = '{"status": "done", "files": ["hello.txt"], "why": "token [redacted]"}' ] \
+  || fail "result on exit 0: stdout is not the redacted output object: $(cat "$SANDBOX/report")"
 rm -f "$W/hello.txt"
 
-# A report file the agent wrote as ~/out/report.md: stdout and report_path give it, then the final message (the
-# block); the status and follow-ups still come from the final message. The token is redacted in it too.
-printf 'Built hello.txt.\nkey sk-claude-secret\n' >"$SANDBOX/reportfile"
-printf 'status: done\nchanged: hello.txt\nwhy:\nfollow-up: document --flag\n' >"$SANDBOX/summary"
-run 0 "$patch" --name "08-report-file" || fail "report file: exited non-zero: $(cat "$SANDBOX/out")"
-want="$(printf 'Built hello.txt.\nkey [redacted]\n\nstatus: done\nchanged: hello.txt\nwhy:\nfollow-up: document --flag')"
-[ "$(cat "$SANDBOX/report")" = "$want" ] || fail "report file: stdout is not the report then the block: $(cat "$SANDBOX/report")"
-result_is "report file" '.report_status == "done" and .follow_up == ["document --flag"]
-  and (.report_path | endswith("/report.md"))'
-rf="$(jq -r .report_path "$(kept)/result.json" | tr -d '\r')"
-[ "$(cat "$rf")" = "$want" ] || fail "report file: report_path does not hold the report then the block: $(cat "$rf")"
+# The output object inside one code fence still gives its status. A ~/out/report.md the agent wrote is not kept:
+# the final message is the whole output, on stdout and at report_path.
+printf 'stray report\n' >"$SANDBOX/reportfile"
+printf '```json\n{"status": "blocked", "why": "red suite"}\n```\n' >"$SANDBOX/summary"
+run 0 "$patch" --name "08-fenced" || fail "fenced output: exited non-zero: $(cat "$SANDBOX/out")"
+result_is "fenced output" '.report_status == "blocked" and (.report_path | endswith("/summary.md"))'
+[ ! -e "$(kept)/report.md" ] || fail "fenced output: ~/out/report.md was kept"
+grep -q "stray report" "$SANDBOX/report" && fail "fenced output: ~/out/report.md reached stdout"
 rm -f "$W/hello.txt" "$SANDBOX/reportfile"
+# A final message that is no JSON object (an old block of `status:` lines, prose) gives no status.
+printf 'status: done\nchanged: hello.txt\n' >"$SANDBOX/summary"
+run 0 "$patch" --name "08-no-json" || fail "no JSON output: exited non-zero: $(cat "$SANDBOX/out")"
+result_is "no JSON output" '.report_status == null'
+rm -f "$W/hello.txt"
 
 # No changes: exit 3, claim still deleted.
 code=0; run 0 "" || code=$?
@@ -423,7 +428,7 @@ code=0; run 1 "$patch" || code=$?
 grep -q "delete sandboxclaim" "$SANDBOX/calls" || fail "failed run: claim not deleted"
 run_data "failed run data" failed 1
 result_is "result on exit 1" '.exit_code == 1 and .status == "failed" and .complete == false and .total_cost_usd == null
-  and .num_turns == null and .usage == null and .model == null and .claude_version == null and .report_status == null and .follow_up == []
+  and .num_turns == null and .usage == null and .model == null and .claude_version == null and .report_status == null
   and (.duration_ms | type) == "number"'
 # A rename to a name of another length lists both its paths, and a non-ASCII name, which git C-quotes
 # ("b/caf\303\251.txt"), is listed as it is on disk.
@@ -446,10 +451,10 @@ rm -f "$W"/caf*.txt
 # A report and a last result event each over 200 KB, more than one argument may hold, still give a result.
 big="$(head -c 210000 /dev/zero | tr '\0' x)"
 printf '{"type":"result","is_error":false,"num_turns":2,"result":"%s"}\n' "$big" >"$SANDBOX/events"
-{ printf 'status: done\nfollow-up: read it all\n'; printf '%s\n' "$big"; } >"$SANDBOX/summary"
+printf '{"status": "done", "why": "%s"}\n' "$big" >"$SANDBOX/summary"
 run 0 "$patch" --name 08-big || fail "result of a big report: exited non-zero: $(tail -c 2000 "$SANDBOX/err")"
 result_is "result of a big report" '.complete == true and .num_turns == 2 and .report_status == "done"
-  and .follow_up == ["read it all"] and .changed == ["hello.txt"]'
+  and .changed == ["hello.txt"]'
 rm -f "$W/hello.txt" "$SANDBOX/events" "$SANDBOX/summary"
 # A sandbox exiting 3, 4 or 5 is a failed run too (exit 1): those codes are remote-agent's own answers.
 for c in 3 4 5; do
