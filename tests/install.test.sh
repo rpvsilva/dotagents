@@ -150,6 +150,10 @@ migrations=$!
   mkdir -p "$home/.claude" "$home/.codex" "$home/.cursor"
   run "$home" epics claude >"$SANDBOX/epics.out"
   links "$home" >"$SANDBOX/epics.links"
+  home="$SANDBOX/codex-epics"
+  mkdir -p "$home/.codex"
+  run "$home" epics codex >/dev/null
+  links "$home" >"$SANDBOX/codex-epics.links"
   home="$SANDBOX/badsel"
   mkdir -p "$home/.claude"
   if run "$home" remote nope >"$SANDBOX/badsel.out" 2>&1; then touch "$SANDBOX/badsel-exited-0"; fi
@@ -187,6 +191,7 @@ assert_hooks "$home"
 assert_link "$home/.agents/bin/remote-agent" "$REPO/scripts/remote-agent.sh"
 assert_link "$home/.agents/bin/settings" "$REPO/scripts/settings.sh"
 assert_link "$home/.agents/bin/capped" "$REPO/scripts/capped"
+assert_link "$home/.agents/bin/build-epic" "$REPO/adapters/claude/build-epic/launch.sh"
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
 assert_link "$home/.codex/AGENTS.md" "$REPO/global/AGENTS.md"
 for a in "$REPO"/adapters/claude/agents/*.md; do assert_link "$home/.claude/agents/$(basename "$a")" "$a"; done
@@ -385,6 +390,11 @@ home="$SANDBOX/epics"
 if grep -q "security\|remote-agent\|remote-runs\|hooks/guard" "$SANDBOX/epics.links"; then
   fail "install.sh claude epics linked parts it does not need"
 fi
+grep -qx ".agents/bin/build-epic -> $REPO/adapters/claude/build-epic/launch.sh" "$SANDBOX/epics.links" ||
+  fail "install.sh claude epics did not link the build-epic launcher"
+# The launcher starts Claude Code: a Codex-only install leaves it out.
+if grep -q "bin/build-epic" "$SANDBOX/codex-epics.links"; then fail "install.sh codex epics linked the build-epic launcher"; fi
+grep -q "^.agents/skills/build-epic " "$SANDBOX/codex-epics.links" || fail "install.sh codex epics did not link build-epic"
 
 # An unknown selection word: usage, exit 1, nothing linked.
 [ ! -e "$SANDBOX/badsel-exited-0" ] || fail "install.sh with an unknown part exited 0"

@@ -27,6 +27,7 @@ remote-agent-setup.test.sh scripts/remote-* scripts/capped scripts/settings.sh r
 remote-agent-check.test.sh scripts/remote-* scripts/capped scripts/settings.sh remote/settings.json scripts/remote-backends/* scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt tests/lib/*
 parallel.test.sh tests/parallel.sh
 capped.test.sh scripts/capped
+launcher.test.sh adapters/claude/build-epic/*
 run.test.sh tests/run.sh scripts/shellcheck-version scripts/shellcheck-image evals/pick.py evals/compare.py
 parts.test.sh scripts/parts.sh groups.json *needs.json
 settings.test.sh scripts/settings.sh *settings.json

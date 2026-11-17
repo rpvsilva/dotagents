@@ -146,6 +146,11 @@ uninstall "$home" cursor to-epic >/dev/null
 uninstall "$home" to-epic >/dev/null
 [ ! -L "$home/.agents/skills/to-epic" ] && [ ! -L "$home/.claude/agents/source-reader.md" ] && [ ! -L "$home/.codex/agents/source-reader.toml" ] ||
   fail "uninstall to-epic kept the skill or its source-reader agent"
+# build-epic's launcher stays while build-epic does (tune-tests requires it), and goes with the epics group.
+[ -L "$home/.agents/bin/build-epic" ] || fail "uninstall pr-loop or to-epic removed the build-epic launcher"
+uninstall "$home" epics >/dev/null
+[ ! -L "$home/.agents/bin/build-epic" ] || fail "uninstall epics kept the build-epic launcher"
+[ -z "$(dangling "$home")" ] || fail "uninstall epics left dangling links: $(dangling "$home")"
 
 # Removing the hooks group drops its links and config entries, and keeps remote, the other hooks and a foreign hook.
 home="$SANDBOX/hooks"
