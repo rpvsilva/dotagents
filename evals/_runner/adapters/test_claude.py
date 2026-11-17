@@ -206,6 +206,28 @@ class ParseTest(EvalSandbox):
         shutil.copy(FIXTURES / "killed.jsonl", self.run_dir / adapters.TRANSCRIPT)
         self.assertIsNone(self.claude.answer(self.run_dir))
 
+    def segments(self, last_subtype="success", last_error=False):
+        """A run whose background subagent's notification resumed it: one result event per segment, each counting its
+        own turns and time, the cost cumulative."""
+        init = {"type": "system", "subtype": "init", "session_id": "s-seg", "claude_code_version": "2.1.326"}
+        first = {"type": "result", "subtype": "success", "is_error": False, "session_id": "s-seg", "num_turns": 16,
+                 "duration_ms": 75041, "total_cost_usd": 0.6, "result": "waiting"}
+        last = dict(first, subtype=last_subtype, is_error=last_error, num_turns=4, duration_ms=22309, result="done")
+        self.write([init, first, last])
+        return self.claude.parse(self.run_dir, self.eval_home, self.work)
+
+    def test_turns_and_time_add_up_every_segment_of_a_resumed_run(self):
+        got = self.segments()
+        self.assertEqual(got["turns"], 20)
+        self.assertAlmostEqual(got["duration_s"], 97.35)
+        self.assertIsNone(got["capped"])
+        self.assertIsNone(got["error"])
+        self.assertEqual(self.claude.answer(self.run_dir), "done")
+
+    def test_the_last_segment_decides_a_cap_or_an_error(self):
+        self.assertEqual(self.segments("error_max_turns", True)["capped"], "turns")
+        self.assertEqual(self.segments("error_during_execution", True)["error"], "tool")
+
     def test_spawned_agents_counts_task_and_agent_tool_uses(self):
         got = self.parse("subagent")
         self.assertEqual(got["spawned_agents"], 3)
