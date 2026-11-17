@@ -130,7 +130,7 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 ### ✨ Claude Code extras
 
 - **Plugins** ([`adapters/claude/plugins.txt`](adapters/claude/plugins.txt)): `mattpocock-skills`, a set of engineering skills (grilling, TDD, code review, ...).
-- **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `remote-runs` adds a `/remote-runs` pane listing remote subagent runs and their live logs; `agent-flow` adds an `/agent-flow` pane drawing the session's agents as a live org chart, with a list of every agent and its log, remote-agent runs included.
+- **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `agent-flow` adds an `/agent-flow` pane drawing the session's agents as a live org chart, with a list of every agent and its log, remote-agent runs included (this session's under the agent that started them, other sessions' in the list).
 - **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow my GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
 
 ### 🧱 Groups
@@ -140,7 +140,7 @@ Every skill, subagent, mod, hook and folder part belongs to one **group**, a fea
 | Group | What it holds |
 |---|---|
 | `core` | Always installed: Settings (`~/.agents/bin/settings`), the shared conventions, the hooks library and the `configure` skill |
-| `remote` | Running subagents remotely: the `remote-agent` command, the `remote-subagents` skill and the `remote-runs` mod |
+| `remote` | Running subagents remotely: the `remote-agent` command and the `remote-subagents` skill; the `agent-flow` group shows the runs |
 | `pr-loop` | `ship-pr`, `fix-pr`, `address-review`, `renovate-prs`, `review-pr` and their subagents |
 | `epics` | `build-epic`, `to-epic`, `tune-tests` and their subagents |
 | `security` | `security-audit` and its subagents |

@@ -1,1 +1,1 @@
-{"group": "remote", "needs": {"remote-subagents": "optional"}}
+{"group": "remote", "needs": {"remote-subagents": "optional", "agent-flow": "optional"}}

@@ -84,6 +84,13 @@ assert_hooks() {
   mkdir -p "$home/.agents"
   ln -s "$REPO/scripts/hooks" "$home/.agents/hooks"
   run "$home" shared >"$SANDBOX/migrate.out"
+  # A home from before agent-flow replaced remote-runs: a link to the mod folder this checkout no longer has, and a
+  # dangling link that is not ours.
+  home="$SANDBOX/stalemod"
+  mkdir -p "$home/.claude/skills"
+  ln -s "$REPO/adapters/claude/mods/remote-runs" "$home/.claude/skills/remote-runs"
+  ln -s "$SANDBOX/nowhere" "$home/.claude/skills/foreign"
+  run "$home" claude agent-flow >"$SANDBOX/stalemod.out"
   if run "$SANDBOX/bad" nope >/dev/null 2>&1; then touch "$SANDBOX/bad-exited-0"; fi
 ) &
 single=$!
@@ -270,7 +277,7 @@ wait "$single" || fail "a single-tool install failed"
 # claude: no codex links; codex and cursor: skipped cleanly when their folder is missing.
 home="$SANDBOX/claude"
 assert_link "$home/.claude/CLAUDE.md" "$REPO/global/AGENTS.md"
-assert_link "$home/.claude/skills/remote-runs" "$REPO/adapters/claude/mods/remote-runs"
+assert_link "$home/.claude/skills/agent-flow" "$REPO/adapters/claude/mods/agent-flow"
 [ ! -e "$SANDBOX/claude-touched-codex" ] || fail "install.sh claude touched ~/.codex"
 grep -q "skipping" "$SANDBOX/codex.out" || fail "codex without ~/.codex did not skip"
 grep -q "skipping" "$SANDBOX/cursor.out" || fail "cursor without ~/.cursor did not skip"
@@ -286,6 +293,13 @@ home="$SANDBOX/migrate"
 assert_hooks "$home"
 [ -z "$(find "$REPO/scripts/hooks" -type l)" ] || fail "install.sh linked into the repo through the old ~/.agents/hooks link"
 if grep -q "backed up" "$SANDBOX/migrate.out"; then fail "replacing the old ~/.agents/hooks link backed something up"; fi
+
+# stalemod: the link to a mod gone from this checkout is removed and said; a dangling link not ours stays.
+home="$SANDBOX/stalemod"
+[ ! -L "$home/.claude/skills/remote-runs" ] || fail "install.sh kept the stale remote-runs link"
+grep -q "removed stale .*remote-runs" "$SANDBOX/stalemod.out" || fail "install.sh did not say it removed the stale link: $(cat "$SANDBOX/stalemod.out")"
+[ -L "$home/.claude/skills/foreign" ] || fail "install.sh removed a dangling link that is not ours"
+assert_link "$home/.claude/skills/agent-flow" "$REPO/adapters/claude/mods/agent-flow"
 
 wait "$migrations" || fail "a migration or space-path install failed"
 
@@ -343,7 +357,6 @@ want_remote=".agents/bin/capped -> $REPO/scripts/capped
 .agents/skills/remote-subagents -> $REPO/skills/remote-subagents
 .claude/skills/_shared -> $SANDBOX/remote/.agents/skills/_shared
 .claude/skills/configure -> $SANDBOX/remote/.agents/skills/configure
-.claude/skills/remote-runs -> $REPO/adapters/claude/mods/remote-runs
 .claude/skills/remote-subagents -> $SANDBOX/remote/.agents/skills/remote-subagents"
 [ "$(cat "$SANDBOX/remote.links")" = "$want_remote" ] ||
   fail "install.sh remote linked: $(diff <(echo "$want_remote") "$SANDBOX/remote.links")"
@@ -382,7 +395,7 @@ home="$SANDBOX/epics"
 [ "$(names_in "$home" .claude/agents)" = "epic-explorer epic-implementer epic-planner pr-fixer pr-reviewer source-reader test-tuner " ] ||
   fail "install.sh claude epics agents: $(names_in "$home" .claude/agents)"
 [ -z "$(find "$home/.codex" "$home/.cursor" -mindepth 1)" ] || fail "install.sh claude epics touched codex or cursor"
-if grep -q "security\|remote-agent\|remote-runs\|hooks/guard" "$SANDBOX/epics.links"; then
+if grep -q "security\|remote-agent\|agent-flow\|hooks/guard" "$SANDBOX/epics.links"; then
   fail "install.sh claude epics linked parts it does not need"
 fi
 
