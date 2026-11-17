@@ -376,7 +376,8 @@ rm -f "$W/hello.txt"
 # The output object inside one code fence still gives its status. A ~/out/report.md the agent wrote is not kept:
 # the final message is the whole output, on stdout and at report_path.
 printf 'stray report\n' >"$SANDBOX/reportfile"
-printf '```json\n{"status": "blocked", "why": "red suite"}\n```\n' >"$SANDBOX/summary"
+fence='```'
+printf '%sjson\n{"status": "blocked", "why": "red suite"}\n%s\n' "$fence" "$fence" >"$SANDBOX/summary"
 run 0 "$patch" --name "08-fenced" || fail "fenced output: exited non-zero: $(cat "$SANDBOX/out")"
 result_is "fenced output" '.report_status == "blocked" and (.report_path | endswith("/summary.md"))'
 [ ! -e "$(kept)/report.md" ] || fail "fenced output: ~/out/report.md was kept"
