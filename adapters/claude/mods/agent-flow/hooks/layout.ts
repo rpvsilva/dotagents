@@ -8,6 +8,7 @@
 
 import { type Agent, ctxColor, ctxShare, fmtTokens, gauge, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus } from './flow.ts'
 import { ENTER_MS, phaseOf, type Phase, schedule } from './lifecycle.ts'
+import { costLine } from './remote.ts'
 
 /** A run of text with one look; `agent`, when set, is what a click on it opens: an agent's id, or a squad's or fold's node id. */
 export type Seg = { text: string; color?: string; bold?: boolean; dim?: boolean; agent?: string }
@@ -330,10 +331,18 @@ function drawBox(put: Put, n: Node, x: number, y: number, now: number, opts: Cha
     l4 = g.turn ? `turn ${g.turn}` : ''
   } else {
     l2 = printable(a.desc)
-    if (st === 'running') l4 = `⎿ ${a.step ?? 'thinking'}`
+    const run = a.remote && a.remote.taskId === null ? a.remote : null
+    if (st === 'running' && run?.phase) {
+      l4 = `◌ ${run.phase}…`
+      l4s = { color: modelColor(a.model) }
+    } else if (st === 'running') l4 = `⎿ ${a.step ?? 'thinking'}`
     else if (st === 'waiting') {
       l4 = '◐ needs you'
       l4s = { color: 'warning' }
+    } else if (st === 'done' && run) {
+      // The time goes on the model line: cost and files fill this one.
+      l4 = `✓ ${costLine(run.cost, run.files) || `${a.steps} steps`}`
+      l4s = { color: 'success', dim: dim }
     } else if (st === 'done') {
       l4 = `✓ ${a.steps} steps · ${clock(elapsed)}`
       l4s = { color: 'success', dim: dim }
@@ -343,9 +352,9 @@ function drawBox(put: Put, n: Node, x: number, y: number, now: number, opts: Cha
     }
   }
   put(x + 2, y + 2, pad(l2, inner), tone ? { dim: true } : {})
-  const model = modelLabel(a.model)
+  const model = modelLabel(a.model) || (a.remote ? 'remote' : '')
   put(x + 2, y + 3, pad(model, inner - 6), tone ? { dim: true } : { color: modelColor(a.model) })
-  if (!isMain && st !== 'done') put(x + 2 + inner - 5, y + 3, clock(elapsed).padStart(5), { dim: true })
+  if (!isMain && (st !== 'done' || (a.remote && a.remote.taskId === null))) put(x + 2 + inner - 5, y + 3, clock(elapsed).padStart(5), { dim: true })
   put(x + 2, y + 4, pad(l4, inner), dim ? { dim: true } : l4s)
   ctxBorder(put, a, x, y + H - 1, dim || st === 'done')
 }
