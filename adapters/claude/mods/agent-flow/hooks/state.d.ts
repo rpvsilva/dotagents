@@ -33,6 +33,10 @@ export type Agent = {
   turn: number
   /** Permission checks pending: tool_use_id → epoch ms it was asked. */
   checks: Record<string, number>
+  /** Context used, in tokens, at the last reading (the engine's tokenCount; the session's for main); null before one. */
+  ctx: number | null
+  /** Its model's context window, in tokens; null before a reading. */
+  window: number | null
 }
 
 export type Graph = {
@@ -45,12 +49,49 @@ export type Graph = {
   lastTurn: { done: number; failed: number } | null
 }
 
-/** How the pane draws: the chart or the tree, and which squad is expanded under the chart (null: none). */
-export type View = { tree: boolean; expanded: string | null }
+/**
+ * How the pane draws: the tab (the chart, or the list of agents), the chart or the tree, which squad is expanded
+ * under the chart (null: none), and whose log is open on the Agents tab (null: the list).
+ */
+export type View = {
+  tab: 'chart' | 'agents'
+  tree: boolean
+  expanded: string | null
+  agentId: string | null
+  /** The Agents tab's filter. */
+  filter: Filter
+  /** The squad groups open in the Agents list, by group id (`parent:type`). */
+  groups: string[]
+  /** The logs to go back to, oldest first, before the tab the first log was opened from (`origin`). */
+  trail: string[]
+  origin: 'chart' | 'agents'
+}
+
+export type Filter = 'all' | 'running' | 'needs' | 'failed' | 'done'
+
+/** One line of an agent's log, by kind: its prompt, its text, a tool call, a tool's result or error. */
+export type LogLine = { kind: 'prompt' | 'text' | 'call' | 'result' | 'error' | 'agent'; text: string; agentId?: string }
+
+/** The open log: its lines, the last message read, and the window the pane shows. */
+export type Log = {
+  /** Whose log; null when none is open. */
+  agentId: string | null
+  lines: LogLine[]
+  /** The uuid of the last message read: the next read starts after it; null before the first read. */
+  after: string | null
+  /** Whether the window shows the end and moves with it. */
+  follow: boolean
+  /** The first line the window shows when it does not follow. */
+  top: number
+  /** Whether older lines were left out. */
+  truncated: boolean
+  /** Why the session would not give the messages; null when it did. */
+  denied: string | null
+}
 
 declare module 'claude-code' {
   interface PluginState {
     // Change an atom's shape tag when its fields change: it declines what an earlier version stored.
-    'agent-flow': { graph: Shaped<Graph>; view: Shaped<View>; frame: Shaped<number> }
+    'agent-flow': { graph: Shaped<Graph>; view: Shaped<View>; frame: Shaped<number>; log: Shaped<Log> }
   }
 }
