@@ -57,6 +57,9 @@
    "pr_facts": {
     "$ref": "common.json#/$defs/path"
    },
+   "task": {
+    "$ref": "common.json#/$defs/path"
+   },
    "decisions": {
     "$ref": "common.json#/$defs/path"
    },
