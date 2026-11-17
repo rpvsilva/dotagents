@@ -357,6 +357,9 @@ async function scanRemote($: EngineInterface, t: number): Promise<void> {
     const ours = all.filter(s => s.isOurs)
     const others = pickOthers(all.filter(s => !s.isOurs).map(s => s.run)).map(r => kept.get(r.folder)!)
     for (const s of [...ours, ...others]) if (!s.isDeep) await deepen($, s, t)
+    // A finished run of another session too old to be listed is never read: its folder is not looked at again.
+    const listed = new Set(others)
+    for (const s of all) if (s.isFinal && !s.isOurs && !listed.has(s)) s.isDeep = true
     // Liveness: ps where processes run; elsewhere a run whose files went quiet for 5 minutes counts as stopped.
     const runs = all.map(s => s.run)
     const out = await ps($, livePids(runs))

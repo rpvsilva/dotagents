@@ -420,10 +420,11 @@ test('a finished log ends with how it ended, and c copies it', async ($, on) => 
 
 // Remote runs: a fake repo on a fake file system, as remote-agent leaves it.
 function repoFs(on: any, files: Record<string, string>, dirs: Record<string, string[]>, ps: () => string) {
-  const calls = { ps: 0, lists: 0 }
+  const calls = { ps: 0, lists: 0, stats: 0 }
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.id', () => ({ value: 'sess-1' }))
   on('fs.stat', (_: unknown, e: any) => {
+    calls.stats++
     if (dirs[e.path]) return { value: { kind: 'dir', size: 0, mtimeMs: NOW, isLink: false } }
     const f = files[e.path]
     if (f === undefined) throw new Error(`ENOENT: ${e.path}`)
@@ -515,6 +516,26 @@ test('quiet (not drawn, nothing live), the run folders are read every 15 s', asy
   expect(calls.lists).toBe(lists)
   await w.clock.advance(4000)
   expect(calls.lists).toBeGreaterThan(lists)
+})
+
+test('finished runs of other sessions past the listed 20 are read once, then never looked at again', async ($, on) => {
+  const w = engine(on)
+  const ids = Array.from({ length: 30 }, (_, i) => `agent-20261117-1000${String(i).padStart(2, '0')}-1`)
+  const files: Record<string, string> = {}
+  for (const [i, id] of ids.entries()) files[`/repo/.git/remote-agent/${id}/run.json`] = runFile({ run: id, name: `old-${i}`, state: 'done', caller: { session: 'someone-else' }, started: NOW / 1000 - 1000 + i, ended: NOW / 1000 - 900 + i })
+  const calls = repoFs(on, files, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': ids }, () => '')
+  await start($)
+  await w.clock.advance(1000)
+  await press($, 'tab-agents')
+  const stats = calls.stats
+  // Drawn, so read every 1.5 s: only the folder listings and the open pane, no folder's files again.
+  await press($, 'tab-agents')
+  await w.clock.advance(1500)
+  await press($, 'tab-agents')
+  await w.clock.advance(1500)
+  expect(calls.stats - stats).toBeLessThan(5)
+  expect(await drawn($)).toContain('old-29')
+  expect(await drawn($)).not.toContain('old-9 ')
 })
 
 test('a run that ends is notified once; runs already over when the mod loads are not', async ($, on) => {
