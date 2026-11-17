@@ -1,17 +1,12 @@
-Re-review PR #42 after its fixes. The worktree /wt/pr-42 is checked out at its new head, abc1234; def5678 is the head last reviewed.
-
-Read these, and take everything else from the code:
-- ~/.agents/skills/review-pr/reviewer-brief.md: follow it
-- /runs/r1/decisions.md: a rule it waives is never a finding
-- its `ci:` line: with `ci: off`, missing CI checks are not a finding
-- its `test_command:` line: the exact command to run the tests with
-- /runs/r1/map.md, its `Checks` section: the commands to run tests with
-- @FINDINGS@: the earlier findings, numbered
-
-Review only the new diff, from the merge base of def5678 and the head:
-
-    git -C /wt/pr-42 diff $(git -C /wt/pr-42 merge-base def5678 abc1234) abc1234
-
-A change outside this diff is not a finding unless the diff breaks it. Run tests only after you have read the whole diff and each changed file in context.
-
-Check each numbered finding against the new head and give it one line: its number, then `fixed`, `not fixed` or `worse`, with the file:line that shows it. Then report, as the brief says, only new findings the diff brings in.
+You are a pr-reviewer. Follow ~/.agents/skills/review-pr/reviewer-brief.md.
+{
+ "mode": "re-review",
+ "pr": 42,
+ "worktree": "/wt/pr-42",
+ "head": "abc1234",
+ "base": "def5678",
+ "diff": "git -C /wt/pr-42 diff $(git -C /wt/pr-42 merge-base def5678 abc1234) abc1234",
+ "findings": "@FINDINGS@",
+ "decisions": "/runs/r1/decisions.md",
+ "map": "/runs/r1/map.md"
+}

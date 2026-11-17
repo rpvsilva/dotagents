@@ -160,14 +160,14 @@ class MergeTaskTest(unittest.TestCase):
         self.high_tier()
         head = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         (self.kit.run_dir / "reviews").mkdir()
-        (self.kit.run_dir / "reviews" / f"01-01-{head[:7]}.md").write_text("report\n", encoding="utf-8")
+        (self.kit.run_dir / "reviews" / f"01-01-{head[:7]}.json").write_text("{}\n", encoding="utf-8")
         self.assertRegex(self.merge(), r"^OK 01-01 done ")
 
     def test_a_review_of_an_older_head_does_not_count(self):
         self.high_tier()
         old = self.kit.git("rev-parse", "HEAD", cwd=self.wt)
         (self.kit.run_dir / "reviews").mkdir()
-        (self.kit.run_dir / "reviews" / f"01-01-{old[:7]}.md").write_text("report\n", encoding="utf-8")
+        (self.kit.run_dir / "reviews" / f"01-01-{old[:7]}.json").write_text("{}\n", encoding="utf-8")
         self.commit(self.wt, "fix.txt", "fix\n", "fix: after the review")
         self.assertTrue(self.merge().startswith("FAIL 01-01 unreviewed (log: "))
 

@@ -151,9 +151,9 @@ Each run keeps a folder at `<common git dir>/remote-agent/<run>/` (`git rev-pars
 | `transcript.jsonl` | The agent's events as they arrive. Follow it with `tail -f` |
 | `run.json` | State (`starting`, `running`, `done`, `failed`), timings, exit code |
 | `progress.log` | One line per step, the same as stderr |
-| `result.json` | What the run came to, written on every exit: exit code, `status`, the report's `status:` and `follow-up:` lines, changed files, turns, tokens, cost, model, the sandbox's Claude Code version (`claude_version`), `complete`, the caps it set (`caps`), whether the caps were off (`capped_off`: what the sandbox lacked to run them), the caps' kills (`capped_kills`, `killed`) apart from a lost sandbox (`lost`). Read it, not stdout or stderr, when you need the outcome |
+| `result.json` | What the run came to, written on every exit: exit code, `status`, the output's `status` (`report_status`, from the agent's JSON output, its final message), changed files, turns, tokens, cost, model, the sandbox's Claude Code version (`claude_version`), `complete`, the caps it set (`caps`), whether the caps were off (`capped_off`: what the sandbox lacked to run them), the caps' kills (`capped_kills`, `killed`) apart from a lost sandbox (`lost`). Read it, not stdout or stderr, when you need the outcome |
 | `capped.log` | Each command the caps killed in the sandbox |
-| `changes.patch`, `summary.md` | What came back |
+| `changes.patch`, `summary.md` | What came back: the patch, and the agent's final message, its JSON output object |
 | `session.jsonl` | Claude's session, for `remote-agent resume` |
 
 To read a run's outcome without its stdout or stderr, run `remote-agent result <name|run>` in the repo. It prints the `result.json` of that run id, or of the newest run started with `--name <name>` (a retry reuses the name; the latest start wins, preferring runs started from your own worktree). Each run has its own folder and `progress.log`, so this holds for runs started together, in a loop, or with stderr redirected. It exits 1 with one line when no run matches or the newest has not ended yet.

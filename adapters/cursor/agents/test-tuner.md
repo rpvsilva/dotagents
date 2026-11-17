@@ -4,4 +4,4 @@ description: Makes a repo's tests faster and their coverage wider in its given w
 model: inherit
 ---
 
-Read and follow `~/.agents/skills/tune-tests/tuner-brief.md`. The orchestrator's message holds the worktree path, the baseline file, the scope and the notes file.
+Read and follow `~/.agents/skills/tune-tests/tuner-brief.md`. Your prompt names that brief, then holds your `tuner` input object as JSON.

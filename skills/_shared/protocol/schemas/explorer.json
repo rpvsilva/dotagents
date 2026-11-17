@@ -1,0 +1,76 @@
+{
+ "$comment": "The explorer role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "epic-explorer",
+ "brief": "build-epic/explorer-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "areas",
+   "area",
+   "spec",
+   "note",
+   "output"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "areas": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "area": {
+    "type": "string",
+    "minLength": 1
+   },
+   "spec": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "note": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "note"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "note": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "unsettled": {
+    "$ref": "common.json#/$defs/sentences"
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}

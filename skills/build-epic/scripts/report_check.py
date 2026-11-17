@@ -1,82 +1,63 @@
 #!/usr/bin/env python3
-"""Checks a subagent's final message, read on stdin: the 4-line block, at most 400 characters, and its full report.
+"""Checks a subagent's output and final message by the agent protocol (skills/_shared/protocol).
 
 Usage: python3 -I report_check.py <run> <id> < message
        python3 -I report_check.py <run> <id> --from-report
 
-`--from-report` checks the block ending `<run>/reports/<id>.md` instead (a remote subagent's stdout): from its last
-`status:` line to the end, blank lines and one closing code fence after it allowed; a report with no `status:` line is
-a `shape` violation.
+The output is `<run>/reports/<id>.json`, checked against its role's output schema: `planner` for `plan-*`,
+`explorer` for `explore-*`, `implementer` for a task. The final message, on stdin, must be at most 400 characters
+and `{"status": <the output's status>, "output": <a path>}`. `--from-report` checks the output alone: a remote
+subagent's final message is its output, saved there by the orchestrator.
 
-The block is the lines `status:`, `changed:`, `why:` and `follow-up:`, in that order and nothing else; `status:` holds
-one word. Blank lines around it and one code fence wrapping it are allowed. The length counts the message without
-its surrounding whitespace. The full report must be a non-empty `<run>/reports/<id>.md`.
-Prints `OK <id> <status>`, or `FAIL <id> brief-violation <details> (log: <path>)`, details being any of
-`length=<n>`, `lines=<n>` (not 4 lines), `shape` (wrong fields or order, or an empty status) and `no-report`.
+Prints `OK <id> <status>`, or `FAIL <id> brief-violation <problems> (log: <path>)`, the problems as check.py names
+them (`no-output`, `json`, `length=<n>`, `status-mismatch`, `<json path>: <problem>`).
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_shared" / "protocol"))
 
+import protocol  # noqa: E402
 from steplib import core  # noqa: E402
 
-MAX_CHARS = 400
-FIELDS = ("status:", "changed:", "why:", "follow-up:")
 
-
-def block_lines(message):
-    """The message's lines, without blank lines around them and one wrapping code fence."""
-    lines = message.strip().splitlines()
-    if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
-        lines = lines[1:-1]
-        while lines and not lines[0].strip():
-            lines.pop(0)
-        while lines and not lines[-1].strip():
-            lines.pop()
-    return lines
-
-
-def last_block(text):
-    """The report's last block: from its last `status:` line on, without the closing fence and blank lines after it."""
-    lines = text.rstrip().splitlines()
-    if lines and lines[-1].strip() == "```":
-        lines.pop()
-    starts = [i for i, line in enumerate(lines) if line.startswith("status:")]
-    return "\n".join(lines[starts[-1]:]) if starts else None
+def role_of(ident):
+    if ident.startswith("plan-"):
+        return "planner"
+    if ident.startswith("explore-"):
+        return "explorer"
+    return "implementer"
 
 
 def step(ctx):
     if ctx.args not in ([], ["--from-report"]):
         raise core.Fail("usage: report_check.py <run> <id> [--from-report]")
-    report = ctx.run_dir / "reports" / f"{ctx.id}.md"
-    if ctx.args:
-        message = last_block(report.read_text(errors="replace", encoding="utf-8")) if report.is_file() else None
-        if message is None:
-            ctx.note(f"no block at the end of {report}")
-            raise core.Fail("brief-violation shape" + ("" if report.is_file() and report.stat().st_size else " no-report"))
-    else:
-        message = sys.stdin.buffer.read().decode("utf-8", errors="replace")
-    ctx.note(f"message ({len(message.strip())} characters):\n{message}")
-    problems = []
-    length = len(message.strip())
-    if length > MAX_CHARS:
-        problems.append(f"length={length}")
-    lines = block_lines(message)
-    status = ""
-    if len(lines) != len(FIELDS):
-        problems.append(f"lines={len(lines)}")
-    elif not all(line.startswith(field) for line, field in zip(lines, FIELDS)):
-        problems.append("shape")
-    else:
-        status = lines[0][len("status:"):].strip()
-        if len(status.split()) != 1:
-            problems.append("shape")
-    if not report.is_file() or report.stat().st_size == 0:
-        ctx.note(f"no report at {report}")
-        problems.append("no-report")
+    role, path = role_of(ctx.id), ctx.run_dir / "reports" / f"{ctx.id}.json"
+    try:
+        output = protocol.parse_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        ctx.note(f"no output at {path}")
+        raise core.Fail("brief-violation no-output")
+    except ValueError:
+        raise core.Fail("brief-violation json")
+    problems = protocol.check(role, "output", output)
+    status = output.get("status") if isinstance(output.get("status"), str) else ""
+    if not ctx.args:
+        raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+        ctx.note(f"message ({len(raw.strip())} characters):\n{raw}")
+        if len(raw.strip()) > protocol.MESSAGE_MAX:
+            problems.append(f"length={len(raw.strip())}")
+        try:
+            message = protocol.parse_json(raw)
+            problems += [p.replace("$", "message", 1) for p in protocol.validate(
+                {"$ref": "common.json#/$defs/message"}, message, "common.json")]
+            if message.get("status") != status:
+                problems.append("status-mismatch")
+        except ValueError:
+            problems.append("message: json")
     if problems:
-        raise core.Fail("brief-violation " + " ".join(problems))
+        raise core.Fail("brief-violation " + "; ".join(problems))
     return status
 
 

@@ -1,0 +1,234 @@
+{
+ "$comment": "The tuner role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "test-tuner",
+ "brief": "tune-tests/tuner-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "worktree",
+   "scope"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "worktree": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "scope": {
+    "type": "string",
+    "minLength": 1
+   },
+   "notes": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "baseline": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "test_command": {
+    "type": "string",
+    "minLength": 1
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "failure": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "reissue": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "remote": {
+    "type": "boolean"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "commit",
+   "files",
+   "baseline",
+   "time",
+   "covered",
+   "moved",
+   "mutations",
+   "left"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "commit": {
+    "type": "string",
+    "pattern": "^([0-9a-f]{7,40})?$"
+   },
+   "files": {
+    "$ref": "common.json#/$defs/paths"
+   },
+   "baseline": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "suite",
+      "secs"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "suite": {
+       "type": "string",
+       "minLength": 1
+      },
+      "secs": {
+       "type": "number",
+       "minimum": 0
+      }
+     }
+    }
+   },
+   "time": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "suite",
+      "before_s",
+      "after_s",
+      "cause"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "suite": {
+       "type": "string",
+       "minLength": 1
+      },
+      "before_s": {
+       "type": "number",
+       "minimum": 0
+      },
+      "after_s": {
+       "type": "number",
+       "minimum": 0
+      },
+      "cause": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   },
+   "covered": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "entry",
+      "test"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "entry": {
+       "type": "string",
+       "minLength": 1
+      },
+      "test": {
+       "type": "string",
+       "minLength": 1
+      }
+     }
+    }
+   },
+   "moved": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "assertion",
+      "now"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "assertion": {
+       "type": "string",
+       "minLength": 1
+      },
+      "now": {
+       "type": "string",
+       "minLength": 1
+      }
+     }
+    }
+   },
+   "mutations": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "path",
+      "line",
+      "old",
+      "new"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "path": {
+       "$ref": "common.json#/$defs/path"
+      },
+      "line": {
+       "$ref": "common.json#/$defs/line"
+      },
+      "old": {
+       "type": "string"
+      },
+      "new": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "left": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "spot",
+      "why"
+     ],
+     "additionalProperties": false,
+     "properties": {
+      "spot": {
+       "type": "string",
+       "minLength": 1
+      },
+      "why": {
+       "$ref": "common.json#/$defs/sentence"
+      }
+     }
+    }
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}
