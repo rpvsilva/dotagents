@@ -1,0 +1,28 @@
+{
+  "name": "agent-flow",
+  "version": "0.1.0",
+  "description": "Draws this session's agents as a live org chart in a pane: /agent-flow",
+  "license": "UNLICENSED",
+  "types": "./hooks/state.d.ts",
+  "userConfig": {
+    "linger_s": {
+      "type": "number",
+      "title": "Linger",
+      "description": "Seconds a finished agent's box stays on the chart before it leaves",
+      "default": 30
+    },
+    "squad_min": {
+      "type": "number",
+      "title": "Squad size",
+      "description": "Siblings of one agent type that fold into one squad box",
+      "default": 4
+    },
+    "motion": {
+      "type": "string",
+      "title": "Motion",
+      "description": "on: spinners, moving dots and gliding boxes; off: a still chart",
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}

@@ -5,3 +5,6 @@
 secrets/
 .DS_Store
 __pycache__/
+
+# The API types Claude Code writes into a mod it hot-reloads while you develop it.
+adapters/claude/mods/*/.claude-plugin/types/
