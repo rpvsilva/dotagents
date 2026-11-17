@@ -105,14 +105,35 @@ def check(role, part, value):
 
 
 def parse_json(text):
-    """The JSON object in `text`, allowing blank lines and one wrapping code fence; ValueError when there is none."""
-    lines = text.strip().splitlines()
+    """The JSON object in `text`; ValueError when there is none.
+
+    The object may sit in one code fence, or after a line of prose (a remote agent's final message often opens with
+    one): the first `{` that starts an object running to the end of the text, a closing fence aside, is taken.
+    """
+    body = text.strip()
+    lines = body.splitlines()
     if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
-        lines = lines[1:-1]
-    value = json.loads("\n".join(lines))
+        body = "\n".join(lines[1:-1]).strip()
+    try:
+        value = json.loads(body)
+    except ValueError:
+        value = _trailing_object(body)
     if not isinstance(value, dict):
         raise ValueError("not a JSON object")
     return value
+
+
+def _trailing_object(text):
+    """The object starting at the first `{` whose JSON runs to the end of `text`, an optional closing fence aside."""
+    decoder = json.JSONDecoder()
+    for start in (i for i, c in enumerate(text) if c == "{"):
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        if text[end:].strip() in ("", "```"):
+            return value
+    raise ValueError("no JSON object")
 
 
 def prompt(role, inputs):

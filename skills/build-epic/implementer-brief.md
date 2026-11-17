@@ -46,7 +46,8 @@ Your role is `implementer` ([Protocol](../_shared/conventions.md#protocol), sche
                 "path": "<path>", "line": 12, "claim": "<one sentence>"}]}
 ```
 
+- A follow-up's `line` is the line it is about; `0`, or no `line`, for the whole file.
 - `followups` holds work a later task must pick up (`follow-up`) and each cross-cutting feature your change touches that no task of the plan names (`interaction`). Severity: `blocker` (the build is wrong without it), `should-fix` (likely trouble, a missing test) or `nit`.
 - A change the task needs in a file only the human edits (one a `path` rule of the repo's [merge guard](merge-guard.md) names) is never made in the worktree: the guard would refuse the merge. Propose it as an `owner-doc` follow-up with `item` (the part of the file it changes, e.g. a heading) and `patch` (the ready-to-apply unified diff).
 - With an `output` path in your prompt, write the object there, then your final message is only `{"status": ..., "output": <that path>}`. With none (a remote run), your final message is the object itself, unfenced, and nothing else.
-- A `reissue` input names your last run's output on this task, which broke this section: the work is done, so change no file, run nothing, and write that output again as this section says.
+- A `reissue` input names your last run's output on this task, which broke this section: the work is done, so change no file and run nothing: write that output again, with only what broke this section corrected.
