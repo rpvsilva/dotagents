@@ -391,13 +391,13 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
   }
   const names = new Map<string, string>()
   const { events } = parseLines(transcript.endsWith('\n') ? transcript : `${transcript}\n`)
-  // The last message the agent wrote: its text and where its lines start in `out`.
-  let said: { text: string; at: number } | null = null
+  // Whether the agent wrote a last message, which summary.md repeats.
+  let said = false
   for (const ev of events) {
     const parent = typeof ev.parent_tool_use_id === 'string' ? ev.parent_tool_use_id : null
     if (parent !== taskToolUseId) continue
     const text = ev.type === 'assistant' ? blocks(ev).filter(b => b.type === 'text' && typeof b.text === 'string').map(b => b.text as string).join('\n') : ''
-    if (text.trim() !== '') said = { text, at: out.length }
+    if (text.trim() !== '') said = true
     for (const line of renderEvent(ev, names)) {
       const p = lineParts(line)
       if (p.kind === 'call') out.push({ kind: 'call', text: `▸ ${p.tool}${p.rest ? ` ${p.rest}` : ''}` })
@@ -409,45 +409,12 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
       else out.push({ kind: 'note', text: line })
     }
   }
-  if (taskToolUseId === null && summary !== null && summary.trim() !== '') {
-    // Each line as said, a line that is one JSON object (a task's outcome) as its fields.
-    const lines = summary.split('\n').filter(l => l.trim() !== '').flatMap(l => jsonFields(l) ?? [oneLine(l)])
-    const read = lines.map(text => ({ kind: 'text' as const, text }))
-    // summary.md is the agent's last message: where the transcript showed it, it is read there, not twice.
-    const flat = (t: string) => t.replace(/\s+/g, ' ').trim()
-    if (said && flat(said.text) === flat(summary)) {
-      const at = out.findIndex((l, i) => i >= said!.at && l.kind === 'text')
-      if (at >= 0) {
-        let end = at
-        while (end < out.length && out[end]!.kind === 'text') end++
-        out.splice(at, end - at, ...read)
-      } else out.push(...read)
-    } else out.push({ kind: 'note', text: '── summary ──' }, ...read)
+  // summary.md is the agent's last message, which the transcript already shows: read only when it shows none.
+  if (taskToolUseId === null && !said && summary !== null && summary.trim() !== '') {
+    out.push({ kind: 'note', text: '── summary ──' })
+    for (const l of summary.split('\n')) if (l.trim() !== '') out.push({ kind: 'text', text: oneLine(l) })
   }
   return out
-}
-
-/**
- * A reply that is one JSON object, as lines a person reads: `status: done`, `files: a.py, b.py`, an empty value as
- * `—`, a nested one as compact JSON; null when the text is not a JSON object.
- */
-export function jsonFields(text: string): string[] | null {
-  let v: unknown
-  try {
-    v = JSON.parse(text.trim())
-  } catch {
-    return null
-  }
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
-  const shown = (x: unknown): string =>
-    x === '' || x === null || (Array.isArray(x) && x.length === 0)
-      ? '—'
-      : Array.isArray(x) && x.every(e => typeof e !== 'object' || e === null)
-        ? x.map(String).join(', ')
-        : typeof x === 'object'
-          ? JSON.stringify(x)
-          : String(x)
-  return Object.entries(v as Record<string, unknown>).map(([k, x]) => oneLine(`${printable(k)}: ${printable(shown(x))}`))
 }
 
 // Moved from the remote-runs mod, which this mod replaces: resuming a run, and notifying each run that ends.

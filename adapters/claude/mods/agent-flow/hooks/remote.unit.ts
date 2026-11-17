@@ -5,7 +5,6 @@ import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce } from './flow.ts'
 import { chart, type ChartOpts, newTween } from './layout.ts'
 import {
   endedRuns,
-  jsonFields,
   markNotified,
   notifyText,
   OTHERS_MAX,
@@ -138,11 +137,11 @@ test("a remote log: the run's setup, its own events, then its summary; a subagen
   assert.deepEqual(lines.slice(0, 3).map(l => l.text), ['remote-agent: claimed in 1s', '== capped: shell prefix set', 'remote-agent: first agent event after 11s'])
   assert.ok(lines.some(l => l.kind === 'call' && l.text === '▸ Bash ls skills | wc -l'))
   assert.ok(!lines.some(l => l.text.includes('skills/*/')))
-  // summary.md repeats the agent's last message: shown once, where it said it.
+  // summary.md repeats the agent's last message: shown once, as it said it.
   assert.equal(lines.filter(l => l.text === '14 skills.').length, 1)
   assert.ok(!lines.some(l => l.text === '── summary ──'))
-  // One that says something else comes after a rule.
-  assert.deepEqual(remoteLog(TRANSCRIPT, progress, 'Counted them.\n', null).slice(-2), [{ kind: 'note', text: '── summary ──' }, { kind: 'text', text: 'Counted them.' }])
+  // With no last message in the transcript, summary.md says it, after a rule.
+  assert.deepEqual(remoteLog('', progress, 'Counted them.\n', null).slice(-2), [{ kind: 'note', text: '── summary ──' }, { kind: 'text', text: 'Counted them.' }])
   const child = remoteLog(TRANSCRIPT, progress, '14 skills.\n', 'agent1')
   assert.deepEqual(child.map(l => l.text), ['▸ Bash ls -d skills/*/', '⎿ skills/a/'])
 })
@@ -274,27 +273,12 @@ test('pickOthers keeps the OTHERS_MAX newest runs, live ones first', () => {
   assert.equal(picked[1]!.id, `r${OTHERS_MAX + 4}`)
 })
 
-test("a run that replies in JSON reads as fields, once; the transcript's own end line gives way to the log's", () => {
-  const reply = '{"status":"done","commit":"","files":["todo/cli/format.py","tests/cli/test_x.py"],"notes":{"a":1}}'
-  const tr = [
-    { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
-    { type: 'assistant', message: { content: [{ type: 'text', text: reply }] } },
-    { type: 'result', subtype: 'success', is_error: false, duration_ms: 59_000, total_cost_usd: 0.24, num_turns: 12, result: reply },
-  ].map(e => `${JSON.stringify(e)}\n`).join('')
+test("a run's last message is shown as said, once: summary.md, which repeats it, is not", () => {
+  const reply = 'Done.\n{"status": "done", "files": ["README.md"]}'
+  const tr = [{ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } }, { type: 'result', subtype: 'success', is_error: false, duration_ms: 59_000, total_cost_usd: 0.2 }]
+    .map(e => `${JSON.stringify(e)}\n`).join('')
   const lines = remoteLog(tr, null, `${reply}\n`, null).map(l => l.text)
-  assert.deepEqual(lines, ['── session · claude-opus-5-5 ──', 'status: done', 'commit: —', 'files: todo/cli/format.py, tests/cli/test_x.py', 'notes: {"a":1}'])
-  assert.equal(jsonFields('not json'), null)
-  assert.equal(jsonFields('[1, 2]'), null)
-})
-
-test('a last message of prose then a JSON line is read once: the prose, then the fields', () => {
-  const reply = "The protocol checker isn't in this sandbox, so I couldn't run it.\n{\"status\": \"done\", \"why\": \"\", \"files\": [\"README.md\", \"a.py\"]}"
-  const tr = [
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } }] } },
-    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'x' }] } },
-    { type: 'assistant', message: { content: [{ type: 'text', text: reply }] } },
-  ].map(e => `${JSON.stringify(e)}\n`).join('')
-  const lines = remoteLog(tr, null, `${reply}\n`, null).map(l => l.text)
-  assert.deepEqual(lines.slice(-4), ["The protocol checker isn't in this sandbox, so I couldn't run it.", 'status: done', 'why: —', 'files: README.md, a.py'])
   assert.ok(!lines.includes('── summary ──'))
+  assert.ok(!lines.some(l => l.includes('59s')))
+  assert.ok(!lines.some(l => l.startsWith('status:')))
 })
