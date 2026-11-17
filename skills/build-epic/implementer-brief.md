@@ -6,6 +6,7 @@ You build one task for `build-epic` (or `security-audit`, where the fix branch p
 2. **Build test-first** inside the task's `Writes`: other tasks run beside you on the files outside it. When the task truly needs another file, edit it and name it in `follow-up`. Work one acceptance criterion at a time: write a test that goes **red** for the right reason, make it **green** with the smallest change, then tidy. If a `tdd` skill is available, follow it. When the task's check is marked GAP, make the change and then run that check. Every test is **real**:
    - It drives the public surface (the CLI, the API, a module's exported functions) and asserts what a user or caller observes; private helpers and mocks of the repo's own code stay out of it.
    - It is named after the behaviour it checks, and every acceptance criterion has at least one.
+   - A criterion quoting a command line is tested with that line's words as the shell splits them (`shlex.split` or the same words by hand), never regrouped: `--every 2 weeks` is three arguments, not `--every` and `2 weeks`.
    - It never depends on an env var the package reads: it sets or unsets it in its own environment (the fixture `map.md`'s `Test isolation` names), so the test passes whatever the caller's shell holds.
    - It can fail: once green, break the behaviour it covers (delete the line, flip the condition), watch that test go **red**, then restore the code. A test that stays green gets rewritten or deleted.
 
