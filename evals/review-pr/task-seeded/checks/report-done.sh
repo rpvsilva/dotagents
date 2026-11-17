@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Passes when the report file ends with the block whose status is done.
+# Passes when the report file is a valid reviewer output, by the protocol's own check, with status done.
 set -euo pipefail
-report="$EVAL_SCRATCH/report.md"
-[ -f "$report" ]
-[ "$(tail -n 8 "$report" | grep -E '^status:' | tail -n 1 | tr -d '[:space:]`')" = "status:done" ]
+[ "$(python3 -I "$EVAL_CHECKOUT/skills/_shared/protocol/check.py" reviewer output "$EVAL_SCRATCH/report.json")" = "OK reviewer done" ]

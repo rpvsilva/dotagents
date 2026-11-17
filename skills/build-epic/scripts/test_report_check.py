@@ -1,5 +1,6 @@
-"""Tests for `report_check.py`: a subagent's final message is the 4-line block, at most 400 characters, with its
-full report at `<run>/reports/<id>.md`."""
+"""Tests for `report_check.py`: a subagent's output is its role's JSON at `<run>/reports/<id>.json`, and its final
+message the status and that path, at most 400 characters."""
+import json
 import re
 import subprocess
 import sys
@@ -12,14 +13,8 @@ from testkit import SCRIPTS, Kit  # noqa: E402
 
 REPORT_CHECK = SCRIPTS / "report_check.py"
 
-BLOCK = "status: done\nchanged: abc1234 skills/x.py\nwhy:\nfollow-up: none\n"
-
-
-def padded(length):
-    """A valid block exactly `length` characters long, its trailing newline not counted."""
-    head = "status: done\nchanged: abc1234 "
-    tail = "\nwhy:\nfollow-up: none"
-    return head + "x" * (length - len(head) - len(tail)) + tail + "\n"
+OUTPUT = {"status": "done", "commit": "abc1234", "files": ["skills/x.py"], "suites": [], "followups": [],
+          "tests": [{"name": "test_x", "criterion": "x works", "broke": "returned None"}]}
 
 
 class ReportCheckTest(unittest.TestCase):
@@ -28,114 +23,71 @@ class ReportCheckTest(unittest.TestCase):
         self.addCleanup(self.kit.close)
         self.reports = self.kit.run_dir / "reports"
         self.reports.mkdir()
-        (self.reports / "04-02.md").write_text("# 04-02 report\n\nAll of it.\n", encoding="utf-8")
+        self.write("04-02", OUTPUT)
 
-    def check(self, message, ident="04-02", run=None):
-        p = subprocess.run([sys.executable, "-I", str(REPORT_CHECK), str(run or self.kit.run_dir), ident],
+    def write(self, ident, output):
+        path = self.reports / f"{ident}.json"
+        path.write_text(output if isinstance(output, str) else json.dumps(output), encoding="utf-8")
+        return path
+
+    def message(self, ident="04-02", status="done", **extra):
+        return json.dumps({"status": status, "output": str(self.reports / f"{ident}.json"), **extra})
+
+    def check(self, message, ident="04-02", *flags):
+        p = subprocess.run([sys.executable, "-I", str(REPORT_CHECK), str(self.kit.run_dir), ident, *flags],
                            cwd="/", env=self.kit.env, input=message.encode(), stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
         out = p.stdout.decode()
         self.assertEqual(len(out.splitlines()), 1, out)
         return p.returncode, out.strip()
 
-    def assertViolation(self, message, detail, ident="04-02"):
-        rc, line = self.check(message, ident)
+    def assertViolation(self, message, detail, ident="04-02", *flags):
+        rc, line = self.check(message, ident, *flags)
         self.assertEqual(rc, 1, line)
-        m = re.fullmatch(rf"FAIL {ident} brief-violation {detail} \(log: (.+)\)", line)
+        m = re.fullmatch(rf"FAIL {ident} brief-violation (.+) \(log: (.+)\)", line)
         self.assertTrue(m, line)
-        self.assertTrue(Path(m.group(1)).is_file(), line)
+        self.assertIn(detail, m.group(1))
+        self.assertTrue(Path(m.group(2)).is_file(), line)
 
-    def test_valid_block_with_its_report_file_prints_ok_and_the_status(self):
-        self.assertEqual(self.check(BLOCK), (0, "OK 04-02 done"))
-        self.assertEqual(self.check(BLOCK.replace("done", "plan-wrong")), (0, "OK 04-02 plan-wrong"))
+    def test_a_valid_output_and_message_print_ok_and_the_status(self):
+        self.assertEqual(self.check(self.message()), (0, "OK 04-02 done"))
+        self.write("04-02", dict(OUTPUT, status="plan-wrong", why="the store has no ids"))
+        self.assertEqual(self.check(self.message(status="plan-wrong")), (0, "OK 04-02 plan-wrong"))
 
-    def test_block_of_exactly_400_characters_passes(self):
-        self.assertEqual(self.check(padded(400)), (0, "OK 04-02 done"))
+    def test_a_code_fence_and_blank_lines_around_the_message_are_allowed(self):
+        self.assertEqual(self.check("\n```json\n" + self.message() + "\n```\n\n"), (0, "OK 04-02 done"))
 
-    def test_401_character_block_is_a_length_violation(self):
-        self.assertViolation(padded(401), "length=401")
+    def test_the_role_follows_the_id(self):
+        self.write("plan-B", {"status": "done", "wrote": ["map.md"]})
+        self.assertEqual(self.check(self.message("plan-B"), "plan-B"), (0, "OK plan-B done"))
+        self.write("explore-store", {"status": "done", "note": "notes/store.md"})
+        self.assertEqual(self.check(self.message("explore-store"), "explore-store"), (0, "OK explore-store done"))
+        self.write("plan-B", {"status": "done"})
+        self.assertViolation(self.message("plan-B"), "missing wrote", "plan-B")
 
-    def test_missing_report_file_is_a_no_report_violation(self):
-        (self.reports / "04-02.md").unlink()
-        self.assertViolation(BLOCK, "no-report")
+    def test_a_long_message_is_a_length_violation(self):
+        self.assertViolation(self.message(note="x" * 400), "length=")
 
-    def test_empty_report_file_is_a_no_report_violation(self):
-        (self.reports / "04-02.md").write_text("", encoding="utf-8")
-        self.assertViolation(BLOCK, "no-report")
+    def test_the_old_four_line_block_is_a_violation(self):
+        self.assertViolation("status: done\nchanged: x\nwhy:\nfollow-up:\n", "message: json")
 
-    def test_long_message_without_a_report_names_both(self):
-        (self.reports / "04-02.md").unlink()
-        self.assertViolation(padded(500), "length=500 no-report")
+    def test_a_message_disagreeing_with_the_output_is_a_violation(self):
+        self.assertViolation(self.message(status="blocked"), "status-mismatch")
 
-    def test_extra_line_after_the_block_is_a_violation(self):
-        self.assertViolation(BLOCK + "Also, I refactored the parser.\n", "lines=5")
+    def test_a_missing_or_broken_output_is_a_violation(self):
+        (self.reports / "04-02.json").unlink()
+        self.assertViolation(self.message(), "no-output")
+        self.write("04-02", "Built it, all green.")
+        self.assertViolation(self.message(), "json")
 
-    def test_extra_line_before_the_block_is_a_violation(self):
-        self.assertViolation("Here is my report:\n" + BLOCK, "lines=5")
+    def test_an_output_off_its_schema_names_the_problem(self):
+        self.write("04-02", dict(OUTPUT, status="blocked"))
+        self.assertViolation(self.message(status="blocked"), "$: missing why")
 
-    def test_second_follow_up_line_is_a_violation(self):
-        self.assertViolation(BLOCK + "follow-up: docs for --flag\n", "lines=5")
-
-    def test_missing_or_misordered_field_is_a_violation(self):
-        self.assertViolation(BLOCK.replace("why:\n", ""), "lines=3")
-        self.assertViolation(BLOCK.replace("why:", "reason:"), "shape")
-        self.assertViolation("changed: x\nstatus: done\nwhy:\nfollow-up: none\n", "shape")
-
-    def test_empty_status_is_a_violation(self):
-        self.assertViolation(BLOCK.replace("status: done", "status:"), "shape")
-
-    def test_status_of_more_than_one_word_is_a_violation(self):
-        self.assertViolation(BLOCK.replace("status: done", "status: done mostly"), "shape")
-
-    def test_blank_lines_inside_a_tagged_code_fence_are_not_extra_lines(self):
-        self.assertEqual(self.check("```text\n\n" + BLOCK + "\n```"), (0, "OK 04-02 done"))
-
-    def test_empty_message_is_a_violation(self):
-        self.assertViolation("", "lines=0")
-
-    def test_surrounding_blank_lines_and_a_code_fence_are_not_extra_lines(self):
-        self.assertEqual(self.check("\n```\n" + BLOCK + "```\n\n"), (0, "OK 04-02 done"))
-
-    def from_report(self, report, ident="04-02"):
-        (self.reports / f"{ident}.md").write_text(report, encoding="utf-8")
-        p = subprocess.run([sys.executable, "-I", str(REPORT_CHECK), str(self.kit.run_dir), ident, "--from-report"],
-                           cwd="/", env=self.kit.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE)
-        out = p.stdout.decode()
-        self.assertEqual(len(out.splitlines()), 1, out)
-        return p.returncode, out.strip()
-
-    def test_from_report_finds_the_block_ending_the_report_file(self):
-        self.assertEqual(self.from_report("# 04-02 report\n\nAll of it.\n\n" + BLOCK), (0, "OK 04-02 done"))
-
-    def test_from_report_allows_a_trailing_blank_line_or_a_closing_fence(self):
-        self.assertEqual(self.from_report("All of it.\n\n" + BLOCK + "\n\n"), (0, "OK 04-02 done"))
-        self.assertEqual(self.from_report("All of it.\n\n```\n" + BLOCK + "```\n"), (0, "OK 04-02 done"))
-        self.assertEqual(self.from_report("All of it.\n```\n\n" + BLOCK.replace("done", "blocked") + "\n```\n\n"),
-                         (0, "OK 04-02 blocked"))
-
-    def test_from_report_takes_the_last_block_when_the_report_quotes_an_earlier_one(self):
-        self.assertEqual(self.from_report(BLOCK.replace("done", "blocked") + "\nMore.\n\n" + BLOCK),
-                         (0, "OK 04-02 done"))
-
-    def test_from_report_still_refuses_a_line_after_the_block(self):
-        rc, line = self.from_report("All of it.\n\n" + BLOCK + "Also, I refactored the parser.\n")
-        self.assertEqual(rc, 1, line)
-        self.assertRegex(line, r"^FAIL 04-02 brief-violation lines=5 \(log: .+\)$")
-
-    def test_from_report_without_a_block_or_a_file_is_a_violation(self):
-        rc, line = self.from_report("No block here.\n")
-        self.assertRegex(line, r"^FAIL 04-02 brief-violation shape \(log: .+\)$")
-        (self.reports / "04-02.md").unlink()
-        p = subprocess.run([sys.executable, "-I", str(REPORT_CHECK), str(self.kit.run_dir), "04-02", "--from-report"],
-                           cwd="/", env=self.kit.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
-        self.assertEqual(p.returncode, 1)
-        self.assertRegex(p.stdout.decode(), r"^FAIL 04-02 brief-violation shape no-report \(log: .+\)\n$")
-
-    def test_report_found_through_a_linked_run_path(self):
-        link = self.kit.link(self.kit.run_dir, "run-link")
-        rc, line = self.check(BLOCK, run=link)
-        self.assertEqual((rc, line), (0, "OK 04-02 done"))
+    def test_from_report_checks_the_output_alone(self):
+        self.assertEqual(self.check("", "04-02", "--from-report"), (0, "OK 04-02 done"))
+        self.write("04-02", dict(OUTPUT, extra=1))
+        self.assertViolation("", "$: unknown key extra", "04-02", "--from-report")
 
 
 if __name__ == "__main__":

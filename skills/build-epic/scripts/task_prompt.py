@@ -4,20 +4,20 @@
 Usage: python3 -I task_prompt.py <run> <TT-NN> [--remote] [--resolve <files>] [--sync <files>] [--cap <note>]
                                  [--failure <file>] [--reissue]
 
-The agent is the `epic-implementer`. The prompt is the brief's
-path, then one `<input>: <value>` line per input, the report file last. Here, every input is its path on this
-machine and the report file is `<run>/reports/<id>.md`. With `--remote`, the same lines name `~/work` for the
-worktree, `~/attached/<name>` for every file sent along (attached by the printed arguments), and `~/out/report.md`
-for the report file, which `remote-agent` brings back after the run.
+The agent is the `epic-implementer`; the prompt is the `implementer` role's (skills/_shared/protocol): the line
+naming the agent and its brief, then its input object as JSON. Here, every input is its path on this machine and
+`output` is `<run>/reports/<id>.json`. With `--remote`, the inputs name `~/work` for the worktree and
+`~/attached/<name>` for every file sent along (attached by the printed arguments), and no `output`: the agent's final
+message is its output object, which `remote-agent` brings back.
 
-- `--resolve <files>`: a resolver's `resolve: <files>` line.
-- `--sync <files>`: a `sync: <files>` line, for a hub task whose base merge `start_task.py` left conflicted in its
+- `--resolve <files>`: a resolver's `resolve` input, the files comma-separated.
+- `--sync <files>`: the `sync` input, for a hub task whose base merge `start_task.py` left conflicted in its
   worktree: the implementer resolves it before building. Local only (`sync-remote`): a remote run gets no merge state.
-- `--cap <note>`: the cap note, `cap: <kind> killed <cmd> (--mb <mb> --secs <secs>)`.
-- `--failure <file>`: a `failure:` line naming a file that holds what failed (a red suite's log), sent along remotely.
-- `--reissue`: the last run on this task did the work but its report broke the brief: its report is copied to
-  `<run>/prompts/<id>-<n>-report.md` (kept even after the next run writes `reports/<id>.md`) and named on a
-  `reissue:` line.
+- `--cap <note>`: the `cap` input, `<kind> killed <cmd> (--mb <mb> --secs <secs>)`.
+- `--failure <file>`: the `failure` input, naming a file that holds what failed (a red suite's log), sent along remotely.
+- `--reissue`: the last run on this task did the work but its output broke the brief: its output is copied to
+  `<run>/prompts/<id>-<n>-output.json` (kept even after the next run writes `reports/<id>.json`) and named by the
+  `reissue` input.
 
 The prompt goes to `<run>/prompts/<id>-<n>.md`, `<n>` one past the last. Prints
 `OK <id> local prompt=<file> agent=<agent>`, or `OK <id> remote prompt=<file> args=<arguments>`: the arguments to
@@ -33,8 +33,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import core, decisions, taskwt  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_shared" / "protocol"))
+import protocol  # noqa: E402
+
 USAGE = "[--remote] [--resolve <files>] [--sync <files>] [--cap <note>] [--failure <file>] [--reissue]"
-IMPLEMENTER = ("epic-implementer", "You are an epic-implementer. Follow ~/.agents/skills/build-epic/implementer-brief.md.")
 
 
 def options(args):
@@ -62,7 +64,7 @@ def step(ctx):
     if opts["sync"] and opts["remote"]:
         raise core.Fail("sync-remote")
     task = taskwt.Task(ctx)
-    agent, first = IMPLEMENTER
+    agent = protocol.schema("implementer")["agent"]
     run = ctx.run_dir
     prompts = run / "prompts"
     prompts.mkdir(exist_ok=True)
@@ -83,39 +85,39 @@ def step(ctx):
             raise core.Fail(f"no-failure-file: {failure}")
     reissue = None
     if opts["reissue"]:
-        report = run / "reports" / f"{ctx.id}.md"
-        if not report.is_file() or report.stat().st_size == 0:
-            raise core.Fail(f"no-report: {report}")
-        reissue = prompts / f"{ctx.id}-{n}-report.md"
-        shutil.copyfile(str(report), str(reissue))
+        output = run / "reports" / f"{ctx.id}.json"
+        if not output.is_file() or output.stat().st_size == 0:
+            raise core.Fail(f"no-output: {output}")
+        reissue = prompts / f"{ctx.id}-{n}-output.json"
+        shutil.copyfile(str(output), str(reissue))
 
     test_command = decisions.get(run, "test_command")
-    lines = [first]
-    lines.append(f"task: {sent(task.path)}")
+    inputs = {"task": sent(task.path)}
     if opts["remote"]:
+        inputs["remote"] = True
         for name in ("spec.md", "map.md", "notes"):
             if (run / name).exists():
-                lines.append(f"{Path(name).stem}: {sent(run / name)}")
+                inputs[Path(name).stem] = sent(run / name)
     else:
-        lines.append(f"run: {run}")
-    lines.append(f"worktree: {'~/work' if opts['remote'] else task.worktree}")
-    lines.append(f"ticket branch: {task.upstream}")
+        inputs["run"] = str(run)
+    inputs["worktree"] = "~/work" if opts["remote"] else str(task.worktree)
+    inputs["ticket_branch"] = task.upstream
     if test_command:
-        lines.append(f"test_command: {test_command}")
-    if opts["resolve"]:
-        lines.append(f"resolve: {opts['resolve']}")
-    if opts["sync"]:
-        lines.append(f"sync: {opts['sync']}")
+        inputs["test_command"] = test_command
+    for key in ("resolve", "sync"):
+        if opts[key]:
+            inputs[key] = re.split(r"[,\s]+", opts[key].strip(", "))
     if opts["cap"]:
-        lines.append(f"cap: {opts['cap']}")
+        inputs["cap"] = opts["cap"]
     if failure:
-        lines.append(f"failure: {sent(failure)}")
+        inputs["failure"] = sent(failure)
     if reissue:
-        lines.append(f"reissue: {sent(reissue)}")
-    lines.append(f"report: {'~/out/report.md' if opts['remote'] else run / 'reports' / (ctx.id + '.md')}")
+        inputs["reissue"] = sent(reissue)
+    if not opts["remote"]:
+        inputs["output"] = str(run / "reports" / f"{ctx.id}.json")
 
     prompt = prompts / f"{ctx.id}-{n}.md"
-    prompt.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    prompt.write_text(protocol.prompt("implementer", inputs), encoding="utf-8")
     ctx.note(prompt.read_text(encoding="utf-8"))
     if not opts["remote"]:
         return "local", f"prompt={prompt} agent={agent}"

@@ -243,6 +243,7 @@ uninstall_claude() {
   unlink_parts "$HOME/.claude/skills" "" skill mod
   if gone global; then unlink_ours "$HOME/.claude/CLAUDE.md"; fi
   unlink_parts "$HOME/.claude/agents" .md agent
+  if gone build-epic; then unlink_ours "$HOME/.agents/bin/build-epic"; fi
   unmerge_hooks "$REPO/adapters/claude/hooks" "$HOME/.claude/settings.json"
   if gone global; then unmerge "$HOME/.claude/settings.json" "$(hook_scripts)" "$REPO"/adapters/claude/settings/*.json; fi
   uninstall_claude_cli

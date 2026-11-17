@@ -1,0 +1,64 @@
+{
+ "$comment": "The reader role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "source-reader",
+ "brief": "to-epic/reader-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "source",
+   "note"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "source": {
+    "type": "string",
+    "minLength": 1
+   },
+   "note": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "note"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "note": {
+    "$ref": "common.json#/$defs/path"
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}

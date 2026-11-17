@@ -20,9 +20,9 @@ flowchart LR
 ```
 
 - **Files carry the work.** The planner writes `spec.md` and `map.md`, explorers write `notes/`, and implementers read them.
-- **Reports go up.** Each subagent ends with a short report (`status`, `why`, `follow-up`). The orchestrator acts on it alone.
-- **The orchestrator passes things on.** A `follow-up` becomes an acceptance criterion on a later task. A failed check or a merge conflict is sent back to the implementer. `plan-wrong` triggers a re-plan, which you approve.
-- **Remote subagents are cut off on purpose.** They get a snapshot plus attached files and send back only a patch and a report ([remote.md](remote.md)).
+- **Outputs go up, as data.** Each subagent writes its output as JSON, one schema per role ([protocol](../skills/_shared/protocol/)), and ends with only its status. The orchestrator acts on the status alone; a person reads an output only rendered by a script.
+- **The orchestrator passes things on.** A `follow-up` row of an output's `followups` becomes an acceptance criterion on a later task. A failed check or a merge conflict is sent back to the implementer. `plan-wrong` triggers a re-plan, which you approve.
+- **Remote subagents are cut off on purpose.** They get a snapshot plus attached files and send back only a patch and their output object, as their final message ([remote.md](remote.md)).
 
 ## Why not let agents talk directly
 

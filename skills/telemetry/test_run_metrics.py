@@ -73,6 +73,16 @@ class FixtureRun(unittest.TestCase):
         self.assertEqual(run_metrics_module.reviews(run),
                          {"reports": 3, "prs": 2, "re_reviews": 1, "security": 1})
 
+    def test_reviewer_outputs_in_json_count_as_reviews(self):
+        # Since the agent protocol, a reviewer's output is `<PR>-<sha7>.json`, its posted copy `.posted.md`.
+        run = self.tmp / "json-reviews-run"
+        (run / "reviews").mkdir(parents=True)
+        for name in ("10-abc1234.json", "10-abc1234.posted.md", "10-abc1234-findings.md", "10-def5678.json",
+                     "10-abc1234-security.json", "10-abc1234-security.posted.md", "01-02-abc1234.json"):
+            (run / "reviews" / name).write_text("x", encoding="utf-8")
+        self.assertEqual(run_metrics_module.reviews(run),
+                         {"reports": 3, "prs": 2, "re_reviews": 1, "security": 1})
+
     def test_a_tasks_review_before_its_merge_counts_as_a_review(self):
         # build-epic's high-tier tasks are reviewed with no PR: `reviews/<TT-NN>-<sha7>.md`.
         run = self.tmp / "task-reviews-run"

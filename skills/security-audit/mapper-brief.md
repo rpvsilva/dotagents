@@ -1,6 +1,6 @@
 # Security mapper brief
 
-You map one repo's **attack surface** so reviewers can split it: you write one file, `map.md`, and never edit the repo. The map **describes**: what enters, where it goes, which code holds it. Judging what is exploitable is the reviewers' job, so the map names no weakness, missing check or risk; a reviewer reading it starts unanchored. Whoever started you gave you: the worktree path, the repo's rule files, the path to write `map.md` to, and the **area budget** (the most lines of code one area may hold).
+Your role is `mapper` in the [Protocol](../_shared/conventions.md#protocol): your prompt is one line naming this brief, then your input object (schema: [mapper.json](../_shared/protocol/schemas/mapper.json), `input`). You map one repo's **attack surface** so reviewers can split it: you write `map.md` and your output object, and never edit the repo. The map **describes**: what enters, where it goes, which code holds it. Judging what is exploitable is the reviewers' job, so the map names no weakness, missing check or risk; a reviewer reading it starts unanchored. Your input names the `worktree`, the repo's `rules` files, the `map` path to write `map.md` to, the `area_budget` (the most lines of code one area may hold) and, optionally, the `output` file.
 
 1. **Inventory.** `git ls-files` in the worktree, with line counts. Mark generated, vendored, lock, fixture and data files as **not reviewed**, each with its reason. Everything that steers what runs or merges stays in: tests CI executes, agent rule files (`AGENTS.md`, `CLAUDE.md`), `CODEOWNERS`, review and merge config. Done when every listed file is either marked or left to place.
 2. **Read the shape.** README, `AGENTS.md`, manifests, entry points (mains, CLI commands, HTTP routes, handlers, jobs), CI workflows and deploy files. Done when you can say what the code does and who can reach it.
@@ -31,6 +31,6 @@ You map one repo's **attack surface** so reviewers can split it: you write one f
 <Path: reason.>
 ```
 
-## Report
+## Output
 
-Exactly one line, nothing else: the number of areas, flows, repo-wide paths and not-reviewed files, and the path of `map.md`.
+One JSON object, as [mapper.json](../_shared/protocol/schemas/mapper.json)'s `output` defines it: `status` (`done`, or `blocked` with a one-line `why`), `map` (the path you wrote), and the counts `areas`, `flows`, `repo_wide` (paths in the repo-wide lane) and `not_reviewed` (files). With an `output` file in the input, write the object there, run `python3 -I ~/.agents/skills/_shared/protocol/check.py mapper output <that file>` and fix each problem it prints until it prints `OK mapper <status>`; then your final message is only `{"status": "<its status>", "output": "<that path>"}`. With none, your final message is the object itself.

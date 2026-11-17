@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Posts a reviewer's own report as one COMMENT review on a PR's head commit. It never approves.
+"""Posts a reviewer's output, rendered for a human, as one COMMENT review on a PR's head commit. It never approves.
 
 Usage: python3 -I post_review.py <run> <PR> <report-file> [--base <ref>] [--note <text>]
 
-`<PR>` is a number, `#n` or a PR URL. The report path is resolved against the caller's folder before anything else runs,
-so a relative path posts the same body as an absolute one. The body is one header line, a blank line, the report file's
-bytes unchanged, then the note when given, as its own paragraph. The header names only what is known about the review:
-the PR and head it reviewed, read from the report's name (`<PR>-<sha7>[-<suffix>].<ext>`, or `<TT-NN>-<sha7>...` for a
+`<PR>` is a number, `#n` or a PR URL. The report file is the reviewer's output object (the agent protocol,
+`_shared/protocol`): a `reviewer` one, or a `security` one when its name ends `-security.json`. The report path is
+resolved against the caller's folder before anything else runs, so a relative path posts the same body as an absolute
+one. The body is one header line, a blank line, the output rendered by `_shared/protocol/render.py`, then the note
+when given, as its own paragraph: never the agent's own text. The header names only what is known about the review:
+the PR and head it reviewed, read from the report's name (`<PR>-<sha7>[-<suffix>].json`, or `<TT-NN>-<sha7>...` for a
 task reviewed before it merged, which has no PR; with any other name, the reviewed head is not recorded), `posted on
-PR #<n>` when that PR is not the one posted on (a task's or hub report on its ticket PR), the diff read (`git diff <ref>...<sha7>`) only when `--base` gives the base the reviewer was given (for a
-re-review, the head it reviewed before), and the run's `test_command:` from `decisions.md`. There are no inline
-comments: findings cite `path:line` in the report's text. The body is saved beside the report as `<name>.posted<ext>`,
-and the payload `{commit_id, event: COMMENT, body}` is kept in `<run>/logs/PR<n>-review.json` and posted with
-`gh api repos/{owner}/{repo}/pulls/<n>/reviews`.
+PR #<n>` when that PR is not the one posted on (a task's report on its ticket PR), the diff read (`git diff
+<ref>...<sha7>`) only when `--base` gives the base the reviewer was given (for a re-review, the head it reviewed
+before), and the run's `test_command:` from `decisions.md`. There are no inline comments: findings cite `path:line` in
+the rendered text. The body is saved beside the report as `<name>.posted.md`, and the payload `{commit_id, event:
+COMMENT, body}` is kept in `<run>/logs/PR<n>-review.json` and posted with `gh api repos/{owner}/{repo}/pulls/<n>/reviews`.
 
 Prints `OK PR<n> review <url>`, or `FAIL PR<n> <reason> (log: ...)`: `empty-review` (the file is missing or blank),
-`bad-report` (not UTF-8), `pr-view`, `post`, or `post-denied <report-file>` when GitHub refuses the review (HTTP 403
-other than a rate limit, never retried; a rate-limit 403 is a plain `post` failure, so it can be retried): the report
-stays where it is, so the run's report can name it.
+`bad-report` (not UTF-8), `brief-violation <problems>` (not one JSON object matching its role's output schema, the
+problems as `check.py` names them; nothing is posted), `pr-view`, `post`, or `post-denied <report-file>` when GitHub
+refuses the review (HTTP 403 other than a rate limit, never retried; a rate-limit 403 is a plain `post` failure, so it
+can be retried): the report stays where it is, so the run's report can name it.
 """
 import json
 import re
@@ -26,6 +29,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_shared" / "protocol"))
+
+import protocol  # noqa: E402
+import render  # noqa: E402
 from steplib import core, decisions, gh, runfolder  # noqa: E402
 
 DENIED = re.compile(r"HTTP 403|returned error: 403")
@@ -68,7 +75,25 @@ def header(number, report, base, test_command):
     if base and sha:
         line += f": read `git diff {base}...{sha}` (from the merge base)"
     ran = f"`{test_command}`" if test_command else "no test command recorded"
-    return f"{line}; the run's tests: {ran}. The report below is the reviewer's own."
+    return f"{line}; the run's tests: {ran}. The review below is rendered from the reviewer's report."
+
+
+def role(report):
+    """The protocol role of the report: `security` for a security reviewer's (`...-security.json`), else `reviewer`."""
+    return "security" if report.stem.endswith("-security") else "reviewer"
+
+
+def rendered(report, text):
+    """The report's output rendered for a human; `brief-violation` when it is not a valid output of its role."""
+    try:
+        out = protocol.parse_json(text)
+    except ValueError:
+        problems = ["json"]
+    else:
+        problems = protocol.check(role(report), "output", out)
+    if problems:
+        raise core.Fail(f"brief-violation {'; '.join(problems)}")
+    return render.render(role(report), out)
 
 
 def with_note(body, note):
@@ -95,6 +120,11 @@ def step(ctx):
     except UnicodeDecodeError:
         ctx.note(f"report {report} is not UTF-8")
         raise core.Fail("bad-report")
+    try:
+        review = rendered(report, text)
+    except core.Fail:
+        ctx.note(f"report {report} is not a valid {role(report)} output; nothing posted")
+        raise
     repo = core.resolve(runfolder.run_info(ctx.run_dir)["Repo"])
     res = gh.gh(["pr", "view", number, "--json", "headRefOid"], ctx.log, cwd=repo)
     try:
@@ -103,8 +133,8 @@ def step(ctx):
         head = None
     if not head:
         raise core.Fail("pr-view")
-    body = with_note(header(number, report, base, decisions.get(ctx.run_dir, "test_command")) + "\n\n" + text, note)
-    with open(report.with_name(f"{report.stem}.posted{report.suffix}"), "w", encoding="utf-8", newline="") as f:
+    body = with_note(header(number, report, base, decisions.get(ctx.run_dir, "test_command")) + "\n\n" + review, note)
+    with open(report.with_name(f"{report.stem}.posted.md"), "w", encoding="utf-8", newline="") as f:
         f.write(body)
     payload = {"commit_id": head, "event": "COMMENT", "body": body}
     payload_file = ctx.run_dir / "logs" / f"{ctx.id}-review.json"

@@ -8,8 +8,8 @@ Prints `OK TT-NN committed files=<n>`, the first time adding a `Finished: <UTC I
 was first ready to merge: `resume.py` keeps such a task for Merge, and telemetry starts the ticket's clock there); or, when the task changed nothing, sets it `done`, removes its worktree and
 branch and prints `OK TT-NN no-change`. A merge conflict with the ticket branch is left in the worktree for the
 implementer and prints `FAIL TT-NN conflict <files>`; a rerun after the markers are resolved commits the merge.
-`--report` copies the implementer's report to `<run>/reports/<TT-NN>.md`; when its status is `blocked` or
-`plan-wrong`, the changes are committed and the step fails with that status and its `why`, touching nothing else.
+`--report` copies the implementer's output (its `implementer` JSON) to `<run>/reports/<TT-NN>.json`; when the
+output's status is `blocked` or `plan-wrong`, the changes are committed and the step fails with that status and its `why`, touching nothing else.
 `--title` is the commit's subject (default: the task's title).
 
 For a remote task, first copies the `result.json` of each of its runs (a retried task has several) to
@@ -22,7 +22,6 @@ import fnmatch
 from datetime import datetime, timezone
 import json
 import os
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -43,8 +42,8 @@ def options(args):
 
 
 def read_report(ctx, given):
-    """Copies the report to `<run>/reports/<id>.md` and returns its (status, why)."""
-    stored = ctx.run_dir / "reports" / f"{ctx.id}.md"
+    """Copies the output to `<run>/reports/<id>.json` and returns its (status, why)."""
+    stored = ctx.run_dir / "reports" / f"{ctx.id}.json"
     if given:
         src = core.resolve(given)
         if not src.is_file():
@@ -54,11 +53,13 @@ def read_report(ctx, given):
             shutil.copyfile(str(src), str(stored))
     if not stored.is_file():
         return "", ""
-    text = stored.read_text(encoding="utf-8")
-    # The last block's, as report_check.py checks it: a remote report holds the agent's file, then its final message.
-    status = re.findall(r"^status:[ \t]*(\S+)", text, re.MULTILINE)
-    why = re.findall(r"^why:[ \t]*(.*)$", text, re.MULTILINE)
-    return (status[-1] if status else ""), (why[-1].strip() if why else "")
+    try:
+        output = json.loads(stored.read_text(encoding="utf-8"))
+    except ValueError:
+        return "", ""
+    if not isinstance(output, dict):
+        return "", ""
+    return str(output.get("status") or ""), str(output.get("why") or "").strip()
 
 
 def remote_records(ctx, task):

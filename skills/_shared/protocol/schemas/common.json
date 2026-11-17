@@ -1,0 +1,38 @@
+{
+  "$comment": "Pieces every role's schema refers to as common.json#/$defs/<name>.",
+  "$defs": {
+    "path": { "type": "string", "minLength": 1 },
+    "paths": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+    "line": { "type": "integer", "minimum": 1 },
+    "sentence": { "type": "string", "minLength": 1, "maxLength": 600 },
+    "sentences": { "type": "array", "items": { "$ref": "#/$defs/sentence" } },
+    "severity": { "enum": ["blocker", "should-fix", "nit"] },
+    "followup": {
+      "type": "object",
+      "required": ["severity", "kind", "path", "claim"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": { "$ref": "#/$defs/severity" },
+        "kind": { "enum": ["follow-up", "interaction", "owner-doc"] },
+        "path": { "$ref": "#/$defs/path" },
+        "line": { "$ref": "#/$defs/line" },
+        "item": { "type": "string", "minLength": 1 },
+        "claim": { "$ref": "#/$defs/sentence" },
+        "patch": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "kind": { "const": "owner-doc" } } },
+      "then": { "required": ["item", "patch"] }
+    },
+    "followups": { "type": "array", "items": { "$ref": "#/$defs/followup" } },
+    "why": { "type": "string", "maxLength": 300 },
+    "message": {
+      "type": "object",
+      "required": ["status", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "minLength": 1 },
+        "output": { "$ref": "#/$defs/path" }
+      }
+    }
+  }
+}
