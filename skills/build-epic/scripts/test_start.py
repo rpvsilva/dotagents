@@ -284,18 +284,43 @@ class StartTaskTest(StartCase):
         self.kit.git("merge-base", "--is-ancestor", self.remote_tip(BRANCH), head, cwd=wt)
         self.assertEqual((wt / "hub.md").read_text(encoding="utf-8"), "merged ticket\n")
 
-    def test_a_hub_task_conflict_names_the_files_and_leaves_no_worktree(self):
+    def test_a_hub_task_conflict_is_left_in_its_worktree_for_the_implementer(self):
         self.commit(BRANCH, "README.md", "ticket side\n", "ticket edit")
         self.commit("main", "README.md", "main side\n", "main edit")
+        main = self.main_tip()
         p = self.kit.step(START_TASK, self.kit.run_dir, "01-02")
-        self.assertEqual(p.returncode, 1)
-        line = self.one_line(p)
-        self.assertTrue(line.startswith("FAIL 01-02 sync-conflict README.md (log: "), line)
-        self.log_of(line)
-        self.assertFalse((self.kit.run_dir / "worktrees" / "01-02").exists())
-        self.assertNotIn("01-02", self.worktrees())
-        self.assertEqual(self.kit.git("branch", "--list", "task/*", cwd=self.kit.clone), "")
-        self.assertEqual(self.status(self.task("01-02-hub.md")), "ready")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        wt = self.kit.run_dir / "worktrees" / "01-02"
+        head = self.kit.git("rev-parse", "HEAD", cwd=wt)
+        self.assertEqual(head, self.remote_tip(BRANCH))
+        self.assertEqual(self.one_line(p),
+                         f"OK 01-02 in-progress wt={wt} tip={head[:7]} synced={main[:7]} conflict=README.md")
+        self.assertEqual(self.kit.git("rev-parse", "MERGE_HEAD", cwd=wt), main)
+        text = (wt / "README.md").read_text(encoding="utf-8")
+        self.assertIn("<<<<<<<", text)
+        self.assertIn("ticket side", text)
+        self.assertIn("main side", text)
+        self.assertEqual(self.kit.git("branch", "--show-current", cwd=wt), "task/gh-1-v1.2-json/02")
+        self.assertEqual(self.status(self.task("01-02-hub.md")), "in-progress")
+
+    def test_a_resolved_base_merge_then_the_task_finishes_and_merges_into_the_ticket(self):
+        self.commit(BRANCH, "README.md", "ticket side\n", "ticket edit")
+        self.commit("main", "README.md", "main side\n", "main edit")
+        main = self.main_tip()
+        self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-02"))
+        wt = self.kit.run_dir / "worktrees" / "01-02"
+        (wt / "README.md").write_text("ticket side\nmain side\n", encoding="utf-8")  # the merge left uncommitted
+        (wt / "hub.txt").write_text("hub work\n", encoding="utf-8")
+        (self.kit.run_dir / "map.md").write_text("# Map\n\n## Checks\n\n```\ntrue\n```\n", encoding="utf-8")
+        runfolder.set_header(self.task("01-02-hub.md"), "Tier", "low")
+        p = self.kit.step(SCRIPTS / "finish_task.py", self.kit.run_dir, "01-02")
+        self.assertTrue(self.one_line(p).startswith("OK 01-02 committed "), p.stdout)
+        p = self.kit.step(SCRIPTS / "merge_task.py", self.kit.run_dir, "01-02")
+        self.assertTrue(self.one_line(p).startswith("OK 01-02 done "), p.stdout)
+        tip = self.kit.git("rev-parse", f"refs/heads/{BRANCH}", cwd=self.kit.clone)
+        self.kit.git("merge-base", "--is-ancestor", main, tip, cwd=self.kit.clone)
+        self.assertEqual(self.kit.git("show", f"{tip}:README.md", cwd=self.kit.clone), "ticket side\nmain side")
+        self.assertEqual(self.kit.git("show", f"{tip}:hub.txt", cwd=self.kit.clone), "hub work")
 
     def test_a_started_task_is_refused_without_a_second_worktree(self):
         self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-01"))

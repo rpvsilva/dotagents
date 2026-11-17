@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes the prompt that starts a task's agent, here or remote, from one template.
 
-Usage: python3 -I task_prompt.py <run> <TT-NN> [--remote] [--resolve <files>] [--cap <note>]
+Usage: python3 -I task_prompt.py <run> <TT-NN> [--remote] [--resolve <files>] [--sync <files>] [--cap <note>]
                                  [--failure <file>] [--reissue]
 
 The agent is the `epic-implementer`. The prompt is the brief's
@@ -11,6 +11,8 @@ worktree, `~/attached/<name>` for every file sent along (attached by the printed
 for the report file, which `remote-agent` brings back after the run.
 
 - `--resolve <files>`: a resolver's `resolve: <files>` line.
+- `--sync <files>`: a `sync: <files>` line, for a hub task whose base merge `start_task.py` left conflicted in its
+  worktree: the implementer resolves it before building. Local only (`sync-remote`): a remote run gets no merge state.
 - `--cap <note>`: the cap note, `cap: <kind> killed <cmd> (--mb <mb> --secs <secs>)`.
 - `--failure <file>`: a `failure:` line naming a file that holds what failed (a red suite's log), sent along remotely.
 - `--reissue`: the last run on this task did the work but its report broke the brief: its report is copied to
@@ -31,18 +33,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from steplib import core, decisions, taskwt  # noqa: E402
 
-USAGE = "[--remote] [--resolve <files>] [--cap <note>] [--failure <file>] [--reissue]"
+USAGE = "[--remote] [--resolve <files>] [--sync <files>] [--cap <note>] [--failure <file>] [--reissue]"
 IMPLEMENTER = ("epic-implementer", "You are an epic-implementer. Follow ~/.agents/skills/build-epic/implementer-brief.md.")
 
 
 def options(args):
-    opts = {"remote": False, "reissue": False, "resolve": None, "cap": None, "failure": None}
+    opts = {"remote": False, "reissue": False, "resolve": None, "sync": None, "cap": None, "failure": None}
     args = list(args)
     while args:
         flag = args.pop(0)
         if flag in ("--remote", "--reissue"):
             opts[flag[2:]] = True
-        elif flag in ("--resolve", "--cap", "--failure") and args and args[0].strip():
+        elif flag in ("--resolve", "--sync", "--cap", "--failure") and args and args[0].strip():
             opts[flag[2:]] = args.pop(0).strip()
         else:
             raise core.Fail(f"usage: task_prompt.py <run> <id> {USAGE}")
@@ -57,6 +59,8 @@ def next_number(prompts, ident):
 
 def step(ctx):
     opts = options(ctx.args)
+    if opts["sync"] and opts["remote"]:
+        raise core.Fail("sync-remote")
     task = taskwt.Task(ctx)
     agent, first = IMPLEMENTER
     run = ctx.run_dir
@@ -100,6 +104,8 @@ def step(ctx):
         lines.append(f"test_command: {test_command}")
     if opts["resolve"]:
         lines.append(f"resolve: {opts['resolve']}")
+    if opts["sync"]:
+        lines.append(f"sync: {opts['sync']}")
     if opts["cap"]:
         lines.append(f"cap: {opts['cap']}")
     if failure:

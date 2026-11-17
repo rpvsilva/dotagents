@@ -1,0 +1,9 @@
+[project]
+name = "tally"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["*_test.py"]
+pythonpath = ["."]
