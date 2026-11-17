@@ -788,7 +788,7 @@ export const register: Register = (on, options) => {
                   <Text color={paint('warning')} wrap="wrap">{RESUME_WARNING}</Text>
                 </Box>
               ) : (
-                hint.map((h, i) => <Text key={`hint${i}`} dimColor wrap="wrap">{h}</Text>)
+                hint.map((note, i) => <Text key={`hint${i}`} dimColor wrap="wrap">{note}</Text>)
               )}
             </Box>
           )}
