@@ -7,8 +7,7 @@
   "required": [
    "task",
    "worktree",
-   "ticket_branch",
-   "output"
+   "ticket_branch"
   ],
   "additionalProperties": false,
   "properties": {
@@ -49,6 +48,15 @@
    },
    "remote": {
     "type": "boolean"
+   },
+   "spec": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "map": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "notes": {
+    "$ref": "common.json#/$defs/path"
    }
   }
  },

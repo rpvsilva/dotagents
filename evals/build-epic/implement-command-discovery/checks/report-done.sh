@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Passes as build-epic's own report_check.py judges an implementer: the final answer is the 4-line block with
-# status done, and the report file the prompt names is not empty. The brief also asks for the block at the end of
-# the report file, but build-epic acts on the final answer's block, so that copy is not checked here.
+# Passes as build-epic's own report_check.py judges an implementer: the final answer is the message
+# {"status": "done", "output": ...} and the output file the prompt names is the `implementer` role's JSON
+# with status done.
 set -euo pipefail
 id=01-01
 answer="$(python3 -I - "$EVAL_CHECKOUT/evals/_runner" "$(dirname "$EVAL_TRANSCRIPT")" <<'PY'
