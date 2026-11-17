@@ -5,6 +5,7 @@
   "epics": {"about": "Plan and build an epic from sources to merged tasks, and tune a repo's tests."},
   "security": {"about": "Audit a repo's security and fix what it finds."},
   "safety-hooks": {"about": "Hooks that block leaked secrets and direct merges, and allow cleaning up task folders."},
+  "agent-flow": {"about": "See this session's agents as a live org chart: the agent-flow mod."},
   "small-tools": {"about": "Remember lessons, read telemetry of past sessions, and the MCP servers."},
   "personal": {"about": "Rui's own instructions, guardrails and plugins; a public install leaves it out."}
 }
