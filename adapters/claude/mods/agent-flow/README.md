@@ -15,6 +15,8 @@ Each box (24 columns) shows the agent's status glyph and type, its task (the Age
 
 `main` shows `waiting on agents`, `thinking` or `idle`, its model (learned from the first spawn) and the turn count.
 
+**Context**: each box's bottom border carries a gauge of the context its agent has used against its model's window, `╰─ ▰▰▱▱▱▱ 42k/200k ─╯`, coloured by how full: under half the theme's `success`, to 80% `warning`, past it `error`. Subagents' readings come from `$.agent.list()` (`tokenCount`, its latest request's input and its output, over `contextWindowSize`), main's from `$.session.usage()`; both are taken once a second while an agent runs or ended in the last 10 s, so the gauge may trail the engine's own reading (refreshed about every 5 s). A finished box keeps its last reading, dim. A squad's border shows its members' average and its fullest member's gauge (`ctx avg 34% · max ▰▰▰▰▱▱ 61%`); the tree and the Agents list show the figure on each row. A box with no reading yet has a plain border.
+
 Colours: status from the theme (`warning`, `success`, `error`, `inactive`), so light and colour-blind themes keep working; the model's family colours a running box: `claude` for opus, `suggestion` for sonnet, teal for haiku, `merged` for fable.
 
 ## When boxes come and go
@@ -32,9 +34,31 @@ Colours: status from the theme (`warning`, `success`, `error`, `inactive`), so l
 - **Folding**: when a row is wider than the pane, finished siblings fold into one `✓ N done` box, the parent with the most children first. Running and failed boxes never fold.
 - **Tree**: when even folded the chart does not fit, the pane draws an indented tree instead, one line per agent (and its current step under it), and says how many columns the chart needs. It goes back to the chart only once the chart has fitted with 4 columns to spare for 2 s, so a chart on the edge never flickers between the two. `t` switches between the chart and the tree whenever the chart fits.
 
+## The Agents tab
+
+`a` (or the Agents tab) lists every agent of this session the mod has seen, so an agent stays findable after its box left the chart, in three sections: this turn's agents and any still running (running ones first, newest first, with their current step under them; then the finished by when they ended); `── earlier this session ──`; and `── older ──`, those that ended over 30 minutes ago. Each row shows the status glyph, type, task, model, how long it has run or how long ago it ended, its steps and its context. `g` goes back to the chart.
+
+- **Filters**: `l` All, `r` Running, `n` Needs you (waiting for a permission, or failed this turn), `f` Failed, `d` Done, each with its count.
+- **Squad groups**: under All, 4 or more siblings of one type (option `squad_min`) are one collapsed row with their counts (`▸ epic-implementer ×24 · ● 3 · ◐ 1 · ✓ 18 · ✗ 1`), still listing the members that need you; pressing it opens it to every member. A click on a squad box in the chart opens its group here.
+
+## A log
+
+`1`–`9` (or a click) on a row, or a click on a box or squad cell in the chart, opens that agent's log. It reads the session's own record, `$.session.messages({ agentId })`, which keeps a finished agent's messages:
+
+- a header card: Back, the agent, a state badge, and its model, time, steps, context and parent;
+- `› ` its prompt; its own text; `▸ Bash npm test`, each tool call; `⎿ ` the first line of each result, with how many more lines it held, an error's in red;
+- `▸ Agent fork · try bash 3.2  ↗ open its log`: a call that started an agent links to that agent's log, `1`–`9` in the order shown;
+- once it finished, how it ended: `✓ done in 0:42 · 12 steps`, or `✗ failed error after 0:42`.
+
+Secret-shaped strings (API keys, GitHub and Slack tokens, AWS keys, JWTs, `Bearer` values, URL passwords, `*_TOKEN=` values) are masked with the remote-runs mod's rules, and control characters dropped.
+
+**Back** (`b`) goes the way the log was opened: from a link, to the log the link was in (`← epic-implementer`); else to the tab it came from (`← Chart`, `← Agents`). A tab, a filter or a new prompt forgets that way back. Esc closes the pane.
+
+The log follows the end while the agent runs (read again every second, and once more in the 5 s after it ends), and `↑↓` scroll it; `e` jumps back to the end. `c` copies the log as drawn; `v` opens the agent's whole transcript in the main view. It keeps the last 2,000 lines, and a first read asks for the newest 400 messages, saying so when older ones were left out. The list holds as many agents as the graph (100).
+
 ## The rest of the pane
 
-Over the chart: the counts of this turn (`3 running · 1 need you · 4 done · 1 failed`) and the **needs you** strip, naming every agent waiting for you or failed this turn (two, then `+N more`), wherever it sits, never hidden in a squad. Under it: the Tree/Chart and Expand buttons, each with a hotkey (quick repeated clicks select text in Claude Code and are lost, keys never are), and what the keys do.
+Over the chart: the counts of this turn (`3 running · 1 need you · 4 done · 1 failed`) and the **needs you** strip, naming every agent waiting for you or failed this turn (two, then `+N more`), wherever it sits, never hidden in a squad. Above it, the Chart and Agents tabs (`g`, `a`). Under it: the Tree/Chart and Expand buttons, each with a hotkey (quick repeated clicks select text in Claude Code and are lost, keys never are), and what the keys do.
 
 The status line, set only when its text changes: `● 3 running · ◐ 1 needs you · ✗ 1 failed`; cleared when no agent runs, waits or failed this turn.
 
@@ -59,6 +83,7 @@ These are the mod's own plugin options (`/config`), not dotagents Settings, so t
 - `hooks/main.tsx`: the hooks module. Records events, runs the timer, sets the status line, draws the pane.
 - `hooks/flow.ts`: the agent graph, built from events by one pure reducer; summaries, model labels and colours, the status line text.
 - `hooks/lifecycle.ts`: when a box enters, lingers and leaves.
+- `hooks/log.ts`: an agent's log (messages to lines, masking, links, the scrolled window), the Agents list (sections, filters, squad groups) and the way Back goes.
 - `hooks/layout.ts`: the chart on a character grid (squads, folding, the shared tween, the minimum gap, connectors), the strips, the expanded squad and the tree.
 - `hooks/state.d.ts`: the state contract (`plugin.json` `types`) and the shared types. Change an atom's `shape` tag when its fields change.
 - `hooks/*.unit.ts`: the logic under `node --test`, including a frame scan that plays two sessions (five agents with a fork; a 24-agent fan-out) frame by frame and fails if two boxes ever touch.

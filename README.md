@@ -130,7 +130,7 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 ### ✨ Claude Code extras
 
 - **Plugins** ([`adapters/claude/plugins.txt`](adapters/claude/plugins.txt)): `mattpocock-skills`, a set of engineering skills (grilling, TDD, code review, ...).
-- **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `remote-runs` adds a `/remote-runs` pane listing remote subagent runs and their live logs; `agent-flow` adds an `/agent-flow` pane drawing the session's agents as a live org chart.
+- **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `remote-runs` adds a `/remote-runs` pane listing remote subagent runs and their live logs; `agent-flow` adds an `/agent-flow` pane drawing the session's agents as a live org chart, with a list of every agent and its log.
 - **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow my GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
 
 ### 🧱 Groups
@@ -145,7 +145,7 @@ Every skill, subagent, mod, hook and folder part belongs to one **group**, a fea
 | `epics` | `build-epic`, `to-epic`, `tune-tests` and their subagents |
 | `security` | `security-audit` and its subagents |
 | `safety-hooks` | The `guard-secrets`, `guard-merge` and `allow-task-cleanup` hooks |
-| `agent-flow` | The `agent-flow` mod: the session's agents as a live org chart |
+| `agent-flow` | The `agent-flow` mod: the session's agents as a live org chart, and each one's log |
 | `small-tools` | `remember`, `telemetry`, the `telemetry-save` hook and the MCP servers |
 | `personal` | My own instructions, guardrails and plugins (`global/`) and `add-plugin`; a public install leaves it out |
 

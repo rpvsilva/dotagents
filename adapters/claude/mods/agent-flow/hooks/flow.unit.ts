@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { emptyGraph, type FlowEvent, type Graph, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize, WAIT_MS } from './flow.ts'
+import { ctxColor, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize, WAIT_MS } from './flow.ts'
 
 const T = 1_800_000_000_000
 const run = (evs: FlowEvent[], g: Graph = emptyGraph()) => evs.reduce(reduce, g)
@@ -124,4 +124,19 @@ test('the status line counts running, waiting and failed agents of this turn; no
     { kind: 'turnEnd', at: T + 1, agent: 'a3', reason: 'error', outputTokens: null },
   ])
   assert.equal(statusText(g, T + WAIT_MS), '● 1 running · ◐ 1 needs you · ✗ 1 failed')
+})
+
+test('a context reading sets used and window; the same reading again changes nothing; an unknown agent is ignored', () => {
+  const g = run([spawn('a1', T), { kind: 'ctx', at: T + 1, agent: 'a1', used: 42_000, window: 200_000 }])
+  assert.deepEqual([agent(g, 'a1').ctx, agent(g, 'a1').window], [42_000, 200_000])
+  assert.equal(ctxShare(agent(g, 'a1')), 0.21)
+  assert.equal(reduce(g, { kind: 'ctx', at: T + 2, agent: 'a1', used: 42_000, window: 200_000 }), g)
+  assert.equal(reduce(g, { kind: 'ctx', at: T + 2, agent: 'ghost', used: 1, window: 2 }), g)
+  assert.equal(ctxShare(agent(run([spawn('a2', T)]), 'a2')), null)
+})
+
+test('context reads as people say it: tokens, a gauge, and a colour by how full', () => {
+  assert.deepEqual([950, 42_000, 199_600, 1_000_000, 1_200_000].map(fmtTokens), ['950', '42k', '200k', '1M', '1.2M'])
+  assert.deepEqual([0, 0.01, 0.5, 1].map(s => gauge(s, 6)), ['▱▱▱▱▱▱', '▰▱▱▱▱▱', '▰▰▰▱▱▱', '▰▰▰▰▰▰'])
+  assert.deepEqual([0.2, 0.5, 0.79, 0.8].map(ctxColor), ['success', 'warning', 'warning', 'error'])
 })

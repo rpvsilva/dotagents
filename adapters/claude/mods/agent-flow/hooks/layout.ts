@@ -6,10 +6,11 @@
 // type fold into a squad box; when a row is still too wide, its finished siblings fold into `✓ N done`, and when even
 // that does not fit, the caller draws `tree()` instead.
 
-import { type Agent, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus } from './flow.ts'
+import { type Agent, ctxColor, ctxShare, fmtTokens, gauge, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus } from './flow.ts'
 import { ENTER_MS, phaseOf, type Phase, schedule } from './lifecycle.ts'
 
-export type Seg = { text: string; color?: string; bold?: boolean; dim?: boolean }
+/** A run of text with one look; `agent`, when set, is what a click on it opens: an agent's id, or a squad's or fold's node id. */
+export type Seg = { text: string; color?: string; bold?: boolean; dim?: boolean; agent?: string }
 export type Row = Seg[]
 
 /** Where each box was drawn, so a layout change glides from there: one shared ease-out over TWEEN_MS. */
@@ -189,14 +190,16 @@ export function chart(g: Graph, now: number, opts: ChartOpts, tween: Tween): Cha
     })
   }
 
+  // Every cell a node draws carries its id, so a click opens it; a squad's cells carry their member's own.
+  const tagged = (id: string): Put => (x, y, text, st = {}) => put(x, y, text, { agent: id, ...st })
   const squads: Chart['squads'] = []
   for (const n of all) {
     const y = num(depth, n.id) * (H + VG)
     if (n.kind === 'squad') {
-      drawSquad(put, n, cx(n.id) - SW / 2, y, now, opts)
+      drawSquad(tagged(n.id), n, cx(n.id) - SW / 2, y, now, opts)
       squads.push({ id: n.id, label: `${n.type} ×${n.members!.length}` })
-    } else if (n.kind === 'fold') drawFold(put, n, cx(n.id) - W / 2, y)
-    else drawBox(put, n, cx(n.id) - W / 2, y, now, opts, g)
+    } else if (n.kind === 'fold') drawFold(tagged(n.id), n, cx(n.id) - W / 2, y)
+    else drawBox(n.id === MAIN ? put : tagged(n.id), n, cx(n.id) - W / 2, y, now, opts, g)
   }
   for (const n of all) wires(put, n, kidsOf(n.id), cx, depth, now, opts)
 
@@ -204,7 +207,7 @@ export function chart(g: Graph, now: number, opts: ChartOpts, tween: Tween): Cha
     const out: Row = []
     for (const c of line) {
       const last = out[out.length - 1]
-      if (last && last.color === c.s.color && !!last.bold === !!c.s.bold && !!last.dim === !!c.s.dim) last.text += c.ch
+      if (last && last.color === c.s.color && !!last.bold === !!c.s.bold && !!last.dim === !!c.s.dim && last.agent === c.s.agent) last.text += c.ch
       else out.push({ text: c.ch, ...c.s })
     }
     return trimRow(out)
@@ -286,6 +289,16 @@ function border(put: Put, x: number, y: number, w: number, s: Omit<Seg, 'text'>,
   put(x, y + H - 1, `╰${hz.repeat(w - 2)}╯`, s)
 }
 
+/** The context gauge set into a box's bottom border, from column 2: ` ▰▰▱▱▱▱ 42k/200k `; nothing without a reading. */
+function ctxBorder(put: Put, a: Agent, x: number, y: number, quiet: boolean) {
+  const share = ctxShare(a)
+  if (share === null) return
+  const tone = ctxColor(share)
+  put(x + 2, y, ' ', { color: FAINT, dim: true })
+  put(x + 3, y, gauge(share, 6), quiet ? { dim: true } : { color: tone })
+  put(x + 9, y, ` ${fmtTokens(a.ctx!)}/${fmtTokens(a.window!)} `.slice(0, W - 11), quiet || tone === 'success' ? { dim: true } : { color: tone })
+}
+
 function drawBox(put: Put, n: Node, x: number, y: number, now: number, opts: ChartOpts, g: Graph) {
   const a = n.agent!
   const isMain = a.id === MAIN
@@ -334,6 +347,7 @@ function drawBox(put: Put, n: Node, x: number, y: number, now: number, opts: Cha
   put(x + 2, y + 3, pad(model, inner - 6), tone ? { dim: true } : { color: modelColor(a.model) })
   if (!isMain && st !== 'done') put(x + 2 + inner - 5, y + 3, clock(elapsed).padStart(5), { dim: true })
   put(x + 2, y + 4, pad(l4, inner), dim ? { dim: true } : l4s)
+  ctxBorder(put, a, x, y + H - 1, dim || st === 'done')
 }
 
 function drawFold(put: Put, n: Node, x: number, y: number) {
@@ -359,7 +373,7 @@ function drawSquad(put: Put, n: Node, x: number, y: number, now: number, opts: C
   ms.slice(0, 36).forEach((m, i) => {
     const st = shownStatus(m, now)
     const ch = st === 'running' ? spin(now, opts.motion, i) : st === 'waiting' ? '◐' : st === 'done' ? '✓' : '✗'
-    put(xx, y + 2, ch, dim ? { dim: true } : st === 'running' ? { color: modelColor(m.model) } : st === 'waiting' ? { color: 'warning', bold: true } : st === 'done' ? { color: 'success' } : { color: 'error', bold: true })
+    put(xx, y + 2, ch, dim ? { dim: true, agent: m.id } : { agent: m.id, ...(st === 'running' ? { color: modelColor(m.model) } : st === 'waiting' ? { color: 'warning', bold: true } : st === 'done' ? { color: 'success' } : { color: 'error', bold: true })})
     xx += (i + 1) % 5 === 0 ? 2 : 1
   })
   if (ms.length > 36) put(xx, y + 2, `+${ms.length - 36}`, { dim: true })
@@ -377,6 +391,23 @@ function drawSquad(put: Put, n: Node, x: number, y: number, now: number, opts: C
   }
   if (c.failed) put(bx, y + 3, ` ✗${c.failed}`, { color: 'error', bold: true })
   put(x + 2, y + 4, '▸ x expand', { dim: true })
+  // Context: the members' average, and the fullest one's gauge, set into the bottom border.
+  const shares = ms.map(ctxShare).filter((s): s is number => s !== null)
+  if (shares.length) {
+    const avg = shares.reduce((p, s) => p + s, 0) / shares.length
+    const max = Math.max(...shares)
+    const quiet = dim || !live
+    let cx = x + 2
+    const seg = (text: string, s: Omit<Seg, 'text'>) => {
+      put(cx, y + H - 1, text, s)
+      cx += text.length
+    }
+    seg(' ctx avg ', { dim: true })
+    seg(`${Math.round(avg * 100)}%`, quiet ? { dim: true } : { color: ctxColor(avg) })
+    seg(' · max ', { dim: true })
+    seg(gauge(max, 6), quiet ? { dim: true } : { color: ctxColor(max) })
+    seg(` ${Math.round(max * 100)}% `, quiet ? { dim: true } : { color: ctxColor(max) })
+  }
 }
 
 export function counts(ms: Agent[], now: number) {
@@ -505,6 +536,16 @@ export function needsRow(g: Graph, now: number): Row {
   return row
 }
 
+/** A tree or list row's context: a 4-cell gauge and `42k/200k`, or blank space without a reading. */
+export function ctxSegs(a: Agent, quiet: boolean): Seg[] {
+  const share = ctxShare(a)
+  if (share === null) return [{ text: ' '.repeat(16) }]
+  return [
+    { text: gauge(share, 4), ...(quiet ? { dim: true } : { color: ctxColor(share) }) },
+    { text: ` ${pad(`${fmtTokens(a.ctx!)}/${fmtTokens(a.window!)}`, 11)}`, dim: true },
+  ]
+}
+
 /** The fallback when even folded the chart does not fit: an indented tree, one or two lines per agent. */
 export function tree(g: Graph, now: number, opts: ChartOpts): Row[] {
   const sched = schedule(g, opts.lingerMs)
@@ -516,20 +557,22 @@ export function tree(g: Graph, now: number, opts: ChartOpts): Row[] {
       const st = shownStatus(a, now)
       const glyph = st === 'running' ? spin(now, opts.motion) : st === 'waiting' ? '◐' : st === 'done' ? '✓' : '✗'
       const look = st === 'running' ? { color: modelColor(a.model) } : st === 'waiting' ? { color: 'warning' } : st === 'failed' ? { color: 'error' } : { color: 'success' }
-      rows.push([
+      const own = (segs: Seg[]): Row => segs.map(sg => ({ ...sg, agent: a.id }))
+      rows.push(own([
         { text: `${prefix}${last ? '└─ ' : '├─ '}`, color: FAINT, dim: true },
         { text: glyph, ...look, bold: true },
         { text: ` ${pad(printable(a.type), 18)}`, ...(st === 'done' ? { dim: true } : { color: modelColor(a.model), bold: true }) },
         { text: pad(printable(a.desc), 26), dim: st === 'done' },
         { text: pad(modelLabel(a.model), 11), color: modelColor(a.model) },
+        ...ctxSegs(a, st === 'done'),
         { text: st === 'done' || st === 'failed' ? `${st} ${clock((a.ended ?? now) - a.started)}${a.why ? ` · ${a.why}` : ''}` : clock(now - a.started), ...(st === 'failed' ? { color: 'error' } : { dim: true }) },
-      ])
-      if (st === 'running' || st === 'waiting') rows.push([{ text: `${prefix}${last ? '   ' : '│  '}   ⎿ `, color: FAINT, dim: true }, { text: st === 'waiting' ? 'needs you' : a.step ?? 'thinking', ...(st === 'waiting' ? { color: 'warning' } : { dim: true }) }])
+      ]))
+      if (st === 'running' || st === 'waiting') rows.push(own([{ text: `${prefix}${last ? '   ' : '│  '}   ⎿ `, color: FAINT, dim: true }, { text: st === 'waiting' ? 'needs you' : a.step ?? 'thinking', ...(st === 'waiting' ? { color: 'warning' } : { dim: true }) }]))
       walk(a.id, prefix + (last ? '   ' : '│  '))
     })
   }
   const m = g.agents.find(a => a.id === MAIN)!
-  rows.push([{ text: m.status === 'running' ? spin(now, opts.motion) : '◆', color: 'claude', bold: true }, { text: ' main', color: 'claude', bold: true }, { text: m.model ? `  ${modelLabel(m.model)}` : '', dim: true }])
+  rows.push([{ text: m.status === 'running' ? spin(now, opts.motion) : '◆', color: 'claude', bold: true }, { text: ' main', color: 'claude', bold: true }, { text: m.model ? `  ${modelLabel(m.model)}  ` : '  ', dim: true }, ...ctxSegs(m, false)])
   walk(MAIN, '')
   return rows
 }
