@@ -181,3 +181,17 @@ test('the tree fallback never flickers: tree at once on overflow, chart only aft
   f = fallback(f, roomy, cols, T + 20_000 + FIT_HOLD_MS)
   assert.equal(f.tree, false)
 })
+
+test("a box carries its context gauge in its bottom border, coloured by how full; a squad its average and fullest", () => {
+  const ctx = (id: string, used: number, window = 200_000): FlowEvent => ({ kind: 'ctx', at: T + 50, agent: id, used, window })
+  const c = settled([spawn('a', T), ctx('a', 170_000)], T + 2000)
+  const bottom = c.rows.find(r => text(r).includes('╰─ ▰'))!
+  assert.ok(bottom, 'a gauge in a bottom border')
+  assert.match(text(bottom), /╰─ ▰▰▰▰▰▱ 170k\/200k ─+╯/)
+  assert.equal(bottom.find(sg => sg.text.includes('▰'))!.color, 'error')
+  const sq = Array.from({ length: 4 }, (_, i) => spawn(`e${i}`, T + i, 'epic-implementer'))
+  const reads = [ctx('e0', 20_000), ctx('e1', 40_000), ctx('e2', 60_000), ctx('e3', 120_000)]
+  assert.ok(lines(settled([...sq, ...reads], T + 2000).rows).some(l => /ctx avg 30% · max ▰▰▰▰▱▱ 60%/.test(l)))
+  // No reading yet: a plain border.
+  assert.ok(!lines(settled([spawn('b', T)], T + 2000).rows).some(l => l.includes('▱')))
+})

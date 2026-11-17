@@ -3,21 +3,47 @@
 // reducer. Logic sits in plain .ts files (flow.ts, lifecycle.ts, layout.ts); this module only calls `$` and draws.
 // A failure to record or draw is caught: it never fails, delays or changes a tool call.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import { emptyGraph, type FlowEvent, MAIN, reduce, statusText, summarize } from './flow.ts'
-import { chart, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS, tree } from './layout.ts'
+import { type Agent, ctxShare, emptyGraph, type FlowEvent, fmtTokens, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize } from './flow.ts'
+import { addMessages, ago, backLabel, logText, EARLIER, filterCounts, FIRST_READ, goBack, type Item, listItems, type Message, NO_LOG, openFrom, scrollLog, WAITING, windowLines } from './log.ts'
+import { chart, clock, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS, tree } from './layout.ts'
 import { isMoving } from './lifecycle.ts'
-import type { View } from './state.d.ts'
+import type { Filter, Log, LogLine, View } from './state.d.ts'
 
 const PANE = 'agent-flow'
 const TICK_MS = 125
 // A pane not drawn for this long is taken as closed: the timer stops redrawing it until something changes.
 const DRAWN_MS = 2000
-const KEYS = 't tree/chart · x expand squad · esc close'
+const KEYS = 't tree/chart · x expand squad · a agents · esc close'
+const LIST_KEYS = '1-9 open · l r n f d filter · g chart · esc close'
+const LOG_KEYS = 'b back · 1-9 open a linked agent · ↑↓ scroll · c copy · esc close'
+// The Agents tab's filters: hotkey and label.
+const FILTERS: [Filter, string, string][] = [
+  ['all', 'l', 'All'],
+  ['running', 'r', 'Running'],
+  ['needs', 'n', 'Needs you'],
+  ['failed', 'f', 'Failed'],
+  ['done', 'd', 'Done'],
+]
+// While the Agents tab shows a running agent, it is redrawn this often, for its clock.
+const LIST_EVERY_MS = 1000
+// How often the context readings are taken while an agent runs, and for how long after the last one ended (the
+// engine keeps a finished agent listed for a while, so its last reading is taken too).
+const CTX_EVERY_MS = 1000
+const CTX_AFTER_END_MS = 10_000
+// How often an open log is read again while its agent runs, and for how long after it ends (its last messages).
+const LOG_EVERY_MS = 1000
+const LOG_AFTER_END_MS = 5000
+// The pane's rows around the log's window: the tabs and a blank row, the header card (border, two lines) and a
+// blank row; the end line, a blank row and the buttons below.
+const CHROME_ROWS = 11
+const logRows = (bodyRows: number, l: Log) => Math.max(3, bodyRows - CHROME_ROWS - (l.truncated ? 1 : 0))
 
-const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-1' })
-const view = atom({ plugin: 'agent-flow', key: 'view' } as const, { tree: false, expanded: null } as View, { shape: 'view-1' })
+const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-2' })
+const NO_VIEW: View = { tab: 'chart', tree: false, expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
+const view = atom({ plugin: 'agent-flow', key: 'view' } as const, NO_VIEW, { shape: 'view-3' })
+const log = atom({ plugin: 'agent-flow', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
 const frame = atom({ plugin: 'agent-flow', key: 'frame' } as const, 0, { shape: 'frame-1' })
 
 // Per-process state, which a reload starts again: where boxes were drawn, the status line last set, the last draw.
@@ -27,6 +53,13 @@ let lastStatus: string | undefined | null = null
 let lastDraw = 0
 let isTicking = false
 let settings = { lingerMs: 30_000, squadMin: 4, motion: true }
+// The open log's reads go one at a time (the timer and a press may both ask); when it was last read; the lines its
+// window showed at the last draw, which a scroll moves by.
+let logQueue: Promise<void> = Promise.resolve()
+let logReadAt = 0
+let ctxReadAt = 0
+let drawnRows = { agentId: null as string | null, rows: 10 }
+let listDrawnAt = 0
 
 async function now($: EngineInterface): Promise<number> {
   try {
@@ -54,6 +87,106 @@ async function record($: EngineInterface, ev: FlowEvent): Promise<void> {
   }
 }
 
+/**
+ * Reads the open log's new messages into the log atom; another agent's log (one opened, or Back) starts it again.
+ * Never throws: a read the session denies says why in the log.
+ */
+async function readLog($: EngineInterface): Promise<void> {
+  try {
+    const { agentId } = await read($, view)
+    const was = await read($, log)
+    let l: Log = agentId === was.agentId ? was : { ...NO_LOG, agentId }
+    if (agentId !== null) {
+      logReadAt = await now($)
+      const got = await $.session.messages(l.after === null ? { agentId, last: FIRST_READ } : { agentId, after: l.after })
+      if ('deny' in got) l = l.after === null ? { ...l, denied: String(got.deny) } : { ...l, after: null }
+      else l = addMessages({ ...l, denied: null }, got as unknown as Message[])
+    }
+    if (l !== was) await update($, log, () => l)
+  } catch {
+    // no new lines this time
+  }
+}
+
+function followLog($: EngineInterface): Promise<void> {
+  logQueue = logQueue.then(() => readLog($))
+  return logQueue
+}
+
+/** Whether the open log should be read again at `t`: its agent runs, or ended a moment ago. */
+function logIsLive(a: Agent | undefined, t: number): boolean {
+  if (!a) return false
+  return a.ended === null || t - a.ended < LOG_AFTER_END_MS
+}
+
+/**
+ * Takes a context reading for main and every subagent the engine lists, recorded as one graph write. Only while
+ * something runs or ended a moment ago: a still session costs nothing. Never throws.
+ */
+async function readCtx($: EngineInterface, t: number): Promise<void> {
+  try {
+    const g = await read($, graph)
+    const recent = g.agents.some(a => a.status === 'running' || (a.ended !== null && t - a.ended < CTX_AFTER_END_MS))
+    if (!recent || t - ctxReadAt < CTX_EVERY_MS) return
+    ctxReadAt = t
+    const evs: FlowEvent[] = []
+    try {
+      for (const info of await $.agent.list()) {
+        if (info.contextWindowSize && info.tokenCount > 0) evs.push({ kind: 'ctx', at: t, agent: info.id, used: info.tokenCount, window: info.contextWindowSize })
+      }
+    } catch {
+      // no agents listed on this surface
+    }
+    try {
+      const { context } = await $.session.usage()
+      if (context.tokens !== undefined && context.window) evs.push({ kind: 'ctx', at: t, agent: MAIN, used: context.tokens, window: context.window })
+    } catch {
+      // no usage to read
+    }
+    if (evs.length) await update($, graph, x => evs.reduce(reduce, x))
+  } catch {
+    // no reading this time
+  }
+}
+
+/** Opens agent `agentId`'s log, read at once; `from` says where Back returns. */
+async function openLog($: EngineInterface, agentId: string, from: 'chart' | 'agents' | 'log'): Promise<void> {
+  await update($, view, v => openFrom(v, agentId, from))
+  await followLog($)
+}
+
+/** One step back: the log a link was followed from, else the tab the first log was opened from. */
+async function back($: EngineInterface): Promise<void> {
+  await update($, view, v => goBack(v))
+  await followLog($)
+}
+
+/**
+ * Opens what a click in the chart landed on: an agent's log; for a squad, the Agents tab with its group open; for a
+ * `✓ N done` fold, the Agents tab.
+ */
+async function openNode($: EngineInterface, id: string): Promise<void> {
+  if (id.startsWith('squad:')) {
+    const group = id.slice('squad:'.length)
+    await update($, view, (v): View => ({ ...v, tab: 'agents', agentId: null, trail: [], filter: 'all', groups: v.groups.includes(group) ? v.groups : [...v.groups, group] }))
+  } else if (id.startsWith('fold:')) await update($, view, (v): View => ({ ...v, tab: 'agents', agentId: null, trail: [], filter: 'all' }))
+  else if (id !== MAIN) await openLog($, id, 'chart')
+}
+
+/** A tab, or a filter: either leaves any open log and forgets the way back. */
+const toTab = (tab: View['tab']) => (v: View): View => ({ ...v, tab, agentId: null, trail: [] })
+const toFilter = (filter: Filter) => (v: View): View => ({ ...v, tab: 'agents', filter, agentId: null, trail: [] })
+
+/** Copies `text` on the surface that pressed, and toasts what happened. */
+async function copyText($: EngineInterface, text: string, lines: number, surface: RenderSurface): Promise<void> {
+  try {
+    const got = await $.ui.copy({ text, surface })
+    $.ui.toast(got.isCopied ? `copied ${lines} lines` : `not copied: ${got.reason ?? 'refused'}`)
+  } catch {
+    $.ui.toast('not copied')
+  }
+}
+
 /** Redraws the pane while something moves on it and it was drawn lately; keeps the status line current. */
 async function tick($: EngineInterface): Promise<void> {
   if (isTicking) return
@@ -61,9 +194,19 @@ async function tick($: EngineInterface): Promise<void> {
   try {
     const t = await now($)
     await status($)
+    await readCtx($, t)
     const isDrawn = t - lastDraw < DRAWN_MS
     const isGliding = t - tween.t0 < TWEEN_MS
-    if (isDrawn && (isGliding || fall.fitSince !== null || isMoving(await read($, graph), t, settings.lingerMs))) await update($, frame, n => n + 1)
+    const v = await read($, view)
+    if (isDrawn && v.agentId !== null && t - logReadAt >= LOG_EVERY_MS) {
+      const g = await read($, graph)
+      if (logIsLive(g.agents.find(a => a.id === v.agentId), t)) await followLog($)
+    }
+    // The list redraws once a second while an agent runs, for its clock; the chart on every frame something moves.
+    if (isDrawn && v.tab === 'agents' && t - listDrawnAt >= LIST_EVERY_MS && (await read($, graph)).agents.some(a => a.id !== MAIN && a.status === 'running')) {
+      listDrawnAt = t
+      await update($, frame, n => n + 1)
+    } else if (isDrawn && v.tab === 'chart' && v.agentId === null && (isGliding || fall.fitSince !== null || isMoving(await read($, graph), t, settings.lingerMs))) await update($, frame, n => n + 1)
   } catch {
     // no redraw this tick
   } finally {
@@ -96,6 +239,14 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await record($, { kind: 'turnStart', at: await now($), agent: e.agentId ?? MAIN })
+    // A new prompt forgets the way back through logs; an open log stays open.
+    if (e.agentId === undefined) {
+      try {
+        await update($, view, v => (v.trail.length ? { ...v, trail: [] } : v))
+      } catch {
+        // nothing to forget
+      }
+    }
     return next(e)
   })
 
@@ -136,6 +287,16 @@ export const register: Register = (on, options) => {
     return r
   }).catch(($, e, next) => next(e))
 
+  // The log draws its own window, exactly its rows: the person's scroll moves it; the chart and the list scroll as usual.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const { agentId } = await read($, view)
+    if (agentId === null) return next(e)
+    const l = await read($, log)
+    const rows = drawnRows.agentId === agentId ? drawnRows.rows : logRows(e.bodyRows, l)
+    if (l.agentId === agentId) await update($, log, () => scrollLog(l, e.by, rows))
+    return {}
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     await read($, frame) // redrawn on each frame the timer counts
@@ -143,28 +304,259 @@ export const register: Register = (on, options) => {
     const v = await read($, view)
     const t = await now($)
     lastDraw = t
+    const segText = (sg: Seg, i: number) => (
+      <Text key={`s${i}`} {...(sg.color ? { color: sg.color } : {})} {...(sg.dim ? { dimColor: true } : {})} {...(sg.bold ? { bold: true } : {})}>
+        {sg.text}
+      </Text>
+    )
+    // A row: plain text, or, where it holds a box or tree line, a run of pieces, each one a node's a click opens.
+    const line = (r: Row, i: number) => {
+      if (!r.some(sg => sg.agent)) {
+        return (
+          <Text key={`r${i}`} wrap="truncate-end">
+            {r.length ? r.map(segText) : ' '}
+          </Text>
+        )
+      }
+      const runs: { agent: string | undefined; segs: Seg[]; col: number }[] = []
+      let col = 0
+      for (const sg of r) {
+        const last = runs.at(-1)
+        if (last && last.agent === sg.agent) last.segs.push(sg)
+        else runs.push({ agent: sg.agent, segs: [sg], col })
+        col += sg.text.length
+      }
+      return (
+        <Box key={`r${i}`} flexDirection="row">
+          {runs.map(run =>
+            run.agent === undefined ? (
+              <Text key={`t${run.col}`}>{run.segs.map(segText)}</Text>
+            ) : (
+              <Button key={`open:${run.agent}:${i}:${run.col}`} plain onPress={() => openNode($, run.agent!)}>
+                {run.segs.map(segText)}
+              </Button>
+            ),
+          )}
+        </Box>
+      )
+    }
+    const counts = filterCounts(g, t)
+    const tabs = (
+      <Box key="tabs" columnGap={2} marginBottom={1}>
+        <Button key="tab-chart" hotkey="g" {...(v.tab === 'chart' ? { variant: 'primary' } : { dimColor: true })} onPress={() => update($, view, toTab('chart'))}>
+          Chart
+        </Button>
+        <Button key="tab-agents" hotkey="a" {...(v.tab === 'agents' ? { variant: 'primary' } : { dimColor: true })} onPress={() => update($, view, toTab('agents'))}>
+          {`Agents (${counts.all})`}
+        </Button>
+      </Box>
+    )
+    const look = (a: Agent) => {
+      const st = shownStatus(a, t)
+      const glyph = st === 'running' ? '●' : st === 'waiting' ? '◐' : st === 'failed' ? '✗' : '✓'
+      const color = st === 'running' ? modelColor(a.model) : st === 'waiting' ? 'warning' : st === 'failed' ? 'error' : 'success'
+      const when =
+        st === 'running' || st === 'waiting'
+          ? `${st === 'waiting' ? 'needs you' : 'running'} ${clock(t - a.started)}`
+          : `${st === 'failed' ? `failed (${a.why ?? 'error'})` : 'done'} ${ago(a.ended ?? t, t)} · took ${clock((a.ended ?? t) - a.started)}`
+      const share = ctxShare(a)
+      const ctx = share === null ? '' : `ctx ${fmtTokens(a.ctx!)}/${fmtTokens(a.window!)} (${Math.round(share * 100)}%)`
+      const meta = [modelLabel(a.model), when, `${a.steps} steps`, ctx].filter(x => x !== '').join(' · ')
+      return { st, glyph, color, meta }
+    }
+
+    // An agent's log, from the chart, the list or another log.
+    const open = v.agentId === null ? undefined : g.agents.find(a => a.id === v.agentId)
+    if (open) {
+      const l = await read($, log)
+      const shown: Log = l.agentId === open.id ? l : { ...NO_LOG, agentId: open.id }
+      const rows = logRows(e.props.scroll.bodyRows, shown)
+      drawnRows = { agentId: open.id, rows }
+      const k = look(open)
+      const isLive = k.st === 'running' || k.st === 'waiting'
+      const parent = open.parent === null || open.parent === MAIN ? 'main' : printable(g.agents.find(a => a.id === open.parent)?.type ?? 'an agent')
+      const badge = k.st === 'running' ? 'RUNNING' : k.st === 'waiting' ? 'NEEDS YOU' : k.st === 'failed' ? 'FAILED' : 'DONE'
+      const visible = windowLines(shown.lines, shown.follow, shown.top, rows)
+      let link = 0
+      const logLine = (ln: LogLine, i: number) => {
+        switch (ln.kind) {
+          case 'prompt':
+            return <Text key={`l${i}`} wrap="truncate-end" color="suggestion">{`› ${ln.text}`}</Text>
+          case 'call':
+            return <Text key={`l${i}`} wrap="truncate-end" bold>{ln.text}</Text>
+          case 'agent': {
+            // A link to the agent this call started: its log, with Back returning here.
+            link++
+            const known = ln.agentId !== undefined && g.agents.some(a => a.id === ln.agentId)
+            if (!known) return <Text key={`l${i}`} wrap="truncate-end" bold>{ln.text}</Text>
+            return (
+              <Button key={`link:${ln.agentId}:${i}`} plain {...(link <= 9 ? { hotkey: String(link) } : {})} onPress={() => openLog($, ln.agentId!, 'log')}>
+                <Text bold>{ln.text}</Text>
+                <Text color="suggestion">{'  ↗ open its log'}</Text>
+              </Button>
+            )
+          }
+          case 'result':
+            return <Text key={`l${i}`} wrap="truncate-end" dimColor>{`  ${ln.text}`}</Text>
+          case 'error':
+            return <Text key={`l${i}`} wrap="truncate-end" color="error">{`  ${ln.text}`}</Text>
+          default:
+            return <Text key={`l${i}`} wrap="truncate-end">{ln.text}</Text>
+        }
+      }
+      const took = clock((open.ended ?? t) - open.started)
+      return (
+        <Box flexDirection="column" paddingX={1}>
+          {tabs}
+          <Box flexDirection="column" borderStyle="round" borderColor={k.color} paddingX={1} marginBottom={1}>
+            <Box columnGap={1}>
+              <Button key="back" hotkey="b" onPress={() => back($)}>
+                {backLabel(v, g)}
+              </Button>
+              <Text wrap="truncate-end">
+                <Text color={k.color}>{k.glyph}</Text>
+                {' '}
+                <Text bold>{printable(open.type)}</Text>
+                {'  '}
+                {printable(open.desc)}
+                {'  '}
+                <Text backgroundColor={k.color} color="inverseText" bold>{` ${badge} `}</Text>
+              </Text>
+            </Box>
+            <Text dimColor wrap="truncate-end">{`${k.meta} · from ${parent}`}</Text>
+          </Box>
+          {shown.truncated && <Text dimColor wrap="truncate-end">{EARLIER}</Text>}
+          {shown.denied !== null && <Text color="warning" wrap="wrap">{`the session gives no messages for this agent: ${shown.denied}`}</Text>}
+          {shown.denied === null && shown.lines.length === 0 && <Text dimColor>{WAITING}</Text>}
+          {visible.map(logLine)}
+          {!isLive && shown.follow && (
+            <Text key="end" wrap="truncate-end">
+              <Text backgroundColor={k.st === 'failed' ? 'error' : 'success'} color="inverseText" bold>{k.st === 'failed' ? ' ✗ failed ' : ' ✓ done '}</Text>
+              <Text dimColor>{k.st === 'failed' ? ` ${open.why ?? 'error'} after ${took} · ${open.steps} steps` : ` in ${took} · ${open.steps} steps`}</Text>
+            </Text>
+          )}
+          <Box columnGap={2} marginTop={1}>
+            {shown.follow ? (
+              <Button key="end" hotkey="e" dimColor onPress={() => update($, log, x => ({ ...x, follow: true }))}>
+                {isLive ? '● Following live' : '■ End of log'}
+              </Button>
+            ) : (
+              <Button key="end" hotkey="e" variant="primary" onPress={() => update($, log, x => ({ ...x, follow: true }))}>
+                ↓ Jump to end
+              </Button>
+            )}
+            <Button key="copy" hotkey="c" dimColor onPress={press => copyText($, logText(shown.lines), shown.lines.length, press.surface)}>
+              Copy log
+            </Button>
+            <Button key="transcript" hotkey="v" dimColor onPress={async () => {
+              const r = await $.ui.view({ agentId: open.id })
+              if ('deny' in r && r.deny) $.ui.toast(`cannot open its transcript: ${r.deny}`)
+            }}>
+              Open transcript
+            </Button>
+            <Text dimColor wrap="truncate-end">{LOG_KEYS}</Text>
+          </Box>
+        </Box>
+      )
+    }
+
+    if (v.tab === 'agents') {
+      const items = listItems(g, t, v.filter, settings.squadMin)
+      let n = 0
+      const hot = () => (++n <= 9 ? { hotkey: String(n) } : {})
+      const row = (a: Agent, isOld: boolean) => {
+        const k = look(a)
+        const detail = k.st === 'running' || k.st === 'waiting' ? (a.step ? `⎿ ${printable(a.step)}` : '⎿ thinking') : k.st === 'failed' ? `⎿ ${a.why ?? 'error'}` : ''
+        return (
+          <Box key={`row:${a.id}`} flexDirection="column">
+            <Button key={`agent:${a.id}`} plain dimColor={isOld} {...hot()} onPress={() => openLog($, a.id, 'agents')}>
+              <Text {...(isOld ? { dimColor: true } : { color: k.color })}>{k.glyph}</Text> <Text bold={!isOld}>{printable(a.type)}</Text>{'  '}{printable(a.desc)}{'  '}
+              <Text dimColor>{k.meta}</Text>
+            </Button>
+            {!isOld && detail !== '' && <Text dimColor wrap="truncate-end">{`  ${detail}`}</Text>}
+          </Box>
+        )
+      }
+      // A squad member, one compact line under its group.
+      const member = (a: Agent) => {
+        const k = look(a)
+        return (
+          <Button key={`agent:${a.id}`} plain {...hot()} onPress={() => openLog($, a.id, 'agents')}>
+            {'   '}
+            <Text color={k.color}>{k.glyph}</Text> {printable(a.desc)}{'  '}
+            <Text dimColor>{k.meta}</Text>
+          </Button>
+        )
+      }
+      const group = (it: Extract<Item, { kind: 'group' }>) => {
+        const isOpen = v.groups.includes(it.id)
+        const c = { running: 0, waiting: 0, done: 0, failed: 0 }
+        for (const m of it.members) c[shownStatus(m, t)]++
+        const lead = it.members[0]!
+        return (
+          <Box key={`group:${it.id}`} flexDirection="column">
+            <Button key={`group:${it.id}`} plain {...hot()} onPress={() => update($, view, (x): View => ({ ...x, groups: isOpen ? x.groups.filter(id => id !== it.id) : [...x.groups, it.id] }))}>
+              <Text bold>{`${isOpen ? '▾' : '▸'} ${printable(it.type)} ×${it.members.length}`}</Text>{'  '}
+              <Text color={modelColor(lead.model)}>{modelLabel(lead.model)}</Text>{'  '}
+              <Text color={modelColor(lead.model)}>{`● ${c.running}`}</Text>
+              <Text dimColor>{' · '}</Text>
+              <Text color="warning">{`◐ ${c.waiting}`}</Text>
+              <Text dimColor>{' · '}</Text>
+              <Text color="success">{`✓ ${c.done}`}</Text>
+              <Text dimColor>{' · '}</Text>
+              <Text color="error">{`✗ ${c.failed}`}</Text>
+            </Button>
+            {(isOpen ? it.members : it.needing).map(member)}
+          </Box>
+        )
+      }
+      const sections: [Item['section'], string | null][] = [['recent', null], ['earlier', '── earlier this session ──'], ['older', '── older ──']]
+      return (
+        <Box flexDirection="column" paddingX={1}>
+          {tabs}
+          <Box key="filters" columnGap={1} marginBottom={1}>
+            {FILTERS.map(([f, key, label]) => (
+              <Button key={`filter-${f}`} hotkey={key} {...(v.filter === f ? { variant: 'primary' } : { dimColor: true })} onPress={() => update($, view, toFilter(f))}>
+                {`${label} ${counts[f]}`}
+              </Button>
+            ))}
+          </Box>
+          <Box flexDirection="column" rowGap={1}>
+            {counts.all === 0 && <Text dimColor>No agents yet this session: they show here as they start, and stay once they finish.</Text>}
+            {counts.all > 0 && items.length === 0 && <Text dimColor>None match this filter.</Text>}
+            {sections.map(([sec, title]) => {
+              const its = items.filter(it => it.section === sec)
+              if (!its.length) return null
+              const isOld = sec !== 'recent'
+              const body = its.map(it => (it.kind === 'group' ? group(it) : row(it.agent, isOld)))
+              return title === null ? (
+                body
+              ) : (
+                <Box key={`sec:${sec}`} flexDirection="column">
+                  <Text dimColor>{title}</Text>
+                  {body}
+                </Box>
+              )
+            })}
+            <Text dimColor>{LIST_KEYS}</Text>
+          </Box>
+        </Box>
+      )
+    }
+
     const columns = Math.max(40, e.props.bodyColumns - 2)
     const opts = { columns, lingerMs: settings.lingerMs, squadMin: settings.squadMin, motion: settings.motion && e.surface === 'terminal', expanded: v.expanded }
     const c = chart(g, t, opts, tween)
     fall = fallback(fall, c.width, columns, t)
     const asTree = v.tree || fall.tree
     const body = asTree ? tree(g, t, opts) : c.rows
-    const seg = (s: Seg, i: number) => (
-      <Text key={`s${i}`} {...(s.color ? { color: s.color } : {})} {...(s.dim ? { dimColor: true } : {})} {...(s.bold ? { bold: true } : {})}>
-        {s.text}
-      </Text>
-    )
-    const line = (r: Row, i: number) => (
-      <Text key={`r${i}`} wrap="truncate-end">
-        {r.length ? r.map(seg) : ' '}
-      </Text>
-    )
     const squad = c.squads[0]
     return (
       <Box flexDirection="column" paddingX={1}>
+        {tabs}
         <Box flexDirection="column" alignItems="center" marginBottom={1}>
-          {line(headerRow(g, t), 0)}
-          {line(needsRow(g, t), 1)}
+          {line(headerRow(g, t), -1)}
+          {line(needsRow(g, t), -2)}
         </Box>
         {body.map(line)}
         <Box columnGap={2} marginTop={1}>

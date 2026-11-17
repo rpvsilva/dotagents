@@ -14,6 +14,8 @@ export type FlowEvent =
   | { kind: 'turnStart'; at: number; agent: string }
   | { kind: 'turnEnd'; at: number; agent: string; reason: string; outputTokens: number | null }
   | { kind: 'spawnFailed'; at: number; toolUseId: string; why: string }
+  /** A context reading: `used` tokens of a `window` (both from the engine). */
+  | { kind: 'ctx'; at: number; agent: string; used: number; window: number }
 
 /** Agents kept at most: past it the oldest finished ones go (main never). */
 export const MAX_AGENTS = 100
@@ -24,7 +26,7 @@ export const MAIN = 'main'
 
 export function emptyGraph(): Graph {
   return {
-    agents: [{ id: MAIN, parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 0, checks: {} }],
+    agents: [{ id: MAIN, parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 0, checks: {}, ctx: null, window: null }],
     turn: 0,
     turnStarted: 0,
     lastTurn: null,
@@ -32,6 +34,30 @@ export function emptyGraph(): Graph {
 }
 
 const isFinished = (a: Agent) => a.status !== 'running'
+
+/** Tokens as people say them: `950`, `42k`, `1.2M`, `1M`. */
+export function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${Number.isInteger(Math.round(m * 10) / 10) ? Math.round(m) : (Math.round(m * 10) / 10).toFixed(1)}M`
+  }
+  if (n >= 1000) return `${Math.round(n / 1000)}k`
+  return String(Math.round(n))
+}
+
+/** The share of its window an agent has used, 0 to 1; null without a reading. */
+export function ctxShare(a: Pick<Agent, 'ctx' | 'window'>): number | null {
+  return a.ctx === null || !a.window ? null : Math.min(1, Math.max(0, a.ctx / a.window))
+}
+
+/** The theme colour of a context share: under half `success`, to 80% `warning`, past it `error`. */
+export const ctxColor = (share: number) => (share >= 0.8 ? 'error' : share >= 0.5 ? 'warning' : 'success')
+
+/** A gauge `w` cells wide: ▰ for the share used (at least one once any is), ▱ for the rest. */
+export function gauge(share: number, w: number): string {
+  const f = Math.min(w, Math.max(share > 0 ? 1 : 0, Math.round(share * w)))
+  return '▰'.repeat(f) + '▱'.repeat(w - f)
+}
 
 /** Applies one event; returns the same graph when nothing changed, so a caller can skip a write. */
 export function reduce(g: Graph, ev: FlowEvent): Graph {
@@ -52,7 +78,7 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       const parent = g.agents.some(a => a.id === ev.parent) ? ev.parent : MAIN
       const agent: Agent = {
         id: ev.id, parent, type: ev.type, desc: ev.desc, model: ev.model, status: 'running', why: null, started: at, ended: null,
-        steps: 0, tokens: 0, step: null, toolUseId: ev.toolUseId, turn: g.turn, checks: {},
+        steps: 0, tokens: 0, step: null, toolUseId: ev.toolUseId, turn: g.turn, checks: {}, ctx: null, window: null,
       }
       const withMain = ev.parentModel && parent === MAIN ? patch(MAIN, m => (m.model ? m : { ...m, model: ev.parentModel })) : g
       return cap({ ...withMain, agents: [...withMain.agents, agent] })
@@ -88,6 +114,8 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
         tokens: a.tokens + (ev.outputTokens ?? 0),
       }))
     }
+    case 'ctx':
+      return patch(ev.agent, a => (a.ctx === ev.used && a.window === ev.window ? a : { ...a, ctx: ev.used, window: ev.window }))
     case 'spawnFailed': {
       const a = g.agents.find(x => x.toolUseId === ev.toolUseId)
       if (!a || isFinished(a)) return g
