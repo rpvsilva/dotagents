@@ -3,6 +3,8 @@ ci: off
 merge_identity: app
 review_before_agent_merge: no
 test_command: python3 -I -m pytest -q -c pyproject.toml
+parallel: 4
+approved: yes
 
 ## Authorizations
 
