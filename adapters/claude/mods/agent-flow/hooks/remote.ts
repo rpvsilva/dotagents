@@ -231,7 +231,7 @@ export function parseResult(text: string | null): Result | null {
 }
 
 /** A subagent a run ran, as its transcript's task events describe it. */
-export type Task = { id: string; type: string; desc: string; toolUseId: string | null; status: 'running' | 'done' | 'failed'; ended: number | null; steps: number; step: string | null }
+export type Task = { id: string; type: string; desc: string; toolUseId: string | null; status: 'running' | 'done' | 'failed'; started: number | null; ended: number | null; steps: number; step: string | null }
 
 /** What a run's transcript says: its model, its tool calls, the one running now, and the subagents it ran. */
 export type Scan = { model: string | null; steps: number; step: string | null; tasks: Task[] }
@@ -260,7 +260,7 @@ export function scanTranscript(text: string): Scan {
       if (!id) continue
       let t = tasks.get(id)
       if (ev.subtype === 'task_started' && !t) {
-        t = { id, type: str(ev.subagent_type) ?? 'agent', desc: str(ev.description) ?? '', toolUseId: str(ev.tool_use_id), status: 'running', ended: null, steps: 0, step: null }
+        t = { id, type: str(ev.subagent_type) ?? 'agent', desc: str(ev.description) ?? '', toolUseId: str(ev.tool_use_id), status: 'running', started: null, ended: null, steps: 0, step: null }
         tasks.set(id, t)
         if (t.toolUseId) byToolUse.set(t.toolUseId, t)
       }
@@ -277,6 +277,9 @@ export function scanTranscript(text: string): Scan {
     }
     const owner = parent === null ? null : (byToolUse.get(parent) ?? null)
     if (parent !== null && !owner) continue
+    // A subagent starts at its first event's time (its prompt), which the task events do not carry.
+    const at = typeof ev.timestamp === 'string' ? Date.parse(ev.timestamp) : NaN
+    if (owner && owner.started === null && Number.isFinite(at)) owner.started = at
     for (const b of blocks(ev)) {
       if (ev.type === 'assistant' && b.type === 'tool_use') {
         const line = summarize(str(b.name) ?? 'tool', obj(b.input) ?? {})
