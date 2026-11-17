@@ -16,7 +16,7 @@ mkdir "$SANDBOX/bin"
 cat >"$SANDBOX/bin/claude" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >"$SANDBOX/argv"
-printf '%s\n' "\${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-unset}" >"$SANDBOX/compact"
+printf '%s\n' "\${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-unset} \${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-unset}" >"$SANDBOX/compact"
 EOF
 chmod +x "$SANDBOX/bin/claude"
 
@@ -42,10 +42,10 @@ expect "/build-epic https://github.com/o/r/issues/7" https://github.com/o/r/issu
 expect "/build-epic Add due dates --explore" "Add due dates" --explore
 expect "/build-epic"
 
-# Auto-compact at 40% unless the caller set its own percentage.
-[ "$(cat "$SANDBOX/compact")" = 40 ] || fail "auto-compact: got $(cat "$SANDBOX/compact")"
-CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60 PATH="$SANDBOX/bin:$PATH" "$LAUNCH" '#1'
-[ "$(cat "$SANDBOX/compact")" = 60 ] || fail "auto-compact override: got $(cat "$SANDBOX/compact")"
+# Auto-compact at 40% of a 200k window unless the caller set their own.
+[ "$(cat "$SANDBOX/compact")" = "40 200000" ] || fail "auto-compact: got $(cat "$SANDBOX/compact")"
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=60 CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000 PATH="$SANDBOX/bin:$PATH" "$LAUNCH" '#1'
+[ "$(cat "$SANDBOX/compact")" = "60 300000" ] || fail "auto-compact override: got $(cat "$SANDBOX/compact")"
 
 # Without claude on PATH it says so and exits 127.
 code=0

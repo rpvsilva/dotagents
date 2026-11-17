@@ -10,7 +10,7 @@ The build-epic orchestrator is the main Claude Code session. Before its first tu
 
 Every argument goes to `/build-epic` unchanged, so it takes what the skill takes. To resume a run, run the same command again: the skill resumes from the run folder. `claude --resume` would bring every tool back.
 
-It runs, with `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=40` unless you set another percentage:
+It runs, with `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=40` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` unless you set your own:
 
 ```sh
 claude "/build-epic <arguments>" --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
@@ -19,7 +19,7 @@ claude "/build-epic <arguments>" --strict-mcp-config --mcp-config '{"mcpServers"
 
 - **No MCP servers**: none from any config and no claude.ai connectors.
 - **Only the tools a run calls.** A subagent's tools are the parent's set minus its own `disallowedTools`, so the set covers the subagents too: `Monitor` and `ToolSearch` are the implementers'. A tool left out is gone for every subagent of the run.
-- **Auto-compact at 40%** of the context window. The skill says to compact after each shipped ticket, but the model cannot run `/compact`: in the first step D replay of #402 the orchestrator never compacted and reached 204,700 of 200,000 tokens after three tickets. Compacting early is what keeps it small.
+- **Auto-compact at about 80k tokens**: 40% of a 200k compact window. The skill says to compact after each shipped ticket, but the model cannot run `/compact`. Opus 5.5 has a 1M-token window, for which Claude Code's compact window is 600k, so by default it compacts near 570k, and the percentage alone moves that only to 240k. The first two step D replays of #402 never compacted: the orchestrator reached 205k after three tickets, and 162k after all five. Claude Code compacts when a turn starts, a subagent's notification included, so the threshold is crossed at most one turn's worth.
 - **User settings stay**: permissions, hooks (`guard-merge`, `telemetry-save`) and the skills folder load as usual. The skill listing is dropped with the `Skill` tool; `/build-epic` still expands.
 
 The launcher is Claude-only (`adapters/claude/build-epic/launch.sh`). `install.sh` links it when `build-epic` is installed for Claude.
