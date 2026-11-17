@@ -6,7 +6,7 @@
 
 import { type FlowEvent, printable, summarize } from './flow.ts'
 import type { Launch, LogLine } from './state.d.ts'
-import { lineParts, oneLine, parseLines, renderEvent, type TranscriptEvent } from './transcript.ts'
+import { lineParts, oneLine, parseLines, renderEvent, tidy, type TranscriptEvent } from './transcript.ts'
 
 /**
  * A run's state: what run.json says (`starting`, `running`, `done`, `failed`), `stopped` when it says starting or
@@ -391,13 +391,13 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
   }
   const names = new Map<string, string>()
   const { events } = parseLines(transcript.endsWith('\n') ? transcript : `${transcript}\n`)
-  // Whether the agent wrote a last message, which summary.md repeats.
-  let said = false
+  // The agent's last message: its text blocks, and the span of `out` its event drew.
+  let said: { texts: string[]; at: number; end: number } | null = null
   for (const ev of events) {
     const parent = typeof ev.parent_tool_use_id === 'string' ? ev.parent_tool_use_id : null
     if (parent !== taskToolUseId) continue
-    const text = ev.type === 'assistant' ? blocks(ev).filter(b => b.type === 'text' && typeof b.text === 'string').map(b => b.text as string).join('\n') : ''
-    if (text.trim() !== '') said = true
+    const texts = ev.type === 'assistant' ? blocks(ev).filter(b => b.type === 'text' && typeof b.text === 'string' && b.text.trim() !== '').map(b => b.text as string) : []
+    const at = out.length
     for (const line of renderEvent(ev, names)) {
       const p = lineParts(line)
       if (p.kind === 'call') out.push({ kind: 'call', text: `▸ ${p.tool}${p.rest ? ` ${p.rest}` : ''}` })
@@ -408,13 +408,44 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
       else if ((p.kind === 'done' || p.kind === 'failed') && taskToolUseId === null) continue
       else out.push({ kind: 'note', text: line })
     }
+    if (texts.length) said = { texts, at, end: out.length }
+  }
+  // The last message's JSON (a task's outcome, for the skill that started the run) is not drawn: its prose is.
+  if (said) {
+    let k = 0
+    const kept: LogLine[] = []
+    for (const l of out.slice(said.at, said.end)) {
+      if (l.kind !== 'text') kept.push(l)
+      else {
+        const prose = oneLine(tidy(withoutJson(said.texts[k++] ?? l.text)))
+        if (prose !== '') kept.push({ ...l, text: prose })
+      }
+    }
+    out.splice(said.at, said.end - said.at, ...kept)
   }
   // summary.md is the agent's last message, which the transcript already shows: read only when it shows none.
-  if (taskToolUseId === null && !said && summary !== null && summary.trim() !== '') {
+  if (taskToolUseId === null && said === null && summary !== null && summary.trim() !== '') {
     out.push({ kind: 'note', text: '── summary ──' })
     for (const l of summary.split('\n')) if (l.trim() !== '') out.push({ kind: 'text', text: oneLine(l) })
   }
   return out
+}
+
+/** `text` without a JSON object: the whole of it when it is one, else each line that is one. */
+export function withoutJson(text: string): string {
+  const isObject = (t: string) => {
+    try {
+      const v: unknown = JSON.parse(t.trim())
+      return v !== null && typeof v === 'object' && !Array.isArray(v)
+    } catch {
+      return false
+    }
+  }
+  if (isObject(text)) return ''
+  return text
+    .split('\n')
+    .filter(l => !isObject(l))
+    .join('\n')
 }
 
 // Moved from the remote-runs mod, which this mod replaces: resuming a run, and notifying each run that ends.
