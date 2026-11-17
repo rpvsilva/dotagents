@@ -31,10 +31,14 @@ export type Run = {
   pid_start: string | null
   /** The Claude session that started it, from run.json `caller.session`; null when it recorded none. */
   session: string | null
+  /** The worktree it ran from, from run.json; what `remote-agent resume` takes. */
+  worktree: string | null
+  /** Whether its folder holds a session.jsonl that is not empty: the session remote-agent can resume. */
+  hasSession: boolean
 }
 
 /** A run folder's files as main.tsx read them (null when missing); `changed` in epoch ms. */
-export type RunFiles = { id: string; folder: string; runJson: string | null; changed: number }
+export type RunFiles = { id: string; folder: string; runJson: string | null; changed: number; hasSession?: boolean }
 
 const STATES: readonly RunState[] = ['starting', 'running', 'done', 'failed']
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -80,6 +84,8 @@ export function parseRun(f: RunFiles): Run {
     pid: num(j.pid),
     pid_start: str(j.pid_start),
     session,
+    worktree: str(j.worktree),
+    hasSession: f.hasSession ?? false,
   }
 }
 
@@ -320,6 +326,10 @@ export type RemoteRun = {
   cost: number | null
   turns: number | null
   files: number | null
+  /** The session that started it (null: none recorded), its worktree, and whether it can be resumed. */
+  session: string | null
+  worktree: string | null
+  hasSession: boolean
 }
 
 /** A run's box status: starting and running run; done is done whatever its exit code (3: no changes); else failed, with why. */
@@ -342,6 +352,9 @@ export function remoteRun(run: Run, result: Result | null, scan: Scan | null, no
     cost: result?.cost ?? null,
     turns: result?.turns ?? null,
     files: result?.files ?? null,
+    session: run.session,
+    worktree: run.worktree,
+    hasSession: run.hasSession,
   }
 }
 
@@ -395,4 +408,74 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
     for (const l of summary.split('\n')) if (l.trim() !== '') out.push({ kind: 'text', text: oneLine(l) })
   }
   return out
+}
+
+// Moved from the remote-runs mod, which this mod replaces: resuming a run, and notifying each run that ends.
+
+/** At most this many runs of other sessions are listed, the newest. */
+export const OTHERS_MAX = 20
+/** The folders of notified runs kept in the store per repo; past it, only folders gone from disk are dropped. */
+export const NOTIFIED_MAX = 1000
+/** The store key of a repo's notified run folders: the remote-runs mod's, so a run it notified is not notified again. */
+export const notifiedKey = (common: string) => `notified:${common}`
+
+function shellQuote(s: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+const isEnded = (state: RunState) => state === 'done' || state === 'failed' || state === 'stopped'
+
+/**
+ * The command that picks a finished (done, failed or stopped) run with a session up: `remote-agent resume <run>
+ * <worktree>` (the worktree from run.json, shell-quoted); null for a run still going or one with no session.jsonl.
+ */
+export function resumeCommand(row: Pick<Run, 'id' | 'state' | 'worktree'>, hasSession: boolean): string | null {
+  if (!isEnded(row.state) || !hasSession) return null
+  return ['remote-agent', 'resume', shellQuote(printable(row.id)), ...(row.worktree === null ? [] : [shellQuote(row.worktree)])].join(' ')
+}
+
+/** The warning under the resume command: it places a session the sandbox wrote. */
+export const RESUME_WARNING = "⚠ the sandbox wrote this session and it may hold forged turns: read the run folder's session.jsonl first"
+
+/**
+ * How to pick a finished run up: `resume: <resumeCommand>` and RESUME_WARNING; with no session.jsonl (`hasSession`
+ * false), that it cannot be resumed. None for a run still going. Mirrors the session line remote-agent prints at the
+ * end of a run.
+ */
+export function resumeHint(row: Pick<Run, 'id' | 'state' | 'worktree'>, hasSession: boolean): string[] {
+  if (!isEnded(row.state)) return []
+  const command = resumeCommand(row, hasSession)
+  if (command === null) return ['no session came back: this run cannot be resumed']
+  return [`resume: ${command}`, RESUME_WARNING]
+}
+
+/** The runs that ended (done, failed or stopped) and whose folder is not in `notified`. */
+export function endedRuns(runs: readonly Run[], notified: ReadonlySet<string>): Run[] {
+  return runs.filter(r => isEnded(r.state) && !notified.has(r.folder))
+}
+
+/**
+ * The notified folders after marking `ended`, newest last. Past `max`, the oldest folders not in `present` (the
+ * folders the scan found) go first; a folder still on disk is never dropped, so it is never notified twice.
+ */
+export function markNotified(notified: readonly string[], ended: readonly Run[], present: ReadonlySet<string>, max: number): string[] {
+  const next = [...notified, ...ended.map(r => r.folder)]
+  let extra = next.length - max
+  return extra <= 0 ? next : next.filter(f => present.has(f) || extra-- <= 0)
+}
+
+/** A finished run's notification text: `<name> done`, `<name> failed (exit <code>)` or `<name> stopped`. */
+export function notifyText(r: Run): string {
+  const name = r.name ?? r.id
+  if (r.state === 'failed') return r.exit === null ? `${name} failed` : `${name} failed (exit ${r.exit})`
+  return `${name} ${r.state}`
+}
+
+/** The runs of other sessions to list: the OTHERS_MAX newest, live ones first. */
+export function pickOthers(runs: readonly Run[]): Run[] {
+  const live = (r: Run) => (r.state === 'starting' || r.state === 'running' ? 0 : 1)
+  return runs
+    .slice()
+    .sort((x, y) => live(x) - live(y) || (y.started ?? 0) - (x.started ?? 0))
+    .slice(0, OTHERS_MAX)
 }

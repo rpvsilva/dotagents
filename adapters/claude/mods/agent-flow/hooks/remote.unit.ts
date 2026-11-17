@@ -4,6 +4,13 @@ import { test } from 'node:test'
 import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce } from './flow.ts'
 import { chart, type ChartOpts, newTween } from './layout.ts'
 import {
+  endedRuns,
+  markNotified,
+  notifyText,
+  OTHERS_MAX,
+  pickOthers,
+  resumeCommand,
+  resumeHint,
   applyLiveness,
   applyStaleness,
   callerOf,
@@ -189,4 +196,75 @@ test("a run's box: ☁ and its name, its setup phase while it boots, its cost an
   const done = draw(run({ state: 'done', exit_code: 0, ended: T / 1000 + 27 }), T + 30_000, { cost: 0.25, turns: 4, files: 3, model: 'claude-opus-5-5', why: null })
   assert.match(done, /opus 5\.5 +0:27/)
   assert.match(done, /✓ \$0\.25 · 3 files/)
+})
+
+// Ported from the remote-runs mod's runs.unit.ts and transcript.unit.ts: resuming a run and notifying the ended ones.
+
+const at = (id: string, state: string, over: Record<string, unknown> = {}, hasSession = true) =>
+  parseRun({ id, folder: `/repo/.git/remote-agent/${id}`, runJson: JSON.stringify({ state, worktree: '/repo', name: 'TT-01-list', ...over }), changed: 0, hasSession })
+
+test('a finished run with a session says how to resume it, and warns the sandbox wrote the session', () => {
+  for (const state of ['done', 'failed']) {
+    const [command, warning, ...rest] = resumeHint(at('agent-20261102-100000-7', state), true)
+    assert.equal(command, 'resume: remote-agent resume agent-20261102-100000-7 /repo')
+    assert.match(warning!, /sandbox wrote/)
+    assert.match(warning!, /forged turns/)
+    assert.match(warning!, /read the run folder's session\.jsonl first/)
+    assert.deepEqual(rest, [])
+  }
+  const stopped = { ...at('agent-20261102-100000-7', 'running'), state: 'stopped' as const }
+  assert.equal(resumeHint(stopped, true)[0], 'resume: remote-agent resume agent-20261102-100000-7 /repo')
+  assert.equal(resumeCommand(stopped, true), 'remote-agent resume agent-20261102-100000-7 /repo')
+})
+
+test('a run still going, or one with no run.json, shows no resume hint; one with no session cannot be resumed', () => {
+  for (const state of ['starting', 'running', 'not-a-state']) {
+    assert.deepEqual(resumeHint(at('a', state), true), [])
+    assert.deepEqual(resumeHint(at('a', state), false), [])
+  }
+  for (const state of ['done', 'failed']) {
+    assert.deepEqual(resumeHint(at('a', state), false), ['no session came back: this run cannot be resumed'])
+    assert.equal(resumeCommand(at('a', state), false), null)
+  }
+})
+
+test('the worktree in the resume command is shell-quoted', () => {
+  const command = (wt: string | null) => resumeHint(at('agent-20261102-100000-7', 'done', { worktree: wt }), true)[0]
+  assert.equal(command('/Users/me/My Projects/repo'), "resume: remote-agent resume agent-20261102-100000-7 '/Users/me/My Projects/repo'")
+  assert.equal(command("/tmp/it's"), "resume: remote-agent resume agent-20261102-100000-7 '/tmp/it'\\''s'")
+  assert.equal(command('/tmp/$(rm -rf ~)'), "resume: remote-agent resume agent-20261102-100000-7 '/tmp/$(rm -rf ~)'")
+  assert.equal(command(null), 'resume: remote-agent resume agent-20261102-100000-7')
+})
+
+test('run.json gives the worktree; the folder says whether a session came back', () => {
+  assert.deepEqual([at('a', 'done').worktree, at('a', 'done').hasSession, at('a', 'done', {}, false).hasSession], ['/repo', true, false])
+})
+
+test('endedRuns lists done, failed and stopped runs not yet notified', () => {
+  const rows = [at('d', 'done'), at('f', 'failed'), { ...at('st', 'running'), state: 'stopped' as const }, at('r', 'running'), at('s', 'starting'), at('u', 'nope'), at('old', 'done')]
+  assert.deepEqual(endedRuns(rows, new Set([rows[6]!.folder])).map(r => r.id), ['d', 'f', 'st'])
+})
+
+test('markNotified adds the ended folders newest last, and past the cap drops the oldest gone from disk only', () => {
+  const ended = [at('new', 'done')]
+  const f = ended[0]!.folder
+  assert.deepEqual(markNotified(['/a'], ended, new Set(), 3), ['/a', f])
+  assert.deepEqual(markNotified(['/on-disk', '/gone-1', '/gone-2'], ended, new Set(['/on-disk', f]), 3), ['/on-disk', '/gone-2', f])
+  assert.deepEqual(markNotified(['/x', '/y'], ended, new Set(['/x', '/y', f]), 2), ['/x', '/y', f])
+})
+
+test('notifyText names the run, else its id, and how it ended', () => {
+  assert.equal(notifyText(at('a', 'done')), 'TT-01-list done')
+  assert.equal(notifyText(at('a', 'failed', { exit_code: 2 })), 'TT-01-list failed (exit 2)')
+  assert.equal(notifyText(at('a', 'failed', { exit_code: null })), 'TT-01-list failed')
+  assert.equal(notifyText({ ...at('agent-9', 'running', { name: null }), state: 'stopped' }), 'agent-9 stopped')
+})
+
+test('pickOthers keeps the OTHERS_MAX newest runs, live ones first', () => {
+  const runs = Array.from({ length: OTHERS_MAX + 5 }, (_, i) => at(`r${i}`, 'done', { started: 1000 + i }))
+  runs.push(at('live', 'running', { started: 1 }))
+  const picked = pickOthers(runs)
+  assert.equal(picked.length, OTHERS_MAX)
+  assert.equal(picked[0]!.id, 'live')
+  assert.equal(picked[1]!.id, `r${OTHERS_MAX + 4}`)
 })

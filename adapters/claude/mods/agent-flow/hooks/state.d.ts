@@ -61,6 +61,10 @@ export type Remote = {
   files: number | null
   /** Whether a launching Bash call was found for it; when not, it hangs under main. */
   linked: boolean
+  /** The run's worktree (run.json), for `remote-agent resume`; null for a subagent it ran, or none recorded. */
+  worktree: string | null
+  /** Whether the run folder holds a session.jsonl that is not empty, so the run can be resumed. */
+  hasSession: boolean
 }
 
 /** A Bash call that ran remote-agent: who made it, when, and the runs it is known to have started. */
@@ -89,6 +93,8 @@ export type Graph = {
   lastTurn: { done: number; failed: number } | null
   /** The Bash calls that ran remote-agent, newest last, at most 50. */
   launches: Launch[]
+  /** The repo's remote runs other sessions (or none recorded) started: listed in the Agents tab only, never on the chart. */
+  others: Agent[]
 }
 
 /**
