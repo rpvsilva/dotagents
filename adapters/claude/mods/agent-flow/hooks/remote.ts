@@ -391,9 +391,13 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
   }
   const names = new Map<string, string>()
   const { events } = parseLines(transcript.endsWith('\n') ? transcript : `${transcript}\n`)
+  // The last message the agent wrote: its text and where its lines start in `out`.
+  let said: { text: string; at: number } | null = null
   for (const ev of events) {
     const parent = typeof ev.parent_tool_use_id === 'string' ? ev.parent_tool_use_id : null
     if (parent !== taskToolUseId) continue
+    const text = ev.type === 'assistant' ? blocks(ev).filter(b => b.type === 'text' && typeof b.text === 'string').map(b => b.text as string).join('\n') : ''
+    if (text.trim() !== '') said = { text, at: out.length }
     for (const line of renderEvent(ev, names)) {
       const p = lineParts(line)
       if (p.kind === 'call') out.push({ kind: 'call', text: `▸ ${p.tool}${p.rest ? ` ${p.rest}` : ''}` })
@@ -406,14 +410,19 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
     }
   }
   if (taskToolUseId === null && summary !== null && summary.trim() !== '') {
-    const raw = summary.split('\n').filter(l => l.trim() !== '')
-    const lines = jsonFields(summary) ?? raw.map(l => oneLine(l))
+    // Each line as said, a line that is one JSON object (a task's outcome) as its fields.
+    const lines = summary.split('\n').filter(l => l.trim() !== '').flatMap(l => jsonFields(l) ?? [oneLine(l)])
+    const read = lines.map(text => ({ kind: 'text' as const, text }))
     // summary.md is the agent's last message: where the transcript showed it, it is read there, not twice.
-    const first = oneLine(raw[0]!)
-    let at = -1
-    for (let i = out.length - 1; i >= 0 && at < 0; i--) if (out[i]!.kind === 'text' && out[i]!.text === first) at = i
-    if (at >= 0) out.splice(at, raw.length, ...lines.map(text => ({ kind: 'text' as const, text })))
-    else out.push({ kind: 'note', text: '── summary ──' }, ...lines.map(text => ({ kind: 'text' as const, text })))
+    const flat = (t: string) => t.replace(/\s+/g, ' ').trim()
+    if (said && flat(said.text) === flat(summary)) {
+      const at = out.findIndex((l, i) => i >= said!.at && l.kind === 'text')
+      if (at >= 0) {
+        let end = at
+        while (end < out.length && out[end]!.kind === 'text') end++
+        out.splice(at, end - at, ...read)
+      } else out.push(...read)
+    } else out.push({ kind: 'note', text: '── summary ──' }, ...read)
   }
   return out
 }
