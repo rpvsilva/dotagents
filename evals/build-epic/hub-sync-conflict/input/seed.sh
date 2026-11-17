@@ -6,6 +6,8 @@
 set -euo pipefail
 work="$1" run="$2"
 g() { git -C "$work" "$@"; }
+# The registry file, its docstring then the command list given.
+registry() { printf '"""The command names that python -m tally accepts, sorted."""\nCOMMANDS = [%s]\n' "$1" >"$work/tally/commands.py"; }
 g config user.name build-epic
 g config user.email build-epic@localhost
 g checkout -q -b feat/report main
@@ -22,7 +24,7 @@ from tally import report
 def test_report_lists_open_items():
     assert report.run([{"title": "a", "done": True}, {"title": "b", "done": False}]) == ["report: 1 open", "- b"]
 PY
-printf '"""The command names `python -m tally` accepts, sorted."""\nCOMMANDS = ["add", "list", "report"]\n' > "$work/tally/commands.py"
+registry '"add", "list", "report"'
 g add -A && g commit -qm "feat: report command lists open items"
 task="$(g rev-parse HEAD)"
 g checkout -q feat/report
@@ -45,7 +47,7 @@ from tally import stats
 def test_summary_counts_done_items():
     assert stats.summary([{"title": "a", "done": True}, {"title": "b", "done": False}]) == "1 of 2 done"
 PY
-printf '"""The command names `python -m tally` accepts, sorted."""\nCOMMANDS = ["add", "list", "stats"]\n' > "$work/tally/commands.py"
+registry '"add", "list", "stats"'
 g add -A && g commit -qm "feat: stats command (ticket 01)"
 g reset -q --hard
 sed -i.bak "s/^Commit: .*/Commit: $merged/" "$run/tasks/02-01-report-command.md" && rm "$run/tasks/02-01-report-command.md.bak"

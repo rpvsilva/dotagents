@@ -1,2 +1,2 @@
-"""The command names `python -m tally` accepts, sorted."""
+"""The command names that python -m tally accepts, sorted."""
 COMMANDS = ["add", "list"]

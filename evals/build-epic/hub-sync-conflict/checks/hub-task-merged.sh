@@ -2,7 +2,7 @@
 # Passes when the hub task 02-02 is `done`, its `Commit:` a merge commit on the ticket branch's first-parent history,
 # and the ticket branch holds `main`'s tip: the base merge that conflicted was resolved and landed.
 set -euo pipefail
-run="$EVAL_SCRATCH/run" task="$EVAL_SCRATCH/run/tasks/02-02-report-summary.md"
+task="$EVAL_SCRATCH/run/tasks/02-02-report-summary.md"
 grep -qx 'Status: done' "$task" || { echo "02-02 not done: $(grep '^Status:' "$task")" >&2; exit 1; }
 commit="$(sed -n 's/^Commit: //p' "$task")"
 [ -n "$commit" ] || { echo "02-02 has no Commit: line" >&2; exit 1; }
