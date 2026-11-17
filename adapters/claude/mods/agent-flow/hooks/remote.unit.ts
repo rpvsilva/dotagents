@@ -5,6 +5,7 @@ import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce } from './flow.ts'
 import { chart, type ChartOpts, newTween } from './layout.ts'
 import {
   endedRuns,
+  jsonFields,
   markNotified,
   notifyText,
   OTHERS_MAX,
@@ -137,7 +138,11 @@ test("a remote log: the run's setup, its own events, then its summary; a subagen
   assert.deepEqual(lines.slice(0, 3).map(l => l.text), ['remote-agent: claimed in 1s', '== capped: shell prefix set', 'remote-agent: first agent event after 11s'])
   assert.ok(lines.some(l => l.kind === 'call' && l.text === '▸ Bash ls skills | wc -l'))
   assert.ok(!lines.some(l => l.text.includes('skills/*/')))
-  assert.deepEqual(lines.slice(-2), [{ kind: 'note', text: '── summary ──' }, { kind: 'text', text: '14 skills.' }])
+  // summary.md repeats the agent's last message: shown once, where it said it.
+  assert.equal(lines.filter(l => l.text === '14 skills.').length, 1)
+  assert.ok(!lines.some(l => l.text === '── summary ──'))
+  // One that says something else comes after a rule.
+  assert.deepEqual(remoteLog(TRANSCRIPT, progress, 'Counted them.\n', null).slice(-2), [{ kind: 'note', text: '── summary ──' }, { kind: 'text', text: 'Counted them.' }])
   const child = remoteLog(TRANSCRIPT, progress, '14 skills.\n', 'agent1')
   assert.deepEqual(child.map(l => l.text), ['▸ Bash ls -d skills/*/', '⎿ skills/a/'])
 })
@@ -267,4 +272,17 @@ test('pickOthers keeps the OTHERS_MAX newest runs, live ones first', () => {
   assert.equal(picked.length, OTHERS_MAX)
   assert.equal(picked[0]!.id, 'live')
   assert.equal(picked[1]!.id, `r${OTHERS_MAX + 4}`)
+})
+
+test("a run that replies in JSON reads as fields, once; the transcript's own end line gives way to the log's", () => {
+  const reply = '{"status":"done","commit":"","files":["todo/cli/format.py","tests/cli/test_x.py"],"notes":{"a":1}}'
+  const tr = [
+    { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: reply }] } },
+    { type: 'result', subtype: 'success', is_error: false, duration_ms: 59_000, total_cost_usd: 0.24, num_turns: 12, result: reply },
+  ].map(e => `${JSON.stringify(e)}\n`).join('')
+  const lines = remoteLog(tr, null, `${reply}\n`, null).map(l => l.text)
+  assert.deepEqual(lines, ['── session · claude-opus-5-5 ──', 'status: done', 'commit: —', 'files: todo/cli/format.py, tests/cli/test_x.py', 'notes: {"a":1}'])
+  assert.equal(jsonFields('not json'), null)
+  assert.equal(jsonFields('[1, 2]'), null)
 })

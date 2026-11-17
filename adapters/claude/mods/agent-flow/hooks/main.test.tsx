@@ -506,6 +506,25 @@ test("another session's run is listed under other sessions, never on the chart; 
   expect(copied).toEqual([`remote-agent resume ${RUN} /repo`, `${RUNDIR}/transcript.jsonl`])
 })
 
+test("a finished run's log ends with one end line, whole, at a narrow pane's width", async ($, on) => {
+  const w = engine(on)
+  const files = {
+    [`${RUNDIR}/run.json`]: runFile({ state: 'done', exit_code: 0, ended: NOW / 1000 + 107 }),
+    [`${RUNDIR}/transcript.jsonl`]: TRANSCRIPT + JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 59_000, total_cost_usd: 0.24, num_turns: 12 }) + '\n',
+    [`${RUNDIR}/result.json`]: JSON.stringify({ total_cost_usd: 0.24, num_turns: 12, changed: ['a.py', 'b.py'], model: 'claude-opus-5-5' }),
+  }
+  repoFs(on, files, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': [RUN] }, () => '')
+  await start($)
+  await w.clock.advance(2000)
+  await press($, 'tab-agents')
+  await pressFirst($, `agent:remote:${RUN}`)
+  const wide = await drawn($)
+  expect(wide).toContain('12 turns')
+  const out = await drawn($, 'terminal', 70)
+  expect(out).toContain('$0.24 · 12 turns · 2 files')
+  expect(out).not.toContain('in 59s')
+})
+
 test('quiet (not drawn, nothing live), the run folders are read every 15 s', async ($, on) => {
   const w = engine(on)
   const calls = repoFs(on, { [`${RUNDIR}/run.json`]: runFile({ caller: { session: 'someone-else' }, state: 'done' }) }, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': [RUN] }, () => '')
