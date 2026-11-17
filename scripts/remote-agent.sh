@@ -45,7 +45,7 @@
 # token's value is redacted in every kept file. The session is not placed for /resume at the end: the sandbox wrote it,
 # so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
 # in the worktree's project folder, its cwd the worktree, after a warning saying so. Beside the transcript, for any reader:
-# run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s;
+# run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s, caller;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
 # exit_code, status, report_status, changed, follow_up, report_path, duration_ms, num_turns, total_cost_usd, usage,
@@ -342,12 +342,26 @@ worktree_json="$(printf '%s' "$root" | jq -Rs . | tr -d '\r')"
     | tr -d '\r' >"$keep/run.json.tmp" && mv "$keep/run.json.tmp" "$keep/run.json"; } 2>/dev/null || true
 # In the C locale: lstart follows it on macOS, and a reader compares it with its own ps.
 pid_start="$(LC_ALL=C ps -o lstart= -p $$ 2>/dev/null | sed 's/^ *//; s/ *$//')" || pid_start=""
+# caller: the Claude Code session and process that ran this remote-agent, from CLAUDE_CODE_SESSION_ID and CLAUDE_PID,
+# which Claude Code gives every Bash command, so a viewer (the agent-flow mod) shows a session its own runs. A value
+# unset, over 128 characters or not a plain id ([A-Za-z0-9_.:-]) is null, so nothing else reaches run.json this way.
+caller_id() {
+  case "$1" in
+    '' | *[!A-Za-z0-9_.:-]*) ;;
+    *) if [ "${#1}" -le 128 ]; then printf '%s' "$1"; fi ;;
+  esac
+}
+caller_session="$(caller_id "${CLAUDE_CODE_SESSION_ID:-}")"
+caller_pid="$(caller_id "${CLAUDE_PID:-}")"
+case "$caller_pid" in *[!0-9]* | ???????????*) caller_pid="" ;; esac # digits, at most 10: a JSON number
 # shellcheck disable=SC2016 # jq's variables
 run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, pid: $pid,
   pid_start: (if $ps == "" then null else $ps end), state: "starting", exit_code: null, ended: null, claim_s: null,
-  send_s: null, first_event_s: null}' --arg run "$run" --arg name "$run_name" \
+  send_s: null, first_event_s: null,
+  caller: {session: (if $cs == "" then null else $cs end), claude_pid: (if $cp == "" then null else ($cp | tonumber) end)}}' \
+  --arg run "$run" --arg name "$run_name" \
   --argjson w "$worktree_json" --argjson started "$started" --argjson pid "$$" \
-  --arg ps "$pid_start"
+  --arg ps "$pid_start" --arg cs "$caller_session" --arg cp "$caller_pid"
 
 # Progress: each line on stdin goes to stderr behind the tag, to $keep/progress.log untagged with the token's value
 # redacted, and, without --no-log, to $stage/log, which send_log copies to the sandbox's log. The sandbox logs its own

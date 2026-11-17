@@ -10,6 +10,8 @@ trap 'rm -rf "$SANDBOX"' EXIT
 fails=0
 # A pod starts with no shell prefix: drop the one this suite may inherit from a capped sandbox it runs in.
 unset CLAUDE_CODE_SHELL_PREFIX
+# run.json's caller comes from these: drop the ones a Claude Code session running this suite gives it.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
 
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 # shellcheck source=lib/remote-stubs.sh disable=SC1091
@@ -268,7 +270,9 @@ run_data() {
   jq -e --arg st "$2" --argjson rc "$3" --arg name "${4:-}" --arg run "$run" '.state == $st and .exit_code == $rc
     and .name == (if $name == "" then null else $name end) and .run == $run and (.pid | type) == "number"
     and (.started | type) == "number" and .ended >= .started and (.claim_s | type) == "number"
-    and (.send_s | type) == "number" and (.worktree | type) == "string"' "$k/run.json" >/dev/null 2>&1 \
+    and (.send_s | type) == "number" and (.worktree | type) == "string"
+    and (.caller | type) == "object" and (.caller | keys) == ["claude_pid", "session"]' \
+    "$k/run.json" >/dev/null 2>&1 \
     || fail "$1: run.json is not $2 with exit $3 and name ${4:-null}: $(cat "$k/run.json" 2>/dev/null)"
   [ -z "$(find "$k" -name 'run.json.*')" ] || fail "$1: a temporary run.json left: $(find "$k" -name 'run.json.*')"
   [ "$(tr -d '\r' <"$k/progress.log" 2>/dev/null | LC_ALL=C sort)" \
@@ -325,7 +329,28 @@ grep -q "remote-agent: no session came back" "$SANDBOX/err" || fail "no session:
 grep -q "shutdownPolicy: Delete" "$SANDBOX/claim.yaml" || fail "claim does not delete on shutdown"
 # Beside the transcript: run.json says what the run is and how it ended, progress.log every progress line.
 run_data "success run data" "done" 0
+jq -e '.caller == {session: null, claude_pid: null}' "$(kept)/run.json" >/dev/null 2>&1 \
+  || fail "caller: not all null outside Claude Code: $(cat "$(kept)/run.json")"
 rm "$W/hello.txt"
+
+# caller: the Claude Code session and process every Bash command gets.
+export CLAUDE_CODE_SESSION_ID="c5330192-f86d-4902-b68c-e10b090b8b46" CLAUDE_PID="90394"
+run 0 "$patch" || fail "caller: exited non-zero: $(cat "$SANDBOX/out")"
+jq -e '.caller == {session: "c5330192-f86d-4902-b68c-e10b090b8b46", claude_pid: 90394}' "$(kept)/run.json" >/dev/null 2>&1 \
+  || fail "caller: not recorded: $(cat "$(kept)/run.json")"
+run_data "caller run data" "done" 0
+rm "$W/hello.txt"
+# Anything but a plain id is null: quotes cannot reach run.json's JSON, nor a newline and the token, nor a
+# 129-character value; a claude_pid that is not a short number is null too.
+for odd in 'x", "evil": "1' $'s1\nsk-claude-secret' "$(printf '%0129d' 0)"; do
+  export CLAUDE_CODE_SESSION_ID="$odd" CLAUDE_PID="12345678901"
+  run 0 "$patch" || fail "caller, odd values: exited non-zero: $(cat "$SANDBOX/out")"
+  jq -e '.caller == {session: null, claude_pid: null} and (has("evil") | not)' \
+    "$(kept)/run.json" >/dev/null 2>&1 || fail "caller, odd values: not all null: $(cat "$(kept)/run.json")"
+  run_data "caller, odd values, run data" "done" 0
+  rm "$W/hello.txt"
+done
+unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
 
 # result.json: what the run came to, for a caller that lost stdout, stderr or the exit code. Its figures come from
 # the transcript's last result event and the init event's model, the changed files from the patch, the report's
