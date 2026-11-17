@@ -241,6 +241,11 @@ uninstall_claude_cli() {
 uninstall_claude() {
   echo "claude"
   unlink_parts "$HOME/.claude/skills" "" skill mod
+  # A link to a mod this checkout no longer has (remote-runs, replaced by agent-flow) is ours and stale: removed.
+  local m
+  for m in "$HOME"/.claude/skills/*; do
+    if [ -L "$m" ] && [ ! -e "$m" ] && [[ "$(readlink "$m")" == "$REPO"/adapters/claude/mods/* ]]; then unlink_ours "$m"; fi
+  done
   if gone global; then unlink_ours "$HOME/.claude/CLAUDE.md"; fi
   unlink_parts "$HOME/.claude/agents" .md agent
   if gone build-epic; then unlink_ours "$HOME/.agents/bin/build-epic"; fi

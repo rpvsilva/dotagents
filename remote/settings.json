@@ -19,6 +19,5 @@
   "max_mb": { "kind": "int", "default": 200, "min": 1, "levels": ["machine"], "env": "REMOTE_MAX_MB", "meaning": "Largest worktree snapshot sent, in MB." },
   "cap_mb": { "kind": "int", "default": null, "min": 1, "env": "REMOTE_CAP_MB", "meaning": "In the sandbox, a lower memory cap for each of the agent's shell commands, in MB (scripts/capped kills it over it); unset: the sandbox's own memory limit less 1024 MB for Claude, or 2000 MB when it has none. A number above that changes nothing." },
   "cap_secs": { "kind": "int", "default": 300, "min": 1, "env": "REMOTE_CAP_SECS", "meaning": "In the sandbox, the time cap of each of the agent's shell commands, in seconds (scripts/capped kills it past it)." },
-  "open_pane": { "kind": "bool", "default": true, "meaning": "Claude Code's remote-runs mod opens its pane, without taking the keyboard, when a remote run starts in the session's repo; false: open it with /remote-runs." },
   "max_sandboxes": { "kind": "int", "default": 4, "min": 1, "levels": ["machine"], "env": "REMOTE_MAX_SANDBOXES", "meaning": "Most remote subagents running at once, whatever the skill: what the backend holds (a cluster's warm pool, an SSH host's cores). Apart from max_parallel, which caps subagents on this machine." }
 }

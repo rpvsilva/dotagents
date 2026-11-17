@@ -1,36 +1,8 @@
+// Moved from the remote-runs mod's transcript.unit.ts with the reader: its rendering, masking and line kinds.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { parseRun } from './runs.ts'
-import {
-  appendLines,
-  byteSlice,
-  CHUNK,
-  copiedText,
-  type Log,
-  hintRows,
-  lineParts,
-  lineStyle,
-  RESUME_WARNING,
-  sessionRule,
-  resumeCommand,
-  shortPath,
-  tidy,
-  mask,
-  nextOffset,
-  NO_LOG,
-  oneLine,
-  parseLines,
-  readChunk,
-  readFrom,
-  renderEvent,
-  renderTranscript,
-  resumeHint,
-  scrollLog,
-  type TranscriptEvent,
-  windowLines,
-  wrappedRows,
-} from './transcript.ts'
+import { lineParts, lineStyle, mask, oneLine, parseLines, renderEvent, renderTranscript, sessionRule, tidy, type TranscriptEvent } from './transcript.ts'
 
 // A transcript's text: one JSON line per event, each ended with a newline.
 const jsonl = (...events: unknown[]) => events.map(e => `${JSON.stringify(e)}\n`).join('')
@@ -187,159 +159,6 @@ test('a line has ANSI escapes and control characters stripped and fits one row',
 const bytes = (s: string) => new TextEncoder().encode(s).length
 const n = (count: number, from = 0) => Array.from({ length: count }, (_, i) => `line ${from + i}`)
 
-test('nextOffset moves past the whole lines only, counting multi-byte characters as their UTF-8 bytes', () => {
-  assert.equal(nextOffset('ab\ncd\n', 10), 16)
-  assert.equal(nextOffset('é→😀\n', 0), bytes('é→😀\n'))
-  assert.equal(nextOffset('é→😀\n', 0), 10)
-  assert.equal(nextOffset('one\nhalf é wr', 5), 9)
-  assert.equal(nextOffset('no newline yet', 7), 7)
-  assert.equal(nextOffset('', 3), 3)
-})
-
-test('byteSlice cuts text by UTF-8 bytes, never inside a character', () => {
-  assert.equal(byteSlice('aé😀b', 1), 'é😀b')
-  assert.equal(byteSlice('aé😀b', 3), '😀b')
-  assert.equal(byteSlice('aé😀b', 0, 3), 'aé')
-  assert.equal(byteSlice('aé😀b', 0, 4), 'aé')
-  assert.equal(byteSlice('aé😀b', 3, 4), '😀')
-  assert.equal(byteSlice('aé😀b', 2), '😀b')
-  assert.equal(byteSlice('aé😀b', 4), 'b')
-  assert.equal(byteSlice('abc', 9), '')
-})
-
-test('windowLines shows the last rows while following, and the rows from top otherwise', () => {
-  const lines = n(10)
-  assert.deepEqual(windowLines(lines, true, 0, 4), n(4, 6))
-  assert.deepEqual(windowLines(lines, false, 2, 4), n(4, 2))
-  assert.deepEqual(windowLines(lines, false, 9, 4), n(4, 6))
-  assert.deepEqual(windowLines(lines, false, -3, 4), n(4))
-  assert.deepEqual(windowLines(n(2), true, 0, 4), n(2))
-  assert.deepEqual(windowLines([], true, 0, 4), [])
-})
-
-const log = (over: Partial<Log> = {}): Log => ({ ...NO_LOG, runId: 'r', ...over })
-
-test('scrolling up stops following; scrolling back to the end follows again', () => {
-  const up = scrollLog(log({ lines: n(10) }), -3, 4)
-  assert.deepEqual([up.top, up.follow], [3, false])
-  assert.deepEqual(windowLines(up.lines, up.follow, up.top, 4), n(4, 3))
-  const top = scrollLog(up, -100, 4)
-  assert.deepEqual([top.top, top.follow], [0, false])
-  const back = scrollLog(top, 6, 4)
-  assert.deepEqual([back.top, back.follow], [6, true])
-  const short = scrollLog(log({ lines: n(2) }), -1, 4)
-  assert.equal(short.follow, true)
-})
-
-test('new lines leave a scrolled-up window where it was, and follow the end otherwise', () => {
-  const up = appendLines(scrollLog(log({ lines: n(10) }), -3, 4), n(5, 10))
-  assert.deepEqual(windowLines(up.lines, up.follow, up.top, 4), n(4, 3))
-  const following = appendLines(log({ lines: n(10) }), n(5, 10))
-  assert.deepEqual(windowLines(following.lines, following.follow, following.top, 4), n(4, 11))
-})
-
-test('lines past the cap drop the oldest, keep a scrolled window on the same lines, and mark the log truncated', () => {
-  const up = scrollLog(log({ lines: n(10) }), -3, 4)
-  const capped = appendLines(up, n(4, 10), 12)
-  assert.equal(capped.lines.length, 12)
-  assert.equal(capped.lines[0], 'line 2')
-  assert.equal(capped.truncated, true)
-  assert.deepEqual(windowLines(capped.lines, capped.follow, capped.top, 4), n(4, 3))
-  assert.equal(appendLines(log({ lines: n(3) }), n(1, 3), 12).truncated, false)
-})
-
-test('a first read starts at 0, or one byte before the last chunk of a file over a chunk; a shrunk file starts again', () => {
-  assert.deepEqual(readFrom(NO_LOG, 500), { from: 0, length: CHUNK, isTail: false, isReset: false })
-  assert.deepEqual(readFrom(NO_LOG, CHUNK), { from: 0, length: CHUNK, isTail: false, isReset: false })
-  assert.deepEqual(readFrom(NO_LOG, 5 * CHUNK), { from: 4 * CHUNK - 1, length: CHUNK + 1, isTail: true, isReset: false })
-  assert.deepEqual(readFrom(log({ offset: 300 }), 5 * CHUNK), { from: 300, length: CHUNK, isTail: false, isReset: false })
-  assert.deepEqual(readFrom(log({ offset: 300 }), 100), { from: 0, length: CHUNK, isTail: false, isReset: true })
-  assert.deepEqual(readFrom(log({ offset: 9 * CHUNK }), 5 * CHUNK), { from: 4 * CHUNK - 1, length: CHUNK + 1, isTail: true, isReset: true })
-})
-
-const event = (text: string) => jsonl(say(text))
-
-test('readChunk renders the whole lines and leaves a half-written last line to be read again', () => {
-  const whole = event('one') + event('twö')
-  const half = event('three').slice(0, 20)
-  const first = readChunk(log(), whole + half, { from: 0, length: CHUNK, isTail: false, isFull: false }, new Map())
-  assert.deepEqual(first.lines, ['one', 'twö'])
-  assert.equal(first.offset, bytes(whole))
-  const again = readChunk(first, half + event('three').slice(20), { from: first.offset, length: CHUNK, isTail: false, isFull: false }, new Map())
-  assert.deepEqual(again.lines, ['one', 'twö', 'three'])
-  assert.equal(again.offset, bytes(whole + event('three')))
-  assert.equal(readChunk(first, half, { from: first.offset, length: CHUNK, isTail: false, isFull: false }, new Map()), first)
-})
-
-test('a tail read drops the line cut at its start and marks the log truncated', () => {
-  const got = readChunk(log(), `t","x":1}\n${event('kept')}`, { from: 1000, length: CHUNK + 1, isTail: true, isFull: false }, new Map())
-  assert.deepEqual(got.lines, ['kept'])
-  assert.equal(got.truncated, true)
-  assert.equal(got.offset, 1000 + bytes(`t","x":1}\n${event('kept')}`))
-  const exact = readChunk(log(), `\n${event('first whole')}`, { from: 999, length: CHUNK + 1, isTail: true, isFull: false }, new Map())
-  assert.deepEqual(exact.lines, ['first whole'])
-})
-
-test('a full chunk with no newline is skipped whole, so one huge line never stalls the log', () => {
-  const huge = 'x'.repeat(50)
-  const got = readChunk(log({ offset: 200 }), huge, { from: 200, length: CHUNK, isTail: false, isFull: true }, new Map())
-  assert.equal(got.offset, 200 + CHUNK)
-  assert.deepEqual(got.lines, [])
-  const notFull = readChunk(log({ offset: 200 }), huge, { from: 200, length: CHUNK, isTail: false, isFull: false }, new Map())
-  assert.equal(notFull.offset, 200)
-})
-
-test('a tail read with no newline skips its bytes when the file had them all, and waits for more otherwise', () => {
-  const huge = 'x'.repeat(50)
-  const full = readChunk(log(), huge, { from: 1000, length: CHUNK + 1, isTail: true, isFull: true }, new Map())
-  assert.deepEqual([full.offset, full.lines, full.truncated], [1000 + CHUNK + 1, [], true])
-  const start = log()
-  assert.equal(readChunk(start, huge, { from: 1000, length: CHUNK + 1, isTail: true, isFull: false }, new Map()), start)
-})
-
-// A row of the pane in `state`, for the run folder `/repo/.git/remote-agent/<id>/`, with `worktree` from run.json.
-const row = (state: string, worktree: string | null = '/repo', id = 'agent-20261102-100000-7') =>
-  parseRun({ id, folder: `/repo/.git/remote-agent/${id}`, runJson: JSON.stringify({ state, worktree }), progress: null, changed: 0 })
-
-test('a finished run with a session says how to resume it, and warns the sandbox wrote the session', () => {
-  for (const state of ['done', 'failed']) {
-    const [command, warning, ...rest] = resumeHint(row(state), true)
-    assert.equal(command, 'resume: remote-agent resume agent-20261102-100000-7 /repo')
-    assert.match(warning, /sandbox wrote/)
-    assert.match(warning, /forged turns/)
-    assert.match(warning, /read the run folder's session\.jsonl first/)
-    assert.deepEqual(rest, [])
-  }
-  const stopped = { ...row('running'), state: 'stopped' as const }
-  assert.equal(resumeHint(stopped, true)[0], 'resume: remote-agent resume agent-20261102-100000-7 /repo')
-})
-
-test('a run still going, or one with no run.json, shows no resume hint', () => {
-  for (const state of ['starting', 'running', 'not-a-state']) {
-    assert.deepEqual(resumeHint(row(state), true), [])
-    assert.deepEqual(resumeHint(row(state), false), [])
-  }
-})
-
-test('a finished run with no session.jsonl says it cannot be resumed', () => {
-  for (const state of ['done', 'failed']) assert.deepEqual(resumeHint(row(state), false), ['no session came back: this run cannot be resumed'])
-})
-
-test('the worktree in the resume command is shell-quoted', () => {
-  const command = (wt: string | null) => resumeHint(row('done', wt), true)[0]
-  assert.equal(command('/Users/me/My Projects/repo'), "resume: remote-agent resume agent-20261102-100000-7 '/Users/me/My Projects/repo'")
-  assert.equal(command("/tmp/it's"), "resume: remote-agent resume agent-20261102-100000-7 '/tmp/it'\\''s'")
-  assert.equal(command('/tmp/$(rm -rf ~)'), "resume: remote-agent resume agent-20261102-100000-7 '/tmp/$(rm -rf ~)'")
-  assert.equal(command(null), 'resume: remote-agent resume agent-20261102-100000-7')
-})
-
-test('copying the path toasts copied, or why not', () => {
-  assert.equal(copiedText(null), 'copied')
-  assert.match(copiedText('no-surface'), /^not copied \(this surface has no clipboard\)/)
-  assert.match(copiedText('no-clipboard'), /^not copied \(no clipboard tool\)/)
-  assert.match(copiedText('refused'), /^not copied \(refused\)/)
-})
-
 test('mask covers every token shape the README lists', () => {
   const tail = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'
   const shapes = [
@@ -366,15 +185,6 @@ test('oneLine keeps up to max characters when given a wider max', () => {
   assert.equal(oneLine(path).length, 160)
 })
 
-test('wrappedRows counts the rows a line wraps to at spaces, a word longer than a row cut', () => {
-  assert.equal(wrappedRows('', 10), 1)
-  assert.equal(wrappedRows('abc def', 10), 1)
-  assert.equal(wrappedRows('abcde fghij', 10), 2)
-  assert.equal(wrappedRows('abcd efghi', 10), 1)
-  assert.equal(wrappedRows('a'.repeat(25), 10), 3)
-  assert.equal(wrappedRows(`ab ${'c'.repeat(12)} d`, 10), 3)
-})
-
 test('a crafted 1 MiB line of secret-like repeats is masked and cut in well under a second', () => {
   const MiB = 1 << 20
   for (const unit of ['KEY', 'eyJ-', 'TOKEN_']) {
@@ -389,18 +199,6 @@ test('a crafted 1 MiB line of secret-like repeats is masked and cut in well unde
   }
   // Masking shortens a long secret: the line still says it was cut.
   assert.equal(oneLine(`a sk-ant-${'x'.repeat(1000)} more`), 'a [masked]…')
-})
-
-test('a tail read starting inside a multi-byte character keeps the offset at the true line start', () => {
-  const enc = new TextEncoder()
-  const file = enc.encode(`${event('before €uro')}${event('kept')}${event('half').slice(0, 12)}`)
-  // One byte into the 3-byte €: the read starts on its two continuation bytes, which decode as two U+FFFD.
-  const from = enc.encode(event('before €uro').split('€')[0]).length + 1
-  const chunk = new TextDecoder().decode(file.slice(from))
-  assert.ok(chunk.startsWith('��'))
-  const got = readChunk(log(), chunk, { from, length: file.length - from, isTail: true, isFull: true }, new Map())
-  assert.deepEqual(got.lines, ['kept'])
-  assert.equal(got.offset, enc.encode(`${event('before €uro')}${event('kept')}`).length)
 })
 
 test('lineStyle colors a log line by its kind: tool call, result, error, session, end', () => {
@@ -449,18 +247,6 @@ test('a tool call and its result render as a call row and an indented result row
   assert.deepEqual(renderTranscript(text), ['▸ Write x.txt', '  ⎿ File created successfully at: x.txt', '  ⎿ ✗ Blocked', '  ⎿ (no output)'])
 })
 
-test('resumeCommand is the bare command, null without a session or for a live run', () => {
-  assert.equal(resumeCommand(row('done'), true), 'remote-agent resume agent-20261102-100000-7 /repo')
-  assert.equal(resumeCommand(row('done'), false), null)
-  assert.equal(resumeCommand(row('running'), true), null)
-})
-
-test('shortPath writes the home folder as ~', () => {
-  assert.equal(shortPath('/Users/me/repo/.git/x'), '~/repo/.git/x')
-  assert.equal(shortPath('/home/me/x'), '~/x')
-  assert.equal(shortPath('/tmp/Users/me'), '/tmp/Users/me')
-})
-
 test('lineParts splits a line by its kind for drawing', () => {
   assert.deepEqual(lineParts('▸ Bash ls -la'), { kind: 'call', tool: 'Bash', rest: 'ls -la' })
   assert.deepEqual(lineParts('▸ TodoWrite'), { kind: 'call', tool: 'TodoWrite', rest: '' })
@@ -475,12 +261,4 @@ test('lineParts splits a line by its kind for drawing', () => {
 test('sessionRule fills the width with the rule', () => {
   assert.equal(sessionRule('── session · opus ──', 24), '── session · opus ──────')
   assert.equal(sessionRule('── session ──', 5), '── session ──')
-})
-
-test('hintRows counts the resume card, the no-session note, or nothing for a live run', () => {
-  const done = row('done')
-  // A blank row, the border's two, the command's one, the warning's at 54 columns.
-  assert.equal(hintRows(done, true, 58), 1 + 2 + 1 + wrappedRows(RESUME_WARNING, 54))
-  assert.equal(hintRows(done, false, 58), 1 + 1)
-  assert.equal(hintRows(row('running'), true, 58), 0)
 })

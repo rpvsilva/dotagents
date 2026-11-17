@@ -1,11 +1,11 @@
+// Moved from the remote-runs mod's transcript.ts, which this mod replaces: the reader and renderer, without that
+// mod's chunked reads, resume hints and copy messages.
+//
 // A run's log: its transcript.jsonl (`claude -p --output-format stream-json --verbose`, one event per line) turned
 // into one-row log lines. Plain logic, no claude-code import at run time, so `node --test` runs it
 // (transcript.unit.ts). The reader never throws: a partial last line, a line that is not JSON and an event of an
 // odd shape are skipped.
-import { printable, type Run } from './runs.ts'
-import type { Log } from './state.d.ts'
-
-export type { Log }
+import { printable } from './flow.ts'
 
 /** What the log says while the transcript holds no event yet. */
 export const WAITING = 'waiting for the first event'
@@ -178,7 +178,7 @@ export function renderEvent(ev: TranscriptEvent, toolNames: Map<string, string>)
     raw.push(['', resultLine(ev)])
   }
   return raw
-    .map(([lead, text]) => [lead, oneLine(tidy(text), LINE_MAX - lead.length)])
+    .map(([lead, text]): [string, string] => [lead, oneLine(tidy(text), LINE_MAX - lead.length)])
     .filter(([, text]) => text !== '')
     .map(([lead, text]) => lead + text)
 }
@@ -189,216 +189,18 @@ export function renderTranscript(text: string): string[] {
   return parseLines(text).events.flatMap(ev => renderEvent(ev, toolNames))
 }
 
-// The open log, read a chunk at a time as the run writes. Byte offsets count the file's UTF-8 bytes and stop at the
-// last newline read, so a half-written last line is read again whole on the next tick.
-
-/** The most bytes one read takes: the tail shown on first opening a longer transcript, and each read after. */
-export const CHUNK = 1 << 20
-
-/** The most log lines kept; past it the oldest go. */
-export const LINES_MAX = 2000
-
-/** The note over a log that does not start at the transcript's first event. */
-export const EARLIER = '(earlier events not shown: open the file)'
-
-/** No log: what Back and a switch to another run start from. */
-export const NO_LOG: Log = { runId: null, offset: 0, lines: [], follow: true, top: 0, truncated: false }
-
-const encoder = new TextEncoder()
-
-/** `offset` moved past the whole lines of `text`, the bytes read from it: up to and including its last newline. */
-export function nextOffset(text: string, offset: number): number {
-  return offset + encoder.encode(text.slice(0, text.lastIndexOf('\n') + 1)).length
-}
-
-const utf8Length = (cp: number) => (cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4)
-
-/**
- * The characters of `text` from UTF-8 byte `start`, at most `length` bytes of them; a character the cut would
- * split at the end is left out, one split at the start too.
- */
-export function byteSlice(text: string, start: number, length = Infinity): string {
-  let at = 0
-  let from = -1
-  let i = 0
-  for (; i < text.length; ) {
-    if (from < 0 && at >= start) from = i
-    const cp = text.codePointAt(i) as number
-    const size = utf8Length(cp)
-    if (from >= 0 && at + size > start + length) break
-    at += size
-    i += cp > 0xffff ? 2 : 1
-  }
-  if (from < 0) return ''
-  return text.slice(from, i)
-}
-
-/** Where a read starts in the transcript, how many bytes it takes, and what readChunk is to make of them. */
-export type ReadAt = { from: number; length: number; isTail: boolean; isReset: boolean }
-
-/**
- * Where to read next in a transcript of `size` bytes: a chunk at the log's offset; on a first read of a file longer
- * than a chunk, its last chunk and the byte before it (`isTail`: up to the first newline is dropped, so a line cut
- * there goes and one starting there stays). A file now shorter than the offset was written anew: it is read as
- * a first read again (`isReset`).
- */
-export function readFrom(log: Log, size: number): ReadAt {
-  const isReset = size < log.offset
-  if (!isReset && (log.offset > 0 || log.lines.length > 0)) return { from: log.offset, length: CHUNK, isTail: false, isReset }
-  if (size > CHUNK) return { from: size - CHUNK - 1, length: CHUNK + 1, isTail: true, isReset }
-  return { from: 0, length: CHUNK, isTail: false, isReset }
-}
-
-/**
- * `log` with the lines of `chunk`, the text read from byte `from`, and its offset moved past them. A tail read
- * drops the text up to its first newline. A full chunk with no newline (`isFull`: the file had all `length` bytes)
- * is part of one huge line: it is skipped whole, and the line's end fails to parse and is skipped too.
- * `toolNames` keeps the run's tool call ids across reads. The same `log` when nothing changed.
- */
-export function readChunk(
-  log: Log,
-  chunk: string,
-  at: { from: number; length: number; isTail: boolean; isFull: boolean },
-  toolNames: Map<string, string>,
-): Log {
-  let text = chunk
-  let from = at.from
-  let truncated = log.truncated
-  if (at.isTail) {
-    const cut = text.indexOf('\n')
-    if (cut < 0) return at.isFull ? { ...log, offset: from + at.length, truncated: true } : log
-    text = text.slice(cut + 1)
-    // Counted from the end the file had whole: the dropped part may start inside a character, whose stray bytes
-    // read as U+FFFD and re-encode longer than they were.
-    from = at.isFull ? at.from + at.length - encoder.encode(text).length : from + encoder.encode(chunk.slice(0, cut + 1)).length
-    truncated = true
-  }
-  const offset = nextOffset(text, from)
-  if (offset === from) {
-    if (at.isFull) return { ...log, offset: at.from + at.length, truncated }
-    return offset === log.offset && truncated === log.truncated ? log : { ...log, offset, truncated }
-  }
-  const { events } = parseLines(text.slice(0, text.lastIndexOf('\n') + 1))
-  const added = events.flatMap(ev => renderEvent(ev, toolNames))
-  return appendLines({ ...log, offset, truncated }, added)
-}
-
-/**
- * `log` with `added` at its end, keeping the last `max` lines. A window scrolled up stays on the same lines: its
- * top moves back by the lines dropped.
- */
-export function appendLines(log: Log, added: readonly string[], max = LINES_MAX): Log {
-  if (added.length === 0) return log
-  const all = [...log.lines, ...added]
-  const dropped = Math.max(0, all.length - max)
-  return {
-    ...log,
-    lines: dropped ? all.slice(dropped) : all,
-    top: Math.max(0, log.top - dropped),
-    truncated: log.truncated || dropped > 0,
-  }
-}
-
-/** The last line a window of `rows` may start at. */
-const lastTop = (lines: readonly string[], rows: number) => Math.max(0, lines.length - rows)
-
-/**
- * `log` with its window of `rows` moved `by` lines (negative: up). It follows the end again once it reaches it.
- */
-export function scrollLog(log: Log, by: number, rows: number): Log {
-  const last = lastTop(log.lines, rows)
-  const now = log.follow ? last : Math.min(Math.max(log.top, 0), last)
-  const top = Math.min(Math.max(now + by, 0), last)
-  return { ...log, top, follow: top >= last }
-}
-
-/** The `rows` lines a window shows: the last ones while following, else those from `top`. */
-export function windowLines(lines: readonly string[], follow: boolean, top: number, rows: number): string[] {
-  const last = lastTop(lines, rows)
-  const start = follow ? last : Math.min(Math.max(top, 0), last)
-  return lines.slice(start, start + rows)
-}
-
-/**
- * The toast after copying the transcript's path: `copied`, or why not from `$.ui.copy`'s reason (null: copied).
- * The path stays drawn as text, so it can be selected by hand.
- */
-export function copiedText(reason: string | null): string {
-  if (reason === null) return 'copied'
-  const why: Record<string, string> = {
-    'no-surface': 'this surface has no clipboard',
-    'no-clipboard': 'no clipboard tool',
-  }
-  return `not copied (${why[reason] ?? reason}): select the path shown instead`
-}
-
-/** `s` as one shell word: as is when it holds only safe characters, else in single quotes. */
-function shellQuote(s: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
-}
-
-/**
- * The command that picks a finished (done, failed or stopped) run with a session up: `remote-agent resume <run>
- * <worktree>` (the worktree from run.json, shell-quoted); null for a run still going or one with no session.jsonl.
- */
-export function resumeCommand(row: Run, hasSession: boolean): string | null {
-  if (row.state !== 'done' && row.state !== 'failed' && row.state !== 'stopped') return null
-  if (!hasSession) return null
-  return ['remote-agent', 'resume', shellQuote(printable(row.id)), ...(row.worktree === null ? [] : [shellQuote(row.worktree)])].join(' ')
-}
-
-/** The warning under the resume command: it places a session the sandbox wrote. */
-export const RESUME_WARNING = "⚠ the sandbox wrote this session and it may hold forged turns: read the run folder's session.jsonl first"
-
-/**
- * How to pick a finished run up: `resume: <resumeCommand>` and RESUME_WARNING; with no session.jsonl (`hasSession`
- * false), that it cannot be resumed. None for a run still going. Mirrors the session line remote-agent prints at the
- * end of a run.
- */
-export function resumeHint(row: Run, hasSession: boolean): string[] {
-  if (row.state !== 'done' && row.state !== 'failed' && row.state !== 'stopped') return []
-  const command = resumeCommand(row, hasSession)
-  if (command === null) return ['no session came back: this run cannot be resumed']
-  return [`resume: ${command}`, RESUME_WARNING]
-}
-
-/** `path` with the home folder (`/Users/<name>` or `/home/<name>`) as `~`. */
-export function shortPath(path: string): string {
-  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
-}
-
-/** How many rows `line` takes wrapped at `columns`, as a terminal wraps text: at spaces, a longer word cut. */
-export function wrappedRows(line: string, columns: number): number {
-  const width = Math.max(1, Math.floor(columns))
-  let rows = 1
-  let used = 0
-  for (const word of line.split(' ')) {
-    const need = used === 0 ? word.length : used + 1 + word.length
-    if (need <= width) {
-      used = need
-      continue
-    }
-    if (used > 0) rows++
-    rows += Math.max(0, Math.ceil(word.length / width) - 1)
-    used = word.length % width || (word.length === 0 ? 0 : width)
-  }
-  return rows
-}
-
 /** How the pane draws a log line: a theme color, or dim; `{}` for the agent's own text. */
 export type LineStyle = { color?: 'suggestion' | 'success' | 'error' | 'warning'; dimColor?: true }
 
 /**
  * A log line's style from what renderEvent made of it: a tool call in the suggestion color, a tool result dim and an
- * errored one red, the session rule dim, the end line green (done) or red (failed); the resume warning in the
- * warning color.
+ * errored one red, the session rule dim, the end line green (done) or red (failed).
  */
 export function lineStyle(line: string): LineStyle {
   if (line.startsWith(CALL)) return { color: 'suggestion' }
   if (line.startsWith(RESULT_ERROR)) return { color: 'error' }
   if (line.startsWith(RESULT)) return { dimColor: true }
   if (line.startsWith(SESSION)) return { dimColor: true }
-  if (line === RESUME_WARNING) return { color: 'warning' }
   if (/^✓ done(?: in \d+s)?(?:(?: ·)? \$\d+\.\d{2})?$/.test(line)) return { color: 'success' }
   if (/^✗ failed( \(\S+\))?$/.test(line)) return { color: 'error' }
   return {}
@@ -430,26 +232,4 @@ export function lineParts(line: string): LinePart {
 export function sessionRule(line: string, width: number): string {
   const head = `${line.replace(/ ──$/, '')} `
   return head + '─'.repeat(Math.max(2, Math.floor(width) - head.length))
-}
-
-/** How many rows code takes at `columns`: a terminal may cut it at any character, or wrap it at spaces. */
-function codeRows(source: string, columns: number): number {
-  const width = Math.max(1, Math.floor(columns))
-  return Math.max(wrappedRows(source, width), Math.ceil(source.length / width) || 1)
-}
-
-/** The columns a bordered card with one column of padding each side takes from its content. */
-export const CARD_X = 4
-
-/**
- * How many rows the part under the log takes at `columns`, with the blank row above it: the resume card (its border,
- * the command and the warning) for a run that can be resumed, the no-session note for a finished one that cannot,
- * none for a run still going.
- */
-export function hintRows(row: Run, hasSession: boolean, columns: number): number {
-  const hint = resumeHint(row, hasSession)
-  if (hint.length === 0) return 0
-  const command = resumeCommand(row, hasSession)
-  if (command === null) return 1 + hint.reduce((n, line) => n + wrappedRows(line, columns), 0)
-  return 1 + 2 + codeRows(command, columns - CARD_X) + wrappedRows(RESUME_WARNING, columns - CARD_X)
 }

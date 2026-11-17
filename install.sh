@@ -150,6 +150,13 @@ install_claude() {
     m="${m%/}"
     if has "${m##*/}"; then link "$m" "$HOME/.claude/skills/${m##*/}"; fi
   done
+  # A link to a mod this checkout no longer has (remote-runs, replaced by agent-flow) points nowhere: removed.
+  for m in "$HOME"/.claude/skills/*; do
+    if [ -L "$m" ] && [ ! -e "$m" ] && [[ "$(readlink "$m")" == "$REPO"/adapters/claude/mods/* ]]; then
+      rm "$m"
+      echo "  removed stale $m"
+    fi
+  done
   if has global; then link "$REPO/global/AGENTS.md" "$HOME/.claude/CLAUDE.md"; fi
   link_each "$HOME/.claude/agents" "$REPO"/adapters/claude/agents/*.md
   # build-epic's launcher starts Claude Code without the tools and MCP servers a run never calls (docs/build-epic-launcher.md).
