@@ -85,6 +85,23 @@ class Schemas(unittest.TestCase):
         out["followups"][0].update(item="Checks", patch="--- a/AGENTS.md\n")
         self.assertEqual(protocol.check("implementer", "output", out), [])
 
+    def test_a_followup_about_the_whole_file_has_line_0_or_none(self):
+        out = dict(DONE["implementer"])
+        out["followups"] = [{"severity": "nit", "kind": "follow-up", "path": "README.md", "line": 0, "claim": "x"},
+                            {"severity": "nit", "kind": "follow-up", "path": "README.md", "claim": "y"}]
+        self.assertEqual(protocol.check("implementer", "output", out), [])
+        out["followups"][0]["line"] = -1
+        self.assertTrue(protocol.check("implementer", "output", out))
+
+    def test_a_line_of_prose_before_the_object_is_read_past(self):
+        obj = {"status": "done", "note": "a {brace} inside"}
+        self.assertEqual(protocol.parse_json("Reissue: write it again.\n\n" + json.dumps(obj)), obj)
+        self.assertEqual(protocol.parse_json("Here it is:\n```json\n" + json.dumps(obj) + "\n```"), obj)
+        with self.assertRaises(ValueError):
+            protocol.parse_json(json.dumps(obj) + "\nDone, and more prose after.")
+        with self.assertRaises(ValueError):
+            protocol.parse_json("status: done\n")
+
     def test_a_coverage_cell_is_clean_or_a_finding_number(self):
         out = json.loads(json.dumps(DONE["security"]))
         out["coverage"][0]["cells"]["secrets"] = "dirty"
