@@ -20,7 +20,7 @@ class VerifyTunerLimitsTest(VerifyTunerCase):
     # The looping cases wait out their whole limit, so they cap the Checks line low; 2 s still lets the green run pass.
     def test_a_looping_mutation_is_stopped_by_the_checks_time_limit_and_counts_as_red(self):
         self.checks("capped --mb 2000 --secs 2 -- python3 -m unittest -q")
-        self.write_report(f"mutations: calc.py:6 return a - b -> {LOOP}")
+        self.write_report([("calc.py", 6, "return a - b", LOOP)])
         before = self.snapshot()
         start = time.monotonic()
         p = self.verify()
@@ -33,7 +33,7 @@ class VerifyTunerLimitsTest(VerifyTunerCase):
     def test_a_looping_green_suite_fails_on_the_time_limit(self):
         self.checks("capped --mb 2000 --secs 1 -- python3 -m unittest -q")
         self.tune(f"\n    def test_slow(self):\n        {LOOP}\n")
-        self.write_report("mutations: calc.py:6 a - b -> a + b")
+        self.write_report([("calc.py", 6, "a - b", "a + b")])
         p = self.verify()
         self.assertFails(p, "timeout capped --mb 2000 --secs 1 -- python3 -m unittest -q")
         log = (self.kit.run_dir / "logs" / "01-tests-verify_tuner.log").read_text(encoding="utf-8")
@@ -45,7 +45,7 @@ class VerifyTunerLimitsTest(VerifyTunerCase):
     def test_an_interrupted_mutation_restores_the_worktree(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
             with self.subTest(sig=sig):
-                self.write_report(f"mutations: calc.py:6 return a - b -> {LOOP}")
+                self.write_report([("calc.py", 6, "return a - b", LOOP)])
                 before = self.snapshot()
                 p = subprocess.Popen([sys.executable, "-I", str(VERIFY), str(self.kit.run_dir), "01-tests",
                                       "--report", str(self.report), "--timeout", "60"], env=self.kit.env, text=True,
