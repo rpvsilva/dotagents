@@ -42,7 +42,7 @@ const TRANSCRIPT = jsonl(
   { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: '15' }] } },
   { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'agent1', name: 'Agent', input: { description: 'Find settings' } }] } },
   { type: 'system', subtype: 'task_started', task_id: 'tk1', tool_use_id: 'agent1', description: 'Find skills with settings.json', subagent_type: 'Explore' },
-  { type: 'assistant', parent_tool_use_id: 'agent1', message: { content: [{ type: 'tool_use', id: 'k1', name: 'Bash', input: { command: 'ls -d skills/*/' } }] } },
+  { type: 'assistant', parent_tool_use_id: 'agent1', timestamp: new Date(T + 5_000).toISOString(), message: { content: [{ type: 'tool_use', id: 'k1', name: 'Bash', input: { command: 'ls -d skills/*/' } }] } },
   { type: 'user', parent_tool_use_id: 'agent1', message: { content: [{ type: 'tool_result', tool_use_id: 'k1', content: 'skills/a/' }] } },
   { type: 'system', subtype: 'task_progress', task_id: 'tk1', usage: { tool_uses: 1 } },
   { type: 'system', subtype: 'task_updated', task_id: 'tk1', patch: { status: 'completed', end_time: T + 20_000 } },
@@ -121,7 +121,7 @@ test("a transcript gives the run's model, its own steps, and each subagent with 
   assert.equal(s.model, 'claude-opus-5-5')
   assert.equal(s.steps, 2)
   assert.equal(s.step, 'Agent Find settings')
-  assert.deepEqual(s.tasks, [{ id: 'tk1', type: 'Explore', desc: 'Find skills with settings.json', toolUseId: 'agent1', status: 'done', ended: T + 20_000, steps: 1, step: null }])
+  assert.deepEqual(s.tasks, [{ id: 'tk1', type: 'Explore', desc: 'Find skills with settings.json', toolUseId: 'agent1', status: 'done', started: T + 5_000, ended: T + 20_000, steps: 1, step: null }])
 })
 
 test("a remote log: the run's setup, its own events, then its summary; a subagent's log only its own events", () => {

@@ -4,9 +4,9 @@
 //
 // main sits at the top, centred, and never moves; each agent hangs under the one that started it; 4+ siblings of one
 // type fold into a squad box; when a row is still too wide, its finished siblings fold into `✓ N done`, and when even
-// that does not fit, the caller draws `tree()` instead.
+// that does not fit, the caller lists the running agents instead.
 
-import { type Agent, ctxColor, ctxShare, fmtTokens, gauge, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus } from './flow.ts'
+import { type Agent, costOf, costSum, ctxColor, ctxShare, fmtTokens, fmtUsd, gauge, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus } from './flow.ts'
 import { ENTER_MS, phaseOf, type Phase, schedule } from './lifecycle.ts'
 import { costLine } from './remote.ts'
 
@@ -220,26 +220,26 @@ export function chart(g: Graph, now: number, opts: ChartOpts, tween: Tween): Cha
   return { rows, squads, fits, moving, width: need }
 }
 
-/** Spare columns the chart needs before the pane goes back to it from the tree. */
+/** Spare columns the chart needs before the pane goes back to it from the list. */
 export const FIT_MARGIN = 4
 /** How long the chart must keep fitting, with FIT_MARGIN to spare, before the pane goes back to it. */
 export const FIT_HOLD_MS = 2000
-/** Whether the pane falls back to the tree; `fitSince` is when the chart started fitting again. */
-export type Fallback = { tree: boolean; fitSince: number | null }
-export const noFallback = (): Fallback => ({ tree: false, fitSince: null })
+/** Whether the chart is too narrow for the pane, which lists the running agents instead; `fitSince` is when it started fitting again. */
+export type Fallback = { narrow: boolean; fitSince: number | null }
+export const noFallback = (): Fallback => ({ narrow: false, fitSince: null })
 
 /**
- * The tree fallback, with hysteresis so the pane never flickers between the two: the tree as soon as the chart
+ * The narrow fallback, with hysteresis so the pane never flickers between the two: the list as soon as the chart
  * (`width` columns) overflows the pane, and the chart again only once it has fitted with FIT_MARGIN to spare for
- * FIT_HOLD_MS. A chart on the edge (a box entering, a fold, a scrollbar taking a column) stays a tree.
+ * FIT_HOLD_MS. A chart on the edge (a box entering, a fold, a scrollbar taking a column) stays a list.
  */
 export function fallback(prev: Fallback, width: number, columns: number, now: number): Fallback {
   const room = columns - 2 - width
-  if (room < 0) return { tree: true, fitSince: null }
-  if (!prev.tree) return prev
-  if (room < FIT_MARGIN) return prev.fitSince === null ? prev : { tree: true, fitSince: null }
+  if (room < 0) return { narrow: true, fitSince: null }
+  if (!prev.narrow) return prev
+  if (room < FIT_MARGIN) return prev.fitSince === null ? prev : { narrow: true, fitSince: null }
   const since = prev.fitSince ?? now
-  return now - since >= FIT_HOLD_MS ? noFallback() : prev.fitSince === since ? prev : { tree: true, fitSince: since }
+  return now - since >= FIT_HOLD_MS ? noFallback() : prev.fitSince === since ? prev : { narrow: true, fitSince: since }
 }
 
 /** Keeps at least GAP columns between neighbours in each row, pushing both half the overlap, until none is left. */
@@ -288,6 +288,13 @@ function border(put: Put, x: number, y: number, w: number, s: Omit<Seg, 'text'>,
     put(x + w - 1, y + r, vt, s)
   }
   put(x, y + H - 1, `╰${hz.repeat(w - 2)}╯`, s)
+}
+
+/** What a box's agents cost, set into its top border at the right: ` $0.12 `; nothing before a reading. */
+function costBorder(put: Put, usd: number | null, x: number, y: number, w: number) {
+  if (usd === null) return
+  const txt = ` ${fmtUsd(usd)} `
+  put(x + w - 2 - txt.length, y, txt, { dim: true })
 }
 
 /** The context gauge set into a box's bottom border, from column 2: ` ▰▰▱▱▱▱ 42k/200k `; nothing without a reading. */
@@ -357,6 +364,7 @@ function drawBox(put: Put, n: Node, x: number, y: number, now: number, opts: Cha
   if (!isMain && (st !== 'done' || (a.remote && a.remote.taskId === null))) put(x + 2 + inner - 5, y + 3, clock(elapsed).padStart(5), { dim: true })
   put(x + 2, y + 4, pad(l4, inner), dim ? { dim: true } : l4s)
   ctxBorder(put, a, x, y + H - 1, dim || st === 'done')
+  costBorder(put, costOf(a), x, y, W)
 }
 
 function drawFold(put: Put, n: Node, x: number, y: number) {
@@ -373,6 +381,7 @@ function drawSquad(put: Put, n: Node, x: number, y: number, now: number, opts: C
   const dim = n.phase.ph === 'dim' || n.phase.ph === 'chip'
   const look = dim ? { color: FAINT, dim: true } : live ? { color: modelColor(n.model) } : c.failed ? { color: 'error' } : { color: FAINT, dim: true }
   border(put, x, y, SW, look, dim)
+  costBorder(put, costSum(ms), x, y, SW)
   put(x + 2, y + 1, live ? spin(now, opts.motion) : c.failed ? '✗' : '✓', dim ? { dim: true } : live ? { color: modelColor(n.model), bold: true } : c.failed ? { color: 'error', bold: true } : { color: 'success', bold: true })
   put(x + 4, y + 1, `${printable(n.type)} ×${ms.length}`.slice(0, SW - 18), dim ? { dim: true, bold: true } : { color: modelColor(n.model), bold: true })
   const model = modelLabel(n.model)
@@ -490,9 +499,9 @@ function wires(put: Put, n: Node, kids: Node[], cx: (id: string) => number, dept
   for (const [x, y, color] of dots) put(x, y, '•', { color, bold: true })
 }
 
-/** An expanded squad under the chart: one line per member, in as many columns as fit. */
+/** An expanded squad under the chart: one line per member with its context, in as many columns as fit. */
 function expandedRows(n: Node, now: number, opts: ChartOpts): Row[] {
-  const CW = 40
+  const CW = 52
   const cols = Math.max(1, Math.min(3, Math.floor(opts.columns / CW)))
   const ms = n.members!
   const per = Math.ceil(ms.length / cols)
@@ -505,7 +514,11 @@ function expandedRows(n: Node, now: number, opts: ChartOpts): Row[] {
       const st = shownStatus(m, now)
       const glyph = st === 'running' ? spin(now, opts.motion, c * per + r) : st === 'waiting' ? '◐' : st === 'done' ? '✓' : '✗'
       const look = st === 'running' ? { color: modelColor(m.model) } : st === 'waiting' ? { color: 'warning' } : st === 'failed' ? { color: 'error' } : { color: 'success' }
-      row.push({ text: glyph, ...look }, { text: ` ${pad(printable(m.desc), 22)} `, dim: st === 'done' }, { text: pad(st === 'waiting' ? 'needs you' : st, 10), ...look }, { text: pad(clock((m.ended ?? now) - m.started), 6), dim: true })
+      const share = ctxShare(m)
+      const ctx: Seg[] = share === null
+        ? [{ text: ' '.repeat(11) }]
+        : [{ text: gauge(share, 4), ...(st === 'done' ? { dim: true } : { color: ctxColor(share) }) }, { text: pad(` ${Math.round(share * 100)}%`, 7), dim: true }]
+      row.push({ text: glyph, ...look }, { text: ` ${pad(printable(m.desc), 22)} `, dim: st === 'done' }, { text: pad(st === 'waiting' ? 'needs you' : st, 10), ...look }, { text: pad(clock((m.ended ?? now) - m.started), 6), dim: true }, ...ctx)
     }
     rows.push(row)
   }
@@ -543,47 +556,6 @@ export function needsRow(g: Graph, now: number): Row {
   })
   if (need.length > 2) row.push({ text: `    +${need.length - 2} more`, color: 'warning' })
   return row
-}
-
-/** A tree or list row's context: a 4-cell gauge and `42k/200k`, or blank space without a reading. */
-export function ctxSegs(a: Agent, quiet: boolean): Seg[] {
-  const share = ctxShare(a)
-  if (share === null) return [{ text: ' '.repeat(16) }]
-  return [
-    { text: gauge(share, 4), ...(quiet ? { dim: true } : { color: ctxColor(share) }) },
-    { text: ` ${pad(`${fmtTokens(a.ctx!)}/${fmtTokens(a.window!)}`, 11)}`, dim: true },
-  ]
-}
-
-/** The fallback when even folded the chart does not fit: an indented tree, one or two lines per agent. */
-export function tree(g: Graph, now: number, opts: ChartOpts): Row[] {
-  const sched = schedule(g, opts.lingerMs)
-  const rows: Row[] = []
-  const walk = (id: string, prefix: string) => {
-    const kids = g.agents.filter(a => a.parent === id && phaseOf(a, now, sched)).sort((x, y) => x.started - y.started)
-    kids.forEach((a, i) => {
-      const last = i === kids.length - 1
-      const st = shownStatus(a, now)
-      const glyph = st === 'running' ? spin(now, opts.motion) : st === 'waiting' ? '◐' : st === 'done' ? '✓' : '✗'
-      const look = st === 'running' ? { color: modelColor(a.model) } : st === 'waiting' ? { color: 'warning' } : st === 'failed' ? { color: 'error' } : { color: 'success' }
-      const own = (segs: Seg[]): Row => segs.map(sg => ({ ...sg, agent: a.id }))
-      rows.push(own([
-        { text: `${prefix}${last ? '└─ ' : '├─ '}`, color: FAINT, dim: true },
-        { text: glyph, ...look, bold: true },
-        { text: ` ${pad(printable(a.type), 18)}`, ...(st === 'done' ? { dim: true } : { color: modelColor(a.model), bold: true }) },
-        { text: pad(printable(a.desc), 26), dim: st === 'done' },
-        { text: pad(modelLabel(a.model), 11), color: modelColor(a.model) },
-        ...ctxSegs(a, st === 'done'),
-        { text: st === 'done' || st === 'failed' ? `${st} ${clock((a.ended ?? now) - a.started)}${a.why ? ` · ${a.why}` : ''}` : clock(now - a.started), ...(st === 'failed' ? { color: 'error' } : { dim: true }) },
-      ]))
-      if (st === 'running' || st === 'waiting') rows.push(own([{ text: `${prefix}${last ? '   ' : '│  '}   ⎿ `, color: FAINT, dim: true }, { text: st === 'waiting' ? 'needs you' : a.step ?? 'thinking', ...(st === 'waiting' ? { color: 'warning' } : { dim: true }) }]))
-      walk(a.id, prefix + (last ? '   ' : '│  '))
-    })
-  }
-  const m = g.agents.find(a => a.id === MAIN)!
-  rows.push([{ text: m.status === 'running' ? spin(now, opts.motion) : '◆', color: 'claude', bold: true }, { text: ' main', color: 'claude', bold: true }, { text: m.model ? `  ${modelLabel(m.model)}  ` : '  ', dim: true }, ...ctxSegs(m, false)])
-  walk(MAIN, '')
-  return rows
 }
 
 export { ENTER_MS }

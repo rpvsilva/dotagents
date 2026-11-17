@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ctxColor, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize, WAIT_MS } from './flow.ts'
+import { costSum, ctxColor, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize, WAIT_MS } from './flow.ts'
 
 const T = 1_800_000_000_000
 const run = (evs: FlowEvent[], g: Graph = emptyGraph()) => evs.reduce(reduce, g)
@@ -139,4 +139,25 @@ test('context reads as people say it: tokens, a gauge, and a colour by how full'
   assert.deepEqual([950, 42_000, 199_600, 1_000_000, 1_200_000].map(fmtTokens), ['950', '42k', '200k', '1M', '1.2M'])
   assert.deepEqual([0, 0.01, 0.5, 1].map(s => gauge(s, 6)), ['▱▱▱▱▱▱', '▰▱▱▱▱▱', '▰▰▰▱▱▱', '▰▰▰▰▰▰'])
   assert.deepEqual([0.2, 0.5, 0.79, 0.8].map(ctxColor), ['success', 'warning', 'warning', 'error'])
+})
+
+test('ink draws the plan palette when fixed, and the theme keys otherwise', () => {
+  assert.equal(ink(modelColor('claude-opus-5-5'), true), '#e0835f')
+  assert.equal(ink(modelColor('claude-sonnet-5-5'), true), '#7fa8f2')
+  assert.equal(ink(modelColor('claude-haiku-5-5'), true), '#5cc9a7')
+  assert.equal(ink('warning', true), '#e8b34f')
+  assert.equal(ink(ctxColor(0.9), true), '#f0727a')
+  assert.equal(ink('warning', false), 'warning')
+  assert.equal(ink(modelColor(null), true), '#d8d9df')
+  assert.equal(ink('permission', true), 'permission')
+  assert.equal(ink(undefined, true), undefined)
+})
+
+test('fmtUsd and costSum: cents, under a cent, from a hundred; null when no agent has a cost', () => {
+  assert.equal(fmtUsd(0.123), '$0.12')
+  assert.equal(fmtUsd(0.001), '<$0.01')
+  assert.equal(fmtUsd(0), '$0.00')
+  assert.equal(fmtUsd(123.4), '$123')
+  assert.equal(costSum([{ cost: 0.5, remote: null }, { cost: null, remote: null }, { cost: 0.25, remote: null }]), 0.75)
+  assert.equal(costSum([{ cost: null, remote: null }]), null)
 })
