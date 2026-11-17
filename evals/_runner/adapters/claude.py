@@ -118,6 +118,14 @@ def zero_cost(result):
                              for n in usage.values() if not isinstance(n, (dict, list, str, type(None))))
 
 
+def total(results, key):
+    """The sum of `key` over the result events, or None when any lacks it as a number (or there is none)."""
+    values = [e.get(key) for e in results]
+    if not values or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        return None
+    return sum(values)
+
+
 def parse(run_dir, home, work):
     stream = events(Path(run_dir) / TRANSCRIPT)
     init = next((e for e in stream if e.get("type") == "system" and e.get("subtype") == "init"), {})
@@ -131,11 +139,14 @@ def parse(run_dir, home, work):
     else:
         tokens = result_tokens(result) if result else None
     capped = CAPS.get(result.get("subtype")) if result else None
-    duration = result.get("duration_ms") if result else None
+    # A run that a background subagent's notification resumed writes one result event per segment, each counting its
+    # own turns and time (the cost is cumulative): add them up. The last one still decides the cap and the error.
+    results = [e for e in stream if e.get("type") == "result"]
+    ms = total(results, "duration_ms")
     return {
         "tokens": tokens,
-        "turns": result.get("num_turns") if result else None,
-        "duration_s": duration / 1000 if isinstance(duration, (int, float)) else None,
+        "turns": total(results, "num_turns"),
+        "duration_s": ms / 1000 if ms is not None else None,
         "capped": capped,
         "tool_version": init.get("claude_code_version"),
         "spawned_agents": spawned,
