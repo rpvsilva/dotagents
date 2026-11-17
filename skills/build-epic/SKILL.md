@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Build an epic as **tickets** made of **tasks**. A ticket is one tracker issue (or a few that share files): its own branch and one PR into the run's **base** (the default branch, or the integration branch `--into` names). A task is one implementer's slice of a ticket, merged into the ticket branch as one commit once the Checks pass; the ticket branch stays on this machine until the ticket ships, and its PR's one deep review covers every task. Tickets that share files run one after another in a **lane**; only lanes with disjoint write sets run in parallel.
 
-Input: an epic or issue (link or ID, on any tracker), or plain text. Optional: `--parallel N`; `--explore` to always run the explorers; `--into <branch>` to build into an integration branch (it beats the `base` Setting).
+Input: an epic or issue (link or ID, on any tracker), or plain text. Optional: `--parallel N`; `--explore` to always run the explorers; `--into <branch>` to build into an integration branch (it beats the `base` Setting). Where the tool has a launcher for this skill (Claude Code: `~/.agents/bin/build-epic <arguments>`, [docs](../../docs/build-epic-launcher.md)), start and resume runs with it: it loads only the tools a run calls.
 
 You are the **orchestrator**. You run scripts, start subagents and talk to the human; you never read the code, the tracker or a subagent's work yourself, except to verify review findings.
 
