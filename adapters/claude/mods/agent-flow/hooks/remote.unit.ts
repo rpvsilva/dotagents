@@ -286,3 +286,15 @@ test("a run that replies in JSON reads as fields, once; the transcript's own end
   assert.equal(jsonFields('not json'), null)
   assert.equal(jsonFields('[1, 2]'), null)
 })
+
+test('a last message of prose then a JSON line is read once: the prose, then the fields', () => {
+  const reply = "The protocol checker isn't in this sandbox, so I couldn't run it.\n{\"status\": \"done\", \"why\": \"\", \"files\": [\"README.md\", \"a.py\"]}"
+  const tr = [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'x' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: reply }] } },
+  ].map(e => `${JSON.stringify(e)}\n`).join('')
+  const lines = remoteLog(tr, null, `${reply}\n`, null).map(l => l.text)
+  assert.deepEqual(lines.slice(-4), ["The protocol checker isn't in this sandbox, so I couldn't run it.", 'status: done', 'why: —', 'files: README.md, a.py'])
+  assert.ok(!lines.includes('── summary ──'))
+})
