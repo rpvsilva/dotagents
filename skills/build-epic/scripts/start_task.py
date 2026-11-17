@@ -6,8 +6,9 @@ Adds `<run>/worktrees/TT-NN` on a new `task/<ticket-slug>/NN` from the ticket br
 (`gitops.ticket_tip`, where earlier tasks merged) and sets the task
 `in-progress`. Prints `OK TT-NN in-progress wt=<path> tip=<sha7>`. A hub task (one `ticket NN` blocker) also merges
 `origin/<base>` there (`decisions.md`'s `base:`, else the default branch), adding `synced=<sha7>` (the tip it merged);
-a conflict removes the worktree and branch, leaves the task `ready` and
-prints `FAIL TT-NN sync-conflict <files>`.
+a conflict is left in the worktree, its markers in the files, for the implementer to resolve first, adding
+`conflict=<files>`. A merge that fails with no conflicted file removes the worktree and branch, leaves the task
+`ready` and prints `FAIL TT-NN sync-failed`.
 A task not `ready`, or whose worktree or branch already exists, is refused.
 """
 import sys
@@ -66,13 +67,15 @@ def step(ctx):
         base = f"refs/remotes/origin/{ci.base(ctx.run_dir, info['Default'])}"
         synced = git.tip(base)
         merge = git_in(ctx, info["Repo"], wt, "merge", "--no-edit", base)
+        details = f" synced={synced[:7]}"
         if merge.rc != 0:
             conflicted = git_in(ctx, info["Repo"], wt, "diff", "--name-only", "--diff-filter=U").out.split()
-            git_in(ctx, info["Repo"], wt, "merge", "--abort")
-            git.worktree_remove(wt)
-            git.branch_delete(branch)
-            raise core.Fail(f"sync-conflict {' '.join(conflicted)}" if conflicted else "sync-failed")
-        details = f" synced={synced[:7]}"
+            if not conflicted:
+                git_in(ctx, info["Repo"], wt, "merge", "--abort")
+                git.worktree_remove(wt)
+                git.branch_delete(branch)
+                raise core.Fail("sync-failed")
+            details += f" conflict={','.join(conflicted)}"
         tip = git.tip(f"refs/heads/{branch}")
     runfolder.set_header(task, "Status", "in-progress")
     return "in-progress", f"wt={wt} tip={tip[:7]}{details}"
