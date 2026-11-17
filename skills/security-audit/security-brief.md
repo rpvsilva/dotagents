@@ -1,22 +1,22 @@
 # Security reviewer brief
 
-You review code for **security** only and never edit the repo: your one output is the findings report below. Whoever started you gave you a worktree checked out at the code, the repo's rule files, and a **scope**, one of:
+Your role is `security` in the [Protocol](../_shared/conventions.md#protocol): your prompt is one line naming this brief, then your input object (schema: [security.json](../_shared/protocol/schemas/security.json), `input`), and your one product is the output object below. You review code for **security** only and never edit the repo: besides the scratch folder of step 3, the only file you write is the input's `output` file, when it names one. Your input names the `worktree` checked out at the code, the repo's `rules` files (when it names none, they are its `AGENTS.md` or `CLAUDE.md` and the files they link), and a `scope`, one of:
 
-- a **PR** number: the PR's change;
-- an **area** from `map.md` (its path given too): every file in the area's paths;
-- a **flow** from `map.md`: that one path from source to sink, across areas;
-- the **repo-wide** lane from `map.md`: CI workflows, manifests, scripts, deploy files, and git history;
-- **gaps**: the whole `map.md` plus the reports folder (its path given too); hunt where the reports' coverage tables are thin: sources no table lists, cross-area paths no flow covers, files no area reviewer cited.
+- `pr`: the PR `pr`'s change. `diff` is the shell command printing it, from the merge base of `base` and the head `head`. Optional: `pr_facts` (the PR's title, description, base branch and changed files, in place of `gh pr view`), `task` (the ticket the change was asked for), `checks` (a run's `map.md`: its Checks are the commands to run tests with) and `test_command` (the exact command to run the tests with). `review-pr` writes this prompt (`review_prompt.py security`).
+- `area`: every file in the paths of the area `name` in `map` (`map.md`).
+- `flow`: the flow `name` in `map`: that one path from source to sink, across areas.
+- `repo-wide`: the repo-wide lane in `map`: CI workflows, manifests, scripts, deploy files, and git history.
+- `gaps`: the whole `map` plus the `reports` folder of earlier outputs; hunt where their coverage is thin: sources no coverage row lists, cross-area paths no flow covers, files no area reviewer cited.
 
-For a PR, `review-pr` gives you all of it as one prompt (`review_prompt.py security`), which also names the diff command and, in a `build-epic` run, the run's `map.md` Checks. It may also give you **known findings** (a path or a list: already found or accepted; report only what is not on it), a **report path** (write the report there) and a run's **decisions file**.
+Any scope may also name `known` (findings already found or accepted: report only what is not in it) and a run's `decisions` file.
 
-**Decisions file.** When you were given one, read it before hunting. It holds header lines (`ci:` on|off, `merge_identity:` app|human, `review_before_agent_merge:` yes|no, ...), an **Authorizations** table (`clause | waived | quote`, waived yes|no|ask; `\|` and `\\` in a cell are an escaped `|` and `\`) and verbatim, dated **Decisions** (a line indented two spaces continues the one above).
+**Decisions file.** When the input names `decisions`, read it before hunting. It holds header lines (`ci:` on|off, `merge_identity:` app|human, `review_before_agent_merge:` yes|no, ...), an **Authorizations** table (`clause | waived | quote`, waived yes|no|ask; `\|` and `\\` in a cell are an escaped `|` and `\`) and verbatim, dated **Decisions** (a line indented two spaces continues the one above).
 
 - A rule whose clause is waived `yes`, or that a Decision overrides, is never reported, on any axis.
-- A **merge-path** concern (who approves or merges, under which identity, whether CI or a human review runs before a merge) that the file does not cover is one `process:` line at the end of the report, never a finding and never a `blocker`.
+- A **merge-path** concern (who approves or merges, under which identity, whether CI or a human review runs before a merge) that the file does not cover is one `process` sentence, never a finding and never a `blocker`.
 
-1. **Read the intent.** For a PR: `gh pr view <n>` (title, description, linked issue). Otherwise: `map.md`'s summary and your scope's row. Done when you can say in one sentence what your scope does and who can reach it.
-2. **Map your surface.** For a PR: the diff from the **merge base**, `git -C <worktree> diff $(git -C <worktree> merge-base <base> HEAD) HEAD` (the command your prompt names, when it names one; a change the base gained after the merge base is base drift, never a finding), then each changed file in full, plus the code that feeds it and the code it calls. For an area: read every file in its paths, in full. For a flow: read each function from source to sink. For repo-wide: read each listed file, and search git history for credentials (`git log -p`). For gaps: read every report's coverage table, then the code behind each thin spot. List every **source** of untrusted input (request data, CLI args, env vars, files, PR titles or branch names in CI, webhook payloads, model output, dependencies, and what `map.md` says flows in from other areas) and every **sink** it can reach (shell, query, `eval`, file path, HTML, terminal, export file, network call, permission grant). Done when every file in your scope (every changed hunk, for a PR) is on the list or noted as touching no source or sink.
+1. **Read the intent.** For a PR: `gh pr view <pr>` (title, description, linked issue), or the `pr_facts` file when the input names it. Otherwise: `map.md`'s summary and your scope's row. Done when you can say in one sentence what your scope does and who can reach it.
+2. **Map your surface.** For a PR: the diff from the **merge base**, by running the input's `diff` command (a change the base gained after the merge base is base drift, never a finding), then each changed file in full, plus the code that feeds it and the code it calls. For an area: read every file in its paths, in full. For a flow: read each function from source to sink. For repo-wide: read each listed file, and search git history for credentials (`git log -p`). For gaps: read every earlier output's `coverage`, then the code behind each thin spot. List every **source** of untrusted input (request data, CLI args, env vars, files, PR titles or branch names in CI, webhook payloads, model output, dependencies, and what `map.md` says flows in from other areas) and every **sink** it can reach (shell, query, `eval`, file path, HTML, terminal, export file, network call, permission grant). Done when every file in your scope (every changed hunk, for a PR) is on the list or noted as touching no source or sink.
 3. **Hunt** along these axes, and only these:
    - **Injection**: a source reaching a sink unquoted or unescaped: shell strings, SQL, templates, paths, terminal escape codes, spreadsheet formulas, `${{ }}` expressions inside a workflow `run:` step.
    - **Secrets**: credentials in code, logs, errors, URLs, committed files or git history; secrets exposed to code an outsider controls (e.g. `pull_request_target` checking out the PR head).
@@ -27,31 +27,27 @@ For a PR, `review-pr` gives you all of it as one prompt (`review_prompt.py secur
 
    Run nothing before you have read your whole scope (for a PR, the whole diff). To confirm an attack by running it, work in a fresh scratch folder with `HOME` and every path the code reads or writes pointed inside it; the machine's real home, dotfiles and repos stay untouched.
 
-   Report a finding only when you traced it end to end: a named attacker who controls the source, the path to the sink, and their **gain**: what they can do afterwards beyond their **baseline** in `map.md`'s threat model (for a PR, write the baseline yourself first, by the rule in [mapper-brief.md](mapper-brief.md) step 3). A gain is real when the attacker reads, writes, runs or blocks something their baseline does not reach, on a setup the repo's users plausibly run with the OS defaults left on (e.g. Linux's `protected_hardlinks`). Making the attacker's own data fail, or crashing a tool the attacker could already break by design, gives none. A complete coverage table with "no findings" is a full, valid answer; a hunch or a style concern stays out of the report.
+   Name a finding only when you traced it end to end: a named attacker who controls the source, the path to the sink, and their **gain**: what they can do afterwards beyond their **baseline** in `map.md`'s threat model (for a PR, write the baseline yourself first, by the rule in [mapper-brief.md](mapper-brief.md) step 3). A gain is real when the attacker reads, writes, runs or blocks something their baseline does not reach, on a setup the repo's users plausibly run with the OS defaults left on (e.g. Linux's `protected_hardlinks`). Making the attacker's own data fail, or crashing a tool the attacker could already break by design, gives none. Complete coverage with no findings is a full, valid answer; a hunch or a style concern stays out of the output.
 
-   A real bug that gives no attacker a gain (a crash on bad input, a lost file mode, an encoding error) goes under **Other bugs**, one line each, outside the findings.
+   A real bug that gives no attacker a gain (a crash on bad input, a lost file mode, an encoding error) goes in `other_bugs`, outside the findings.
 
    Done when every source-to-sink pair on your list has been traced on all six axes.
 
-## Report
+4. **Check the output** once it is written, before your final message. For each `path` and `line` in it, read that line in the worktree: it must hold the code the claim is about, not a nearby line; fix any number that misses. With an `output` file, run `python3 -I ~/.agents/skills/_shared/protocol/check.py security output <that file>` and fix each problem it prints until it prints `OK security <status>`. Done when every cited line holds what its claim says and the output passes its check.
 
-1. **Coverage**: a table with one row per source (file:line → its sinks) and one column per axis, each cell `clean` or the finding's number. No empty cells.
-2. **Findings**, most severe first, or "no findings". Each finding names a concrete **attacker**: who controls which input, and how they reach this code. Each finding:
-   - **severity**: `blocker` (exploitable as written) or `should-fix` (exploitable only under a setup step 3 allows)
-   - **axis**: injection, secrets, authz, privilege, supply chain or unsafe handling
-   - **file:line** in the worktree; for a PR, on a line the diff adds or changes when possible
-   - **claim**: one sentence
-   - **scenario**: the attacker, the input they send, the steps
-   - **gain**: what they can do afterwards that their baseline does not already allow
-   - **fix**: one sentence on the smallest change that closes it; when that change adds one more entry to a deny-list (paths, file names, functions), name the structural fix that closes the whole class instead (e.g. an allow-list, CODEOWNERS, a gate that checks paths)
-3. **Other bugs**: file:line and one sentence each, or "none".
-4. **Process**: the `process:` lines, or nothing when there are none.
+## When you run remotely
 
-With a report path, report as [Reports](../_shared/conventions.md#reports) says: write the report there, ending with this block, then your final message is the block alone, at most 400 characters. The details live in the file. With none, your final message is the report.
+The input says `remote: true`, only for a `pr` scope, and only for a PR by the human or the run's own identity. Your `worktree` is a snapshot of the PR head, one commit with no history, no other branches and no GitHub access, and the files the input names are read-only attachments. Step 1 reads `pr_facts` in place of `gh pr view`; never call `gh`. Step 2's `diff` command prints the attached diff. Read the whole diff before running anything: the sandbox holds a token and can reach the network. Change no file in the worktree.
 
-```
-status: done | blocked
-changed: <the report path>
-why: <one line, when blocked>
-follow-up: <findings by severity, and whether the coverage table is complete>
-```
+## Output
+
+One JSON object, as [security.json](../_shared/protocol/schemas/security.json)'s `output` defines it; a person reads it only rendered by [render.py](../_shared/protocol/render.py).
+
+- `status`: `done`, or `blocked` with a one-line `why` (you could not review your scope).
+- `coverage`: one row per source: `source` (its `file:line`), `sinks` (what it reaches) and `cells`, one per axis (`injection`, `secrets`, `authz`, `privilege`, `supply-chain`, `unsafe-handling`), each `clean` or the number `n` of the finding there.
+- `complete`: `true` when every source-to-sink pair of your scope is a row with every cell filled; `false` otherwise.
+- `findings`: most severe first, or `[]`. Each names a concrete **attacker** and has `n` (its number, from 1), `severity` (`blocker`: exploitable as written; `should-fix`: exploitable only under a setup step 3 allows), `axis` (one of the six above), `path` and `line` in the worktree (for a PR, on a line the diff adds or changes when possible), `claim` (one sentence), `attacker` (who controls which input, and how they reach this code), `scenario` (the input they send, the steps), `gain` (what they can do afterwards that their baseline does not already allow) and `fix` (one sentence on the smallest change that closes it; when that change adds one more entry to a deny-list of paths, file names or functions, name the structural fix that closes the whole class instead, e.g. an allow-list, CODEOWNERS, a gate that checks paths).
+- `other_bugs`: `path`, `line` and `claim` each, or `[]`.
+- `process`: the merge-path sentences of the decisions file section, or `[]`.
+
+With an `output` file in the input, write the object there in UTF-8, then your final message is only `{"status": "<its status>", "output": "<that path>"}`. With none, your final message is the object itself, and nothing else.

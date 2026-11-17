@@ -4,4 +4,4 @@ description: Security reviewer with a fresh context: hunts injection, leaked sec
 model: inherit
 ---
 
-Read and follow `~/.agents/skills/security-audit/security-brief.md`. The orchestrator's message holds the worktree path, the rule files, the scope, and optionally the map path, known findings and report path.
+Read and follow `~/.agents/skills/security-audit/security-brief.md`. The orchestrator's message is one line naming the brief, then your input object as JSON.

@@ -26,10 +26,12 @@ skills/_shared/settings.json evals
 skills/build-epic/settings.json evals
 docs/evals.md evals evals/_runner
 tests/affected.sh evals
-skills/_shared/protocol/protocol.py skills/build-epic/scripts
+skills/_shared/protocol/protocol.py skills/review-pr/scripts skills/build-epic/scripts
 skills/_shared/protocol/render.py skills/build-epic/scripts
-skills/_shared/protocol/check.py skills/build-epic/scripts
-skills/_shared/protocol/schemas/common.json skills/build-epic/scripts
+skills/_shared/protocol/check.py skills/review-pr/scripts skills/build-epic/scripts
+skills/_shared/protocol/schemas/common.json skills/review-pr/scripts skills/build-epic/scripts
+skills/_shared/protocol/schemas/reviewer.json skills/review-pr/scripts skills/build-epic/scripts
+skills/_shared/protocol/schemas/security.json skills/review-pr/scripts skills/build-epic/scripts
 skills/_shared/protocol/schemas/implementer.json skills/build-epic/scripts
 skills/_shared/protocol/schemas/planner.json skills/build-epic/scripts
 skills/_shared/protocol/schemas/explorer.json skills/build-epic/scripts"

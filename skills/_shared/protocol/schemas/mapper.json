@@ -19,6 +19,10 @@
    "map": {
     "$ref": "common.json#/$defs/path"
    },
+   "area_budget": {
+    "type": "integer",
+    "minimum": 1
+   },
    "output": {
     "$ref": "common.json#/$defs/path"
    }

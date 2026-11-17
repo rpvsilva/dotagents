@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_ship import POST_REVIEW, REVIEWS, Base  # noqa: E402
+from test_ship import POST_REVIEW, REVIEW_OUTPUT, REVIEWS, Base  # noqa: E402
 
 DENIED = "gh: Resource not accessible by integration (HTTP 403)\n"
 
@@ -16,9 +16,9 @@ class PostDeniedTest(Base):
         return self.one_line(self.kit.step(POST_REVIEW, self.kit.run_dir, *args))
 
     def report(self):
-        report = self.kit.tmp / "reviews" / "12-abc1234.md"
+        report = self.kit.tmp / "reviews" / "12-abc1234.json"
         report.parent.mkdir(exist_ok=True)
-        report.write_text("Finding: the JSON parser drops keys.\n", encoding="utf-8")
+        report.write_text(REVIEW_OUTPUT, encoding="utf-8")
         return report
 
     def deny(self):
@@ -29,7 +29,7 @@ class PostDeniedTest(Base):
         report = self.deny()
         line = self.post("12", report)
         self.assertRegex(line, rf"^FAIL PR12 post-denied {re.escape(str(report))} \(log: .+\)$")
-        self.assertEqual(report.read_text(encoding="utf-8"), "Finding: the JSON parser drops keys.\n")
+        self.assertEqual(report.read_text(encoding="utf-8"), REVIEW_OUTPUT)
 
     def test_a_denied_post_is_not_retried(self):
         report = self.deny()

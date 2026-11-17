@@ -12,6 +12,9 @@ from testkit import SCRIPTS, Kit  # noqa: E402
 
 POST_REVIEW = SCRIPTS / "post_review.py"
 SHIP = SCRIPTS / "ship_ticket.py"
+# A valid `reviewer` output (the agent protocol): what `post_review.py` posts, rendered.
+REVIEW_OUTPUT = json.dumps({"status": "done", "mode": "ticket", "findings": [], "checked": "every hunk",
+                            "process": [], "followups": []})
 REPO = SCRIPTS.parents[2]
 
 # `gh pr view` answers like GitHub: the PR's head is the ticket branch's tip on origin, its state `answers/pr-state`
@@ -109,8 +112,8 @@ class PostReviewTest(Base):
         return json.loads(Path(call[call.index("--input") + 1]).read_text(encoding="utf-8"))
 
     def test_the_payload_is_a_comment_on_the_prs_head_and_never_an_approval(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n", encoding="utf-8")
+        report = self.kit.tmp / "r.json"
+        report.write_text(REVIEW_OUTPUT, encoding="utf-8")
         self.post("https://github.com/o/r/pull/12", report)
         payload = self.payload()
         self.assertEqual(payload["event"], "COMMENT")
@@ -120,26 +123,26 @@ class PostReviewTest(Base):
         self.assertNotIn("APPROVE", json.dumps(self.kit.gh_calls()))
 
     def test_an_empty_report_is_refused_and_nothing_posts(self):
-        report = self.kit.tmp / "r.md"
+        report = self.kit.tmp / "r.json"
         report.write_text(" \n\n", encoding="utf-8")
         line = self.post("#12", report)
         self.assertRegex(line, r"^FAIL PR12 empty-review \(log: ")
         self.assertEqual(self.calls("api"), [])
 
     def test_a_missing_report_is_refused(self):
-        line = self.post("12", self.kit.tmp / "nope.md")
+        line = self.post("12", self.kit.tmp / "nope.json")
         self.assertRegex(line, r"^FAIL PR12 empty-review \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_value_naming_no_pr_is_refused(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n", encoding="utf-8")
+        report = self.kit.tmp / "r.json"
+        report.write_text(REVIEW_OUTPUT, encoding="utf-8")
         self.assertRegex(self.post("latest", report), r"^FAIL latest bad-pr: latest \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_pr_view_without_a_head_fails_and_nothing_posts(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n", encoding="utf-8")
+        report = self.kit.tmp / "r.json"
+        report.write_text(REVIEW_OUTPUT, encoding="utf-8")
         (self.kit.bin / "gh-kit").replace(self.kit.bin / "gh")  # the plain stub, so `pr view` answers what is set
         for out, rc in (("", 1), ("not json", 0), ("{}", 0)):
             with self.subTest(out=out, rc=rc):
@@ -148,14 +151,14 @@ class PostReviewTest(Base):
         self.assertEqual(self.calls("api"), [])
 
     def test_a_report_that_is_not_utf8_is_refused_and_nothing_posts(self):
-        report = self.kit.tmp / "r.md"
+        report = self.kit.tmp / "r.json"
         report.write_bytes(b"caf\xe9\n")
         self.assertRegex(self.post("12", report), r"^FAIL PR12 bad-report \(log: ")
         self.assertEqual(self.kit.gh_calls(), [])
 
     def test_a_failed_post_fails(self):
-        report = self.kit.tmp / "r.md"
-        report.write_text("ok\n", encoding="utf-8")
+        report = self.kit.tmp / "r.json"
+        report.write_text(REVIEW_OUTPUT, encoding="utf-8")
         self.kit.answer(REVIEWS.format(n=12), err="HTTP 422: Unprocessable", rc=1)
         self.assertRegex(self.post("12", report), r"^FAIL PR12 post \(log: ")
 
