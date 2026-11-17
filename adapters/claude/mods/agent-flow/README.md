@@ -2,7 +2,7 @@
 
 A Claude Code mod: `/agent-flow` opens a pane that draws this session's agents as a live org chart. `main` sits at the top, centred; each subagent hangs in a box under the agent that started it, joined by a connector. The pane opens only by the command, never by itself, so it shows at any terminal width.
 
-It only observes. Every hook passes its call on with `next(e)`, unchanged, and records what happened; each hook that wraps a call (`agent.spawn`, `tool.call`, `tool.check`) has a `.catch` that passes the call on, so a failure in the mod can cost the chart an event but never fails, delays or changes a call. It makes no network requests and runs no processes.
+It only observes. Every hook passes its call on with `next(e)`, unchanged, and records what happened; each hook that wraps a call (`agent.spawn`, `tool.call`, `tool.check`) has a `.catch` that passes the call on, so a failure in the mod can cost the chart an event but never fails, delays or changes a call. It makes no network requests; the only processes it runs are `ps` (is a remote run's `remote-agent` still alive) and `tail` (a remote transcript over 3 MiB), both only while a remote run of this session is live, and where a surface has no processes it does without them.
 
 ## What a box shows
 
@@ -27,6 +27,16 @@ Colours: status from the theme (`warning`, `success`, `error`, `inactive`), so l
 - A new turn never cuts a linger short (a background agent's notification starts a turn too); the header then says what the last turn came to (`last turn: ✓ 4 ✗ 1`).
 - `main` never leaves and never moves: everything is placed relative to it.
 - When the layout changes, every box glides from where it is to its new spot on one shared 320 ms ease-out, so a row moves as a whole; a pass then keeps at least 2 columns between neighbours in every row, so no two boxes ever touch.
+
+## Remote runs
+
+A run of `remote-agent` (the `remote` group) shows as a box of its own, `☁ <name>`, under the agent whose Bash call started it, with the subagents it ran inside the sandbox as boxes under it. Its box shows its setup phase while the sandbox starts (`◌ claiming…`, `sending…`, `booting…`), then its current tool call; once done, its cost and the files it changed (`✓ $0.25 · 3 files`), with its time on the model line; a failed one, why (`exit 2`, `stopped`, `lost sandbox`, `capped`).
+
+- **Which runs**: those whose `run.json` names this session as its caller (`caller.session`, written by remote-agent from `CLAUDE_CODE_SESSION_ID`); another session's are never shown. The run folders are found with file reads only: the `.git` above the session's folder, through a worktree's `gitdir:` and `commondir`, to `<common git dir>/remote-agent/<run>/` and each linked worktree's.
+- **Under which agent**: each Bash call that starts `remote-agent` (not its `check`, `result` and other subcommands) is recorded with its agent, start, `--name` and description, which becomes the run's task. A run goes under the call whose output printed its `transcript:` path; else the call that gave its `--name`; else the earliest call that began up to 2 minutes before it and still ran then or went to the background. With none, it hangs under main, and its log says no call was found.
+- **Alive**: a starting or running run whose pid is gone, or was reused (`ps` with the pid's start time), is stopped; where processes cannot run, one whose files went quiet for 5 minutes.
+- **When**: the folders are read every 1.5 s, and only while a `remote-agent` call or a run of this session is live (and once after the mod loads), each folder's files again only when they changed; a finished run of another session is not read again.
+- **Its log**: its setup from `progress.log`, then its transcript as the remote-runs mod renders it (tool calls, results, errors, the end), then its `summary.md`; a sandbox subagent's log, its own events. `session.jsonl` is never read.
 
 ## Many agents
 
@@ -83,6 +93,8 @@ These are the mod's own plugin options (`/config`), not dotagents Settings, so t
 - `hooks/main.tsx`: the hooks module. Records events, runs the timer, sets the status line, draws the pane.
 - `hooks/flow.ts`: the agent graph, built from events by one pure reducer; summaries, model labels and colours, the status line text.
 - `hooks/lifecycle.ts`: when a box enters, lingers and leaves.
+- `hooks/remote.ts`: remote runs: finding the run folders, `run.json`, `result.json` and transcripts read into box fields, liveness, linking a run to its Bash call, a remote log. `parseRun` and the liveness rules come from the remote-runs mod.
+- `hooks/transcript.ts`: a remote transcript's reader and renderer, with its masking, moved from the remote-runs mod.
 - `hooks/log.ts`: an agent's log (messages to lines, masking, links, the scrolled window), the Agents list (sections, filters, squad groups) and the way Back goes.
 - `hooks/layout.ts`: the chart on a character grid (squads, folding, the shared tween, the minimum gap, connectors), the strips, the expanded squad and the tree.
 - `hooks/state.d.ts`: the state contract (`plugin.json` `types`) and the shared types. Change an atom's `shape` tag when its fields change.
