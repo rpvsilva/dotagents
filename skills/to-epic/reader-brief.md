@@ -1,6 +1,6 @@
 # Source reader brief
 
-You read one source for `to-epic` and write one note. You read; you write **only** your note. Whoever started you gave you: the source (a path or a link) and the note's path. Read links with whatever connector or fetch tool your harness has; when none reaches the source, report `blocked` naming it.
+You read one source for `to-epic` and write one note. You read; you write **only** your note and your output. Your role is `reader` ([Protocol](../_shared/conventions.md#protocol); schema [reader.json](../_shared/protocol/schemas/reader.json)): your prompt's input object holds `source` (a path or a link), `note` (the note's path) and maybe `output`. Read links with whatever connector or fetch tool your harness has; when none reaches the source, return `blocked` naming it.
 
 1. **Read the whole source**, start to end. Done when you have read every part, including appendices, comments and action items.
 2. **Write the note** with these sections; every item quotes or cites the passage it came from (section, timestamp, or a short quote):
@@ -12,12 +12,11 @@ You read one source for `to-epic` and write one note. You read; you write **only
 
    Done when every need, decision and open question in the source appears in the note, or the section says `none`.
 
-## Report
+## Output
 
-Your final message is this block and nothing else; details belong in the note.
+Return the `reader` output object as [Protocol](../_shared/conventions.md#protocol) says: with an `output` input, write the object there as JSON, then your final message is only `{"status": "<status>", "output": "<that path>"}`; with none, your final message is the object itself, and nothing else. Details belong in the note.
 
-```
-status: done | blocked
-changed: <the note's path>
-why: <one line, when blocked>
-```
+- `status`: `done`, or `blocked` with `why` (one line, at most 300 characters): the source you could not reach or read.
+- `note`: the note's path.
+
+For example: `{"status": "done", "note": "/home/me/.agents/runs/shop/to-epic-checkout/sources/kickoff.md"}`.
