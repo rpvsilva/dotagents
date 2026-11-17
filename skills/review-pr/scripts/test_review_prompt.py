@@ -1,4 +1,5 @@
-"""Tests for `review_prompt.py`: one golden prompt per mode, the shared rules, and the usage failures."""
+"""Tests for `review_prompt.py`: one golden prompt per mode, each a valid protocol prompt, and the usage failures."""
+import json
 import os
 import re
 import shlex
@@ -12,14 +13,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "review_prompt.py"
 GOLDEN = HERE / "fixtures" / "review_prompt"
-MODES = ("task", "hub", "ticket", "re-review", "security")
+CHECK = HERE.parents[1] / "_shared" / "protocol" / "check.py"
+MODES = ("task", "ticket", "re-review", "security")
+ROLE = {"task": "reviewer", "ticket": "reviewer", "re-review": "reviewer", "security": "security"}
 
 COMMON = ["--pr", "42", "--worktree", "/wt/pr-42", "--head", "abc1234", "--base", "origin/main"]
 RUN = ["--run", "/runs/r1"]
 ARGS = {
     "task": COMMON + RUN + ["--task", "/runs/r1/tasks/03-02-review-prompt.md"],
-    "hub": COMMON + RUN + ["--task", "/runs/r1/tasks/03-09-hub.md", "--ticket", "/runs/r1/tickets/03-review.md",
-                           "--task-base", "origin/feat/03-review"],
     "ticket": COMMON + RUN + ["--task", "/runs/r1/tickets/03-review.md"],
     "re-review": ["--pr", "42", "--worktree", "/wt/pr-42", "--head", "abc1234", "--base", "def5678", *RUN,
                   "--findings", "@FINDINGS@"],
@@ -45,10 +46,16 @@ def run(*args, cwd=None):
                           cwd=cwd)
 
 
+def inputs(prompt):
+    """The input object after the prompt's first line."""
+    return json.loads(prompt.partition("\n")[2])
+
+
 class ReviewPromptTest(unittest.TestCase):
     def setUp(self):
         # Resolved, as the child's cwd is: macOS tmp is under a /var symlink, Windows tmp under an 8.3 short name.
         self.tmp = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.findings = self.tmp / "findings.md"
         self.findings.write_text("1. blocker: x.py:3 crashes on empty input\n", encoding="utf-8")
 
@@ -63,73 +70,102 @@ class ReviewPromptTest(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertEqual(self.render(mode), (GOLDEN / f"{mode}.txt").read_text(encoding="utf-8"))
 
-    def test_every_mode_diffs_against_the_merge_base_and_reads_before_testing(self):
+    def test_each_prompt_names_its_agent_and_brief_and_passes_its_roles_input_check(self):
+        first = {"reviewer": "You are a pr-reviewer. Follow ~/.agents/skills/review-pr/reviewer-brief.md.",
+                 "security": "You are a security-reviewer. Follow ~/.agents/skills/security-audit/security-brief.md."}
         for mode in MODES:
             with self.subTest(mode=mode):
                 out = self.render(mode)
+                self.assertEqual(out.splitlines()[0], first[ROLE[mode]])
+                prompt = self.tmp / f"{mode}.txt"
+                prompt.write_text(out, encoding="utf-8")
+                got = subprocess.run([sys.executable, "-I", str(CHECK), ROLE[mode], "input", str(prompt)],
+                                     capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(got.stdout, f"OK {ROLE[mode]} input\n")
+
+    def test_every_mode_diffs_against_the_merge_base(self):
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                got = inputs(self.render(mode))
                 base = ARGS[mode][ARGS[mode].index("--base") + 1]
-                self.assertIn(f"merge-base {base} abc1234", out)
-                self.assertIn("not a finding", out)
-                self.assertIn("Run tests only after you have read the whole diff", out)
+                self.assertEqual(got["base"], base)
+                self.assertIn(f"merge-base {base} abc1234", got["diff"])
 
-    def test_hub_has_a_task_section_and_a_whole_ticket_section(self):
-        out = self.render("hub")
-        a, b = out.index("## A."), out.index("## B.")
-        self.assertLess(a, b)
-        self.assertIn("merge-base origin/feat/03-review abc1234", out[a:b])
-        self.assertIn("/runs/r1/tasks/03-09-hub.md", out[a:b])
-        self.assertIn("merge-base origin/main abc1234", out[b:])
-        self.assertIn("/runs/r1/tickets/03-review.md", out[b:])
+    def test_the_mode_is_the_reviewers_and_security_is_the_pr_scope(self):
+        for mode in ("task", "ticket", "re-review"):
+            self.assertEqual(inputs(self.render(mode))["mode"], mode)
+        got = inputs(self.render("security"))
+        self.assertEqual(got["scope"], "pr")
+        self.assertNotIn("mode", got)
 
-    def test_re_review_names_only_the_new_diff_and_the_numbered_findings(self):
-        out = self.render("re-review")
-        self.assertIn("@FINDINGS@", out)
-        self.assertIn("each numbered finding", out)
-        self.assertIn("def5678 is the head last reviewed", out)
-        self.assertNotIn("tasks/", out)
+    def test_re_review_names_the_numbered_findings_and_the_head_last_reviewed(self):
+        got = inputs(self.render("re-review"))
+        self.assertEqual(got["findings"], "@FINDINGS@")
+        self.assertEqual(got["base"], "def5678")
+        self.assertNotIn("task", got)
 
-    def test_without_a_run_the_decisions_and_ci_lines_are_left_out(self):
+    def test_a_reviewer_reads_the_runs_map_and_a_security_reviewer_its_checks(self):
+        self.assertEqual(inputs(self.render("ticket"))["map"], "/runs/r1/map.md")
+        got = inputs(self.render("security"))
+        self.assertEqual(got["checks"], "/runs/r1/map.md")
+        self.assertNotIn("map", got)
+
+    def test_without_a_run_the_run_files_are_left_out(self):
         for mode in MODES:
             with self.subTest(mode=mode):
                 args = [a for a in ARGS[mode] if a not in RUN]
-                out = self.render(mode, args)
-                self.assertNotIn("decisions.md", out)
-                self.assertNotIn("ci:", out)
-                self.assertNotIn("/runs/r1/map.md", out)
-                self.assertIn("merge-base", out)
+                got = inputs(self.render(mode, args))
+                for key in ("decisions", "ci", "test_command", "map", "checks", "spec"):
+                    self.assertNotIn(key, got)
 
     def test_a_decisions_file_is_named_with_or_without_a_run(self):
         args = [a for a in ARGS["task"] if a not in RUN]
-        out = self.render("task", args + ["--decisions", "/d/decisions.md"])
-        self.assertIn("- /d/decisions.md: a rule it waives is never a finding", out)
-        self.assertIn("its `ci:` line", out)
-        self.assertNotIn("map.md", out)
-        out = self.render("task", ARGS["task"] + ["--decisions", "/d/decisions.md"])
-        self.assertIn("- /d/decisions.md: a rule it waives", out)
-        self.assertNotIn("/runs/r1/decisions.md", out)
-        self.assertIn("/runs/r1/map.md", out)
+        got = inputs(self.render("task", args + ["--decisions", "/d/decisions.md"]))
+        self.assertEqual(got["decisions"], "/d/decisions.md")
+        self.assertNotIn("map", got)
+        got = inputs(self.render("task", ARGS["task"] + ["--decisions", "/d/decisions.md"]))
+        self.assertEqual(got["decisions"], "/d/decisions.md")
+        self.assertEqual(got["map"], "/runs/r1/map.md")
 
-    def test_a_decisions_file_names_its_test_command_as_the_command_to_run(self):
-        self.assertIn("- its `test_command:` line: the exact command to run the tests with", self.render("task"))
-        args = [a for a in ARGS["task"] if a not in RUN]
-        self.assertNotIn("test_command", self.render("task", args))
+    def test_the_decisions_files_ci_and_test_command_lines_become_inputs(self):
+        decisions = self.tmp / "decisions.md"
+        decisions.write_text("# Decisions\nbase: main\nci: off\ntest_command: capped -- tests/run.sh\n\n"
+                             "## Decisions\n\n- 2026-11-06: ci: on\n", encoding="utf-8")
+        args = [a for a in ARGS["task"] if a not in RUN] + ["--decisions", str(decisions)]
+        got = inputs(run("task", *args).stdout)
+        self.assertEqual((got["ci"], got["test_command"]), ("off", "capped -- tests/run.sh"))
+        got = inputs(run("security", *[a for a in ARGS["security"] if a not in RUN], "--decisions",
+                         str(decisions)).stdout)
+        self.assertEqual(got["test_command"], "capped -- tests/run.sh")
+        self.assertNotIn("ci", got)
+        decisions.write_text("# Decisions\nci: maybe\ntest_command:\n", encoding="utf-8")
+        got = inputs(run("task", *args).stdout)
+        self.assertNotIn("ci", got)
+        self.assertNotIn("test_command", got)
 
-    def test_a_report_file_is_the_one_file_the_reviewer_may_write(self):
+    def test_the_runs_spec_is_named_when_it_exists(self):
+        run_dir = self.tmp / "run"
+        run_dir.mkdir()
+        args = ["--pr", "1", "--worktree", "/w", "--head", "h", "--base", "b", "--run", str(run_dir)]
+        self.assertNotIn("spec", inputs(run("ticket", *args).stdout))
+        (run_dir / "spec.md").write_text("spec\n", encoding="utf-8")
+        self.assertEqual(inputs(run("ticket", *args).stdout)["spec"], str(run_dir / "spec.md"))
+        self.assertNotIn("spec", inputs(run("security", *args).stdout))
+
+    def test_an_output_file_is_named_as_the_output_input(self):
         for mode in MODES:
             with self.subTest(mode=mode):
                 args = [a.replace("@FINDINGS@", str(self.findings)) for a in ARGS[mode]]
-                got = run(mode, *args, "--report", "reviews/42-abc1234.md", cwd=self.tmp)
-                self.assertEqual(got.returncode, 0, got.stderr)
-                report = str(self.tmp / "reviews" / "42-abc1234.md")
-                self.assertTrue(got.stdout.endswith(
-                    f"\nWrite your report to {report}, the only file you may write, then return the block alone, "
-                    "as the brief's Report says.\n"), got.stdout)
-                self.assertNotIn("the only file you may write", self.render(mode))
+                for option in ("--output", "--report"):
+                    got = run(mode, *args, option, "reviews/42-abc1234.json", cwd=self.tmp)
+                    self.assertEqual(got.returncode, 0, got.stderr)
+                    self.assertEqual(inputs(got.stdout)["output"], str(self.tmp / "reviews" / "42-abc1234.json"))
+                self.assertNotIn("output", inputs(self.render(mode)))
 
     def test_relative_paths_are_made_absolute(self):
         got = run("task", "--pr", "1", "--worktree", "wt", "--head", "h", "--base", "b", cwd=self.tmp)
         self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertIn(str(Path(self.tmp, "wt")), got.stdout)
+        self.assertEqual(inputs(got.stdout)["worktree"], str(Path(self.tmp, "wt")))
 
     def test_the_diff_command_runs_as_given_whatever_the_worktree_and_refs_hold(self):
         repo = self.tmp / "a repo $(touch pwned)"
@@ -142,12 +178,12 @@ class ReviewPromptTest(unittest.TestCase):
         subprocess.run(git + ["commit", "-qam", "two"], check=True)
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1;touch pwned2")
         self.assertEqual(got.returncode, 0, got.stderr)
-        command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True, encoding="utf-8")
-        self.assertFalse((self.tmp / "pwned").exists() or (self.tmp / "pwned2").exists(), command)
+        subprocess.run([BASH, "-c", inputs(got.stdout)["diff"]], cwd=self.tmp, capture_output=True, text=True,
+                       encoding="utf-8")
+        self.assertFalse((self.tmp / "pwned").exists() or (self.tmp / "pwned2").exists())
         got = run("task", "--pr", "1", "--worktree", str(repo), "--head", "HEAD", "--base", "HEAD~1")
-        command = next(line.strip() for line in got.stdout.splitlines() if line.strip().startswith("git -C"))
-        res = subprocess.run([BASH, "-c", command], cwd=self.tmp, capture_output=True, text=True, encoding="utf-8")
+        res = subprocess.run([BASH, "-c", inputs(got.stdout)["diff"]], cwd=self.tmp, capture_output=True, text=True,
+                             encoding="utf-8")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("+two", res.stdout)
 
@@ -159,6 +195,10 @@ class ReviewPromptTest(unittest.TestCase):
     def test_an_unknown_mode_fails_with_usage(self):
         self.assert_usage(run("deep", *COMMON))
 
+    def test_hub_mode_is_gone(self):
+        self.assert_usage(run("hub", *COMMON, "--task", "/t.md"))
+        self.assert_usage(run("ticket", *COMMON, "--ticket", "/t.md", "--task-base", "origin/feat/x"))
+
     def test_re_review_without_findings_fails_with_usage(self):
         self.assert_usage(run("re-review", *COMMON))
 
@@ -168,23 +208,22 @@ class ReviewPromptTest(unittest.TestCase):
     def test_a_missing_required_option_fails_with_usage(self):
         self.assert_usage(run("task", "--pr", "42"))
 
-    def test_hub_without_its_ticket_and_task_base_fails_with_usage(self):
-        self.assert_usage(run("hub", *COMMON, "--task", "/t.md"))
+    def test_an_input_the_schema_refuses_fails_with_usage(self):
+        self.assert_usage(run("task", "--pr", "-3", "--worktree", "/w", "--head", "h", "--base", "b"))
+        self.assert_usage(run("task", "--pr", "3", "--worktree", "/w", "--head", "", "--base", "b"))
 
     # A task's commits before they merge, with no PR (build-epic's high-tier tasks)
 
     NO_PR = ["--worktree", "/runs/r1/worktrees/03-02", "--head", "abc1234", "--base", "feat/03-review", *RUN,
-             "--task", "/runs/r1/tasks/03-02-review-prompt.md", "--report", "/runs/r1/reviews/03-02-abc1234.md"]
+             "--task", "/runs/r1/tasks/03-02-review-prompt.md", "--output", "/runs/r1/reviews/03-02-abc1234.json"]
 
     def test_a_task_with_no_pr_is_reviewed_from_its_task_file_and_local_commits(self):
-        out = self.render("task", self.NO_PR)
-        self.assertTrue(out.startswith("Review the commits of task /runs/r1/tasks/03-02-review-prompt.md, before "
-                                       "they merge into feat/03-review. There is no PR"), out)
-        self.assertIn("not `gh pr view`", out)
-        self.assertIn("/runs/r1/tasks/03-02-review-prompt.md: what the change was asked to do", out)
-        self.assertIn("git -C /runs/r1/worktrees/03-02 diff $(git -C /runs/r1/worktrees/03-02 merge-base "
-                      "feat/03-review abc1234) abc1234", out)
-        self.assertNotIn("PR #", out)
+        got = inputs(self.render("task", self.NO_PR))
+        self.assertNotIn("pr", got)
+        self.assertEqual(got["task"], "/runs/r1/tasks/03-02-review-prompt.md")
+        self.assertEqual(got["diff"], "git -C /runs/r1/worktrees/03-02 diff $(git -C /runs/r1/worktrees/03-02 "
+                                      "merge-base feat/03-review abc1234) abc1234")
+        self.assertEqual(got["output"], "/runs/r1/reviews/03-02-abc1234.json")
 
     def test_with_no_pr_only_a_local_task_review_runs(self):
         no_task = [a for a in self.NO_PR if a != "/runs/r1/tasks/03-02-review-prompt.md" and a != "--task"]
@@ -193,9 +232,6 @@ class ReviewPromptTest(unittest.TestCase):
             self.assert_usage(run(mode, *self.NO_PR, "--findings", str(self.findings)))
         self.assert_usage(run("task", *self.NO_PR[:-2], "--remote", str(self.tmp / "remote"),
                               "--allow-author", "rui"))
-
-    def test_the_pr_task_prompt_is_unchanged(self):
-        self.assertEqual(self.render("task"), (GOLDEN / "task.txt").read_text(encoding="utf-8"))
 
 
 def git(repo, *args):
@@ -219,12 +255,11 @@ class RemotePromptTest(unittest.TestCase):
         self.commit("f.txt", "one\n")
         git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
         self.commit("g.txt", "ticket\n")
-        git(self.repo, "update-ref", "refs/remotes/origin/feat/03-review", "HEAD")
         self.last = git(self.repo, "rev-parse", "HEAD")
         self.head = self.commit("f.txt", "two\n")
         self.run_dir = self.tmp / "run"
-        for name in ("decisions.md", "map.md", "spec.md", "tasks/03-02-review-prompt.md", "tasks/03-09-hub.md",
-                     "tickets/03-review.md", "findings.md"):
+        for name in ("decisions.md", "map.md", "spec.md", "tasks/03-02-review-prompt.md", "tickets/03-review.md",
+                     "findings.md"):
             (self.run_dir / name).parent.mkdir(parents=True, exist_ok=True)
             (self.run_dir / name).write_text(f"{name}\n", encoding="utf-8")
         self.bin = self.tmp / "bin"
@@ -249,8 +284,6 @@ class RemotePromptTest(unittest.TestCase):
         common = ["--pr", "42", "--worktree", str(self.repo), "--head", self.head, "--run", run_dir]
         return [mode] + common + {
             "task": ["--base", "origin/main", "--task", f"{run_dir}/tasks/03-02-review-prompt.md"],
-            "hub": ["--base", "origin/main", "--task", f"{run_dir}/tasks/03-09-hub.md",
-                    "--ticket", f"{run_dir}/tickets/03-review.md", "--task-base", "origin/feat/03-review"],
             "ticket": ["--base", "origin/main", "--task", f"{run_dir}/tickets/03-review.md"],
             "re-review": ["--base", self.last, "--findings", f"{run_dir}/findings.md"],
             "security": ["--base", "origin/main", "--task", f"{run_dir}/tickets/03-review.md"],
@@ -268,26 +301,27 @@ class RemotePromptTest(unittest.TestCase):
         attach = (self.out / "attach.txt").read_text(encoding="utf-8").splitlines()
         return got.stdout, attach
 
-    def test_a_remote_prompt_names_no_local_path_no_gh_no_git_history_and_no_report_line(self):
+    def test_a_remote_prompt_names_no_local_path_no_gh_no_git_history_and_no_output(self):
         for mode in MODES:
             with self.subTest(mode=mode):
                 out, _ = self.render(self.args(mode))
-                self.assertIn("~/work", out)
+                got = inputs(out)
+                self.assertEqual(got["worktree"], "~/work")
+                self.assertIs(got["remote"], True)
+                self.assertNotIn("output", got)
                 self.assertNotIn(str(self.tmp), out)
-                self.assertIsNone(re.search(r"(^|[\s(`'\"=:])[/\\]", out), out)
-                self.assertIsNone(re.search(r"\b[A-Za-z]:[/\\]", out), out)
-                self.assertIsNone(re.search(r"\bgh\b", out), out)
-                self.assertIsNone(re.search(r"\bgit\b|merge-base|\$\(", out), out)
-                self.assertNotIn("report:", out)
-                self.assertNotIn("the only file you may write", out)
-                self.assertIn("Run tests only after you have read the whole diff", out)
+                values = [v for k, v in got.items() if isinstance(v, str) and k != "head" and k != "base"]
+                for value in values:
+                    self.assertIsNone(re.search(r"(^|[\s(`'\"=:])[/\\]", value), value)
+                    self.assertIsNone(re.search(r"\b[A-Za-z]:[/\\]", value), value)
+                    self.assertIsNone(re.search(r"\bgh\b|\bgit\b|merge-base|\$\(", value), value)
 
     def test_a_remote_prompt_names_each_attachment_by_its_basename(self):
         for mode in MODES:
             with self.subTest(mode=mode):
                 out, attach = self.render(self.args(mode))
                 names = [Path(path).name for path in attach]
-                self.assertEqual(sorted(set(re.findall(r"~/attached/([^\s`,:;)]+)", out))), sorted(names))
+                self.assertEqual(sorted(set(re.findall(r"~/attached/([^\s\"`,:;)]+)", out))), sorted(names))
                 self.assertTrue(all(Path(path).is_absolute() and Path(path).is_file() for path in attach), attach)
 
     def test_the_attach_list_names_every_input_the_local_prompt_names_with_distinct_basenames(self):
@@ -296,12 +330,11 @@ class RemotePromptTest(unittest.TestCase):
                 args = self.args(mode)
                 local = run(*args)
                 self.assertEqual(local.returncode, 0, local.stderr)
-                named = {p for p in re.findall(r"(?:^|\s)(/\S+?)[,:]?(?=\s|$)", local.stdout, re.M)
-                         if p.startswith(str(self.run_dir))}
+                named = {v for v in inputs(local.stdout).values()
+                         if isinstance(v, str) and v.startswith(str(self.run_dir))}
                 self.assertTrue(named)
                 _, attach = self.render(args)
                 self.assertTrue(named <= set(attach), (named, attach))
-                self.assertIn(str(self.run_dir / "spec.md"), attach)
                 names = [Path(path).name for path in attach]
                 self.assertEqual(len(names), len(set(names)), names)
 
@@ -316,58 +349,35 @@ class RemotePromptTest(unittest.TestCase):
                          "pr view 42 --json author,title,body,headRefOid,baseRefName,files\n")
         self.assertIn(str(self.out / "pr-42.diff"), attach)
         self.assertIn(str(self.out / "pr-42.json"), attach)
-        self.assertIn("cat ~/attached/pr-42.diff", out)
-        self.assertIn("~/attached/pr-42.json", out)
-
-    def test_hub_writes_the_task_diff_and_the_whole_ticket_diff(self):
-        out, attach = self.render(self.args("hub"))
-        a, b = out.index("## A."), out.index("## B.")
-        self.assertIn("cat ~/attached/pr-42-task.diff", out[a:b])
-        self.assertIn("~/attached/03-09-hub.md", out[a:b])
-        self.assertIn("cat ~/attached/pr-42.diff", out[b:])
-        self.assertIn("~/attached/03-review.md", out[b:])
-        task = (self.out / "pr-42-task.diff").read_text(encoding="utf-8")
-        whole = (self.out / "pr-42.diff").read_text(encoding="utf-8")
-        self.assertNotIn("+ticket", task)
-        self.assertIn("+ticket", whole)
-        self.assertIn("+two", task)
-        self.assertIn(str(self.out / "pr-42-task.diff"), attach)
-
-    def test_hub_without_a_task_file_points_at_the_attached_pr_facts(self):
-        args = self.args("hub")
-        i = args.index("--task")
-        out, _ = self.render(args[:i] + args[i + 2:])
-        self.assertIn("the PR description, in ~/attached/pr-42.json", out)
+        got = inputs(out)
+        self.assertEqual(got["diff"], "cat ~/attached/pr-42.diff")
+        self.assertEqual(got["pr_facts"], "~/attached/pr-42.json")
 
     def test_inputs_sharing_a_basename_are_attached_under_distinct_names(self):
         for name in ("a/notes.md", "b/notes.md", "c/decisions.md"):
             (self.tmp / name).parent.mkdir(parents=True, exist_ok=True)
             (self.tmp / name).write_text(f"{name}\n", encoding="utf-8")
-        args = self.args("hub")
-        args[args.index("--task") + 1] = str(self.tmp / "a/notes.md")
-        args[args.index("--ticket") + 1] = str(self.tmp / "b/notes.md")
-        out, attach = self.render(args + ["--decisions", str(self.tmp / "c/decisions.md")])
+        args = self.args("re-review")
+        args[args.index("--findings") + 1] = str(self.tmp / "b/notes.md")
+        out, attach = self.render(args + ["--task", str(self.tmp / "a/notes.md"),
+                                          "--decisions", str(self.tmp / "c/decisions.md")])
         names = [Path(path).name for path in attach]
         self.assertEqual(len(names), len(set(names)), names)
         by_name = {Path(path).name: Path(path).read_text(encoding="utf-8") for path in attach}
-        a, b = out.index("## A."), out.index("## B.")
-        task = re.search(r"~/attached/(\S+)", out[a:]).group(1)
-        ticket = re.search(r"~/attached/(\S+)", out[b:]).group(1)
-        self.assertEqual(by_name[task], "a/notes.md\n")
-        self.assertEqual(by_name[ticket], "b/notes.md\n")
-        decisions = re.search(r"~/attached/(\S+): a rule it waives", out).group(1)
-        self.assertEqual(by_name[decisions], "c/decisions.md\n")
+        got = {k: v.removeprefix("~/attached/") for k, v in inputs(out).items() if isinstance(v, str)}
+        self.assertEqual(by_name[got["task"]], "a/notes.md\n")
+        self.assertEqual(by_name[got["findings"]], "b/notes.md\n")
+        self.assertEqual(by_name[got["decisions"]], "c/decisions.md\n")
 
     def test_without_a_run_only_the_diff_and_the_pr_facts_are_attached(self):
         args = self.args("task")
         i = args.index("--run")
         out, attach = self.render(args[:i] + args[i + 2:])
         self.assertEqual(sorted(Path(p).name for p in attach), ["03-02-review-prompt.md", "pr-42.diff", "pr-42.json"])
-        self.assertNotIn("decisions", out)
-        self.assertIn("the test commands the repo's rule files name", out)
+        self.assertNotIn("decisions", inputs(out))
 
-    def test_remote_with_a_report_file_fails_with_usage(self):
-        got = self.remote(self.args("task") + ["--report", str(self.tmp / "r.md")])
+    def test_remote_with_an_output_file_fails_with_usage(self):
+        got = self.remote(self.args("task") + ["--output", str(self.tmp / "r.json")])
         self.assertEqual(got.returncode, 2, got.stdout + got.stderr)
         self.assertTrue(got.stderr.startswith("usage: review_prompt.py "), got.stderr)
 
@@ -381,8 +391,7 @@ class RemotePromptTest(unittest.TestCase):
         self.assertFalse((self.out / "pr-42.diff").exists())
 
     def test_a_pr_by_any_allowed_author_renders_whatever_the_login_case(self):
-        out, _ = self.render(self.args("task"))
-        self.assertIn("~/work", out)
+        self.render(self.args("task"))
         got = self.remote(self.args("task"), allow=("app/rpvsilva-agent", "RUI"))
         self.assertEqual(got.returncode, 0, got.stderr)
 

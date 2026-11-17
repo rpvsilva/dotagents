@@ -131,6 +131,7 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 
 - **Plugins** ([`adapters/claude/plugins.txt`](adapters/claude/plugins.txt)): `mattpocock-skills`, a set of engineering skills (grilling, TDD, code review, ...).
 - **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `agent-flow` adds an `/agent-flow` pane drawing the session's agents as a live org chart, with a list of every agent and its log, remote-agent runs included (this session's under the agent that started them, other sessions' in the list).
+- **build-epic launcher** ([`adapters/claude/build-epic/launch.sh`](adapters/claude/build-epic/launch.sh)): `~/.agents/bin/build-epic <epic>` starts the orchestrator with no MCP servers and only the tools a run calls, then runs `/build-epic`. See [docs/build-epic-launcher.md](docs/build-epic-launcher.md).
 - **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow my GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
 
 ### 🧱 Groups
@@ -192,6 +193,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | ☁️ [Remote subagents](docs/remote.md) | Running subagents on a cluster, Docker or an SSH host, with diagrams |
 | 💬 [Agent communication](docs/agent-communication.md) | Why subagents don't talk to each other |
 | ⚖️ [Compared with Claude features](docs/claude-features.md) | How this setup differs from Claude Code's self-hosted environments and Claude Cowork |
+| 🚀 [build-epic launcher](docs/build-epic-launcher.md) | Starting a build-epic run in Claude Code without the tools and MCP servers it never calls, and what that saves |
 | 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the case format, running cases locally or on the remote backend, grading and comparing them, when they run, and the pilot |
 | 👤 [Personal values](docs/personal.md) | Every value that is mine, and what a public install leaves out: my instructions, guardrails, plugins, gate, App identity and cluster |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
@@ -210,7 +212,7 @@ scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, evals
+docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
 ```

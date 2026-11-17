@@ -1,0 +1,82 @@
+{
+ "$comment": "The planner role: what its prompt carries (input) and what it returns (output). Checked by ../check.py.",
+ "agent": "epic-planner",
+ "brief": "build-epic/planner-brief.md",
+ "input": {
+  "type": "object",
+  "required": [
+   "pass",
+   "run",
+   "notes",
+   "output"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "pass": {
+    "enum": [
+     "A",
+     "B",
+     "revise"
+    ]
+   },
+   "input": {
+    "type": "string",
+    "minLength": 1
+   },
+   "run": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "notes": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "explore": {
+    "const": "always"
+   },
+   "reason": {
+    "$ref": "common.json#/$defs/path"
+   },
+   "output": {
+    "$ref": "common.json#/$defs/path"
+   }
+  }
+ },
+ "output": {
+  "type": "object",
+  "required": [
+   "status",
+   "wrote"
+  ],
+  "additionalProperties": false,
+  "properties": {
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "why": {
+    "$ref": "common.json#/$defs/why"
+   },
+   "wrote": {
+    "$ref": "common.json#/$defs/paths"
+   }
+  },
+  "if": {
+   "properties": {
+    "status": {
+     "const": "done"
+    }
+   }
+  },
+  "else": {
+   "required": [
+    "why"
+   ],
+   "properties": {
+    "why": {
+     "minLength": 1
+    }
+   }
+  }
+ }
+}

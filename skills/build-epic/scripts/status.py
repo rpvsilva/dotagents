@@ -17,6 +17,7 @@ Prints `OK run state <path>`.
 A report counts only when it is not older than its task file, which `start_task.py` and a re-plan rewrite: a report
 from before the task's last dispatch or re-plan is stale.
 """
+import json
 import os
 import re
 import sys
@@ -105,15 +106,19 @@ class Run:
         return self.status(self.tickets[tt][2]) if tt in self.tickets else "missing"
 
     def why(self, ident):
-        """The (status, why, fresh) of the task's stored report, or (None, None, False) without one. `fresh`: the
-        report is not older than the task file, so it comes from the task's last dispatch."""
-        report = self.dir / "reports" / f"{ident}.md"
+        """The (status, why, fresh) of the task's stored output (`reports/<id>.json`), or (None, None, False) without
+        one. `fresh`: the output is not older than the task file, so it comes from the task's last dispatch."""
+        report = self.dir / "reports" / f"{ident}.json"
         if not report.is_file():
             return None, None, False
-        text = report.read_text(encoding="utf-8")
+        try:
+            output = json.loads(report.read_text(encoding="utf-8"))
+        except ValueError:
+            output = {}
+        output = output if isinstance(output, dict) else {}
         task = self.paths.get(ident)
         fresh = task is None or report.stat().st_mtime_ns >= task.stat().st_mtime_ns
-        return runfolder.header(text, "status"), runfolder.header(text, "why") or "", fresh
+        return output.get("status"), str(output.get("why") or ""), fresh
 
     def stuck(self, tt):
         """[(id, state, why)] for each task of ticket `tt` that waits on a human: `blocked`, or not `done` with a

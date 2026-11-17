@@ -1,5 +1,6 @@
 """Tests for the `build-epic` pilot cases: each case's checks pass on a hand-built good run folder and fail on an
 empty one, and each check fails when the part of the plan it covers is broken."""
+import json
 import os
 import shutil
 import sys
@@ -109,7 +110,11 @@ Spec behaviours 1-4.
 
 
 def report(status):
-    return f"# Report\n\nWrote the plan.\n\n```\nstatus: {status}\nchanged: spec.md\nfollow-up:\n```\n"
+    """A planner output (skills/_shared/protocol, role `planner`) with `status`."""
+    out = {"status": status, "wrote": ["spec.md"]}
+    if status != "done":
+        out["why"] = "no tracker"
+    return json.dumps(out)
 
 
 def write_good(name, scratch):
@@ -118,7 +123,7 @@ def write_good(name, scratch):
     if name in PASS_A:
         (scratch / "spec.md").write_text(SPEC)
         (scratch / "areas.md").write_text(AREAS)
-        (scratch / "reports" / "plan-A.md").write_text(report("done"))
+        (scratch / "reports" / "plan-A.json").write_text(report("done"))
         return
     (scratch / "notes").mkdir(exist_ok=True)
     (scratch / "tickets").mkdir(exist_ok=True)
@@ -128,7 +133,7 @@ def write_good(name, scratch):
     (scratch / "map.md").write_text(MAP)
     (scratch / "tickets" / "01-tally-top.md").write_text(TICKET)
     (scratch / "tasks" / "01-01-top.md").write_text(TASK)
-    (scratch / "reports" / "plan-B.md").write_text(report("done"))
+    (scratch / "reports" / "plan-B.json").write_text(report("done"))
 
 
 class PilotBuildEpicTest(EvalSandbox):
@@ -239,25 +244,24 @@ class PilotBuildEpicTest(EvalSandbox):
         self.assert_fails_only("pass-a-remove", "areas-written",
                                lambda paths: (paths["scratch"] / "areas.md").write_text(""))
 
-    def test_report_done_fails_unless_the_report_ends_with_status_done(self):
-        for name, file in (("pass-a-remove", "plan-A.md"), ("pass-b-top", "plan-B.md")):
+    def test_report_done_fails_unless_the_output_is_valid_with_status_done(self):
+        for name, file in (("pass-a-remove", "plan-A.json"), ("pass-b-top", "plan-B.json")):
             self.assert_fails_only(name, "report-done",
                                    lambda paths, f=file: (paths["scratch"] / "reports" / f).write_text(
                                        report("blocked")))
             shutil.rmtree(self.tmp / name)
             self.assert_fails_only(name, "report-done",
                                    lambda paths, f=file: (paths["scratch"] / "reports" / f).write_text(
-                                       report("done") + "\n".join(["more text"] * 10) + "\n"))
+                                       "status: done\nchanged: spec.md\n"))
             shutil.rmtree(self.tmp / name)
 
-    def test_report_done_fails_on_pass_a_rename_unless_the_report_ends_with_status_done(self):
-        reports = lambda paths: paths["scratch"] / "reports" / "plan-A.md"  # noqa: E731
+    def test_report_done_fails_on_pass_a_rename_unless_the_output_is_valid_with_status_done(self):
+        reports = lambda paths: paths["scratch"] / "reports" / "plan-A.json"  # noqa: E731
         self.assert_fails_only("pass-a-rename", "report-done",
                                lambda paths: reports(paths).write_text(report("blocked")))
         shutil.rmtree(self.tmp / "pass-a-rename")
         self.assert_fails_only("pass-a-rename", "report-done",
-                               lambda paths: reports(paths).write_text(
-                                   report("done") + "\n".join(["more text"] * 10) + "\n"))
+                               lambda paths: reports(paths).write_text('{"status": "done"}'))
 
     def test_plan_ok_fails_on_a_plan_check_problem_or_no_ticket_or_task(self):
         def no_writes(paths):
@@ -279,6 +283,8 @@ class PilotBuildEpicTest(EvalSandbox):
         script = checkout / "skills" / "build-epic" / "plan_check.py"
         script.parent.mkdir(parents=True)
         script.write_text("print('plan has problems')\n")
+        protocol = Path(__file__).resolve().parents[1] / "skills" / "_shared" / "protocol"
+        shutil.copytree(protocol, checkout / "skills" / "_shared" / "protocol")  # report-done checks with it
         result = self.run_case("pass-b-top", checkout=checkout)
         self.assertEqual([c for c, ok in result.items() if not ok], ["plan-ok"])
 

@@ -9,8 +9,8 @@ Prints one JSON object (`schema: build-epic-run-metrics/v1`):
 - `fix_rounds`: the `OK <id> pushed` lines in `logs/<id>-push_fix.log`, one per fix pushed to an open task PR (runs from
   before tasks were commits), the red
   merges (`FAIL <id> red` in `logs/<id>-merge_task.log`) and the fix tasks.
-- `reviews`: the reviewer reports in `reviews/<PR>-<sha7>.md`, and `reviews/<TT-NN>-<sha7>.md` for a task reviewed
-  before it merged (it has no PR); each after a PR's (or task's) first is a re-review.
+- `reviews`: the reviewer outputs in `reviews/<PR>-<sha7>.json` (`.md` in older runs), and `reviews/<TT-NN>-<sha7>.json`
+  for a task reviewed before it merged (it has no PR); each after a PR's (or task's) first is a re-review.
 - `follow_ups`: the rows of `followups.jsonl` (build-epic's `followups.py record` writes them), counted by `severity`
   and `kind`, and the reports in `reports/<id>.md` with a `follow-up:`. A line that is not a JSON row is a gap.
 - `suites`: the suites of `reports/<id>.checks.json` (a count may be `null`: output it could not read), or, for an id
@@ -128,17 +128,18 @@ def fix_rounds(run, tasks):
             "fix_tasks": sum(1 for t in tasks if t["kind"] == "fix")}
 
 
-# A reviewer's own report, `<PR>-<sha7>.md`; the posted copy (`.posted.md`), the numbered findings
-# (`-findings.md`) and the security report (`-security.md`) beside it are not reviews of their own.
-REVIEW_REPORT = re.compile(r"(\d+(?:-\d+)?)-[0-9a-f]{7}\.md")  # a PR's, or `<TT-NN>-...`: a task's, before it merged
+# A reviewer's output, `<PR>-<sha7>.json` (`.md` in a run from before the agent protocol); the posted copy
+# (`.posted.md`), the numbered findings (`-findings.md`) and the security report (`-security.json`) beside it are not
+# reviews of their own.
+REVIEW_REPORT = re.compile(r"(\d+(?:-\d+)?)-[0-9a-f]{7}\.(?:json|md)")  # a PR's, or `<TT-NN>-...`: a task's, before it merged
 
 
 def reviews(run):
-    names = [p.name for p in sorted((run / "reviews").glob("*.md"))]
+    names = [p.name for p in sorted((run / "reviews").glob("*")) if p.suffix in (".json", ".md")]
     per_pr = tally(m.group(1) for n in names if (m := REVIEW_REPORT.fullmatch(n)))
     total = sum(per_pr.values())
     return {"reports": total, "prs": len(per_pr), "re_reviews": total - len(per_pr),
-            "security": sum(1 for n in names if re.fullmatch(r"\d+-[0-9a-f]{7}-security\.md", n))}
+            "security": sum(1 for n in names if re.fullmatch(r"\d+-[0-9a-f]{7}-security\.(?:json|md)", n))}
 
 
 def follow_ups(run, gaps):

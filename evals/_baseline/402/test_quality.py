@@ -162,6 +162,26 @@ class Quality(unittest.TestCase):
         rc, out = self.main(bare, "main", "--python", self.stub)
         self.assertEqual((rc, out["acceptance"]["passed"]), (0, 2))
 
+    def test_json_reviews_count_their_findings(self):
+        (self.run_dir / "tickets" / "03-c.md").write_text("# TT: C\nStatus: merged\nPR: https://x/pull/12\n",
+                                                          encoding="utf-8")
+        (self.run_dir / "logs" / "PR12-post_review.log").write_text(
+            "== post_review PR12 /elsewhere/reviews/50-eeeeeee.json --base origin/b at 1\n"
+            "== post_review PR12 /elsewhere/reviews/50-eeeeeee-security.json --base origin/b at 2\n"
+            "== post_review PR12 /elsewhere/reviews/51-fffffff.json --base origin/b at 3\n", encoding="utf-8")
+        finding = {"axis": "bugs", "path": "a.py", "line": 1, "claim": "c", "scenario": "s"}
+        (self.run_dir / "reviews" / "50-eeeeeee.json").write_text(json.dumps({"status": "done", "findings": [
+            dict(finding, severity="blocker"), dict(finding, severity="nit"), dict(finding, severity="nit")]}))
+        (self.run_dir / "reviews" / "50-eeeeeee-security.json").write_text(
+            json.dumps({"status": "done", "findings": [dict(finding, severity="should-fix")]}))
+        (self.run_dir / "reviews" / "51-fffffff.json").write_text("not json")
+        rc, out = self.main(self.repo, "main", "--python", self.stub, "--run", self.run_dir)
+        reviews = out["run"]["ticket_reviews"]
+        self.assertEqual(reviews["reports"][-2:], ["50-eeeeeee.json", "50-eeeeeee-security.json"])
+        # The Markdown ones of make_run (1 blocker, 3 should-fix) plus these (1 blocker, 1 should-fix, 2 nit).
+        self.assertEqual((reviews["blocker"], reviews["should-fix"], reviews["nit"]), (2, 4, 2))
+        self.assertEqual(reviews["re_reviews"][-1], "51-fffffff.json")
+
     def test_run_folder_metrics(self):
         rc, out = self.main(self.repo, "main", "--python", self.stub, "--run", self.run_dir)
         self.assertEqual(rc, 0, out)

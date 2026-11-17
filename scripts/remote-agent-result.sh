@@ -3,10 +3,10 @@
 # Usage: remote-agent-result.sh <run folder> <exit code>   (remote-agent.sh calls it on every exit, redacts the token
 # and writes the file through a temporary one and `mv`; it reads only files already redacted, and the patch's names)
 # Fields: run, name (from run.json); exit_code; status (done on exit 0 or 3, else failed, as run.json's state);
-# report_status (the report's `status:` line in summary.md, null without one); changed (the files changes.patch
-# touches; [] when it is empty, as on exit 3; null when no patch came back); follow_up (the report's `follow-up:`
-# lines, [] when none; both from the final message, summary.md); report_path (report.md when the agent wrote
-# ~/out/report.md, else summary.md; null when none came back); duration_ms, num_turns, total_cost_usd,
+# report_status (the `status` of the output object the final message, summary.md, holds: one JSON object, optionally in
+# one code fence, as the agent protocol has a remote agent end; null when it holds none or no string `status`);
+# changed (the files changes.patch touches; [] when it is empty, as on exit 3; null when no patch came back);
+# report_path (summary.md, the agent's output; null when none came back); duration_ms, num_turns, total_cost_usd,
 # usage (from the last result event of transcript.jsonl; duration_ms from run.json's started and ended without one);
 # model (the init event's, else the first of the result's modelUsage); claude_version (the init event's
 # claude_code_version: the sandbox's Claude Code); complete (true only on exit 0, 3 or 4 with a
@@ -110,8 +110,6 @@ if [ -f "$keep/summary.md" ]; then
   report="$(printf '%s' "$keep/summary.md" | jq -Rs . | tr -d '\r')"
   cp "$keep/summary.md" "$tmp/summary"
 fi
-# The report file the agent wrote, with its final message after it (remote-agent.sh), is the full report.
-[ ! -f "$keep/report.md" ] || report="$(printf '%s' "$keep/report.md" | jq -Rs . | tr -d '\r')"
 
 # The caps' kills, and whether the sandbox was lost: from the progress lines, CRs dropped.
 : >"$tmp/progress"
@@ -150,12 +148,13 @@ jq -c --argjson rc "$rc" --argjson gone "$gone" --arg capoff "$capoff" --arg cap
   ($ev[0].result // null) as $r
   | [$kills | split("\n")[] | capture("^capped: killed: (?<kind>memory|timeout)( (?<cmd>.+))?$")
       | {kind, cmd: (.cmd // null)}] as $k
-  | ($summary | split("\n") | map(sub("\r$"; "") | sub("^[\\s>*`-]+"; ""))) as $lines
+  # The output object: the whole final message, or the inside of one code fence around it.
+  | ($summary | gsub("\r"; "") | sub("^\\s*```[^\n]*\n"; "") | sub("\n```\\s*$"; "")) as $body
+  | ((try ($body | fromjson) catch null) | if type == "object" then . else null end) as $out
   | {run: .run, name: .name, exit_code: $rc,
      status: (if $rc == 0 or $rc == 3 then "done" else "failed" end),
-     report_status: ([$lines[] | capture("^status:\\s*(?<s>\\S+)").s] | first // null),
+     report_status: (if ($out.status | type) == "string" then $out.status else null end),
      changed: $changed[0],
-     follow_up: [$lines[] | capture("^follow-up:\\s*(?<f>.*)$").f | sub("\\s+$"; "") | select(. != "")],
      report_path: $report,
      duration_ms: ($r.duration_ms // (if (.started | type) == "number" and (.ended | type) == "number"
        then (.ended - .started) * 1000 else null end)),
