@@ -23,6 +23,7 @@ export type FlowEvent =
   | { kind: 'remoteTask'; at: number; runId: string; folder: string; task: Task; model: string | null }
   /** A context reading: `used` tokens of a `window` (both from the engine). */
   | { kind: 'ctx'; at: number; agent: string; used: number; window: number }
+  | { kind: 'cost'; at: number; agent: string; usd: number }
 
 /** Agents kept at most: past it the oldest finished ones go (main never). */
 export const MAX_AGENTS = 100
@@ -33,7 +34,7 @@ export const MAIN = 'main'
 
 export function emptyGraph(): Graph {
   return {
-    agents: [{ id: MAIN, parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 0, checks: {}, ctx: null, window: null, remote: null }],
+    agents: [{ id: MAIN, parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 0, checks: {}, ctx: null, window: null, cost: null, remote: null }],
     turn: 0,
     turnStarted: 0,
     lastTurn: null,
@@ -59,6 +60,18 @@ export function ctxShare(a: Pick<Agent, 'ctx' | 'window'>): number | null {
 }
 
 /** The theme colour of a context share: under half `success`, to 80% `warning`, past it `error`. */
+/** What an agent cost: its own reading, else a remote run's from result.json; null when neither is known. */
+export const costOf = (a: Pick<Agent, 'cost' | 'remote'>): number | null => a.cost ?? a.remote?.cost ?? null
+
+/** Dollars as the pane shows them: `$0.12`, `<$0.01` for a cost under a cent, `$123` from a hundred up. */
+export const fmtUsd = (usd: number) => (usd >= 100 ? `$${Math.round(usd)}` : usd > 0 && usd < 0.005 ? '<$0.01' : `$${usd.toFixed(2)}`)
+
+/** The summed cost of `agents`, or null when none has one. */
+export function costSum(agents: readonly Pick<Agent, 'cost' | 'remote'>[]): number | null {
+  const known = agents.map(costOf).filter((c): c is number => c !== null)
+  return known.length ? known.reduce((p, c) => p + c, 0) : null
+}
+
 export const ctxColor = (share: number) => (share >= 0.8 ? 'error' : share >= 0.5 ? 'warning' : 'success')
 
 /** A gauge `w` cells wide: ▰ for the share used (at least one once any is), ▱ for the rest. */
@@ -86,7 +99,7 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       const parent = g.agents.some(a => a.id === ev.parent) ? ev.parent : MAIN
       const agent: Agent = {
         id: ev.id, parent, type: ev.type, desc: ev.desc, model: ev.model, status: 'running', why: null, started: at, ended: null,
-        steps: 0, tokens: 0, step: null, toolUseId: ev.toolUseId, turn: g.turn, checks: {}, ctx: null, window: null, remote: null,
+        steps: 0, tokens: 0, step: null, toolUseId: ev.toolUseId, turn: g.turn, checks: {}, ctx: null, window: null, cost: null, remote: null,
       }
       const withMain = ev.parentModel && parent === MAIN ? patch(MAIN, m => (m.model ? m : { ...m, model: ev.parentModel })) : g
       return cap({ ...withMain, agents: [...withMain.agents, agent] })
@@ -122,6 +135,8 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
         tokens: a.tokens + (ev.outputTokens ?? 0),
       }))
     }
+    case 'cost':
+      return patch(ev.agent, a => (a.cost === ev.usd ? a : { ...a, cost: ev.usd }))
     case 'ctx':
       return patch(ev.agent, a => (a.ctx === ev.used && a.window === ev.window ? a : { ...a, ctx: ev.used, window: ev.window }))
     case 'launch': {
@@ -159,7 +174,7 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       }
       if (!was) {
         const agent: Agent = {
-          id, type: `☁ ${r.name ?? 'remote-agent'}`, started: r.started, tokens: 0, toolUseId: null, turn: g.turn, checks: {}, ctx: null, window: null, ...fields,
+          id, type: `☁ ${r.name ?? 'remote-agent'}`, started: r.started, tokens: 0, toolUseId: null, turn: g.turn, checks: {}, ctx: null, window: null, cost: null, ...fields,
         }
         return cap({ ...g, agents: [...g.agents, agent] })
       }
@@ -176,10 +191,12 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       const fields = {
         parent, type: printable(t.type), desc: printable(t.desc), model: ev.model, status: t.status, why: t.status === 'failed' ? 'failed' : null,
         ended: t.ended, steps: t.steps, step: t.step, remote,
+        // Its start from the transcript, else the run's scan that found it; never after it ended.
+        ...(t.started !== null ? { started: t.started } : {}),
       }
       const was = g.agents.find(a => a.id === id)
       if (!was) {
-        const agent: Agent = { id, started: at, tokens: 0, toolUseId: null, turn: g.turn, checks: {}, ctx: null, window: null, ...fields }
+        const agent: Agent = { id, started: Math.min(at, t.ended ?? at), tokens: 0, toolUseId: null, turn: g.turn, checks: {}, ctx: null, window: null, cost: null, ...fields }
         return cap({ ...g, agents: [...g.agents, agent] })
       }
       return patch(id, a => (same(a, fields) ? a : { ...a, ...fields }))
@@ -246,6 +263,29 @@ export function modelLabel(id: string | null): string {
   if (!id) return ''
   const m = /(opus|sonnet|haiku|fable)[-_ ]?(\d+)(?:[-_.](\d+))?/i.exec(id)
   return m?.[1] && m[2] ? `${m[1].toLowerCase()} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : printable(id).slice(0, 24)
+}
+
+/** The plan's dark palette, by the theme key each colour stands in for (haiku's teal is already a hex). */
+export const PALETTE: Readonly<Record<string, string>> = {
+  claude: '#e0835f',
+  suggestion: '#7fa8f2',
+  merged: '#c39cf2',
+  warning: '#e8b34f',
+  success: '#6cc58a',
+  error: '#f0727a',
+  inactive: '#3c3f49',
+  inverseText: '#131418',
+  text: '#d8d9df',
+}
+
+/** The fill of a selected tab or filter in the plan's palette. */
+export const TAB_FILL = '#2a2c34'
+
+/** A colour as drawn: the plan's hex when `fixed`, else the theme key itself, so the person's theme decides. */
+export function ink(color: string, fixed: boolean): string
+export function ink(color: string | undefined, fixed: boolean): string | undefined
+export function ink(color: string | undefined, fixed: boolean): string | undefined {
+  return color === undefined || !fixed ? color : (PALETTE[color] ?? color)
 }
 
 /** The color of a model's family: Claude's own for opus, the theme's blue for sonnet; teal and violet for haiku, fable. */

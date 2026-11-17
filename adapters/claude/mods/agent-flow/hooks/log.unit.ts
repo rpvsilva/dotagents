@@ -93,7 +93,7 @@ test('four siblings of one type are one group, listing the members that need you
 
 test('Back goes the way the logs were opened: to the log a link was followed from, then to the tab', () => {
   const g = [sp('p', T, 'epic-implementer'), sp('k', T + 1, 'fork', 'p')].reduce(reduce, emptyGraph())
-  const v0: View = { tab: 'agents', tree: false, expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
+  const v0: View = { tab: 'agents', expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
   const fromChart = openFrom({ ...v0, tab: 'chart' }, 'p', 'chart')
   assert.equal(backLabel(fromChart, g), '← Chart')
   const viaLink = openFrom(fromChart, 'k', 'log')
@@ -121,4 +121,17 @@ test('secrets are masked before a line is cut, as remote-runs masks them', () =>
 
 test('ago reads as people say it', () => {
   assert.deepEqual([0, 42_000, 180_000, 7_200_000].map(d => ago(T, T + d)), ['just now', '42s ago', '3m ago', '2h ago'])
+})
+
+test('an agent started by a listed agent goes under it, nested; one that ended before this turn is not this turn', () => {
+  const g = [
+    sp('p', T, 'epic-implementer'), sp('k', T + 1, 'fork', 'p'), sp('kk', T + 2, 'Explore', 'k'), end('kk', T + 3), end('k', T + 4), end('p', T + 5),
+    { kind: 'turnStart', at: T + 10_000, agent: MAIN } as FlowEvent,
+  ].reduce(reduce, emptyGraph())
+  const items = listItems(g, T + 20_000, 'all', 4)
+  assert.deepEqual(ids(items), ['earlier:p'])
+  const row = items[0] as Extract<Item, { kind: 'agent' }>
+  assert.deepEqual(row.kids.map(c => [c.agent.id, c.depth]), [['k', 1], ['kk', 2]])
+  // Filtered so the parent is out: the child is a row of its own.
+  assert.deepEqual(ids(listItems({ ...g, agents: g.agents.map(a => (a.id === 'p' ? { ...a, status: 'failed' as const } : a)) }, T + 20_000, 'done', 4)), ['earlier:k'])
 })

@@ -5,9 +5,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import { type Agent, ctxShare, emptyGraph, type FlowEvent, fmtTokens, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize } from './flow.ts'
-import { addMessages, ago, backLabel, logText, EARLIER, filterCounts, FIRST_READ, goBack, type Item, listItems, type Message, NO_LOG, openFrom, scrollLog, WAITING, windowLines } from './log.ts'
-import { chart, clock, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS, tree } from './layout.ts'
+import { type Agent, ctxColor, fmtUsd, ink, TAB_FILL, ctxShare, emptyGraph, type FlowEvent, fmtTokens, gauge, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize } from './flow.ts'
+import { addMessages, ago, backLabel, logText, EARLIER, filterCounts, FIRST_READ, goBack, type Item, type Kid, listItems, type Message, NO_LOG, openFrom, scrollLog, WAITING, windowLines } from './log.ts'
+import { bar, chart, spin, clock, counts as layoutCounts, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS } from './layout.ts'
 import { isMoving } from './lifecycle.ts'
 import {
   applyLiveness,
@@ -37,8 +37,8 @@ const PANE = 'agent-flow'
 const TICK_MS = 125
 // A pane not drawn for this long is taken as closed: the timer stops redrawing it until something changes.
 const DRAWN_MS = 2000
-const KEYS = 't tree/chart · x expand squad · a agents · esc close'
-const LIST_KEYS = '1-9 open · l r n f d filter · g chart · esc close'
+const KEYS = 'x expand squad · a agents · esc close'
+const LIST_KEYS = 'click a row, a group or a filter · 1-9 open · l r n f d filter · g chart · esc close'
 const LOG_KEYS = 'b back · 1-9 open a linked agent · ↑↓ scroll · c copy · esc close'
 // The Agents tab's filters: hotkey and label.
 const FILTERS: [Filter, string, string][] = [
@@ -62,9 +62,9 @@ const LOG_AFTER_END_MS = 5000
 const CHROME_ROWS = 11
 const logRows = (bodyRows: number, l: Log) => Math.max(3, bodyRows - CHROME_ROWS - (l.truncated ? 1 : 0))
 
-const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-3' })
-const NO_VIEW: View = { tab: 'chart', tree: false, expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
-const view = atom({ plugin: 'agent-flow', key: 'view' } as const, NO_VIEW, { shape: 'view-3' })
+const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-4' })
+const NO_VIEW: View = { tab: 'chart', expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
+const view = atom({ plugin: 'agent-flow', key: 'view' } as const, NO_VIEW, { shape: 'view-4' })
 const log = atom({ plugin: 'agent-flow', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
 const frame = atom({ plugin: 'agent-flow', key: 'frame' } as const, 0, { shape: 'frame-1' })
 
@@ -74,7 +74,10 @@ let fall = noFallback()
 let lastStatus: string | undefined | null = null
 let lastDraw = 0
 let isTicking = false
-let settings = { lingerMs: 30_000, squadMin: 4, motion: true }
+let settings = { lingerMs: 30_000, squadMin: 4, motion: true, fixed: true }
+// A colour as the pane draws it, by the `colors` option.
+const paint = (c: string | undefined) => ink(c, settings.fixed)
+const FAINT = 'inactive'
 // The open log's reads go one at a time (the timer and a press may both ask); when it was last read; the lines its
 // window showed at the last draw, which a scroll moves by.
 let logQueue: Promise<void> = Promise.resolve()
@@ -339,13 +342,15 @@ async function readCtx($: EngineInterface, t: number): Promise<void> {
     try {
       for (const info of await $.agent.list()) {
         if (info.contextWindowSize && info.tokenCount > 0) evs.push({ kind: 'ctx', at: t, agent: info.id, used: info.tokenCount, window: info.contextWindowSize })
+        if (info.cost) evs.push({ kind: 'cost', at: t, agent: info.id, usd: info.cost.usd })
       }
     } catch {
       // no agents listed on this surface
     }
     try {
-      const { context } = await $.session.usage()
+      const { context, cost } = await $.session.usage()
       if (context.tokens !== undefined && context.window) evs.push({ kind: 'ctx', at: t, agent: MAIN, used: context.tokens, window: context.window })
+      if (cost) evs.push({ kind: 'cost', at: t, agent: MAIN, usd: cost.usd })
     } catch {
       // no usage to read
     }
@@ -378,6 +383,9 @@ async function openNode($: EngineInterface, id: string): Promise<void> {
   } else if (id.startsWith('fold:')) await update($, view, (v): View => ({ ...v, tab: 'agents', agentId: null, trail: [], filter: 'all' }))
   else if (id !== MAIN) await openLog($, id, 'chart')
 }
+
+/** `s` cut or padded to `n` columns: a column of a table row, a cut one ending in `…`. */
+const fit = (s: string, n: number) => (s.length >= n ? `${s.slice(0, n - 2)}… ` : s.padEnd(n))
 
 /** A tab, or a filter: either leaves any open log and forgets the way back. */
 const toTab = (tab: View['tab']) => (v: View): View => ({ ...v, tab, agentId: null, trail: [] })
@@ -429,6 +437,7 @@ export const register: Register = (on, options) => {
     lingerMs: numberOr(o.linger_s, 30, 0) * 1000,
     squadMin: Math.round(numberOr(o.squad_min, 4, 2)),
     motion: o.motion !== 'off',
+    fixed: o.colors !== 'theme',
   }
 
   on('session.start', async ($, e, next) => {
@@ -527,11 +536,11 @@ export const register: Register = (on, options) => {
     const t = await now($)
     lastDraw = t
     const segText = (sg: Seg, i: number) => (
-      <Text key={`s${i}`} {...(sg.color ? { color: sg.color } : {})} {...(sg.dim ? { dimColor: true } : {})} {...(sg.bold ? { bold: true } : {})}>
+      <Text key={`s${i}`} {...(sg.color ? { color: paint(sg.color) } : {})} {...(sg.dim ? { dimColor: true } : {})} {...(sg.bold ? { bold: true } : {})}>
         {sg.text}
       </Text>
     )
-    // A row: plain text, or, where it holds a box or tree line, a run of pieces, each one a node's a click opens.
+    // A row: plain text, or, where it holds a box, a run of pieces, each one a node's a click opens.
     const line = (r: Row, i: number) => {
       if (!r.some(sg => sg.agent)) {
         return (
@@ -563,33 +572,41 @@ export const register: Register = (on, options) => {
       )
     }
     const counts = filterCounts(g, t)
+    const width = Math.max(40, e.props.bodyColumns - 2)
+    const rule = (k: string) => <Text key={k} color={paint(FAINT)}>{'─'.repeat(width)}</Text>
+    // A tab or filter: the selected one filled and bold (the theme's primary button under `colors: theme`), the rest dim.
+    const pill = (key: string, hotkey: string, label: string, isOn: boolean, onPress: () => void) =>
+      settings.fixed ? (
+        <Button key={key} hotkey={hotkey} plain onPress={onPress}>
+          {isOn ? <Text backgroundColor={TAB_FILL} bold>{` ${label} `}</Text> : <Text dimColor>{` ${label} `}</Text>}
+        </Button>
+      ) : (
+        <Button key={key} hotkey={hotkey} {...(isOn ? { variant: 'primary' } : { dimColor: true })} onPress={onPress}>
+          {label}
+        </Button>
+      )
     const tabs = (
       <Box key="tabs" columnGap={2} marginBottom={1}>
-        <Button key="tab-chart" hotkey="g" {...(v.tab === 'chart' ? { variant: 'primary' } : { dimColor: true })} onPress={() => update($, view, toTab('chart'))}>
-          Chart
-        </Button>
-        <Button key="tab-agents" hotkey="a" {...(v.tab === 'agents' ? { variant: 'primary' } : { dimColor: true })} onPress={() => update($, view, toTab('agents'))}>
-          {`Agents (${counts.all})`}
-        </Button>
+        {pill('tab-chart', 'g', '◆ Chart', v.tab === 'chart' && v.agentId === null, () => update($, view, toTab('chart')))}
+        {pill('tab-agents', 'a', `≡ Agents ${counts.all}`, v.tab === 'agents' || v.agentId !== null, () => update($, view, toTab('agents')))}
       </Box>
     )
+    // An agent's status as the Agents tab and its log say it: glyph, colours, the words, the time.
     const look = (a: Agent) => {
       const st = shownStatus(a, t)
-      const glyph = st === 'running' ? '●' : st === 'waiting' ? '◐' : st === 'failed' ? '✗' : '✓'
+      const glyph = st === 'running' ? spin(t, settings.motion) : st === 'waiting' ? '◐' : st === 'failed' ? '✗' : '✓'
       const color = st === 'running' ? modelColor(a.model) : st === 'waiting' ? 'warning' : st === 'failed' ? 'error' : 'success'
-      const when =
-        st === 'running' || st === 'waiting'
-          ? `${st === 'waiting' ? 'needs you' : 'running'} ${clock(t - a.started)}`
-          : `${st === 'failed' ? `failed (${a.why ?? 'error'})` : 'done'} ${ago(a.ended ?? t, t)} · took ${clock((a.ended ?? t) - a.started)}`
-      const share = ctxShare(a)
-      const ctx = share === null ? '' : `ctx ${fmtTokens(a.ctx!)}/${fmtTokens(a.window!)} (${Math.round(share * 100)}%)`
-      const run = a.remote && a.remote.taskId === null ? a.remote : null
-      const spent = run ? costLine(run.cost, run.files) : ''
-      const meta = [run ? `☁ remote${modelLabel(a.model) ? ` ${modelLabel(a.model)}` : ''}` : modelLabel(a.model), when, `${a.steps} steps`, ctx, spent].filter(x => x !== '').join(' · ')
-      return { st, glyph, color, meta }
+      const took = clock((a.ended ?? t) - a.started)
+      const phase = a.remote && a.remote.taskId === null && st === 'running' ? a.remote.phase : null
+      const word = phase ?? (st === 'waiting' ? 'needs permission' : st)
+      const status = st === 'running' || st === 'waiting' ? `${word} ${clock(t - a.started)}` : `${st} ${took} · ${ago(a.ended ?? t, t)}`
+      const tone = st === 'running' ? modelColor(a.model) : st === 'waiting' ? 'warning' : st === 'failed' ? 'error' : undefined
+      const model = a.remote && !a.model ? 'remote' : modelLabel(a.model)
+      return { st, glyph, color, took, phase, status, tone, model }
     }
 
-    // An agent's log, from the chart, the list or another log.
+    // An agent's log, from the chart, the list or another log: a header card, a rule with the agent and its model,
+    // its task, its calls and results, how it ended; under a rule, follow, back and copy.
     const open = v.agentId === null ? undefined : g.agents.find(a => a.id === v.agentId)
     if (open) {
       const l = await read($, log)
@@ -598,187 +615,307 @@ export const register: Register = (on, options) => {
       drawnRows = { agentId: open.id, rows }
       const k = look(open)
       const isLive = k.st === 'running' || k.st === 'waiting'
-      const parent =
-        (open.parent === null || open.parent === MAIN ? 'main' : printable(g.agents.find(a => a.id === open.parent)?.type ?? 'an agent')) +
-        (open.remote && open.remote.taskId === null && !open.remote.linked ? ' (no remote-agent call found for it)' : '')
-      const badge = k.st === 'running' ? 'RUNNING' : k.st === 'waiting' ? 'NEEDS YOU' : k.st === 'failed' ? 'FAILED' : 'DONE'
-      const visible = windowLines(shown.lines, shown.follow, shown.top, rows)
+      const run = open.remote && open.remote.taskId === null ? open.remote : null
+      const parentAgent = open.parent === null || open.parent === MAIN ? undefined : g.agents.find(a => a.id === open.parent)
+      const parent = parentAgent ? printable(parentAgent.type) : 'main'
+      const badge = k.phase ? k.phase.toUpperCase() : k.st === 'running' ? 'RUNNING' : k.st === 'waiting' ? 'WAITING' : k.st === 'failed' ? 'FAILED' : 'DONE'
+      const share = ctxShare(open)
+      const detail = run
+        ? [printable(open.desc), '☁ remote', run.runId, `caller: ${run.linked ? parent : 'none found'}`, run.turns === null ? '' : `${run.turns} turns`, run.cost === null ? '' : `$${run.cost.toFixed(2)}`]
+        : open.remote
+          ? [printable(open.desc), `inside ${parent}`, `${open.steps} tool calls`]
+          : [printable(open.desc), `from ${parent}`, `${open.steps} steps`, share === null ? '' : `ctx ${fmtTokens(open.ctx!)}/${fmtTokens(open.window!)}`, open.cost === null ? '' : fmtUsd(open.cost)]
+      // The prompt is the task line; a call still waiting for its result says so.
+      const body = shown.lines.filter(x => x.kind !== 'prompt')
+      const lastKind = body.at(-1)?.kind
+      const pending = isLive && (lastKind === 'call' || lastKind === 'agent')
+      const visible = windowLines(body, shown.follow, shown.top, rows)
       let link = 0
+      const call = (text: string) => {
+        const rest = text.replace(/^▸ /, '')
+        const sp = rest.indexOf(' ')
+        return [
+          <Text key="g" color={paint(FAINT)}>{'▸ '}</Text>,
+          <Text key="t" bold>{sp < 0 ? rest : rest.slice(0, sp)}</Text>,
+          sp < 0 ? '' : rest.slice(sp),
+        ]
+      }
       const logLine = (ln: LogLine, i: number) => {
         switch (ln.kind) {
-          case 'prompt':
-            return <Text key={`l${i}`} wrap="truncate-end" color="suggestion">{`› ${ln.text}`}</Text>
           case 'call':
-            return <Text key={`l${i}`} wrap="truncate-end" bold>{ln.text}</Text>
+            return <Text key={`l${i}`} wrap="truncate-end">{call(ln.text)}</Text>
           case 'agent': {
-            // A link to the agent this call started: its log, with Back returning here.
             link++
-            const known = ln.agentId !== undefined && g.agents.some(a => a.id === ln.agentId)
-            if (!known) return <Text key={`l${i}`} wrap="truncate-end" bold>{ln.text}</Text>
+            const known = ln.agentId !== undefined && g.agents.find(a => a.id === ln.agentId)
             return (
-              <Button key={`link:${ln.agentId}:${i}`} plain {...(link <= 9 ? { hotkey: String(link) } : {})} onPress={() => openLog($, ln.agentId!, 'log')}>
-                <Text bold>{ln.text}</Text>
-                <Text color="suggestion">{'  ↗ open its log'}</Text>
-              </Button>
+              <Box key={`l${i}`} flexDirection="column">
+                <Text wrap="truncate-end">{call(ln.text)}</Text>
+                {known ? (
+                  <Button key={`link:${ln.agentId}:${i}`} plain {...(link <= 9 ? { hotkey: String(link) } : {})} onPress={() => openLog($, ln.agentId!, 'log')}>
+                    <Text dimColor>{'  ⎿ '}</Text>
+                    <Text color={paint(modelColor(known.model))}>open its log →</Text>
+                  </Button>
+                ) : null}
+              </Box>
             )
           }
           case 'result':
             return <Text key={`l${i}`} wrap="truncate-end" dimColor>{`  ${ln.text}`}</Text>
           case 'error':
-            return <Text key={`l${i}`} wrap="truncate-end" color="error">{`  ${ln.text}`}</Text>
+            return <Text key={`l${i}`} wrap="truncate-end" color={paint('error')}>{`  ${ln.text.replace(/^⎿ (✗ )?/, '⎿ ✗ ')}`}</Text>
           case 'note':
             return <Text key={`l${i}`} wrap="truncate-end" dimColor>{ln.text}</Text>
           default:
             return <Text key={`l${i}`} wrap="truncate-end">{ln.text}</Text>
         }
       }
-      const took = clock((open.ended ?? t) - open.started)
+      const ended = !isLive
+      const chip = (text: string, color: string) => <Text backgroundColor={paint(color)} color={paint('inverseText')} bold>{` ${text} `}</Text>
+      const how = run
+        ? ` in ${k.took}${run.cost === null ? '' : ` · $${run.cost.toFixed(2)}`}${run.turns === null ? '' : ` · ${run.turns} turns`}${run.files === null ? '' : run.files === 0 ? ' · no changes' : ` · ${run.files} files`}`
+        : ` in ${k.took} · ${open.steps} steps${open.cost === null ? '' : ` · ${fmtUsd(open.cost)}`}`
+      const backTo = backLabel(v, g).replace(/^← /, '').toLowerCase()
       return (
         <Box flexDirection="column" paddingX={1}>
           {tabs}
-          <Box flexDirection="column" borderStyle="round" borderColor={k.color} paddingX={1} marginBottom={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor={paint(k.color)} paddingX={1}>
             <Box columnGap={1}>
-              <Button key="back" hotkey="b" onPress={() => back($)}>
-                {backLabel(v, g)}
+              <Button key="back" hotkey="b" plain onPress={() => back($)}>
+                <Text bold>{backLabel(v, g)}</Text>
               </Button>
               <Text wrap="truncate-end">
-                <Text color={k.color}>{k.glyph}</Text>
+                {'  '}
+                <Text color={paint(k.color)} bold>{k.glyph}</Text>
                 {' '}
                 <Text bold>{printable(open.type)}</Text>
                 {'  '}
-                {printable(open.desc)}
+                {chip(badge, k.color)}
                 {'  '}
-                <Text backgroundColor={k.color} color="inverseText" bold>{` ${badge} `}</Text>
+                <Text color={paint(modelColor(open.model))}>{k.model}</Text>
+                <Text dimColor>{`  ·  ${isLive ? clock(t - open.started) : k.took}${ended ? ` · ended ${ago(open.ended ?? t, t)}` : ''}`}</Text>
               </Text>
             </Box>
-            <Text dimColor wrap="truncate-end">{`${k.meta} · from ${parent}`}</Text>
+            <Text dimColor wrap="truncate-end">{detail.filter(x => x !== '').join(' · ')}</Text>
           </Box>
+          <Text> </Text>
+          <Text color={paint(FAINT)} wrap="truncate-end">{`── ${printable(open.type)}${k.model ? ` · ${k.model}` : ''} ──`}</Text>
+          <Text wrap="truncate-end">
+            <Text dimColor>task: </Text>
+            {printable(open.desc)}
+          </Text>
           {shown.truncated && <Text dimColor wrap="truncate-end">{EARLIER}</Text>}
-          {shown.denied !== null && <Text color="warning" wrap="wrap">{`the session gives no messages for this agent: ${shown.denied}`}</Text>}
-          {shown.denied === null && shown.lines.length === 0 && <Text dimColor>{WAITING}</Text>}
+          {shown.denied !== null && <Text color={paint('warning')} wrap="wrap">{`the session gives no messages for this agent: ${shown.denied}`}</Text>}
+          {shown.denied === null && body.length === 0 && <Text dimColor>{WAITING}</Text>}
           {visible.map(logLine)}
-          {!isLive && shown.follow && (
-            <Text key="end" wrap="truncate-end">
-              <Text backgroundColor={k.st === 'failed' ? 'error' : 'success'} color="inverseText" bold>{k.st === 'failed' ? ' ✗ failed ' : ' ✓ done '}</Text>
-              <Text dimColor>{k.st === 'failed' ? ` ${open.why ?? 'error'} after ${took} · ${open.steps} steps` : ` in ${took} · ${open.steps} steps`}</Text>
+          {pending && shown.follow && (
+            <Text key="pending" wrap="truncate-end">
+              <Text dimColor>{'  ⎿ '}</Text>
+              {k.st === 'waiting' ? <Text color={paint('warning')}>◐ waiting for your permission</Text> : [<Text key="d" color={paint(modelColor(open.model))}>●</Text>, <Text key="r" dimColor> running…</Text>]}
             </Text>
           )}
-          <Box columnGap={2} marginTop={1}>
+          {ended && shown.follow && (
+            <Box key="end" flexDirection="column" marginTop={1}>
+              <Text wrap="truncate-end">
+                {k.st === 'failed' ? chip('✗ failed', 'error') : chip('✓ done', 'success')}
+                <Text dimColor>{k.st === 'failed' ? ` (${open.why ?? 'error'}) after ${k.took}` : how}</Text>
+              </Text>
+              {run && <Text color={paint('warning')} wrap="truncate-end">session.jsonl kept, never read: the sandbox wrote it and could have forged turns</Text>}
+            </Box>
+          )}
+          <Text> </Text>
+          {rule('rule')}
+          <Box columnGap={1}>
             {shown.follow ? (
-              <Button key="end" hotkey="e" dimColor onPress={() => update($, log, x => ({ ...x, follow: true }))}>
-                {isLive ? '● Following live' : '■ End of log'}
+              <Button key="end" hotkey="e" plain onPress={() => update($, log, x => ({ ...x, follow: true }))}>
+                {isLive ? [<Text key="d" color={paint(modelColor(open.model))}>●</Text>, <Text key="f" dimColor> Following live</Text>] : <Text dimColor>■ End of log</Text>}
               </Button>
             ) : (
               <Button key="end" hotkey="e" variant="primary" onPress={() => update($, log, x => ({ ...x, follow: true }))}>
                 ↓ Jump to end
               </Button>
             )}
-            <Button key="copy" hotkey="c" dimColor onPress={press => copyText($, logText(shown.lines), shown.lines.length, press.surface)}>
-              Copy log
+            <Text dimColor>·</Text>
+            <Button key="back-foot" plain dimColor onPress={() => back($)}>
+              {`b back to ${backTo}`}
             </Button>
-            <Button key="transcript" hotkey="v" dimColor onPress={async () => {
+            <Text dimColor>·</Text>
+            <Button key="copy" hotkey="c" plain dimColor onPress={press => copyText($, logText(shown.lines), shown.lines.length, press.surface)}>
+              copy log
+            </Button>
+            <Text dimColor>·</Text>
+            <Button key="transcript" hotkey="v" plain dimColor onPress={async () => {
               const r = await $.ui.view({ agentId: open.id })
               if ('deny' in r && r.deny) $.ui.toast(`cannot open its transcript: ${r.deny}`)
             }}>
-              Open transcript
+              open transcript
             </Button>
-            <Text dimColor wrap="truncate-end">{LOG_KEYS}</Text>
+            <Text dimColor wrap="truncate-end">· ↑↓ scroll</Text>
           </Box>
         </Box>
       )
     }
 
-    if (v.tab === 'agents') {
-      const items = listItems(g, t, v.filter, settings.squadMin)
+    // The chart, unless it does not fit the pane: then its running agents, drawn as the Agents list, until it fits again.
+    const columns = Math.max(40, e.props.bodyColumns - 2)
+    const opts = { columns, lingerMs: settings.lingerMs, squadMin: settings.squadMin, motion: settings.motion && e.surface === 'terminal', expanded: v.expanded }
+    const c = v.tab === 'chart' ? chart(g, t, opts, tween) : null
+    if (c) fall = fallback(fall, c.width, columns, t)
+    const narrow = c !== null && fall.narrow
+    if (v.tab === 'agents' || narrow) {
+      const items = listItems(g, t, narrow ? 'running' : v.filter, settings.squadMin)
       let n = 0
-      const hot = () => (++n <= 9 ? { hotkey: String(n) } : {})
-      const row = (a: Agent, isOld: boolean) => {
+      // An agent's context: a 4-cell gauge coloured by how full, and its share of the window; blank without a reading.
+      const ctxCell = (a: Agent, quiet: boolean) => {
+        const share = ctxShare(a)
+        return share === null
+          ? <Text>{' '.repeat(14)}</Text>
+          : [
+              <Text key="gauge" dimColor={quiet} color={paint(quiet ? undefined : ctxColor(share))}>{gauge(share, 4)}</Text>,
+              <Text key="pct" dimColor>{fit(` ${Math.round(share * 100)}% ctx`, 10)}</Text>,
+            ]
+      }
+      // A row, as a table: number, glyph, type (↳ under another agent), status, model, context, task.
+      // The task column: the agent's task; a remote run's (named after it already) says what it changed instead.
+      const taskOf = (a: Agent) => {
+        const run = a.remote && a.remote.taskId === null ? a.remote : null
+        if (!run) return printable(a.desc)
+        const what = run.files === null ? run.runId : run.files === 0 ? 'no changes' : `${run.files} file${run.files === 1 ? '' : 's'} changed`
+        return `☁ remote · ${what}`
+      }
+      // The line under a live or failed agent: its step, or why it failed; '' for none.
+      const underOf = (a: Agent, k: ReturnType<typeof look>) =>
+        k.st === 'running' || k.st === 'waiting' ? (k.phase ? `◌ ${k.phase}…` : `⎿ ${printable(a.step ?? 'thinking')}`) : k.st === 'failed' ? `⎿ ${a.why ?? 'error'}` : ''
+      const underLine = (a: Agent, k: ReturnType<typeof look>, indent: string) => {
+        const under = underOf(a, k)
+        return under === '' ? null : (
+          <Text key={`under:${a.id}`} wrap="truncate-end">
+            <Text color={paint(FAINT)}>{`${indent}${under.slice(0, 2)}`}</Text>
+            <Text dimColor={k.st === 'running'} color={paint(k.st === 'waiting' ? 'warning' : k.st === 'failed' ? 'error' : undefined)}>{under.slice(2)}</Text>
+          </Text>
+        )
+      }
+      // The columns after the name, the same on a row and on an agent listed under it. No cost: the log's card has it.
+      const cells = (a: Agent, k: ReturnType<typeof look>, isOld: boolean) => {
+        const quiet = isOld || k.st === 'done'
+        return [
+          <Text key="status" dimColor={isOld || !k.tone} color={paint(isOld ? undefined : k.tone)}>{fit(k.status, 26)}</Text>,
+          <Text key="model" dimColor={isOld} color={paint(isOld ? undefined : modelColor(a.model))}>{fit(k.model, 12)}</Text>,
+          ctxCell(a, quiet),
+          <Text key="task" dimColor={quiet}>{fit(taskOf(a), 28)}</Text>,
+        ]
+      }
+      // A row, as a table: number, glyph, type, status, model, context, task; the agents it started under it,
+      // indented, each with its own figures; a blank line after a row with something under it.
+      const row = (a: Agent, isOld: boolean, kids: Kid[]) => {
         const k = look(a)
-        const detail = k.st === 'running' || k.st === 'waiting' ? (a.step ? `⎿ ${printable(a.step)}` : '⎿ thinking') : k.st === 'failed' ? `⎿ ${a.why ?? 'error'}` : ''
+        const quiet = isOld || k.st === 'done'
+        const hot = ++n <= 9 ? { hotkey: String(n) } : {}
+        const name = `${a.parent !== null && a.parent !== MAIN ? '↳ ' : ''}${printable(a.type)}`
+        const under = isOld ? null : underLine(a, k, '       ')
         return (
-          <Box key={`row:${a.id}`} flexDirection="column">
-            <Button key={`agent:${a.id}`} plain dimColor={isOld} {...hot()} onPress={() => openLog($, a.id, 'agents')}>
-              <Text {...(isOld ? { dimColor: true } : { color: k.color })}>{k.glyph}</Text> <Text bold={!isOld}>{printable(a.type)}</Text>{'  '}{printable(a.desc)}{'  '}
-              <Text dimColor>{k.meta}</Text>
+          <Box key={`row:${a.id}`} flexDirection="column" marginBottom={!isOld && (under !== null || kids.length > 0) ? 1 : 0}>
+            <Button key={`agent:${a.id}`} plain {...hot} onPress={() => openLog($, a.id, 'agents')}>
+              <Text color={paint(isOld ? undefined : k.color)} dimColor={isOld} bold>{k.glyph}</Text>
+              {' '}
+              <Text bold dimColor={quiet} color={paint(quiet ? undefined : modelColor(a.model))}>{fit(name, 20)}</Text>
+              {cells(a, k, isOld)}
             </Button>
-            {!isOld && detail !== '' && <Text dimColor wrap="truncate-end">{`  ${detail}`}</Text>}
+            {under}
+            {kids.map(({ agent: c, depth }) => {
+              const kk = look(c)
+              const pad = '  '.repeat(depth - 1)
+              return (
+                <Box key={`kid:${c.id}`} flexDirection="column">
+                  <Button key={`agent:${c.id}`} plain onPress={() => openLog($, c.id, 'agents')}>
+                    <Text color={paint(FAINT)}>{`   ${pad}↳ `}</Text>
+                    <Text color={paint(isOld ? undefined : kk.color)} dimColor={isOld} bold>{kk.glyph}</Text>
+                    {' '}
+                    <Text dimColor={isOld || kk.st === 'done'} color={paint(isOld || kk.st === 'done' ? undefined : modelColor(c.model))}>{fit(printable(c.type), 18 - pad.length)}</Text>
+                    {cells(c, kk, isOld)}
+                  </Button>
+                  {isOld ? null : underLine(c, kk, `         ${pad}`)}
+                </Box>
+              )
+            })}
           </Box>
         )
       }
       // A squad member, one compact line under its group.
       const member = (a: Agent) => {
         const k = look(a)
+        const tail = k.st === 'running' || k.st === 'waiting' ? `⎿ ${printable(a.step ?? 'thinking')}` : k.st === 'failed' ? (a.why ?? 'error') : ''
         return (
-          <Button key={`agent:${a.id}`} plain {...hot()} onPress={() => openLog($, a.id, 'agents')}>
-            {'   '}
-            <Text color={k.color}>{k.glyph}</Text> {printable(a.desc)}{'  '}
-            <Text dimColor>{k.meta}</Text>
+          <Button key={`agent:${a.id}`} plain onPress={() => openLog($, a.id, 'agents')}>
+            {'     '}
+            <Text color={paint(k.color)} bold>{k.glyph}</Text>
+            {' '}
+            <Text dimColor={k.st === 'done'}>{fit(printable(a.desc), 26)}</Text>
+            <Text dimColor={!k.tone} color={paint(k.tone)}>{fit(k.status, 24)}</Text>
+            {ctxCell(a, k.st === 'done')}
+            <Text dimColor={k.st !== 'failed' && k.st !== 'waiting'} color={paint(k.st === 'failed' ? 'error' : k.st === 'waiting' ? 'warning' : undefined)}>{tail}</Text>
           </Button>
         )
       }
       const group = (it: Extract<Item, { kind: 'group' }>) => {
         const isOpen = v.groups.includes(it.id)
-        const c = { running: 0, waiting: 0, done: 0, failed: 0 }
-        for (const m of it.members) c[shownStatus(m, t)]++
+        const c = layoutCounts(it.members, t)
         const lead = it.members[0]!
+        const toggle = () => update($, view, (x): View => ({ ...x, groups: isOpen ? x.groups.filter(id => id !== it.id) : [...x.groups, it.id] }))
+        const list = isOpen ? it.members : it.needing
         return (
-          <Box key={`group:${it.id}`} flexDirection="column">
-            <Button key={`group:${it.id}`} plain {...hot()} onPress={() => update($, view, (x): View => ({ ...x, groups: isOpen ? x.groups.filter(id => id !== it.id) : [...x.groups, it.id] }))}>
-              <Text bold>{`${isOpen ? '▾' : '▸'} ${printable(it.type)} ×${it.members.length}`}</Text>{'  '}
-              <Text color={modelColor(lead.model)}>{modelLabel(lead.model)}</Text>{'  '}
-              <Text color={modelColor(lead.model)}>{`● ${c.running}`}</Text>
-              <Text dimColor>{' · '}</Text>
-              <Text color="warning">{`◐ ${c.waiting}`}</Text>
-              <Text dimColor>{' · '}</Text>
-              <Text color="success">{`✓ ${c.done}`}</Text>
-              <Text dimColor>{' · '}</Text>
-              <Text color="error">{`✗ ${c.failed}`}</Text>
+          <Box key={`group:${it.id}`} flexDirection="column" marginBottom={1}>
+            <Button key={`group:${it.id}`} plain onPress={toggle}>
+              <Text dimColor>{isOpen ? '▾ ' : '▸ '}</Text>
+              <Text color={paint(modelColor(lead.model))} bold>{fit(`${printable(it.type)} ×${it.members.length}`, 22)}</Text>
+              {bar(c, it.members.length, 16).map(([text, st], j) => (
+                <Text key={`b${j}`} {...(st.color ? { color: paint(st.color) } : {})} {...(st.dim ? { dimColor: true } : {})}>{text}</Text>
+              ))}
+              <Text dimColor>{`  ${c.done + c.failed}/${it.members.length} done · ${c.running} running`}</Text>
+              {c.waiting > 0 && <Text color={paint('warning')}>{` · ◐ ${c.waiting} need you`}</Text>}
+              {c.failed > 0 && <Text color={paint('error')}>{` · ✗ ${c.failed}`}</Text>}
             </Button>
-            {(isOpen ? it.members : it.needing).map(member)}
+            {list.map(member)}
+            {!isOpen && it.members.length > list.length && (
+              <Button key={`more:${it.id}`} plain onPress={toggle}>
+                <Text color={paint(FAINT)}>{`       … ${it.members.length - list.length} more · click to show`}</Text>
+              </Button>
+            )}
           </Box>
         )
       }
-      const sections: [Item['section'], string | null][] = [['recent', null], ['earlier', '── earlier this session ──'], ['older', '── older ──']]
+      const sections: [Item['section'], string, boolean][] = [['recent', 'this turn', false], ['earlier', 'earlier this session', false], ['older', '── older ──', true]]
       return (
         <Box flexDirection="column" paddingX={1}>
           {tabs}
-          <Box key="filters" columnGap={1} marginBottom={1}>
-            {FILTERS.map(([f, key, label]) => (
-              <Button key={`filter-${f}`} hotkey={key} {...(v.filter === f ? { variant: 'primary' } : { dimColor: true })} onPress={() => update($, view, toFilter(f))}>
-                {`${label} ${counts[f]}`}
-              </Button>
-            ))}
-          </Box>
-          <Box flexDirection="column" rowGap={1}>
-            {counts.all === 0 && <Text dimColor>No agents yet this session: they show here as they start, and stay once they finish.</Text>}
-            {counts.all > 0 && items.length === 0 && <Text dimColor>None match this filter.</Text>}
-            {sections.map(([sec, title]) => {
-              const its = items.filter(it => it.section === sec)
-              if (!its.length) return null
-              const isOld = sec !== 'recent'
-              const body = its.map(it => (it.kind === 'group' ? group(it) : row(it.agent, isOld)))
-              return title === null ? (
-                body
-              ) : (
-                <Box key={`sec:${sec}`} flexDirection="column">
-                  <Text dimColor>{title}</Text>
-                  {body}
-                </Box>
-              )
-            })}
-            <Text dimColor>{LIST_KEYS}</Text>
-          </Box>
+          {narrow ? (
+            <Text key="narrow" dimColor wrap="truncate-end">{`   the chart needs ${c!.width + 2} columns: its running agents · widen the pane for the chart, a for every agent`}</Text>
+          ) : (
+            <Box key="filters" columnGap={1} marginBottom={1}>
+              {FILTERS.map(([f, key, label]) => (
+                pill(`filter-${f}`, key, `${label} ${counts[f]}`, v.filter === f, () => update($, view, toFilter(f)))
+              ))}
+            </Box>
+          )}
+          {counts.all === 0 && <Text dimColor>No agents yet this session: they show here as they start, and stay once they finish.</Text>}
+          {counts.all > 0 && items.length === 0 && <Text dimColor>{narrow ? '   nothing running' : '   nothing here'}</Text>}
+          {sections.map(([sec, title, isOld]) => {
+            const its = items.filter(it => it.section === sec)
+            if (!its.length) return null
+            return (
+              <Box key={`sec:${sec}`} flexDirection="column" marginBottom={1}>
+                <Text {...(isOld ? { color: paint(FAINT) } : { dimColor: true })}>{`   ${title}`}</Text>
+                {its.map(it => (it.kind === 'group' ? group(it) : row(it.agent, isOld, it.kids)))}
+              </Box>
+            )
+          })}
+          {rule('rule')}
+          <Text dimColor wrap="truncate-end">{` ${LIST_KEYS}`}</Text>
         </Box>
       )
     }
 
-    const columns = Math.max(40, e.props.bodyColumns - 2)
-    const opts = { columns, lingerMs: settings.lingerMs, squadMin: settings.squadMin, motion: settings.motion && e.surface === 'terminal', expanded: v.expanded }
-    const c = chart(g, t, opts, tween)
-    fall = fallback(fall, c.width, columns, t)
-    const asTree = v.tree || fall.tree
-    const body = asTree ? tree(g, t, opts) : c.rows
-    const squad = c.squads[0]
+    const body = c!.rows
+    const squad = c!.squads[0]
     return (
       <Box flexDirection="column" paddingX={1}>
         {tabs}
@@ -788,14 +925,7 @@ export const register: Register = (on, options) => {
         </Box>
         {body.map(line)}
         <Box columnGap={2} marginTop={1}>
-          {fall.tree && !v.tree ? (
-            <Text key="view" dimColor>{`tree: the chart needs ${c.width + 2} columns`}</Text>
-          ) : (
-            <Button key="view" hotkey="t" dimColor onPress={() => update($, view, x => ({ ...x, tree: !x.tree }))}>
-              {asTree ? 'Chart view' : 'Tree view'}
-            </Button>
-          )}
-          {squad && !asTree && (
+          {squad && (
             <Button key="expand" hotkey="x" dimColor onPress={() => update($, view, x => ({ ...x, expanded: x.expanded === squad.id ? null : squad.id }))}>
               {v.expanded === squad.id ? `Collapse ${squad.label}` : `Expand ${squad.label}`}
             </Button>

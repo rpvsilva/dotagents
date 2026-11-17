@@ -17,10 +17,12 @@ type World = {
   messages: Record<string, any[]>; reads: Record<string, number>; viewed: unknown[]
   // Each agent's context reading, [tokens, window], as $.agent.list() gives it.
   ctx: Record<string, [number, number]>
+  // Each agent's cost in dollars, as $.agent.list() gives it.
+  cost: Record<string, number>
 }
 
 function engine(on: any): World {
-  const w: World = { opened: [], status: [], spawned: 0, clock: mock.clock(on, { now: NOW }), messages: {}, reads: {}, viewed: [], ctx: {} }
+  const w: World = { opened: [], status: [], spawned: 0, clock: mock.clock(on, { now: NOW }), messages: {}, reads: {}, viewed: [], ctx: {}, cost: {} }
   on('session.messages', (_: unknown, e: any) => {
     w.reads[e.agentId] = (w.reads[e.agentId] ?? 0) + 1
     const all = w.messages[e.agentId]
@@ -28,8 +30,8 @@ function engine(on: any): World {
     const from = e.after ? all.findIndex(m => m.uuid === e.after) + 1 : Math.max(0, all.length - (e.last ?? all.length))
     return { value: all.slice(from) }
   })
-  on('agent.list', () => ({ value: Object.entries(w.ctx).map(([id, [tokenCount, contextWindowSize]]) => ({ id, tokenCount, contextWindowSize })) }))
-  on('session.usage', () => ({ value: { context: { tokens: 61_000, window: 1_000_000 } } }))
+  on('agent.list', () => ({ value: [...new Set([...Object.keys(w.ctx), ...Object.keys(w.cost)])].map(id => ({ id, tokenCount: w.ctx[id]?.[0] ?? 0, contextWindowSize: w.ctx[id]?.[1] ?? 0, ...(id in w.cost ? { cost: { usd: w.cost[id] } } : {}) })) }))
+  on('session.usage', () => ({ value: { context: { tokens: 61_000, window: 1_000_000 }, cost: { usd: 1.84 } } }))
   on('ui.view', (_: unknown, e: any) => {
     w.viewed.push(e)
     return { value: {} }
@@ -175,37 +177,21 @@ test('an agent started by a subagent hangs under that subagent, not under main',
   await spawn($, 'fix the flaky test', 'epic-implementer')
   await spawn($, 'try bash 3.2', 'fork', { parentAgentId: 'agent-1' })
   await w.clock.advance(1000)
-  const ui = await $.ui.mount(pane('terminal'))
-  await ui.press({ key: 'view' })
-  await ui.unmount()
+  await press($, 'tab-agents')
   const out = await drawn($)
-  expect(out).toMatch(/└─ .*epic-implementer/)
-  expect(out).toMatch(/ {3}└─ .*fork/)
+  expect(out).toContain('epic-implementer')
+  expect(out).toMatch(/   ↳ . fork/)
 })
 
-test('t switches to the tree view and back', async ($, on) => {
-  const w = engine(on)
-  await start($)
-  await spawn($, 'map the auth flow')
-  await w.clock.advance(1000)
-  const ui = await $.ui.mount(pane('terminal'))
-  await ui.press({ key: 'view' })
-  await ui.unmount()
-  expect(await drawn($)).toMatch(/└─ .*Explore/)
-  const again = await $.ui.mount(pane('terminal'))
-  await again.press({ key: 'view' })
-  await again.unmount()
-  expect(await drawn($)).not.toMatch(/└─ .*Explore/)
-})
-
-test('a chart wider than the pane falls back to the tree', async ($, on) => {
+test('a chart wider than the pane lists its running agents instead', async ($, on) => {
   const w = engine(on)
   await start($)
   for (const t of ['Explore', 'Plan', 'pr-reviewer', 'general-purpose']) await spawn($, `task ${t}`, t)
   await w.clock.advance(1000)
   const out = await drawn($, 'terminal', 60)
-  expect(out).toMatch(/├─ .*Explore/)
-  expect(out).toContain('tree: the chart needs')
+  expect(out).toContain('the chart needs')
+  expect(out).toContain('pr-reviewer')
+  expect(out).not.toContain('╭')
 })
 
 test('motion off: no spinner frames', { options: { motion: 'off' } } as any, async ($: any, on: any) => {
@@ -241,13 +227,13 @@ test('a finished agent stays on the Agents tab after its box left the chart, and
   expect(await drawn($)).not.toContain('map the auth flow')
   await press($, 'tab-agents')
   const list = await drawn($)
-  expect(list).toContain('Agents (1)')
+  expect(list).toContain('≡ Agents 1')
   expect(list).toContain('map the auth flow')
-  expect(list).toMatch(/done 40s ago/)
+  expect(list).toMatch(/done 0:00 · 40s ago/)
   await press($, 'agent:agent-1')
   const out = await drawn($)
   expect(out).toContain('← Agents')
-  expect(out).toContain('› map the auth flow')
+  expect(out).toContain('task: map the auth flow')
   expect(out).toContain('▸ Bash rg login')
   expect(out).toContain('⎿ out of rg login')
   await press($, 'back')
@@ -292,7 +278,7 @@ test('g goes back to the chart', async ($, on) => {
   await press($, 'tab-agents')
   await press($, 'tab-chart')
   expect(await drawn($)).toContain('sonnet 5.5')
-  expect(await drawn($)).toContain('t tree/chart')
+  expect(await drawn($)).toContain('x expand squad')
 })
 
 test("each box shows its context used against its model's window; main its session's; the Agents list too", async ($, on) => {
@@ -305,7 +291,43 @@ test("each box shows its context used against its model's window; main its sessi
   expect(out).toContain('42k/200k')
   expect(out).toContain('61k/1M')
   await press($, 'tab-agents')
-  expect(await drawn($)).toContain('ctx 42k/200k (21%)')
+  expect(await drawn($)).toContain('21% ctx')
+})
+
+test("a squad's members show their context: the expanded squad under the chart, and the group opened in the Agents list", async ($, on) => {
+  const w = engine(on)
+  await start($)
+  for (const n of ['a', 'b', 'c', 'd']) await spawn($, `task ${n}`, 'epic-implementer')
+  w.ctx['agent-3'] = [60_000, 200_000]
+  await w.clock.advance(1500)
+  expect(await drawn($)).toContain('ctx avg 30%')
+  await press($, 'expand')
+  expect(await drawn($)).toMatch(/task c .* 30%/)
+  await press($, 'tab-agents')
+  await pressFirst($, 'group:')
+  expect(await drawn($)).toMatch(/task c .*30% ctx/)
+})
+
+test("each agent shows what it cost: its box, main's the session's, its squad's total, its log; the list has no cost column", async ($, on) => {
+  const w = engine(on)
+  await start($)
+  await spawn($, 'map the auth flow')
+  for (const n of ['a', 'b', 'c', 'd']) await spawn($, `task ${n}`, 'epic-implementer')
+  w.cost['agent-1'] = 0.123
+  w.cost['agent-2'] = 0.5
+  w.cost['agent-3'] = 0.25
+  w.messages['agent-1'] = msgs('map the auth flow', 'rg login')
+  await w.clock.advance(1500)
+  const chartOut = await drawn($)
+  expect(chartOut).toContain(' $0.12 ')
+  expect(chartOut).toContain(' $1.84 ')
+  expect(chartOut).toContain(' $0.75 ')
+  await press($, 'tab-agents')
+  const list = await drawn($)
+  expect(list).not.toContain('$0.12')
+  expect(list).not.toContain('$0.75')
+  await pressFirst($, 'agent:agent-1')
+  expect(await drawn($)).toMatch(/from main · .*· \$0\.12/)
 })
 
 // Presses the first Button whose key starts with `prefix` (keys of chart pieces and links carry their position).
@@ -329,7 +351,7 @@ test('a click on a box in the chart opens its log; Back returns to the chart', a
   expect(out).toContain('← Chart')
   expect(out).toContain('▸ Bash rg login')
   await press($, 'back')
-  expect(await drawn($)).toContain('t tree/chart')
+  expect(await drawn($)).toContain('x expand squad')
 })
 
 test("a log links to the agents it started; Back goes to the parent's log, then to the list", async ($, on) => {
@@ -344,7 +366,7 @@ test("a log links to the agents it started; Back goes to the parent's log, then 
   w.messages['agent-2'] = msgs('try bash 3.2', '/bin/bash --version')
   await press($, 'tab-agents')
   await press($, 'agent:agent-1')
-  expect(await drawn($)).toContain('↗ open its log')
+  expect(await drawn($)).toContain('open its log →')
   await pressFirst($, 'link:agent-2:')
   const child = await drawn($)
   expect(child).toContain('← epic-implementer')
@@ -445,16 +467,13 @@ test('a remote run started by a subagent hangs under it in the chart, and opens 
   await spawn($, 'fix it', 'epic-implementer')
   await $.tool.call({ tool: 'Bash', command: `~/.agents/bin/remote-agent --name probe @b.md`, description: 'probe remotely', run_in_background: true, agentId: 'agent-1', tool_use_id: 'b1' })
   await w.clock.advance(3000)
-  await press($, 'view')
-  const tree = await drawn($)
-  expect(tree).toMatch(/└─ .*epic-implementer/)
-  expect(tree).toMatch(/ {3}└─ .*☁ probe/)
+  expect(await drawn($)).toContain('☁ probe')
   expect(calls.ps).toBeGreaterThan(0)
   await pressFirst($, `open:remote:${RUN}`)
   const log = await drawn($)
   expect(log).toContain('remote-agent: claimed in 1s')
   expect(log).toContain('▸ Bash ls skills')
-  expect(log).toContain('from epic-implementer')
+  expect(log).toContain('caller: epic-implementer')
 })
 
 test("a run of another session is never shown, and with no remote-agent call and no live run the folders are not read again", async ($, on) => {
