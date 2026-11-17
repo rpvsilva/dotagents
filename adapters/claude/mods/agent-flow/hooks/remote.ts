@@ -400,14 +400,45 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
       else if (p.kind === 'result') out.push({ kind: 'result', text: `⎿ ${p.rest}` })
       else if (p.kind === 'error') out.push({ kind: 'error', text: `⎿ ${p.rest}` })
       else if (p.kind === 'text') out.push({ kind: 'text', text: p.rest })
+      // The run's own end line goes: the log's end line says how it ended, with the whole run's time.
+      else if ((p.kind === 'done' || p.kind === 'failed') && taskToolUseId === null) continue
       else out.push({ kind: 'note', text: line })
     }
   }
   if (taskToolUseId === null && summary !== null && summary.trim() !== '') {
-    out.push({ kind: 'note', text: '── summary ──' })
-    for (const l of summary.split('\n')) if (l.trim() !== '') out.push({ kind: 'text', text: oneLine(l) })
+    const raw = summary.split('\n').filter(l => l.trim() !== '')
+    const lines = jsonFields(summary) ?? raw.map(l => oneLine(l))
+    // summary.md is the agent's last message: where the transcript showed it, it is read there, not twice.
+    const first = oneLine(raw[0]!)
+    let at = -1
+    for (let i = out.length - 1; i >= 0 && at < 0; i--) if (out[i]!.kind === 'text' && out[i]!.text === first) at = i
+    if (at >= 0) out.splice(at, raw.length, ...lines.map(text => ({ kind: 'text' as const, text })))
+    else out.push({ kind: 'note', text: '── summary ──' }, ...lines.map(text => ({ kind: 'text' as const, text })))
   }
   return out
+}
+
+/**
+ * A reply that is one JSON object, as lines a person reads: `status: done`, `files: a.py, b.py`, an empty value as
+ * `—`, a nested one as compact JSON; null when the text is not a JSON object.
+ */
+export function jsonFields(text: string): string[] | null {
+  let v: unknown
+  try {
+    v = JSON.parse(text.trim())
+  } catch {
+    return null
+  }
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
+  const shown = (x: unknown): string =>
+    x === '' || x === null || (Array.isArray(x) && x.length === 0)
+      ? '—'
+      : Array.isArray(x) && x.every(e => typeof e !== 'object' || e === null)
+        ? x.map(String).join(', ')
+        : typeof x === 'object'
+          ? JSON.stringify(x)
+          : String(x)
+  return Object.entries(v as Record<string, unknown>).map(([k, x]) => oneLine(`${printable(k)}: ${printable(shown(x))}`))
 }
 
 // Moved from the remote-runs mod, which this mod replaces: resuming a run, and notifying each run that ends.
