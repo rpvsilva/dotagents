@@ -152,6 +152,7 @@ The tool's environment holds only `PATH`, `HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CON
 Each run has the case's three caps:
 
 - `turns` and `cost_usd` go to the tool's own flags (Claude Code's `--max-turns` and `--max-budget-usd`); the adapter reads a hit from the transcript.
+- Claude Code writes one `result` event per segment when a background subagent's notification resumes the run, each with its own turns and time: the adapter adds them up for `turns` and `duration_s`, and reads the cap and the error from the last. `run.py`'s check after the run (next line) compares those sums with the caps.
 - After every run, on any tool, `run.py` compares the run's `turns` and `cost_usd` with the caps: one over its cap is saved as `capped: turns` or `capped: cost`. This is how a tool with no such flag (Codex) is capped; an unknown value is never over.
 - `secs` is enforced by running the tool under [`scripts/capped`](../scripts/capped) `--secs`; its `capped: killed: timeout` line marks the hit.
 
