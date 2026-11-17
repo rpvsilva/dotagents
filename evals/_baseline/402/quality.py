@@ -21,8 +21,9 @@ Prints one JSON object:
 - with `--run`, `run`:
   - `ticket_reviews`: each ticket's deep review, the first report posted on its PR (the `== post_review PR<n>
     <report>` lines of `logs/PR<n>-post_review.log`, `<n>` a ticket's `PR:`), plus its `*-security.md` reports, their
-    findings summed by severity from each report's last `follow-up:` line (`1 blocker, 2 should-fix, 0 nit`); a
-    report with no such line is listed in `unparsed`. Reports posted after the deep review (re-reviews of its fixes)
+    findings summed by severity: a JSON output (`.json`, the agent protocol) by its `findings`' `severity`, a Markdown
+    report by its last `follow-up:` line (`1 blocker, 2 should-fix, 0 nit`); a report with neither is listed in
+    `unparsed`. Reports posted after the deep review (re-reviews of its fixes)
     are listed in `re_reviews`, not counted.
   - `fix_findings`: the findings sorted **Fix**, task and ticket reviews alike: each numbered line of
     `reviews/*-findings.md` (`<n>. <severity>, ...`, `<n>. <severity> | ...`, `<n>. **B · <severity> · ...`), counted by
@@ -56,6 +57,7 @@ FEATURES = {
 }
 SEVERITIES = ("blocker", "should-fix", "nit")
 POSTED = re.compile(r"^== post_review PR(\d+) (\S+)")
+SECURITY = re.compile(r"-security\.(md|json)$")
 SUMMARY = re.compile(r"^follow-up:(.*)$", re.MULTILINE)
 COUNT = re.compile(r"(\d+)\s+(blocker|should-fix|nit)\b")
 FIX = re.compile(r"^\d+\.[ \t]+[^\n]*?\b(blocker|should-fix|nit)\b", re.MULTILINE)
@@ -147,6 +149,29 @@ def severities(text):
     return counts
 
 
+def review_counts(path):
+    """A review's findings by severity: a JSON output's `findings`, a Markdown report's last `follow-up:` line; None
+    when the file is missing or has neither."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if path.suffix == ".json":
+        try:
+            findings = json.loads(text).get("findings")
+        except (ValueError, AttributeError):
+            return None
+        if not isinstance(findings, list):
+            return None
+        counts = dict.fromkeys(SEVERITIES, 0)
+        for f in findings:
+            if isinstance(f, dict) and f.get("severity") in counts:
+                counts[f["severity"]] += 1
+        return counts
+    summary = SUMMARY.findall(text)
+    return severities(summary[-1]) if summary else None
+
+
 def ticket_reviews(run, prs):
     """Each ticket PR's deep review (the first report posted on it) and security reports, their `follow-up:` counts
     summed by severity; the reports posted after them (re-reviews of the fixes) are listed, not counted."""
@@ -162,18 +187,17 @@ def ticket_reviews(run, prs):
                 name = Path(m.group(2)).name  # the run folder may have moved since: read it from this one
                 if name not in posted:
                     posted.append(name)
-        plain = [n for n in posted if not n.endswith("-security.md")]
-        reports += plain[:1] + [n for n in posted if n.endswith("-security.md")]
+        plain = [n for n in posted if not SECURITY.search(n)]
+        reports += plain[:1] + [n for n in posted if SECURITY.search(n)]
         later += plain[1:]
     out = dict.fromkeys(SEVERITIES, 0)
     unparsed = []
     for name in reports:
-        path = run / "reviews" / name
-        summary = SUMMARY.findall(path.read_text(encoding="utf-8")) if path.exists() else []
-        if not summary:
+        counts = review_counts(run / "reviews" / name)
+        if counts is None:
             unparsed.append(name)
             continue
-        for sev, n in severities(summary[-1]).items():
+        for sev, n in counts.items():
             out[sev] += n
     return {"reports": reports, **out, "unparsed": unparsed, "re_reviews": later}
 
