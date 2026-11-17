@@ -10,7 +10,7 @@ The build-epic orchestrator is the main Claude Code session. Before its first tu
 
 Every argument goes to `/build-epic` unchanged, so it takes what the skill takes. To resume a run, run the same command again: the skill resumes from the run folder. `claude --resume` would bring every tool back.
 
-It runs:
+It runs, with `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=40` unless you set another percentage:
 
 ```sh
 claude "/build-epic <arguments>" --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
@@ -19,6 +19,7 @@ claude "/build-epic <arguments>" --strict-mcp-config --mcp-config '{"mcpServers"
 
 - **No MCP servers**: none from any config and no claude.ai connectors.
 - **Only the tools a run calls.** A subagent's tools are the parent's set minus its own `disallowedTools`, so the set covers the subagents too: `Monitor` and `ToolSearch` are the implementers'. A tool left out is gone for every subagent of the run.
+- **Auto-compact at 40%** of the context window. The skill says to compact after each shipped ticket, but the model cannot run `/compact`: in the first step D replay of #402 the orchestrator never compacted and reached 204,700 of 200,000 tokens after three tickets. Compacting early is what keeps it small.
 - **User settings stay**: permissions, hooks (`guard-merge`, `telemetry-save`) and the skills folder load as usual. The skill listing is dropped with the `Skill` tool; `/build-epic` still expands.
 
 The launcher is Claude-only (`adapters/claude/build-epic/launch.sh`). `install.sh` links it when `build-epic` is installed for Claude.

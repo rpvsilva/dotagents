@@ -20,7 +20,7 @@ The run folder is `~/.agents/runs/<repo>/<epic-slug>/` (`<repo>` the repo folder
 
 Do every action `next.py` prints before running it again, starting subagents for all of them at once where the step says so. When `next.py` and a step file disagree, trust `next.py` and tell the human the line.
 
-**After each shipped ticket**, the ship step runs `status.py <run> --write`. Then compact or clear your context if your harness can, keeping only the run folder's path and this file; otherwise act on `state.md` and `next.py` alone, not on what earlier turns said.
+**After each shipped ticket**, the ship step runs `status.py <run> --write`. From then on act on `state.md` and `next.py` alone, not on what earlier turns said. When you can compact or clear your context yourself, do it now, keeping only the run folder's path and this file. When you cannot, the harness must do it for you: under Claude Code start the run with the launcher (`~/.agents/bin/build-epic`), which compacts automatically at 40% of the context window.
 
 ## Rules
 
