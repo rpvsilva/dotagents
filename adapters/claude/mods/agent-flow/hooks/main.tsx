@@ -9,6 +9,28 @@ import { type Agent, ctxShare, emptyGraph, type FlowEvent, fmtTokens, MAIN, mode
 import { addMessages, ago, backLabel, logText, EARLIER, filterCounts, FIRST_READ, goBack, type Item, listItems, type Message, NO_LOG, openFrom, scrollLog, WAITING, windowLines } from './log.ts'
 import { chart, clock, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS, tree } from './layout.ts'
 import { isMoving } from './lifecycle.ts'
+import {
+  applyLiveness,
+  costLine,
+  applyStaleness,
+  commonOf,
+  gitdirOf,
+  gitDirs,
+  isLaunch,
+  launchName,
+  livePids,
+  parseResult,
+  parseRun,
+  remoteLog,
+  remoteRun,
+  type Result,
+  type Run,
+  runEvents,
+  runIdsIn,
+  type Scan,
+  scanTranscript,
+  upwards,
+} from './remote.ts'
 import type { Filter, Log, LogLine, View } from './state.d.ts'
 
 const PANE = 'agent-flow'
@@ -40,7 +62,7 @@ const LOG_AFTER_END_MS = 5000
 const CHROME_ROWS = 11
 const logRows = (bodyRows: number, l: Log) => Math.max(3, bodyRows - CHROME_ROWS - (l.truncated ? 1 : 0))
 
-const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-2' })
+const graph = atom({ plugin: 'agent-flow', key: 'graph' } as const, emptyGraph(), { shape: 'graph-3' })
 const NO_VIEW: View = { tab: 'chart', tree: false, expanded: null, agentId: null, filter: 'all', groups: [], trail: [], origin: 'chart' }
 const view = atom({ plugin: 'agent-flow', key: 'view' } as const, NO_VIEW, { shape: 'view-3' })
 const log = atom({ plugin: 'agent-flow', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
@@ -59,6 +81,23 @@ let logQueue: Promise<void> = Promise.resolve()
 let logReadAt = 0
 let ctxReadAt = 0
 let drawnRows = { agentId: null as string | null, rows: 10 }
+
+// Remote runs. The scan reads the repo's run folders at most every REMOTE_EVERY_MS while a remote-agent call or a
+// run of this session is live (and once after the mod loads), rereading a folder's files only when they changed.
+const REMOTE_EVERY_MS = 1500
+// A call sent to the background ends at once; its run may start up to this long after.
+const LAUNCH_WAIT_MS = 120_000
+// $.fs.read refuses a file over 4 MiB: a transcript under this is read whole, a bigger one through `tail`.
+const FS_READ_MAX = 3 << 20
+let remoteAt = 0
+let remoteScanned = false
+let repo: { cwd: string; common: string | null } | null = null
+let sessionId: string | null = null
+// Per run folder: the key of the files last read, and what they gave; a finished run of another session is skipped.
+type Seen = { key: string; run: Run; result: Result | null; scan: Scan | null; transcriptSize: number; isFinal: boolean; isOurs: boolean }
+let seen = new Map<string, Seen>()
+// The open remote log's files as last read, so an unchanged log is not read again.
+let remoteLogKey = ''
 let listDrawnAt = 0
 
 async function now($: EngineInterface): Promise<number> {
@@ -96,7 +135,12 @@ async function readLog($: EngineInterface): Promise<void> {
     const { agentId } = await read($, view)
     const was = await read($, log)
     let l: Log = agentId === was.agentId ? was : { ...NO_LOG, agentId }
-    if (agentId !== null) {
+    const g = await read($, graph)
+    const target = agentId === null ? undefined : g.agents.find(a => a.id === agentId)
+    if (target?.remote) {
+      logReadAt = await now($)
+      l = await readRemoteLog($, l, target.remote.folder, target.remote.toolUseId)
+    } else if (agentId !== null) {
       logReadAt = await now($)
       const got = await $.session.messages(l.after === null ? { agentId, last: FIRST_READ } : { agentId, after: l.after })
       if ('deny' in got) l = l.after === null ? { ...l, denied: String(got.deny) } : { ...l, after: null }
@@ -105,6 +149,168 @@ async function readLog($: EngineInterface): Promise<void> {
     if (l !== was) await update($, log, () => l)
   } catch {
     // no new lines this time
+  }
+}
+
+/** A file's text; null when it is missing or unreadable. */
+async function text($: EngineInterface, path: string): Promise<string | null> {
+  try {
+    const got = await $.fs.read(path)
+    return typeof got === 'string' ? got : null
+  } catch {
+    return null
+  }
+}
+
+/** A file's size and mtime as `size:mtime`; '' when it is missing. */
+async function stamp($: EngineInterface, path: string): Promise<string> {
+  try {
+    const s = await $.fs.stat(path)
+    return `${s.size}:${s.mtimeMs}`
+  } catch {
+    return ''
+  }
+}
+
+/** A transcript's text: whole under FS_READ_MAX, else its last MiB through `tail` (the first, cut line dropped). */
+async function transcriptText($: EngineInterface, path: string): Promise<{ text: string; truncated: boolean } | null> {
+  try {
+    const size = (await $.fs.stat(path)).size
+    if (size < FS_READ_MAX) {
+      const whole = await text($, path)
+      return whole === null ? null : { text: whole, truncated: false }
+    }
+    const got = await $.process.run(['tail', '-c', String(1 << 20), '--', path])
+    return got.exitCode === 0 ? { text: got.stdout.slice(got.stdout.indexOf('\n') + 1), truncated: true } : null
+  } catch {
+    return null
+  }
+}
+
+/** A remote run's (or its subagent's) log, read again only when its folder's files changed. */
+async function readRemoteLog($: EngineInterface, l: Log, folder: string, toolUseId: string | null): Promise<Log> {
+  const key = [l.agentId, await stamp($, `${folder}/transcript.jsonl`), await stamp($, `${folder}/progress.log`), await stamp($, `${folder}/summary.md`)].join('|')
+  if (key === remoteLogKey && l.lines.length) return l
+  remoteLogKey = key
+  const tr = await transcriptText($, `${folder}/transcript.jsonl`)
+  const lines = remoteLog(tr?.text ?? '', await text($, `${folder}/progress.log`), await text($, `${folder}/summary.md`), toolUseId)
+  const last = Math.max(0, lines.length - 1)
+  return { ...l, lines, after: key, truncated: tr?.truncated ?? false, denied: null, top: Math.min(l.top, last) }
+}
+
+/** The repo's common git dir, found from the session's folder with file reads only; null outside a repo. */
+async function commonDir($: EngineInterface): Promise<string | null> {
+  const cwd = await $.session.cwd()
+  if (repo?.cwd === cwd) return repo.common
+  let common: string | null = null
+  for (const dir of upwards(cwd)) {
+    let kind: string
+    try {
+      kind = (await $.fs.stat(`${dir}/.git`)).kind
+    } catch {
+      continue
+    }
+    if (kind === 'dir') common = `${dir}/.git`
+    else {
+      const gitdir = gitdirOf((await text($, `${dir}/.git`)) ?? '', dir)
+      if (gitdir) common = commonOf(gitdir, await text($, `${gitdir}/commondir`))
+    }
+    break
+  }
+  repo = { cwd, common }
+  return common
+}
+
+/** The run folders under the common git dir's and each linked worktree's remote-agent/. */
+async function runFolders($: EngineInterface, common: string): Promise<{ id: string; folder: string }[]> {
+  const list = async (path: string) => {
+    try {
+      return await $.fs.list(path)
+    } catch {
+      return []
+    }
+  }
+  const worktrees = (await list(`${common}/worktrees`)).filter(e => e.kind === 'dir').map(e => e.name)
+  const out: { id: string; folder: string }[] = []
+  for (const dir of gitDirs(common, worktrees)) {
+    for (const e of await list(`${dir}/remote-agent`)) if (e.kind === 'dir') out.push({ id: e.name, folder: `${dir}/remote-agent/${e.name}` })
+  }
+  return out
+}
+
+/** `ps -o pid=,lstart=` for `pids`, in the C locale as remote-agent wrote pid_start; null when ps cannot run. */
+async function ps($: EngineInterface, pids: number[]): Promise<string | null> {
+  if (pids.length === 0) return ''
+  try {
+    return (await $.process.run(['env', 'LC_ALL=C', 'ps', '-o', 'pid=,lstart=', '-p', pids.join(',')])).stdout
+  } catch {
+    return null
+  }
+}
+
+/** Whether the run folders are worth reading at `t`: a remote-agent call or a run of this session is live, or none was read yet. */
+function remoteDue(g: { launches: { ended: number | null; at: number; background: boolean }[]; agents: Agent[] }, t: number): boolean {
+  if (t - remoteAt < REMOTE_EVERY_MS) return false
+  if (!remoteScanned) return true
+  if (g.launches.some(l => l.ended === null || (l.background && t - l.at < LAUNCH_WAIT_MS) || t - (l.ended ?? l.at) < 10_000)) return true
+  return g.agents.some(a => a.remote !== null && a.remote.taskId === null && a.status === 'running')
+}
+
+/**
+ * Reads this session's remote runs into the graph: each run folder whose run.json names this session as its caller,
+ * its liveness, result and transcript. A folder's files are reread only when they changed; a finished run of
+ * another session is not listed again. Never throws.
+ */
+async function scanRemote($: EngineInterface, t: number): Promise<void> {
+  try {
+    if (!remoteDue(await read($, graph), t)) return
+    remoteAt = t
+    remoteScanned = true
+    const common = await commonDir($)
+    if (!common) return
+    sessionId ??= await $.session.id()
+    const kept = new Map<string, Seen>()
+    const ours: Seen[] = []
+    for (const { id, folder } of await runFolders($, common)) {
+      const was = seen.get(folder)
+      if (was?.isFinal && !was.isOurs) {
+        kept.set(folder, was)
+        continue
+      }
+      const key = [await stamp($, `${folder}/run.json`), await stamp($, `${folder}/progress.log`), await stamp($, `${folder}/transcript.jsonl`)].join('|')
+      let s = was
+      if (!was || was.key !== key) {
+        const changed = Math.max(...key.split('|').map(k => Number(k.split(':')[1] ?? 0) || 0))
+        const run = parseRun({ id, folder, runJson: await text($, `${folder}/run.json`), changed })
+        const isOurs = run.session !== null && run.session === sessionId
+        const isFinal = run.state === 'done' || run.state === 'failed'
+        let scan = was?.scan ?? null
+        let size = was?.transcriptSize ?? -1
+        if (isOurs) {
+          const st = await stamp($, `${folder}/transcript.jsonl`)
+          const now = Number(st.split(':')[0] ?? -1)
+          if (st !== '' && now !== size) {
+            const tr = await transcriptText($, `${folder}/transcript.jsonl`)
+            if (tr) scan = scanTranscript(tr.text)
+            size = now
+          }
+        }
+        const result = isOurs && isFinal ? parseResult(await text($, `${folder}/result.json`)) : null
+        s = { key, run, result, scan, transcriptSize: size, isFinal, isOurs }
+      }
+      kept.set(folder, s!)
+      if (s!.isOurs) ours.push(s!)
+    }
+    seen = kept
+    if (!ours.length) return
+    // Liveness: ps where processes run; elsewhere a run whose files went quiet for 5 minutes counts as stopped.
+    const runs = ours.map(s => s.run)
+    const out = await ps($, livePids(runs))
+    const judged = out === null ? applyStaleness(runs, t) : applyLiveness(runs, out)
+    const evs = ours.flatMap((s, i) => runEvents(remoteRun(judged[i]!, s.result, s.scan, t), s.scan, t))
+    await update($, graph, g => evs.reduce(reduce, g))
+  } catch {
+    // no runs this time
   }
 }
 
@@ -195,6 +401,7 @@ async function tick($: EngineInterface): Promise<void> {
     const t = await now($)
     await status($)
     await readCtx($, t)
+    await scanRemote($, t)
     const isDrawn = t - lastDraw < DRAWN_MS
     const isGliding = t - tween.t0 < TWEEN_MS
     const v = await read($, view)
@@ -270,8 +477,23 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const agent = e.agentId ?? MAIN
     await record($, { kind: 'tool', at: await now($), agent, tool: e.tool, summary: summarize(e.tool, e as unknown as Record<string, unknown>) })
+    // A Bash call that starts a remote run: who made it and when, so the run hangs under that agent.
+    const input = e as unknown as Record<string, unknown>
+    const command = e.tool === 'Bash' && typeof input.command === 'string' ? input.command : ''
+    const launch = command !== '' && e.tool_use_id && isLaunch(command) ? e.tool_use_id : null
+    if (launch) {
+      const desc = typeof input.description === 'string' && input.description.trim() ? printable(input.description) : null
+      await record($, { kind: 'launch', at: await now($), toolUseId: launch, agent, name: launchName(command), desc, background: input.run_in_background === true })
+      remoteAt = 0
+    }
     const r = await next(e)
     await record($, { kind: 'toolEnd', at: await now($), agent })
+    if (launch) {
+      const res = (r as { result?: { stdout?: unknown; stderr?: unknown } }).result
+      const out = [res?.stdout, res?.stderr].filter((x): x is string => typeof x === 'string').join('\n')
+      await record($, { kind: 'launchEnd', at: await now($), toolUseId: launch, runIds: runIdsIn(out) })
+      remoteAt = 0
+    }
     if (e.tool === 'Agent' && e.tool_use_id && (r.deny !== undefined || r.isError)) {
       await record($, { kind: 'spawnFailed', at: await now($), toolUseId: e.tool_use_id, why: 'error' })
     }
@@ -361,7 +583,9 @@ export const register: Register = (on, options) => {
           : `${st === 'failed' ? `failed (${a.why ?? 'error'})` : 'done'} ${ago(a.ended ?? t, t)} · took ${clock((a.ended ?? t) - a.started)}`
       const share = ctxShare(a)
       const ctx = share === null ? '' : `ctx ${fmtTokens(a.ctx!)}/${fmtTokens(a.window!)} (${Math.round(share * 100)}%)`
-      const meta = [modelLabel(a.model), when, `${a.steps} steps`, ctx].filter(x => x !== '').join(' · ')
+      const run = a.remote && a.remote.taskId === null ? a.remote : null
+      const spent = run ? costLine(run.cost, run.files) : ''
+      const meta = [run ? `☁ remote${modelLabel(a.model) ? ` ${modelLabel(a.model)}` : ''}` : modelLabel(a.model), when, `${a.steps} steps`, ctx, spent].filter(x => x !== '').join(' · ')
       return { st, glyph, color, meta }
     }
 
@@ -374,7 +598,9 @@ export const register: Register = (on, options) => {
       drawnRows = { agentId: open.id, rows }
       const k = look(open)
       const isLive = k.st === 'running' || k.st === 'waiting'
-      const parent = open.parent === null || open.parent === MAIN ? 'main' : printable(g.agents.find(a => a.id === open.parent)?.type ?? 'an agent')
+      const parent =
+        (open.parent === null || open.parent === MAIN ? 'main' : printable(g.agents.find(a => a.id === open.parent)?.type ?? 'an agent')) +
+        (open.remote && open.remote.taskId === null && !open.remote.linked ? ' (no remote-agent call found for it)' : '')
       const badge = k.st === 'running' ? 'RUNNING' : k.st === 'waiting' ? 'NEEDS YOU' : k.st === 'failed' ? 'FAILED' : 'DONE'
       const visible = windowLines(shown.lines, shown.follow, shown.top, rows)
       let link = 0
@@ -400,6 +626,8 @@ export const register: Register = (on, options) => {
             return <Text key={`l${i}`} wrap="truncate-end" dimColor>{`  ${ln.text}`}</Text>
           case 'error':
             return <Text key={`l${i}`} wrap="truncate-end" color="error">{`  ${ln.text}`}</Text>
+          case 'note':
+            return <Text key={`l${i}`} wrap="truncate-end" dimColor>{ln.text}</Text>
           default:
             return <Text key={`l${i}`} wrap="truncate-end">{ln.text}</Text>
         }

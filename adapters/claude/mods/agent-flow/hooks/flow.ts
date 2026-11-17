@@ -1,9 +1,10 @@
 // The agent graph: what the session's agents are and how each stands, built from Claude Code's events by one pure
 // reducer. No `claude-code` import at run time: tested by flow.unit.ts under node --test.
 
-import type { Agent, Graph, Status } from './state.d.ts'
+import type { Agent, Graph, Launch, Remote, Status } from './state.d.ts'
+import { callerOf, type RemoteRun, type Task } from './remote.ts'
 
-export type { Agent, Graph, Status }
+export type { Agent, Graph, Launch, Remote, Status }
 
 export type FlowEvent =
   | { kind: 'spawn'; at: number; id: string; parent: string; type: string; desc: string; model: string | null; parentModel: string | null; toolUseId: string | null }
@@ -14,6 +15,12 @@ export type FlowEvent =
   | { kind: 'turnStart'; at: number; agent: string }
   | { kind: 'turnEnd'; at: number; agent: string; reason: string; outputTokens: number | null }
   | { kind: 'spawnFailed'; at: number; toolUseId: string; why: string }
+  /** A Bash call that runs remote-agent began, and ended (with the run ids its output named). */
+  | { kind: 'launch'; at: number; toolUseId: string; agent: string; name: string | null; desc: string | null; background: boolean }
+  | { kind: 'launchEnd'; at: number; toolUseId: string; runIds: string[] }
+  /** A remote run as its folder reads now, and a subagent it ran. */
+  | { kind: 'remote'; at: number; run: RemoteRun }
+  | { kind: 'remoteTask'; at: number; runId: string; folder: string; task: Task; model: string | null }
   /** A context reading: `used` tokens of a `window` (both from the engine). */
   | { kind: 'ctx'; at: number; agent: string; used: number; window: number }
 
@@ -26,10 +33,11 @@ export const MAIN = 'main'
 
 export function emptyGraph(): Graph {
   return {
-    agents: [{ id: MAIN, parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 0, checks: {}, ctx: null, window: null }],
+    agents: [{ id: MAIN, parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 0, checks: {}, ctx: null, window: null, remote: null }],
     turn: 0,
     turnStarted: 0,
     lastTurn: null,
+    launches: [],
   }
 }
 
@@ -78,7 +86,7 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
       const parent = g.agents.some(a => a.id === ev.parent) ? ev.parent : MAIN
       const agent: Agent = {
         id: ev.id, parent, type: ev.type, desc: ev.desc, model: ev.model, status: 'running', why: null, started: at, ended: null,
-        steps: 0, tokens: 0, step: null, toolUseId: ev.toolUseId, turn: g.turn, checks: {}, ctx: null, window: null,
+        steps: 0, tokens: 0, step: null, toolUseId: ev.toolUseId, turn: g.turn, checks: {}, ctx: null, window: null, remote: null,
       }
       const withMain = ev.parentModel && parent === MAIN ? patch(MAIN, m => (m.model ? m : { ...m, model: ev.parentModel })) : g
       return cap({ ...withMain, agents: [...withMain.agents, agent] })
@@ -116,12 +124,80 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
     }
     case 'ctx':
       return patch(ev.agent, a => (a.ctx === ev.used && a.window === ev.window ? a : { ...a, ctx: ev.used, window: ev.window }))
+    case 'launch': {
+      if (g.launches.some(l => l.toolUseId === ev.toolUseId)) return g
+      const launch: Launch = { toolUseId: ev.toolUseId, agent: ev.agent, at, ended: null, name: ev.name, desc: ev.desc, background: ev.background, runIds: [] }
+      return { ...g, launches: [...g.launches, launch].slice(-MAX_LAUNCHES) }
+    }
+    case 'launchEnd': {
+      const i = g.launches.findIndex(l => l.toolUseId === ev.toolUseId)
+      const was = g.launches[i]
+      if (!was) return g
+      const launch = { ...was, ended: at, runIds: [...new Set([...was.runIds, ...ev.runIds])] }
+      const launches = g.launches.slice()
+      launches[i] = launch
+      // A run its output named hangs under the call's agent from now on.
+      const agents = g.agents.map(a =>
+        a.remote && a.remote.taskId === null && launch.runIds.includes(a.remote.runId) && (a.parent !== launch.agent || !a.remote.linked) && g.agents.some(p => p.id === launch.agent)
+          ? { ...a, parent: launch.agent, desc: launch.desc ?? a.desc, remote: { ...a.remote, linked: true } }
+          : a,
+      )
+      return { ...g, launches, agents }
+    }
+    case 'remote': {
+      const r = ev.run
+      const id = `remote:${r.runId}`
+      const caller = callerOf(g.launches, { id: r.runId, name: r.name, started: r.started })
+      const linked = caller !== null && g.agents.some(a => a.id === caller.agent)
+      const was = g.agents.find(a => a.id === id)
+      const remote: Remote = {
+        runId: r.runId, folder: r.folder, taskId: null, toolUseId: null, phase: r.phase, exit: r.exit, cost: r.cost, turns: r.turns, files: r.files, linked,
+      }
+      const fields = {
+        parent: linked ? caller!.agent : MAIN, desc: (linked ? caller!.desc : null) ?? was?.desc ?? r.name ?? 'remote run', model: r.model, status: r.status,
+        why: r.why, ended: r.ended, steps: r.steps, step: r.step, remote,
+      }
+      if (!was) {
+        const agent: Agent = {
+          id, type: `☁ ${r.name ?? 'remote-agent'}`, started: r.started, tokens: 0, toolUseId: null, turn: g.turn, checks: {}, ctx: null, window: null, ...fields,
+        }
+        return cap({ ...g, agents: [...g.agents, agent] })
+      }
+      return patch(id, a => (same(a, fields) ? a : { ...a, ...fields }))
+    }
+    case 'remoteTask': {
+      const parent = `remote:${ev.runId}`
+      if (!g.agents.some(a => a.id === parent)) return g
+      const t = ev.task
+      const id = `${parent}:${t.id}`
+      const remote: Remote = {
+        runId: ev.runId, folder: ev.folder, taskId: t.id, toolUseId: t.toolUseId, phase: null, exit: null, cost: null, turns: null, files: null, linked: true,
+      }
+      const fields = {
+        parent, type: printable(t.type), desc: printable(t.desc), model: ev.model, status: t.status, why: t.status === 'failed' ? 'failed' : null,
+        ended: t.ended, steps: t.steps, step: t.step, remote,
+      }
+      const was = g.agents.find(a => a.id === id)
+      if (!was) {
+        const agent: Agent = { id, started: at, tokens: 0, toolUseId: null, turn: g.turn, checks: {}, ctx: null, window: null, ...fields }
+        return cap({ ...g, agents: [...g.agents, agent] })
+      }
+      return patch(id, a => (same(a, fields) ? a : { ...a, ...fields }))
+    }
     case 'spawnFailed': {
       const a = g.agents.find(x => x.toolUseId === ev.toolUseId)
       if (!a || isFinished(a)) return g
       return patch(a.id, x => ({ ...x, status: 'failed', why: ev.why, ended: at, step: null, checks: {} }))
     }
   }
+}
+
+/** The most remote-agent calls the graph keeps; the oldest go. */
+export const MAX_LAUNCHES = 50
+
+/** Whether `a` already has every field of `fields`, compared by value. */
+function same(a: Agent, fields: Partial<Agent>): boolean {
+  return Object.entries(fields).every(([k, v]) => JSON.stringify(a[k as keyof Agent]) === JSON.stringify(v))
 }
 
 const reopen = (_a: Agent): Partial<Agent> => ({ status: 'running', why: null, ended: null })

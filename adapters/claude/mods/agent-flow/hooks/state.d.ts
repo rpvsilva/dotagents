@@ -37,6 +37,44 @@ export type Agent = {
   ctx: number | null
   /** Its model's context window, in tokens; null before a reading. */
   window: number | null
+  /** For a remote-agent run (`remote:<run id>`) and the subagents it ran (`remote:<run id>:<task id>`); null for a local agent. */
+  remote: Remote | null
+}
+
+/** What a remote run's box and log need beyond an agent's fields. */
+export type Remote = {
+  runId: string
+  /** The run folder, which holds run.json, progress.log, transcript.jsonl, result.json and summary.md. */
+  folder: string
+  /** The task id of a subagent the run ran; null for the run itself. */
+  taskId: string | null
+  /** Its subagent's Agent call id in the run's transcript (`parent_tool_use_id` on its own events); null for the run. */
+  toolUseId: string | null
+  /** The setup phase while the sandbox starts (`claiming`, `sending`, `booting`); null once Claude runs. */
+  phase: string | null
+  exit: number | null
+  cost: number | null
+  turns: number | null
+  /** Files the run changed (result.json `changed`). */
+  files: number | null
+  /** Whether a launching Bash call was found for it; when not, it hangs under main. */
+  linked: boolean
+}
+
+/** A Bash call that ran remote-agent: who made it, when, and the runs it is known to have started. */
+export type Launch = {
+  toolUseId: string
+  agent: string
+  at: number
+  /** When the call ended; null while it runs. A backgrounded call ends at once. */
+  ended: number | null
+  /** The `--name` it gave, if any. */
+  name: string | null
+  /** The Bash call's description, the run's task. */
+  desc: string | null
+  background: boolean
+  /** Run ids its output named (`…/remote-agent/<id>/transcript.jsonl`). */
+  runIds: string[]
 }
 
 export type Graph = {
@@ -47,6 +85,8 @@ export type Graph = {
   turnStarted: number
   /** What the last turn's agents came to, shown once a new prompt clears them; null before a second turn. */
   lastTurn: { done: number; failed: number } | null
+  /** The Bash calls that ran remote-agent, newest last, at most 50. */
+  launches: Launch[]
 }
 
 /**
@@ -70,7 +110,7 @@ export type View = {
 export type Filter = 'all' | 'running' | 'needs' | 'failed' | 'done'
 
 /** One line of an agent's log, by kind: its prompt, its text, a tool call, a tool's result or error. */
-export type LogLine = { kind: 'prompt' | 'text' | 'call' | 'result' | 'error' | 'agent'; text: string; agentId?: string }
+export type LogLine = { kind: 'prompt' | 'text' | 'call' | 'result' | 'error' | 'agent' | 'note'; text: string; agentId?: string }
 
 /** The open log: its lines, the last message read, and the window the pane shows. */
 export type Log = {

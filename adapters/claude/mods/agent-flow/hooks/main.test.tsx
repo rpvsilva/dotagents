@@ -395,3 +395,97 @@ test('a finished log ends with how it ended, and c copies it', async ($, on) => 
   await press($, 'copy')
   expect(copied[0]).toContain('› run the tests')
 })
+
+// Remote runs: a fake repo on a fake file system, as remote-agent leaves it.
+function repoFs(on: any, files: Record<string, string>, dirs: Record<string, string[]>, ps: () => string) {
+  const calls = { ps: 0, lists: 0 }
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('fs.stat', (_: unknown, e: any) => {
+    if (dirs[e.path]) return { value: { kind: 'dir', size: 0, mtimeMs: NOW, isLink: false } }
+    const f = files[e.path]
+    if (f === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'file', size: f.length, mtimeMs: NOW + f.length, isLink: false } }
+  })
+  on('fs.read', (_: unknown, e: any) => {
+    const f = files[e.path]
+    if (f === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: f }
+  })
+  on('fs.list', (_: unknown, e: any) => {
+    calls.lists++
+    const names = dirs[e.path]
+    if (!names) throw new Error(`ENOENT: ${e.path}`)
+    return { value: names.map(name => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })) }
+  })
+  on('process.run', (_: unknown, e: any) => {
+    if (e.argv.includes('ps')) {
+      calls.ps++
+      return { value: { exitCode: 0, stdout: ps(), stderr: '' } }
+    }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  return calls
+}
+
+const RUN = 'agent-20261117-114447-18521'
+const RUNDIR = `/repo/.git/remote-agent/${RUN}`
+const runFile = (over: Record<string, unknown>) =>
+  JSON.stringify({ run: RUN, name: 'probe', started: NOW / 1000, pid: 4242, pid_start: 'Tue Nov 17 11:44:47 2026', state: 'running', claim_s: 1, send_s: 1, first_event_s: 2, caller: { session: 'sess-1' }, ...over })
+const TRANSCRIPT = [
+  { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+  { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls skills' } }] } },
+].map(e => `${JSON.stringify(e)}\n`).join('')
+
+test('a remote run started by a subagent hangs under it in the chart, and opens to its transcript log', async ($, on) => {
+  const w = engine(on)
+  const files: Record<string, string> = { [`${RUNDIR}/run.json`]: runFile({}), [`${RUNDIR}/transcript.jsonl`]: TRANSCRIPT, [`${RUNDIR}/progress.log`]: 'remote-agent: claimed in 1s\n' }
+  const calls = repoFs(on, files, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': [RUN] }, () => '4242 Tue Nov 17 11:44:47 2026\n')
+  await start($)
+  await spawn($, 'fix it', 'epic-implementer')
+  await $.tool.call({ tool: 'Bash', command: `~/.agents/bin/remote-agent --name probe @b.md`, description: 'probe remotely', run_in_background: true, agentId: 'agent-1', tool_use_id: 'b1' })
+  await w.clock.advance(3000)
+  await press($, 'view')
+  const tree = await drawn($)
+  expect(tree).toMatch(/└─ .*epic-implementer/)
+  expect(tree).toMatch(/ {3}└─ .*☁ probe/)
+  expect(calls.ps).toBeGreaterThan(0)
+  await pressFirst($, `open:remote:${RUN}`)
+  const log = await drawn($)
+  expect(log).toContain('remote-agent: claimed in 1s')
+  expect(log).toContain('▸ Bash ls skills')
+  expect(log).toContain('from epic-implementer')
+})
+
+test("a run of another session is never shown, and with no remote-agent call and no live run the folders are not read again", async ($, on) => {
+  const w = engine(on)
+  const files = { [`${RUNDIR}/run.json`]: runFile({ caller: { session: 'someone-else' }, state: 'done' }) }
+  const calls = repoFs(on, files, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': [RUN] }, () => '')
+  await start($)
+  await w.clock.advance(3000)
+  await press($, 'tab-agents')
+  expect(await drawn($)).not.toContain('probe')
+  const lists = calls.lists
+  await w.clock.advance(10_000)
+  expect(calls.lists).toBe(lists)
+})
+
+test('a graph stored before remote runs (graph-2, no launches) is declined: the remote run still shows', async ($, on) => {
+  const w = engine(on)
+  // What the version before remote runs stored, kept through the reload.
+  const old = { agents: [{ id: 'main', parent: null, type: 'main', desc: '', model: null, status: 'done', why: null, started: 0, ended: null, steps: 0, tokens: 0, step: null, toolUseId: null, turn: 1, checks: {}, ctx: null, window: null }], turn: 1, turnStarted: NOW, lastTurn: null }
+  // It stays what the store holds until the mod writes over it.
+  let isWritten = false
+  on('state.get', (_: unknown, e: any, next: any) => (e.key !== 'graph' || isWritten ? next(e) : { value: { value: { shape: 'graph-2', value: old }, version: 0 } }))
+  on('state.set', (_: unknown, e: any, next: any) => {
+    if (e.key === 'graph') isWritten = true
+    return next(e)
+  })
+  const files: Record<string, string> = { [`${RUNDIR}/run.json`]: runFile({}), [`${RUNDIR}/transcript.jsonl`]: TRANSCRIPT }
+  repoFs(on, files, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': [RUN] }, () => '4242 Tue Nov 17 11:44:47 2026\n')
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: '~/.agents/bin/remote-agent --name probe @b.md', run_in_background: true, tool_use_id: 'b1' })
+  await w.clock.advance(3000)
+  await press($, 'tab-agents')
+  expect(await drawn($)).toContain('☁ probe')
+})
