@@ -183,9 +183,9 @@ adapters/claude/plugins.txt" "files global: wrong"
 mkdir -p "$SANDBOX/empty"
 same "$(echo '{"group": "core"}' | PARTS_REPO="$SANDBOX/empty" "$PARTS" list)" "" "empty repo: list read stdin"
 
-# Without PARTS_REPO the script reads the repo it lives in: the real groups.json names the eight groups.
-same "$("$PARTS" groups | cut -f1 | tr '\n' ' ')" "core remote pr-loop epics security safety-hooks small-tools personal " \
-  "real repo: groups.json does not name the eight groups"
+# Without PARTS_REPO the script reads the repo it lives in: the real groups.json names the nine groups.
+same "$("$PARTS" groups | cut -f1 | tr '\n' ' ')" "core remote pr-loop epics security safety-hooks agent-flow small-tools personal " \
+  "real repo: groups.json does not name the nine groups"
 # Called through a chain of symlinks (relative, then absolute), it still finds the repo it lives in.
 # Git Bash copies on a plain `ln -s`: ask for a native link, and skip the case where there can be none.
 mkdir -p "$SANDBOX/bin"
@@ -202,7 +202,7 @@ shipped="$(for g in $("$PARTS" groups | cut -f1); do "$PARTS" closure "$g"; done
 for f in scripts/settings.sh scripts/hooks/lib.sh scripts/hooks/secret-patterns.txt adapters/claude/telemetry/extract.py; do
   grep -qxF "$f" <<<"$shipped" || fail "real repo: no part ships $f"
 done
-"$PARTS" groups | awk -F'\t' 'NF != 2 || $2 == "" { bad = 1 } END { exit bad || NR != 8 }' || fail "real repo: a group has no about line"
+"$PARTS" groups | awk -F'\t' 'NF != 2 || $2 == "" { bad = 1 } END { exit bad || NR != 9 }' || fail "real repo: a group has no about line"
 
 [ "$fails" -eq 0 ] || { echo "parts.test.sh: $fails failure(s)"; exit 1; }
 echo "parts.test.sh: ok"
