@@ -18,10 +18,10 @@ from testlib import EvalSandbox  # noqa: E402
 
 PASS_A = ("pass-a-remove", "pass-a-rename")
 PASS_B = ("pass-b-top",)
-# Cases with checks of their own, not this pilot's run-folder checks: the implementer cases, the planner traps and the
-# whole-ticket case.
-OTHERS = ("implement-block-unblock", "implement-command-discovery", "implement-item-fields", "implement-note",
-          "pass-a-traps", "ticket-commits")
+# Cases with checks of their own, not this pilot's run-folder checks: the implementer cases, the planner traps, the
+# whole-ticket case and the hub task's base-merge conflict.
+OTHERS = ("hub-sync-conflict", "implement-block-unblock", "implement-command-discovery", "implement-item-fields",
+          "implement-note", "pass-a-traps", "ticket-commits")
 
 SPEC = """# Spec: tally remove
 

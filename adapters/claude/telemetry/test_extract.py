@@ -418,7 +418,8 @@ class Roles(unittest.TestCase):
         skill = (HERE.parents[2] / "skills" / "build-epic" / "SKILL.md").read_text(encoding="utf-8")
         section = skill.split("\n## Subagents\n", 1)[1].split("\n## ", 1)[0]
         line = next(line for line in section.splitlines() if "**description**" in line)
-        self.assertEqual(sorted(set(re.findall(r"`([a-z-]+): ", line))), sorted(extractor.ROLES))
+        # `tune` stays a role for runs saved before build-epic dropped its tuner (#501); SKILL.md starts none.
+        self.assertEqual(sorted(set(re.findall(r"`([a-z-]+): ", line))), sorted(set(extractor.ROLES) - {"tune"}))
 
     def test_a_subagent_saves_its_cost_at_the_repos_prices(self):
         agent = self.agents["review: PR 12"]
