@@ -4,7 +4,7 @@
 //
 // parseRun, livePids and applyLiveness come from the remote-runs mod's runs.ts, which this mod replaces.
 
-import { type FlowEvent, printable, summarize } from './flow.ts'
+import { type FlowEvent, printable, summarize, withoutJson } from './flow.ts'
 import type { Launch, LogLine } from './state.d.ts'
 import { lineParts, oneLine, parseLines, renderEvent, tidy, type TranscriptEvent } from './transcript.ts'
 
@@ -429,23 +429,6 @@ export function remoteLog(transcript: string, progress: string | null, summary: 
     for (const l of summary.split('\n')) if (l.trim() !== '') out.push({ kind: 'text', text: oneLine(l) })
   }
   return out
-}
-
-/** `text` without a JSON object: the whole of it when it is one, else each line that is one. */
-export function withoutJson(text: string): string {
-  const isObject = (t: string) => {
-    try {
-      const v: unknown = JSON.parse(t.trim())
-      return v !== null && typeof v === 'object' && !Array.isArray(v)
-    } catch {
-      return false
-    }
-  }
-  if (isObject(text)) return ''
-  return text
-    .split('\n')
-    .filter(l => !isObject(l))
-    .join('\n')
 }
 
 // Moved from the remote-runs mod, which this mod replaces: resuming a run, and notifying each run that ends.
