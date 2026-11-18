@@ -30,9 +30,9 @@ from . import core
 NAME = "decisions.md"
 TITLE = "# Decisions"
 KEYS = ("base", "ci", "merge_identity", "human", "review_before_agent_merge", "test_command", "remote_test_command",
-        "remote", "caps", "parallel", "approved")
+        "remote", "caps", "parallel", "red_base", "approved")
 CHOICES = {"ci": ("on", "off"), "merge_identity": ("app", "human"), "review_before_agent_merge": ("yes", "no"),
-           "remote": ("on", "off"), "approved": ("yes",)}
+           "remote": ("on", "off"), "red_base": ("accept",), "approved": ("yes",)}
 WAIVED = ("yes", "no", "ask")
 AUTHORIZATIONS = "## Authorizations"
 DECISIONS = "## Decisions"

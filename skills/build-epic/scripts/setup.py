@@ -37,8 +37,13 @@ overrides the probe).
   (removed after), never the human's checkout. A command `map.md` also names with `--all` in a code span (e.g.
   `` `tests/run.sh --all` ``) runs as that, so a runner that picks only changed suites runs them all. Their skip
   reasons (`steplib/checks.py`'s `skip_reasons`) are written to `<run>/skips.md`, one row per tool (`(not named)` for
-  a reason naming none); `skips=<n>` counts the rows. A red run still lists its skips. A rerun keeps an existing
-  `skips.md`; delete it to list them again.
+  a reason naming none); `skips=<n>` counts the rows. A rerun keeps an existing `skips.md`; delete it to list them
+  again.
+- **Red base**: a suite that fails on the base (`skips.md`'s `rc:` and `failed:` lines; a red run still lists its
+  skips; exit 5 with "no tests ran" in its output, pytest's and unittest's word for a base with no tests yet, is not
+  red) fails `red-base <suite> rc=<n>`, with ` (command not found)` for 126 or 127, after everything above is
+  recorded: a broken test command would otherwise surface only later, in an implementer. A base the human accepts
+  red is recorded once as `decisions.md`'s `red_base: accept`, and setup goes on.
 """
 import os
 import re
@@ -56,6 +61,7 @@ ENV_VAR = checks.ENV_VAR
 DONE = checks.SETUP_DONE
 PR_EVENTS = ("pull_request", "pull_request_target")
 NOT_NAMED = "(not named)"
+NO_TESTS = re.compile(r"no tests ran", re.IGNORECASE)
 FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
 
@@ -274,18 +280,20 @@ def full_suites(map_md, suites):
 
 def run_in_base(ctx, repo, base, suites):
     """Runs `suites` in the run's environment in a throwaway worktree of `origin/<base>`; returns their output and
-    the last exit code. The worktree is removed on any exit."""
+    (the first suite that failed, its exit code), or (None, 0). The worktree is removed on any exit."""
     tmp = Path(tempfile.mkdtemp(prefix="build-epic-skips-"))
     wt = tmp / "base"
     git = gitops.Git(repo, ctx.log)
     git.worktree_add(wt, f"origin/{base}", detach=True)
     try:
-        outs, rc = [], 0
+        outs, failed = [], (None, 0)
         for suite in suites:
             res = ctx.run(["bash", "-c", checks.in_env(ctx.run_dir, suite)], cwd=wt)
             outs += [res.out, res.err]
-            rc = res.rc or rc
-        return "\n".join(outs), rc
+            empty = res.rc == 5 and NO_TESTS.search(res.out + res.err)  # pytest and unittest: a base with no tests
+            if res.rc and not empty and not failed[1]:
+                failed = (suite, res.rc)
+        return "\n".join(outs), failed
     finally:
         git.worktree_remove(wt)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -297,17 +305,28 @@ def list_skips(ctx, repo, base, map_md, suites):
     path = ctx.run_dir / "skips.md"
     if not path.exists():
         full = full_suites(map_md, suites)
-        out, rc = run_in_base(ctx, repo, base, full)
+        out, (suite, rc) = run_in_base(ctx, repo, base, full)
         by_tool = {}
         for skip in checks.skip_reasons(out):
             reasons = by_tool.setdefault(skip.tool or NOT_NAMED, [])
             if skip.reason not in reasons:
                 reasons.append(skip.reason)
         rows = "".join(f"| {_cell(t)} | {_cell('; '.join(r))} |\n" for t, r in by_tool.items())
-        path.write_text(f"# Skipped tools\n\nran: {' && '.join(full)} (in origin/{base})\nrc: {rc}\n\n"
+        failed = f"failed: {suite}\n" if rc else ""
+        path.write_text(f"# Skipped tools\n\nran: {' && '.join(full)} (in origin/{base})\nrc: {rc}\n{failed}\n"
                         f"| tool | reasons |\n| --- | --- |\n{rows}", encoding="utf-8")
     return sum(1 for line in path.read_text(encoding="utf-8").splitlines()
                if line.startswith("| ") and not line.startswith(("| tool |", "| --- |")))
+
+
+def red_base(run_dir):
+    """(the suite, its exit code) when `skips.md` records a suite failing on the base, else None."""
+    path = run_dir / "skips.md"
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    rc = runfolder.header(text, "rc")
+    if not rc or rc.strip() in ("", "0"):
+        return None
+    return (runfolder.header(text, "failed") or "(not named)").strip(), rc.strip()
 
 
 def remote_ready(ctx, repo):
@@ -366,6 +385,11 @@ def step(ctx):
         decisions.save(ctx.run_dir, d)
 
     skips = list_skips(ctx, repo, base, map_md, suites)
+    red = red_base(ctx.run_dir)
+    if red and (decisions.get(ctx.run_dir, "red_base") or "").strip() != "accept":
+        suite, rc = red
+        why = " (command not found)" if rc in ("126", "127") else ""
+        raise core.Fail(f"red-base {suite} rc={rc}{why}")
     return "set up", (f"ci={ci} env={env_dir} skips={skips} caps={mb}MB,{secs}s remote={remote}"
                       f"{machine.note(repo, ctx.log)}")
 
