@@ -92,7 +92,9 @@ class GoTest(unittest.TestCase):
         self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
         lines = self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
         self.assertIn("OK 01 open pr=99", lines)
-        self.assertTrue(any(line.startswith("ship 01 review pr=99") for line in lines), lines)
+        review = [line for line in lines if line.startswith("agent 01 ")]
+        self.assertEqual(len(review), 1, lines)
+        self.assertIn("agent=pr-reviewer description=ticket-review: PR 99", review[0])
 
     def test_no_ship_leaves_the_ticket_pr_to_a_ship_line(self):
         # The ticket-commits and hub-sync-conflict evals stop before shipping, with no GitHub.
@@ -173,15 +175,65 @@ class GoTest(unittest.TestCase):
         self.assertTrue(any("x is wrong" in line for line in lines), lines)
 
     def test_each_action_line_carries_its_instruction(self):
+        import next as nxt
+        self.assertIn("(ship.md: `next.py <run> --go` prepares its reviewers",
+                      nxt.how("ship 01 review pr=99  (ship.md)"))
+        self.assertIn("(build.md: `next.py <run> --go` writes its reviewer's prompt", nxt.how("review 01-01  (build.md)"))
+
+    def test_go_prepares_a_ticket_review_here_and_shows_it_for_the_post(self):
+        # #543: the review steps (tier, prompt, post) run inside next.py; the orchestrator only starts the reviewer.
         self.kit.answer("pr-list", out="[]")
         self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
         self.next("--go")
         self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
-        p = subprocess.run([sys.executable, "-I", str(NEXT), str(self.run), "--returned", "01-02"],
-                           input=self.implement("01-02", "y.txt"), capture_output=True, text=True, env=self.kit.env)
-        review = [line for line in p.stdout.splitlines() if line.startswith("ship 01 review")]
-        self.assertEqual(len(review), 1, p.stdout)
-        self.assertIn("(ship.md: a `pr-reviewer` on `review_prompt.py ticket --pr <n>`", review[0])
+        lines = self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
+        prompt = Path(next(line for line in lines if line.startswith("agent 01 ")).split(" ")[2])
+        text = prompt.read_text(encoding="utf-8")
+        head7 = prompt.stem.split("-")[2]
+        output = self.run / "reviews" / f"99-{head7}.json"
+        self.assertIn(str(output), text)
+        self.assertIn('"mode": "ticket"', text)
+        self.assertNotIn("agent 01 ", " ".join(self.next("--go")))  # prepared once
+        output.write_text(json.dumps({"status": "done", "mode": "ticket", "findings": [], "checked": "every hunk",
+                                      "process": [], "followups": []}), encoding="utf-8")
+        lines = self.next("--go")
+        self.assertIn(f"ship 01 post pr=99 output={output}", lines)
+        self.assertIn("OK reviewer done", lines)
+        self.assertNotIn("OK reviewer done", self.next("--go"))  # shown once
+        head = self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", "feat/a")
+        self.kit.answer("pr-view", out=json.dumps({"headRefOid": head}))
+        self.kit.answer(REVIEWS.format(n=99), out=json.dumps({"html_url": "https://github.com/o/r/pull/99#r1"}))
+        lines = self.next("--reviewed", "01", str(output))
+        self.assertEqual(lines[0], "OK PR99 review https://github.com/o/r/pull/99#r1")
+        self.assertFalse((self.run / "worktrees" / f"review-99-{head7}").exists())
+
+    def test_a_high_tier_task_review_is_prepared_once_and_posted_after_the_deep_review(self):
+        runfolder.set_header(self.run / "tasks" / "01-01-x.md", "Tier", "high")
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.next("--go")
+        lines = self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        review = [line for line in lines if line.startswith("agent 01-01 ")]
+        self.assertEqual(len(review), 1, lines)
+        self.assertIn("agent=pr-reviewer description=review: 01-01", review[0])
+        self.assertIn("review 01-01", lines)
+        self.assertNotIn("agent 01-01 ", " ".join(self.next("--go")))
+        prompt = Path(review[0].split(" ")[2])
+        task_output = self.run / "reviews" / f"01-01-{prompt.stem.split('-')[3]}.json"
+        self.assertIn(str(task_output), prompt.read_text(encoding="utf-8"))
+        clean = json.dumps({"status": "done", "mode": "task", "findings": [], "checked": "every hunk", "process": [],
+                            "followups": []})
+        task_output.write_text(clean, encoding="utf-8")
+        lines = self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
+        prompt = Path(next(line for line in lines if line.startswith("agent 01 ")).split(" ")[2])
+        output = self.run / "reviews" / f"99-{prompt.stem.split('-')[2]}.json"
+        output.write_text(clean.replace('"task"', '"ticket"'), encoding="utf-8")
+        head = self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", "feat/a")
+        self.kit.answer("pr-view", out=json.dumps({"headRefOid": head}))
+        self.kit.answer(REVIEWS.format(n=99), out=json.dumps({"html_url": "https://github.com/o/r/pull/99#r1"}))
+        lines = self.next("--reviewed", "01", str(output))
+        self.assertEqual([line for line in lines if line.startswith("OK PR99 review")], ["OK PR99 review https://github.com/o/r/pull/99#r1"] * 2, lines)
+        self.assertTrue(task_output.with_name(task_output.stem + ".posted.md").is_file())
 
     def remote_on(self):
         path = self.run / "decisions.md"
@@ -218,9 +270,10 @@ class GoTest(unittest.TestCase):
         self.remote_on()
         p = subprocess.run([sys.executable, "-I", str(NEXT), str(self.run), "--returned", "01-02"],
                            input=self.implement("01-02", "y.txt"), capture_output=True, text=True, env=self.kit.env)
-        review = [line for line in p.stdout.splitlines() if line.startswith("ship 01 review")]
-        self.assertEqual(len(review), 1, p.stdout)
-        self.assertIn("(ship.md: remote is on: `next.py <run> --go` starts its remote reviewers itself", review[0])
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        import next as nxt
+        self.assertIn("(ship.md: remote is on: `next.py <run> --go` starts its remote reviewers itself",
+                      nxt.how("ship 01 review pr=99  (ship.md)", remote=True))
 
     def stub_remote(self, exit_code=0, sleep=0):
         """A `remote-agent` that edits `<name's last word>.txt` in the worktree, leaves it uncommitted as a remote run
@@ -350,9 +403,12 @@ class GoTest(unittest.TestCase):
         _, _, head7 = self.ship_with_remote_review(exit_code=1)
         lines = self.next("--wait")
         self.assertTrue(any(line.startswith("FAIL 01 remote-exit 1") for line in lines), lines)
-        self.assertIn("ship 01 review pr=99", lines)
         self.assertTrue((self.run / "remote" / f"review-99-{head7}.local").is_file())
-        self.assertEqual(self.next("--go").count("ship 01 review pr=99"), 1)
+        self.assertTrue(any(line.startswith("agent 01 ") and "-local.md agent=pr-reviewer" in line for line in lines),
+                        lines)  # the next `go` prepared it here
+        lines = self.next("--go")
+        self.assertIn("wait 01 review here", lines)
+        self.assertFalse([line for line in lines if line.startswith(("agent 01 ", "remote 01 "))], lines)
 
     def test_a_first_brief_violation_writes_the_reissue_prompt(self):
         self.next("--go")
