@@ -94,6 +94,10 @@ const FAINT = 'inactive'
 let logQueue: Promise<void> = Promise.resolve()
 let logReadAt = 0
 let ctxReadAt = 0
+// Each model's context window, learned from the engine's readings and from runs' results, kept in $.store across
+// sessions: a remote run's transcript names its model but its window only once it has ended.
+const WINDOWS_KEY = 'windows'
+let windows: Record<string, number> | null = null
 let drawnRows = { agentId: null as string | null, rows: 10 }
 
 // Remote runs. The scan reads the repo's run folders at most every REMOTE_EVERY_MS while a remote-agent call or a
@@ -375,7 +379,9 @@ async function scanRemote($: EngineInterface, t: number): Promise<void> {
     const out = await ps($, livePids(runs))
     const judged = new Map((out === null ? applyStaleness(runs, t) : applyLiveness(runs, out)).map(r => [r.folder, r]))
     const now = (s: Seen) => judged.get(s.run.folder) ?? s.run
-    const evs: FlowEvent[] = ours.flatMap(s => runEvents(remoteRun(now(s), s.result, s.scan, t), s.scan, t))
+    await learnWindows($, Object.assign({}, ...all.map(s => s.scan?.windows ?? {})))
+    const known = await knownWindows($)
+    const evs: FlowEvent[] = ours.flatMap(s => runEvents(remoteRun(now(s), s.result, s.scan, t), s.scan, t, m => known[m] ?? null))
     evs.push({ kind: 'others', at: t, runs: others.map(s => remoteRun(now(s), s.result, s.scan, t)) })
     await update($, graph, g => evs.reduce(reduce, g))
     await notifyEnded($, common, [...judged.values()])
@@ -395,6 +401,32 @@ function logIsLive(a: Agent | undefined, t: number): boolean {
   return a.ended === null || t - a.ended < LOG_AFTER_END_MS
 }
 
+/** The windows learned so far, read from $.store on first use; a model it has not met yet is missing. */
+async function knownWindows($: EngineInterface): Promise<Record<string, number>> {
+  if (windows) return windows
+  let stored: unknown = null
+  try {
+    stored = await $.store.get(WINDOWS_KEY)
+  } catch {
+    // no store: learn them again
+  }
+  const ok = stored && typeof stored === 'object' && !Array.isArray(stored) ? Object.entries(stored as Record<string, unknown>) : []
+  windows = Object.fromEntries(ok.filter((kv): kv is [string, number] => typeof kv[1] === 'number' && kv[1] > 0))
+  return windows
+}
+
+/** Adds windows seen in `found`; stores them only when one is new or changed. Never throws. */
+async function learnWindows($: EngineInterface, found: Record<string, number>): Promise<void> {
+  const known = await knownWindows($)
+  if (Object.entries(found).every(([m, w]) => known[m] === w)) return
+  windows = { ...known, ...found }
+  try {
+    await $.store.set(WINDOWS_KEY, windows)
+  } catch {
+    // kept for this process only
+  }
+}
+
 /**
  * Takes a context reading for main and every subagent the engine lists, recorded as one graph write. Only while
  * something runs or ended a moment ago: a still session costs nothing. Never throws.
@@ -406,8 +438,10 @@ async function readCtx($: EngineInterface, t: number): Promise<void> {
     if (!recent || t - ctxReadAt < CTX_EVERY_MS) return
     ctxReadAt = t
     const evs: FlowEvent[] = []
+    const found: Record<string, number> = {}
     try {
       for (const info of await $.agent.list()) {
+        if (info.model && info.contextWindowSize) found[info.model] = info.contextWindowSize
         if (info.contextWindowSize && info.tokenCount > 0) evs.push({ kind: 'ctx', at: t, agent: info.id, used: info.tokenCount, window: info.contextWindowSize })
         if (info.cost) evs.push({ kind: 'cost', at: t, agent: info.id, usd: info.cost.usd })
       }
@@ -417,10 +451,13 @@ async function readCtx($: EngineInterface, t: number): Promise<void> {
     try {
       const { context, cost } = await $.session.usage()
       if (context.tokens !== undefined && context.window) evs.push({ kind: 'ctx', at: t, agent: MAIN, used: context.tokens, window: context.window })
+      const mainModel = g.agents.find(a => a.id === MAIN)?.model
+      if (mainModel && context.window) found[mainModel] = context.window
       if (cost) evs.push({ kind: 'cost', at: t, agent: MAIN, usd: cost.usd })
     } catch {
       // no usage to read
     }
+    await learnWindows($, found)
     if (evs.length) await update($, graph, x => evs.reduce(reduce, x))
   } catch {
     // no reading this time

@@ -128,7 +128,31 @@ test("a transcript gives the run's model, its own steps, and each subagent with 
   assert.equal(s.model, 'claude-opus-5-5')
   assert.equal(s.steps, 2)
   assert.equal(s.step, 'Agent Find settings')
-  assert.deepEqual(s.tasks, [{ id: 'tk1', type: 'Explore', desc: 'Find skills with settings.json', toolUseId: 'agent1', status: 'done', started: T + 5_000, ended: T + 20_000, steps: 1, step: null }])
+  assert.deepEqual(s.tasks, [{ id: 'tk1', type: 'Explore', desc: 'Find skills with settings.json', toolUseId: 'agent1', status: 'done', started: T + 5_000, ended: T + 20_000, steps: 1, step: null, model: null, ctx: null }])
+})
+
+test("a transcript gives the context the run and each subagent used at its latest request, and the windows a result names", () => {
+  const usage = (input: number, read: number, made: number, out: number) => ({ input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: made, output_tokens: out })
+  const tr = jsonl(
+    { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+    { type: 'assistant', message: { model: 'claude-opus-5-5', usage: usage(2, 1000, 500, 10), content: [{ type: 'tool_use', id: 'agent1', name: 'Agent', input: {} }] } },
+    { type: 'system', subtype: 'task_started', task_id: 'tk1', tool_use_id: 'agent1', description: 'look', subagent_type: 'Explore' },
+    { type: 'assistant', parent_tool_use_id: 'agent1', message: { model: 'claude-haiku-5-5', usage: usage(1, 100, 0, 5), content: [] } },
+    { type: 'assistant', parent_tool_use_id: 'agent1', message: { model: 'claude-haiku-5-5', usage: usage(1, 300, 20, 9), content: [] } },
+    { type: 'assistant', message: { model: 'claude-opus-5-5', usage: usage(2, 2000, 100, 40), content: [] } },
+  )
+  const s = scanTranscript(tr)
+  assert.equal(s.ctx, 2142)
+  assert.deepEqual([s.tasks[0]!.ctx, s.tasks[0]!.model], [330, 'claude-haiku-5-5'])
+  assert.deepEqual(s.windows, {})
+  const done = scanTranscript(tr + jsonl({ type: 'result', modelUsage: { 'claude-opus-5-5': { contextWindow: 1_000_000 }, 'claude-haiku-5-5': { contextWindow: 200_000 } } }))
+  assert.deepEqual(done.windows, { 'claude-opus-5-5': 1_000_000, 'claude-haiku-5-5': 200_000 })
+  // The graph: a reading for the run and its subagent once their model's window is known.
+  const r = remoteRun(run(), null, s, T)
+  const evs = runEvents(r, s, T, m => (m === 'claude-opus-5-5' ? 1_000_000 : null))
+  assert.deepEqual(evs.filter(e => e.kind === 'ctx'), [{ kind: 'ctx', at: T, agent: `remote:${ID}`, used: 2142, window: 1_000_000 }])
+  const g = runEvents(r, s, T, m => (m === 'claude-opus-5-5' ? 1_000_000 : 200_000)).reduce(reduce, emptyGraph())
+  assert.deepEqual(g.agents.filter(a => a.remote).map(a => [a.ctx, a.window]), [[2142, 1_000_000], [330, 200_000]])
 })
 
 test("a remote log: the run's setup, its own events, then its summary; a subagent's log only its own events", () => {
