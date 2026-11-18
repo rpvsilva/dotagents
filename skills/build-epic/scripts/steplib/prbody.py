@@ -10,7 +10,9 @@ acceptance criteria, the skipped tests' reasons under `## Not exercised here`, a
 
 It holds a `## Merge` section before those refs when `<run>/decisions.md` exists: who merges (the App, or the human's
 own login), into which branch (`base:` or the run's default branch), on what proof (`review_before_agent_merge` and
-`ci`), and each Authorizations row quoted as recorded.
+`ci`), and each Authorizations row quoted as recorded. When the App merges and a row is not waived `yes`, the first
+line also says a diff hitting such a rule is left for the human: the guard decides at merge time, after the body is
+written, so the body names the condition, never the outcome.
 With `ci: off` it also holds `LOCAL_PROOF`, the line saying no CI runs and the local Checks run is the proof.
 With no `decisions.md` the section is left out.
 
@@ -125,7 +127,13 @@ def merge_section(run):
     review = "a review and " if d.get("review_before_agent_merge") == "yes" else ""
     proof = "green CI" if ci.enabled(run) else "a green local run (CI is off for this run)"
     rows = [f"- {a.clause} (waived: {a.waived}): {a.quote}" for a in d.authorizations]
-    lines = [f"Merges as {who}, into `{into}`, after {review}{proof}.", "",
+    held = [a.clause for a in d.authorizations if a.waived != "yes"]
+    first = f"Merges as {who}, into `{into}`, after {review}{proof}."
+    if held and d.get("merge_identity") != "human":
+        human = f"`{d.get('human')}`" if d.get("human") else "the human"
+        first += (f" Unless its diff hits a rule not waived `yes` below ({'; '.join(held)}): then it is left for "
+                  f"{human} to approve and merge.")
+    lines = [first, "",
              "Authorizations:\n" + "\n".join(rows) if rows else "Authorizations: none recorded."]
     if not ci.enabled(run):
         lines[1:1] = ["", LOCAL_PROOF]
