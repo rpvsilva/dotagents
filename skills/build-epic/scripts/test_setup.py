@@ -154,13 +154,13 @@ class PrintsOneLine(SetupCase):
     def test_prints_ci_env_and_skips(self):
         self.workflows({"ci.yml": PR_INTO_MAIN})
         line = self.setup()
-        self.assertEqual(line, f"OK run set up ci=on env={self.run_dir / 'env'} skips=0 caps=1500MB,300s")
+        self.assertEqual(line, f"OK run set up ci=on env={self.run_dir / 'env'} skips=0 caps=1500MB,300s remote=off")
         self.assertTrue((self.run_dir / "env").is_dir())
 
     def test_runs_from_a_linked_run_folder(self):
         linked = self.kit.link(self.run_dir, "linked-run")
         p = self.kit.step(SETUP, linked)
-        self.assertEqual(p.stdout, f"OK run set up ci=off env={self.run_dir / 'env'} skips=0 caps=1500MB,300s\n",
+        self.assertEqual(p.stdout, f"OK run set up ci=off env={self.run_dir / 'env'} skips=0 caps=1500MB,300s remote=off\n",
                          p.stderr)
 
     def test_without_run_md_fails_with_its_log(self):
@@ -210,19 +210,19 @@ class CapsFollowTheMachine(SetupCase):
         self.unset("max_parallel")
         self.kit.env["BUILD_EPIC_MACHINE"] = "10,16"
         # (16384 - 2048) / 4 - 1024
-        self.assertIn(" caps=2560MB,300s ", self.setup())
+        self.assertIn(" caps=2560MB,300s remote=off ", self.setup())
         self.assertEqual(self.decided("caps"), "2560 300")
 
     def test_fewer_slots_a_level_sets_give_each_a_bigger_share(self):
         self.unset("cap_mb")
         self.setting("max_parallel", "2")
         self.kit.env["BUILD_EPIC_MACHINE"] = "10,16"
-        self.assertTrue(self.setup().endswith(" caps=6144MB,300s"))
+        self.assertTrue(self.setup().endswith(" caps=6144MB,300s remote=off"))
 
     def test_a_small_machine_still_gets_512_mb(self):
         self.unset("cap_mb")
         self.kit.env["BUILD_EPIC_MACHINE"] = "4,4"
-        self.assertTrue(self.setup().endswith(" caps=512MB,300s"))
+        self.assertTrue(self.setup().endswith(" caps=512MB,300s remote=off"))
 
     def test_cap_secs_sets_the_time_cap(self):
         self.setting("cap_secs", "900")
@@ -275,6 +275,32 @@ class RecordsTheRunsFacts(SetupCase):
         self.assertEqual(self.decided("human"), "rui")
         self.assertEqual(self.decided("merge_identity"), "app")
         self.assertEqual(self.decided("ci"), "off")
+
+    def stub_remote_agent(self, rc):
+        agent = self.kit.home / ".agents" / "bin" / "remote-agent"
+        agent.write_text(f'#!/bin/sh\n[ "$1" = ready ] && echo cluster && exit {rc}\nexit 9\n', encoding="utf-8")
+        agent.chmod(0o755)
+
+    def test_remote_is_on_when_remote_agent_is_ready(self):
+        # Replay e1 of #402 ran every agent here: the orchestrator never passed `--go --remote`.
+        self.stub_remote_agent(0)
+        self.assertTrue(self.setup().endswith(" remote=on"))
+        self.assertEqual(self.decided("remote"), "on")
+
+    def test_remote_is_off_when_remote_agent_is_not_ready_or_missing(self):
+        self.setup()
+        self.assertEqual(self.decided("remote"), "off")
+        (self.run_dir / "decisions.md").write_text("# Decisions\n", encoding="utf-8")
+        self.stub_remote_agent(1)
+        self.setup()
+        self.assertEqual(self.decided("remote"), "off")
+
+    def test_a_recorded_remote_off_is_kept(self):
+        # A run started with `--local` records `remote: off` before setup.
+        self.stub_remote_agent(0)
+        (self.run_dir / "decisions.md").write_text("# Decisions\nremote: off\n", encoding="utf-8")
+        self.assertTrue(self.setup().endswith(" remote=off"))
+        self.assertEqual(self.decided("remote"), "off")
 
     def test_human_unknown_is_left_unrecorded(self):
         self.kit.answer("api-user", err="HTTP 401: Bad credentials\n", rc=1)
@@ -439,7 +465,7 @@ class ListsSkippedTools(SetupCase):
                "SKIPPED [1] tests/test_x.py:3: requires docker\n")
         self.write_map(self.suite_printing(out))
         line = self.setup()
-        self.assertTrue(line.endswith(" skips=3 caps=1500MB,300s"), line)
+        self.assertTrue(line.endswith(" skips=3 caps=1500MB,300s remote=off"), line)
         skips = (self.run_dir / "skips.md").read_text(encoding="utf-8")
         for reason in checks.skip_reasons(out):
             self.assertIn(reason.reason, skips)
@@ -448,7 +474,7 @@ class ListsSkippedTools(SetupCase):
 
     def test_a_red_suite_still_lists_its_skips(self):
         self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'; exit 1")
-        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s remote=off"))
         self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| zsh \|")
 
     def test_suites_run_in_a_throwaway_worktree_of_the_base_not_the_checkout(self):
@@ -467,12 +493,12 @@ class ListsSkippedTools(SetupCase):
         suite = self.suite_printing("== tests/zsh.test.sh (0s)\nzsh.test.sh: skipped (zsh is not installed)\n",
                                     only_with_all=True)
         self.write_map(suite, setup=f"Setup: none. Before a ticket ships, run `{suite} --all`.")
-        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s remote=off"))
         self.assertEqual(self.decided("test_command"), CAPS + suite)
 
     def test_suites_run_in_the_runs_environment(self):
         self.write_map("envtool", setup=env_tool_setup("envtool", "SKIPPED [1] t.py:1: needs docker"))
-        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s remote=off"))
         self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| docker \|")
 
 
@@ -506,11 +532,11 @@ class Reruns(SetupCase):
 
     def test_rerun_keeps_skips_md_until_it_is_deleted(self):
         self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'")
-        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s remote=off"))
         self.write_map("echo all ran")
-        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s"))
+        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s remote=off"))
         (self.run_dir / "skips.md").unlink()
-        self.assertTrue(self.setup().endswith(" skips=0 caps=1500MB,300s"))
+        self.assertTrue(self.setup().endswith(" skips=0 caps=1500MB,300s remote=off"))
 
 
 class SkipReasons(unittest.TestCase):

@@ -15,7 +15,7 @@ Create the run folder and run `init_run.py <run> <repo> [--epic <n>]`, `--epic` 
 
 ## `setup run`
 
-Run `setup.py <run>`. It prints `OK run set up ci=<on|off> env=<path> skips=<n> [parallel=<n> (<cpus> cores, <gb> GB)]`: it runs `map.md`'s `Setup` once into `<run>/env/`, records `test_command:` (`map.md`'s Checks in that environment), `ci:` and `caps:`, and lists in `skips.md` the tools the suite skipped without.
+Run `setup.py <run>`. It prints `OK run set up ci=<on|off> env=<path> skips=<n> caps=<mb>MB,<secs>s remote=<on|off> [parallel=<n> (<cpus> cores, <gb> GB)]`: it runs `map.md`'s `Setup` once into `<run>/env/`, records `test_command:` (`map.md`'s Checks in that environment), `ci:`, `caps:` and `remote:` (on when `remote-agent ready` exits 0), and lists in `skips.md` the tools the suite skipped without.
 
 - **N**: `--parallel N`, else `max_parallel` when a Level sets it, else the printed `parallel=`. Record it with `decide.py <run> set parallel <N>` and tell the human N and its reason once (the flag, the Level, or the machine: `N=4: 8 cores, 16 GB`).
 - **Skips**: when `skips.md` lists tools, ask the human once, in one message, whether to install each, and record their answer with `decide.py <run> quote`. Install the ones they accept as they say, delete `skips.md` and run `setup.py <run>` again. A declined tool stays skipped; its reason reaches the ticket PR and the report.
