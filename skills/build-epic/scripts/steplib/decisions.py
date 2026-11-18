@@ -29,8 +29,8 @@ from . import core
 
 NAME = "decisions.md"
 TITLE = "# Decisions"
-KEYS = ("base", "ci", "merge_identity", "human", "review_before_agent_merge", "test_command", "caps", "parallel",
-        "approved")
+KEYS = ("base", "ci", "merge_identity", "human", "review_before_agent_merge", "test_command", "remote_test_command",
+        "caps", "parallel", "approved")
 CHOICES = {"ci": ("on", "off"), "merge_identity": ("app", "human"), "review_before_agent_merge": ("yes", "no"),
            "approved": ("yes",)}
 WAIVED = ("yes", "no", "ask")

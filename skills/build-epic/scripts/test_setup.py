@@ -2,6 +2,7 @@
 import io
 import os
 import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -287,6 +288,27 @@ class RecordsTheRunsFacts(SetupCase):
         env = self.run_dir / "env"
         self.assertTrue((env / "made").exists())
         self.assertEqual(self.decided("test_command"), CAPS + f"export BUILD_EPIC_ENV={env.as_posix()} && echo hi")
+
+    def test_the_remote_test_command_makes_the_sandbox_env_once_then_runs_the_suites(self):
+        # A remote sandbox has no <run>/env/: replays of #402 saw implementers build their own venvs in /tmp.
+        make = 'mkdir -p "$BUILD_EPIC_ENV/bin" && echo made >> "$BUILD_EPIC_ENV/count" && touch "$BUILD_EPIC_ENV/bin/activate"'
+        self.write_map('echo "suite in $BUILD_EPIC_ENV"', setup=f"Setup:\n\n```\n{make}\n```")
+        self.setup()
+        remote = self.decided("remote_test_command")
+        self.assertNotIn(str(self.run_dir), remote)
+        home = self.run_dir / "sandbox-home"
+        home.mkdir()
+        env = {"HOME": str(home), "PATH": os.environ["PATH"]}
+        for _ in range(2):
+            p = subprocess.run(["bash", "-c", remote], capture_output=True, text=True, env=env, cwd=home)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(p.stdout, f"suite in {home}/.build-epic-env\n")
+        self.assertEqual((home / ".build-epic-env" / "count").read_text(), "made\n")
+
+    def test_the_remote_test_command_without_setup_is_the_suites_under_the_caps(self):
+        self.write_map("echo one\necho two")
+        self.setup()
+        self.assertEqual(self.decided("remote_test_command"), CAPS + "echo one && echo two")
 
     def test_test_command_activates_a_virtualenv_setup_made(self):
         activate = 'mkdir -p "$BUILD_EPIC_ENV/bin" && touch "$BUILD_EPIC_ENV/bin/activate"'

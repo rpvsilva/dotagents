@@ -14,7 +14,8 @@ command printing the diff from `git merge-base <base> <head>`. With `--run`, the
 `<run>/map.md` (a reviewer's `map`, its Checks, Invariants and Field matrix; a security reviewer's `checks`, since its
 `map` is a security map) and `<run>/spec.md` when it exists; without it, none of them, so standalone `review-pr`
 works. `--decisions` names the decisions file instead of `<run>/decisions.md`, with or without `--run`; its `ci:` and
-`test_command:` header lines, when set, become the `ci` and `test_command` inputs. `--output` (alias `--report`) names
+`test_command:` header lines, when set, become the `ci` and `test_command` inputs (with `--remote`, its
+`remote_test_command:` when set: the sandbox has no run environment). `--output` (alias `--report`) names
 the file the reviewer writes its output object to (a run's `<run>/reviews/<PR>-<sha7>.json`, `-security.json` for the
 security reviewer), the only file it may write.
 
@@ -23,7 +24,9 @@ GitHub access: `remote: true`, no `output` (its final message is its output obje
 (`pr-<n>.diff`) and the PR facts (`pr-<n>.json`, from `gh pr view <n> --json author,title,body,headRefOid,baseRefName,
 files`), and `attach.txt`: the absolute path of each file to attach, one per line (those, the decisions file,
 `<run>/map.md`, `<run>/spec.md` when it exists, `--task` and `--findings`), every basename distinct: an input whose
-name is taken is copied into `<dir>` as `<its option>-<name>`. The inputs name the worktree as `~/work`, each file as
+name is taken is copied into `<dir>` as `<its option>-<name>`; and `agent.txt`, the subagent to run it as
+(`pr-reviewer`, or `security-reviewer` in `security` mode), for `remote-agent --agent`, so the remote run gets the model
+a local one does. The inputs name the worktree as `~/work`, each file as
 `~/attached/<name>` and the diff as `cat ~/attached/pr-<n>.diff`. A remote reviewer runs the PR's tests in a sandbox
 holding a token, so `--remote` renders only a PR whose author is one of the `--allow-author` logins (repeatable, as
 `gh pr view --json author` spells them; case aside): the human's and the run's identity. Any other author is refused
@@ -93,8 +96,9 @@ def diff(worktree, base, head):
     return f"git -C {worktree} diff $(git -C {worktree} merge-base {base} {head}) {head}"
 
 
-def headers(decisions):
-    """The decisions file's `ci:` and `test_command:` header lines (those above its first `## ` section), when set."""
+def headers(decisions, remote=False):
+    """The decisions file's `ci:` and `test_command:` header lines (those above its first `## ` section), when set;
+    `remote`, its `remote_test_command:` as the `test_command` when set, since a sandbox has no run environment."""
     try:
         text = Path(decisions).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -104,8 +108,11 @@ def headers(decisions):
         if line.startswith("## "):
             break
         key, sep, value = line.partition(": ")
-        if sep and key in ("ci", "test_command") and value.strip():
+        if sep and key in ("ci", "test_command", "remote_test_command") and value.strip():
             found[key] = value.strip()
+    remote_command = found.pop("remote_test_command", None)
+    if remote and remote_command:
+        found["test_command"] = remote_command
     if found.get("ci") not in (None, "on", "off"):
         del found["ci"]
     return found
@@ -197,6 +204,8 @@ def remote_inputs(args, named):
     for key, path in named.items():
         inputs[key] = attach.add(path, key)
     attach.write()
+    agent = "security-reviewer" if args.mode == "security" else "pr-reviewer"
+    (folder / "agent.txt").write_text(agent + "\n", encoding="utf-8")
     return inputs
 
 
@@ -211,7 +220,7 @@ def inputs(args):
     else:
         values.update(named)
     if "decisions" in named:
-        values.update(headers(named["decisions"]))
+        values.update(headers(named["decisions"], remote=bool(args.remote)))
     if args.pr:
         values["pr"] = args.pr
     if args.output:

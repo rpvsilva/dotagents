@@ -91,7 +91,8 @@ def step(ctx):
         reissue = prompts / f"{ctx.id}-{n}-output.json"
         shutil.copyfile(str(output), str(reissue))
 
-    test_command = decisions.get(run, "test_command")
+    # A sandbox has no `<run>/env/`: a remote agent gets the line that makes its own (`setup.py`).
+    test_command = (opts["remote"] and decisions.get(run, "remote_test_command")) or decisions.get(run, "test_command")
     inputs = {"task": sent(task.path)}
     if opts["remote"]:
         inputs["remote"] = True

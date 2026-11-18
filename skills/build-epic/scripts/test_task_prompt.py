@@ -77,6 +77,14 @@ class TaskPromptTest(unittest.TestCase):
             "--attach", str(self.task.resolve()), "--attach", str(run / "spec.md"), "--attach", str(run / "map.md"),
             "--attach", str(run / "notes"), f"@{fields['prompt']}", str(run / "worktrees" / "01-02")])
 
+    def test_a_remote_prompt_gets_the_remote_test_command_when_setup_recorded_one(self):
+        with open(self.run_dir / "decisions.md", "a", encoding="utf-8") as f:
+            f.write("remote_test_command: make-env-then-test\n")
+        _, _, remote = self.ok("01-02", "--remote")
+        self.assertEqual(remote["test_command"], "make-env-then-test")
+        _, _, local = self.ok("01-02")
+        self.assertEqual(local["test_command"], TEST_COMMAND)
+
     def test_resolver_cap_and_failure_inputs(self):
         log = self.kit.tmp / "red.log"
         log.write_text("FAILED test_x\n", encoding="utf-8")

@@ -21,7 +21,9 @@ overrides the probe).
   `in_env`: `$HOME/.agents/bin` appended to PATH so `capped` is found whatever PATH the shell has, then
   `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` (`Scripts/activate` on
   Windows) when it made a virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`;
-  every agent is given that exact line.
+  every agent here is given that exact line. A remote agent, whose sandbox has no `<run>/env/`, is given
+  `remote_test_command:` instead (`checks.remote_in_env`): the same suites and caps, in `$HOME/.build-epic-env`,
+  which `Setup` makes in the sandbox the first time the line runs.
 - **CI**: `ci: on` when the repo's Actions are enabled and a `.github/workflows/*.yml` on the base (`decisions.md`'s
   `base:`, else `run.md`'s `Default:`) triggers on `pull_request` (or `pull_request_target`) into it, its `branches`
   and `branches-ignore` filters applied; else `ci: off`. When the Actions setting cannot be read, the workflows decide.
@@ -320,12 +322,13 @@ def step(ctx):
     mb, secs = machine.caps(repo, ctx.log)
     caps = f"{mb} {secs}"
     command = test_command(ctx.run_dir, suites, caps)
+    remote = checks.remote_in_env(commands, " && ".join(suites), caps)
 
     base = decisions.get(ctx.run_dir, "base") or info["Default"]
     ci = "on" if ci_runs(ctx, repo, base) else "off"
     who = identity.mode(ctx.run_dir, lambda: tracker.setting("build-epic", "merge_identity", str(repo), ctx.log))
     human = identity.human_login(repo, ctx.log)
-    facts = {"ci": ci, "test_command": command, "caps": caps}
+    facts = {"ci": ci, "test_command": command, "remote_test_command": remote, "caps": caps}
     kept = {"merge_identity": who, "human": human}  # recorded once: a rerun never widens who may merge
     for key, value in {**facts, **kept}.items():
         if value:
