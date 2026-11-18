@@ -316,6 +316,21 @@ class RemotePromptTest(unittest.TestCase):
                     self.assertIsNone(re.search(r"\b[A-Za-z]:[/\\]", value), value)
                     self.assertIsNone(re.search(r"\bgh\b|\bgit\b|merge-base|\$\(", value), value)
 
+    def test_a_remote_review_gets_the_remote_test_command(self):
+        # A sandbox has no <run>/env/, so the local test_command would point at nothing there.
+        (self.run_dir / "decisions.md").write_text(
+            "# Decisions\ntest_command: local-env-test\nremote_test_command: build-env-then-test\n", encoding="utf-8")
+        out, _ = self.render(self.args("ticket"))
+        self.assertEqual(inputs(out)["test_command"], "build-env-then-test")
+
+    def test_a_remote_review_names_the_agent_whose_model_it_runs_on(self):
+        # Without --agent, remote-agent runs the sandbox's default model: Opus for every reviewer in step D's replay 4.
+        for mode in MODES:
+            with self.subTest(mode=mode):
+                self.render(self.args(mode))
+                want = "security-reviewer" if mode == "security" else "pr-reviewer"
+                self.assertEqual((self.out / "agent.txt").read_text(encoding="utf-8"), want + "\n")
+
     def test_a_remote_prompt_names_each_attachment_by_its_basename(self):
         for mode in MODES:
             with self.subTest(mode=mode):

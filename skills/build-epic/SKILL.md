@@ -14,9 +14,9 @@ You are the **orchestrator**. You run scripts, start subagents and talk to the h
 
 The run folder is `~/.agents/runs/<repo>/<epic-slug>/` (`<repo>` the repo folder's name, `<epic-slug>` the tracker ID plus a few words, `gh-12-due-dates`); `<run>` below. Every script is `python3 -I ~/.agents/skills/build-epic/scripts/<name>.py <run> ...`.
 
-1. Run `next.py <run>`. Each line is one action, most urgent first: `<action> <id> [details]  (<step file>)`.
-2. Do each action as its step file under [steps/](steps/) says. Read a step file the first time an action names it, and again after your context was compacted or cleared; never read the step files ahead of time.
-3. Repeat from 1 once an action completes or a subagent returns. `wait` lines need nothing: a subagent is still running, or the ticket waits on a human or another PR.
+1. Run `next.py <run>` until the run is approved; from then on `next.py <run> --go`, which does every action needing no decision itself (starting tickets, preparing tasks, finishing and merging them) and prints each script's line. Each other line is one action, most urgent first: `<action> <id> [details]  (<step file>)`.
+2. Start each `agent <TT-NN> prompt=<file> description=<text>` line's `epic-implementer` with the file's text, and run each `remote <TT-NN> args=<arguments>` line's `remote-agent` with those arguments in the background, its stdout to `<run>/reports/<TT-NN>.json`. Do each other action as the instruction inside its note says (`(<step file>: <instruction>)`). Read its step file under [steps/](steps/) only the first time an action names it, or for a `FAIL` or a case the instruction does not cover; never read the step files ahead of time, nor again after your context was compacted.
+3. When a task's agent returns, pipe its final message to `next.py <run> --returned <TT-NN> [--title "<subject in the commit convention>"]` (a remote one: nothing on stdin, once `remote-agent` exits 0 or 3; `next.py` knows which ran remotely), which checks, finishes and merges it and prepares what that frees, then go to 2. Repeat from 1 when another action completes. `wait` lines need nothing: a subagent is still running, or the ticket waits on a human or another PR.
 
 Do every action `next.py` prints before running it again, starting subagents for all of them at once where the step says so. When `next.py` and a step file disagree, trust `next.py` and tell the human the line.
 
@@ -41,7 +41,7 @@ Do every action `next.py` prints before running it again, starting subagents for
 
 Start and limit them as [Subagents](../_shared/conventions.md#subagents) says: at most **N** at once (the slots, `decisions.md`'s `parallel:`). Each one's **description** (the label your harness saves with it) starts with its role, so telemetry files its cost by role (`ROLES` in `adapters/claude/telemetry/extract.py`): `plan: A`, `plan: B`, `plan: revise-<n>`, `explore: <area>`, `implement: TT-NN <title>`, `fix: TT-NN` (a fix task), `resolve: TT-NN`, `review: TT-NN` (a high-tier task), `ticket-review: PR <n>`, `re-review: PR <n>`, `security: PR <n>`.
 
-An implementer or a reviewer runs remotely when [Remote subagents](../remote-subagents/SKILL.md) lets it (its declaration in `needs.json`, `remote-agent ready` exits 0, no `--local`); the steps say how. The planner and explorers write into the run folder, so they always run here.
+An implementer or a reviewer runs remotely when [Remote subagents](../remote-subagents/SKILL.md) lets it (its declaration in `needs.json`, `remote-agent ready` exits 0, no `--local`). `setup.py` checks that once and records it as `decisions.md`'s `remote: on|off` (for `--local`, run `decide.py <run> set remote off` before it); `next.py` then prepares each task and words each ticket review to match, so you never pass `--remote` yourself. The planner and explorers write into the run folder, so they always run here.
 
 ## Run folder
 
