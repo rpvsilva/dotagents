@@ -19,10 +19,12 @@ type World = {
   ctx: Record<string, [number, number]>
   // Each agent's cost in dollars, as $.agent.list() gives it.
   cost: Record<string, number>
+  // What the mod wrote, by path, last write winning.
+  files: Record<string, string>
 }
 
 function engine(on: any): World {
-  const w: World = { opened: [], status: [], spawned: 0, clock: mock.clock(on, { now: NOW }), messages: {}, reads: {}, viewed: [], ctx: {}, cost: {} }
+  const w: World = { opened: [], status: [], spawned: 0, clock: mock.clock(on, { now: NOW }), messages: {}, reads: {}, viewed: [], ctx: {}, cost: {}, files: {} }
   on('session.messages', (_: unknown, e: any) => {
     w.reads[e.agentId] = (w.reads[e.agentId] ?? 0) + 1
     const all = w.messages[e.agentId]
@@ -35,6 +37,11 @@ function engine(on: any): World {
   on('ui.view', (_: unknown, e: any) => {
     w.viewed.push(e)
     return { value: {} }
+  })
+  on('session.info', () => ({ value: { transcriptPath: '', scratchpadDir: '/scratch' } }))
+  on('fs.write', (_: unknown, e: any) => {
+    w.files[e.path] = e.text
+    return { value: undefined }
   })
   on('command.register', () => ({ value: { command: 'agent-flow' } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
@@ -143,31 +150,23 @@ test('a failed agent shows why, and the needs-you strip names it', async ($, on)
   expect(out).toContain('draft the changelog')
 })
 
-// The band above the prompt as the terminal asks for it: its texts joined, or null when the mod passes.
-async function bandDrawn($: any): Promise<string | null> {
-  const ui = await $.ui.mount({
-    plugin: 'agent-flow', component: 'AbovePrompt', surface: 'terminal',
-    props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 } },
-  })
-  const texts = (await ui.findAll({})).filter((el: any) => el.type === 'Text').map((el: any) => el.text)
-  await ui.unmount()
-  return texts.length ? texts.join('') : null
-}
-
-test('the band above the prompt names running agents with a turning spinner, counts failed ones and the ended bar; no status line', async ($, on) => {
+test('the band is written for the status line script: a line per spinner frame naming the agent, the failed count and the ended bar; no status line', async ($, on) => {
   const w = engine(on)
   await start($)
-  expect(await bandDrawn($)).toBeNull()
+  const band = () => w.files['/scratch/agent-flow/band.txt']
+  expect(band() ?? '').toBe('')
   await spawn($, 'one')
   await spawn($, 'two')
   await w.clock.advance(1000)
   await endTurn($, 'agent-2', 'error')
   await w.clock.advance(500)
-  const a = await bandDrawn($)
-  expect(a).toContain(' one  ·  ✗ 1 failed')
-  expect(a).toContain('▰▰▰▰▱▱▱▱ 1/2')
-  await w.clock.advance(125)
-  expect(await bandDrawn($)).not.toBe(a)
+  const lines = band()!.trimEnd().split('\n').map(l => l.replace(/\x1b\[[0-9;]*m/g, ''))
+  expect(lines.length).toBe(10)
+  expect(lines[0]).toBe('⠋ one  ·  ✗ 1 failed   ▰▰▰▰▱▱▱▱ 1/2')
+  expect(lines[1]).toBe('⠙ one  ·  ✗ 1 failed   ▰▰▰▰▱▱▱▱ 1/2')
+  await endTurn($, 'agent-1')
+  await w.clock.advance(500)
+  expect(band()!.split('\n')[0]).toContain('✗ 1 failed')
   expect(w.status.filter(s => s !== undefined)).toEqual([])
 })
 
