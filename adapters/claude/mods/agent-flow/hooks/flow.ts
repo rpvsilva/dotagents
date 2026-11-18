@@ -330,34 +330,42 @@ export function modelColor(id: string | null): string {
 export const findAgent = (g: Pick<Graph, 'agents' | 'others'>, id: string): Agent | undefined => g.agents.find(a => a.id === id) ?? g.others.find(a => a.id === id)
 
 /**
- * The status line: the running agents by task up to `STATUS_NAMES` (`● fix login · run tests`), past it their count
- * (`● 18 running`), then `◐ 1 needs you · ☁ 2 remote · ✗ 1 failed`, the remote part counting the repo's live remote runs,
- * this session's and others'; with two or more agents this turn, a bar of how many ended (`▰▰▱▱▱ 5/26`).
- * Undefined when nothing runs, waits or failed this turn.
+ * The band above the prompt: this turn's running agents by task up to `BAND_NAMES`, past it only their count; how
+ * many wait for the person or failed; the repo's live remote runs, this session's and others'; how many of this
+ * turn's agents ended. Null when nothing runs, waits or failed this turn.
  */
-export function statusText(g: Graph, now: number): string | undefined {
+export type Band = {
+  /** The running agents named, oldest first; empty past `BAND_NAMES`. */
+  names: { id: string; name: string; model: string | null }[]
+  running: number
+  waiting: number
+  remote: number
+  failed: number
+  /** This turn's agents that ended, of `total`. */
+  ended: number
+  total: number
+}
+
+/** The band names its running agents up to this many; past it, it counts them. */
+export const BAND_NAMES = 4
+
+export function band(g: Graph, now: number): Band | null {
   const mine = g.agents.filter(a => a.id !== MAIN && (a.status === 'running' || a.turn === g.turn))
   const waiting = mine.filter(a => shownStatus(a, now) === 'waiting').length
   const busy = mine.filter(a => a.status === 'running' && shownStatus(a, now) !== 'waiting')
   const failed = mine.filter(a => a.status === 'failed').length
   const isRun = (a: Agent) => a.remote !== null && a.remote.taskId === null && a.status === 'running'
   const remote = g.agents.filter(isRun).length + g.others.filter(isRun).length
-  const names = busy.length <= STATUS_NAMES ? busy.map(a => statusName(a.desc || a.type)) : []
-  const running = busy.length && (names.length ? `● ${names.join(' · ')}` : `● ${busy.length} running`)
-  const parts = [running, waiting && `◐ ${waiting} needs you`, remote && `☁ ${remote} remote`, failed && `✗ ${failed} failed`].filter(Boolean)
-  if (!parts.length) return undefined
+  if (!busy.length && !waiting && !remote && !failed) return null
+  const names = busy.length <= BAND_NAMES ? busy.map(a => ({ id: a.id, name: bandName(a.desc || a.type), model: a.model })) : []
   const ended = mine.length - mine.filter(a => a.status === 'running').length
-  const bar = mine.length > 1 ? `  ${gauge(ended / mine.length, 5)} ${ended}/${mine.length}` : ''
-  return parts.join(' · ') + bar
+  return { names, running: busy.length, waiting, remote, failed, ended, total: mine.length }
 }
 
-/** The status line names its running agents up to this many; past it, it counts them. */
-export const STATUS_NAMES = 4
-
-/** An agent's task as the status line names it: one line, at most 24 columns. */
-function statusName(s: string): string {
+/** An agent's task as the band names it: one line, at most 32 columns. */
+function bandName(s: string): string {
   const t = printable(s.replace(/\s+/g, ' ').trim())
-  return t.length > 24 ? t.slice(0, 23) + '…' : t
+  return t.length > 32 ? t.slice(0, 31) + '…' : t
 }
 
 /** `text` without a JSON object: the whole of it when it is one, else each line that is one. */

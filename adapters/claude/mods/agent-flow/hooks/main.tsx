@@ -3,9 +3,9 @@
 // reducer. Logic sits in plain .ts files (flow.ts, lifecycle.ts, layout.ts); this module only calls `$` and draws.
 // A failure to record or draw is caught: it never fails, delays or changes a tool call.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { ElementConstructor, EngineInterface, Register, RenderElement, RenderSurface, TextProps } from 'claude-code'
 
-import { type Agent, ctxColor, findAgent, fmtUsd, ink, TAB_FILL, ctxShare, emptyGraph, type FlowEvent, fmtTokens, gauge, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize } from './flow.ts'
+import { type Agent, ctxColor, findAgent, fmtUsd, ink, TAB_FILL, ctxShare, emptyGraph, type FlowEvent, fmtTokens, gauge, MAIN, modelColor, modelLabel, printable, reduce, shownStatus, band, type Band, summarize } from './flow.ts'
 import { addMessages, ago, backLabel, logText, EARLIER, filterCounts, FIRST_READ, goBack, type Item, type Kid, listItems, type Message, NO_LOG, openFrom, scrollLog, WAITING, windowLines } from './log.ts'
 import { bar, chart, spin, clock, counts as layoutCounts, fallback, headerRow, needsRow, newTween, noFallback, type Row, type Seg, TWEEN_MS } from './layout.ts'
 import { isMoving } from './lifecycle.ts'
@@ -76,11 +76,13 @@ const NO_VIEW: View = { tab: 'chart', expanded: null, agentId: null, filter: 'al
 const view = atom({ plugin: 'agent-flow', key: 'view' } as const, NO_VIEW, { shape: 'view-4' })
 const log = atom({ plugin: 'agent-flow', key: 'log' } as const, NO_LOG, { shape: 'log-1' })
 const frame = atom({ plugin: 'agent-flow', key: 'frame' } as const, 0, { shape: 'frame-1' })
+// The band above the prompt redraws when this counts: on each frame while its spinners turn, else when what it says changes.
+const bandFrame = atom({ plugin: 'agent-flow', key: 'bandFrame' } as const, 0, { shape: 'band-frame-1' })
 
-// Per-process state, which a reload starts again: where boxes were drawn, the status line last set, the last draw.
+// Per-process state, which a reload starts again: where boxes were drawn, what the band last said, the last draw.
 let tween = newTween()
 let fall = noFallback()
-let lastStatus: string | undefined | null = null
+let lastBand = ''
 let lastDraw = 0
 let isTicking = false
 let settings = { lingerMs: 30_000, squadMin: 4, motion: true, fixed: true }
@@ -125,19 +127,20 @@ async function now($: EngineInterface): Promise<number> {
   }
 }
 
-/** Sets the status line only when its text changed. */
-async function status($: EngineInterface): Promise<void> {
-  const text = statusText(await read($, graph), await now($))
-  if (text === lastStatus) return
-  lastStatus = text
-  $.ui.status(text)
+/** Redraws the band above the prompt: on every frame while an agent runs and motion is on, else when what it says changed. */
+async function redrawBand($: EngineInterface): Promise<void> {
+  const b = band(await read($, graph), await now($))
+  const key = JSON.stringify(b)
+  if (key === lastBand && !(settings.motion && b !== null && (b.running > 0 || b.remote > 0))) return
+  lastBand = key
+  await update($, bandFrame, n => n + 1)
 }
 
 /** Records one event; never throws. */
 async function record($: EngineInterface, ev: FlowEvent): Promise<void> {
   try {
     await update($, graph, g => reduce(g, ev))
-    await status($)
+    await redrawBand($)
   } catch {
     // the chart misses this event; the call it came from goes on as it would
   }
@@ -459,13 +462,13 @@ async function copyText($: EngineInterface, text: string, what: string, surface:
   }
 }
 
-/** Redraws the pane while something moves on it and it was drawn lately; keeps the status line current. */
+/** Redraws the pane while something moves on it and it was drawn lately, and the band while it moves or changes. */
 async function tick($: EngineInterface): Promise<void> {
   if (isTicking) return
   isTicking = true
   try {
     const t = await now($)
-    await status($)
+    await redrawBand($)
     await readCtx($, t)
     await scanRemote($, t)
     const isDrawn = t - lastDraw < DRAWN_MS
@@ -487,6 +490,23 @@ async function tick($: EngineInterface): Promise<void> {
   }
 }
 
+/** The band's parts, each one Text: the running agents by task in their model's colour with a spinner, or their count; then waiting, remote, failed. */
+function bandParts(b: Band, t: number, motion: boolean, Text: ElementConstructor<TextProps>): RenderElement[] {
+  const out: RenderElement[] = []
+  b.names.forEach((n, i) =>
+    out.push(
+      <Text key={`a${n.id}`} color={paint(modelColor(n.model))}>
+        {`${spin(t, motion, i * 3)} ${n.name}`}
+      </Text>,
+    ),
+  )
+  if (!b.names.length && b.running) out.push(<Text key="running" bold color={paint('claude')}>{`${spin(t, motion)} ${b.running} running`}</Text>)
+  if (b.waiting) out.push(<Text key="waiting" color={paint('warning')}>{`◐ ${b.waiting} needs you`}</Text>)
+  if (b.remote) out.push(<Text key="remote" color={paint('suggestion')}>{`☁ ${b.remote} remote`}</Text>)
+  if (b.failed) out.push(<Text key="failed" color={paint('error')}>{`✗ ${b.failed} failed`}</Text>)
+  return out
+}
+
 const numberOr = (v: unknown, d: number, min: number) => (typeof v === 'number' && Number.isFinite(v) && v >= min ? v : d)
 
 export const register: Register = (on, options) => {
@@ -500,6 +520,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'agent-flow', description: "Show this session's agents as a live org chart in a pane" })
+    $.ui.status(undefined) // the status line an earlier version set; the band above the prompt says it now
     $.clock.every(TICK_MS, () => {
       void tick($)
     })
@@ -584,6 +605,26 @@ export const register: Register = (on, options) => {
     const rows = drawnRows.agentId === agentId ? drawnRows.rows : logRows(e.bodyRows, l)
     if (l.agentId === agentId) await update($, log, () => scrollLog(l, e.by, rows))
     return {}
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    await read($, bandFrame) // redrawn on each frame the timer counts for it
+    if (e.props.hasSurvey) return next(e)
+    const t = await now($)
+    const b = band(await read($, graph), t)
+    if (b === null) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const motion = settings.motion && e.surface === 'terminal'
+    const sep = (k: string) => <Text key={k} color={paint(FAINT)}>{'  ·  '}</Text>
+    const parts = bandParts(b, t, motion, Text)
+    return (
+      <Box>
+        {parts.flatMap((p, i) => (i ? [sep(`sep${i}`), p] : [p]))}
+        {b.total > 1 && <Text key="bar" color={paint(FAINT)}>{'   '}</Text>}
+        {b.total > 1 && <Text key="gauge" color={paint(b.failed ? 'error' : 'success')}>{gauge(b.ended / b.total, 8)}</Text>}
+        {b.total > 1 && <Text key="ended" dimColor>{` ${b.ended}/${b.total}`}</Text>}
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
