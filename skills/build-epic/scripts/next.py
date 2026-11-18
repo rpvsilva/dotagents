@@ -2,10 +2,14 @@
 """Says what the orchestrator does next, read from the run folder alone: build-epic's state machine.
 
 Usage: python3 -I next.py <run>
+       python3 -I next.py <run> --go [--no-ship]
+       python3 -I next.py <run> --returned <TT-NN> [--title <subject>] [--no-ship] [< message]
+       python3 -I next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>] [--no-ship]
        python3 -I next.py <run> --triaged <TT> fix|none
 
 Prints one line per action, most urgent first, each `<action> <id> [details]  (<step file>)`, the step file under
-`skills/build-epic/steps/` holding how to do it. A run that is not built yet prints its one next setup action:
+`skills/build-epic/steps/` holding how to do it; a build action's note also carries the one instruction it needs,
+`(<step file>: <instruction>)` (`HOW`), so the step file is read only for a `FAIL` or a case it does not cover. A run that is not built yet prints its one next setup action:
 
   init run            (no `run.md`)                         setup.md
   rules run           (`decisions.md` lacks `merge_identity:` or `review_before_agent_merge:`)   setup.md
@@ -39,6 +43,28 @@ ticket's review state comes from `<run>/logs/PR<n>-review.json` (the last review
 `Triage:` line and its `-review-fixes` task. `--triaged <TT> fix|none` records the orchestrator's sorting of the
 review at the ticket branch's tip on that line (`Triage: <sha7> fix|none, ...`) and prints `OK <TT> triaged <sha7>
 <fix|none>`. Exits 0; `FAIL run no-run-folder` and exit 1 when the folder is missing.
+
+`--go` does, once the run is approved, every action that needs no decision, then prints what is left. It repeats
+until nothing more moves: `start` (`start_ticket.py`), `finish` (`finish_task.py`, the commit titled as the task),
+`dispatch` (`start_task.py`, then `task_prompt.py`, `--remote` for a task with no sync conflict when
+`decisions.md` says `remote: on`, as `setup.py` records it; `--remote` or `--local` given to any of these calls
+overrides it), `merge` (`merge_task.py`) once no agent waits to be started, and a ticket's `ship open` and `ship merge`
+(`ship_ticket.py`; `--no-ship` leaves those two as `ship` lines, for a run told to stop before shipping). It never
+runs `ship merge` while `unguarded` finds clauses: the line is left for the orchestrator, naming them. Each
+script's line is printed as it ran.
+A prepared task prints `agent <TT-NN> prompt=<file> description=<text>` (start an `epic-implementer` with the file's
+text) or `remote <TT-NN> args=<arguments>` (run `remote-agent` with them in the background, its stdout to
+`<run>/reports/<TT-NN>.json`); then the actions left, as without `--go`. A script's `FAIL` stops that action and is
+printed with its log; its step file says what to do.
+
+`--returned <TT-NN>` is `--go` after a task's agent returned: `report_check.py` on the final message (stdin; for a
+task whose latest prompt was a remote one, the saved output, `--from-report`, and stdin is not read), `capped stop` on its worktree when it ran here, `finish_task.py`
+(`--title`, when given, is the commit subject), then `--go`. A first `brief-violation` writes the reissue prompt
+(`task_prompt.py --reissue`) and prints it as an `agent` or `remote` line; a second prints the `FAIL` alone.
+
+`--reviewed <TT> <output>` is `--go` after a ticket's reviewer returned: `post_review.py` posts the output on the
+ticket's PR (`--base`, default `origin/<the run's base>`; `--note` passes through) and prints its line, then the
+output rendered (`render.py`, `security` for a `-security.json` output) for the triage, then `--go`.
 """
 import json
 import re
@@ -49,7 +75,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import status  # noqa: E402
-from steplib import ci, decisions, runfolder  # noqa: E402
+from steplib import ci, core, decisions, guard, runfolder, taskwt  # noqa: E402
 
 PLAN_CHECK = Path(__file__).resolve().parents[1] / "plan_check.py"
 DONE_LIKE = ("merged", "in-review", "claimed")
@@ -225,6 +251,74 @@ def build_actions(run, d, slots):
     return lines
 
 
+HOW = {
+    "human": "show `view.py <run> task <id>` and ask the one question; for a ticket's review-round-3, its review's link",
+    "finish": "`next.py <run> --returned <id>` checks, finishes and merges it",
+    "review": "a `pr-reviewer` on `review_prompt.py task --worktree <run>/worktrees/<id> --head <its HEAD> --base "
+              "<ticket branch> --run <run> --task <task file> --output <run>/reviews/<id>-<sha7>.json`; post nothing",
+    "merge": "`next.py <run> --go` merges it", "start": "`next.py <run> --go` starts it",
+    "dispatch": "`next.py <run> --go` prepares it",
+    "open": "`next.py <run> --go` opens it", "ship-merge": "`next.py <run> --go` merges it",
+    "ship-review": "a `pr-reviewer` on `review_prompt.py ticket --pr <n>` (plus a `security-reviewer` when `tier.py` "
+                   "says high), then `next.py <run> --reviewed <id> <output>`",
+    "ship-review-remote": "remote is on: a remote `pr-reviewer` as review-pr step 3 **Remotely** says "
+                          "(`review_prompt.py ticket --pr <n> --remote <run>/reviews/<n>-<sha7>-remote/`, then "
+                          "`remote-agent --name review-<n>-<sha7> --agent <its agent.txt>` in the background), plus a "
+                          "`security-<n>-<sha7>` one when `tier.py` says high; `remote-agent result <name>` to "
+                          "`<run>/remote/<name>.json`, its report copied to `<run>/reviews/<n>-<sha7>.json`, then "
+                          "`next.py <run> --reviewed <id> <output>`",
+    "triage": "Fix = a blocker, or a should-fix breaking an acceptance criterion or a written rule; none: "
+              "`--triaged <id> none`; else a `<id>-NN-review-fixes` task and `--triaged <id> fix`",
+    "re-review": "a `pr-reviewer` on `review_prompt.py re-review --base <head reviewed> --findings <findings file>`, "
+                 "then `next.py <run> --reviewed <id> <output> --base <head reviewed>`",
+    "re-review-remote": "remote is on: a remote `pr-reviewer` as review-pr step 3 **Remotely** says, on "
+                        "`review_prompt.py re-review --base <head reviewed> --findings <findings file> --remote "
+                        "<run>/reviews/<n>-<sha7>-remote/`; `remote-agent result <name>` to `<run>/remote/<name>.json`, "
+                        "its report copied to `<run>/reviews/<n>-<sha7>.json`, then "
+                        "`next.py <run> --reviewed <id> <output> --base <head reviewed>`",
+    "clean": "`clean.py <run>`", "report": "`status.py <run> --write`, then show `view.py <run> report`",
+}
+
+
+def unguarded(run, d):
+    """The Authorizations clauses `d` does not waive `yes`, when `origin/<default>` has no `agent-merge-guard` block
+    to enforce them (`../merge-guard.md`); [] when it has one or every clause is waived. Without a block the guard
+    passes every diff, so a `no` the human gave would go unenforced if `--go` merged the ticket PR itself."""
+    open_ = [a.clause for a in (d.authorizations if d else []) if a.waived != "yes"]
+    if not open_:
+        return []
+    repo = core.resolve(runfolder.run_info(run)["Repo"])
+    (run / "logs").mkdir(exist_ok=True)
+    with open(run / "logs" / "next-guard.log", "a", encoding="utf-8") as log:
+        try:
+            return [] if guard.load(repo, f"origin/{runfolder.run_info(run)['Default']}", log) else open_
+        except core.Fail:
+            return open_
+
+
+def how(line, remote=False, held=()):
+    """`line` with the one instruction its action needs inside its step-file note, so the step file is read only for
+    a `FAIL` or a case the instruction does not cover; a ticket review's names the remote way when `remote`, and a
+    ticket merge the clauses `held` (`unguarded`) to check by hand."""
+    head, sep, note = line.partition("  (")
+    if not sep:
+        return line
+    words = head.split(" ")
+    key = words[0]
+    if key == "ship" and len(words) > 2:
+        key = {"review": "ship-review", "merge": "ship-merge"}.get(words[2], words[2])
+    text = (remote and HOW.get(f"{key}-remote")) or HOW.get(key)
+    if key == "ship-merge" and held:
+        text = HELD.format(clauses="; ".join(f'"{c}"' for c in held))
+    return f"{head}  ({note[:-1]}: {text})" if text else line
+
+
+HELD = ("no `agent-merge-guard` block enforces the clauses this run did not waive ({clauses}): check the PR's files "
+        "and diff (`gh pr view <n> --json files`, `gh pr diff <n>`) against each; on a hit, ask the human and merge "
+        "only once they waive it (`decide.py <run> clause \"<clause>\" yes \"<their words>\"`); with no hit, "
+        "`ship_ticket.py <run> <id> merge`, then `next.py <run> --go`")
+
+
 def record_triage(run, tt, kind):
     path = runfolder.ticket_file(run, tt)
     text = path.read_text(encoding="utf-8")
@@ -235,6 +329,149 @@ def record_triage(run, tt, kind):
     entries = [f"{s} {k}" for s, k in triage(text) if s != tip] + [f"{tip} {kind}"]
     runfolder.set_header(path, "Triage", ", ".join(entries))
     return f"OK {tt} triaged {tip} {kind}", 0
+
+
+SCRIPTS = Path(__file__).resolve().parent
+AUTO = ("start", "finish", "dispatch", "merge")
+
+
+def script(name, *args, stdin=None):
+    """Runs step script `name`; returns (its last line, its exit code)."""
+    p = subprocess.run([sys.executable, "-I", str(SCRIPTS / f"{name}.py"), *map(str, args)], input=stdin,
+                       capture_output=True, text=True)
+    lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
+    return (lines[-1] if lines else f"FAIL {name} no-output: {p.stderr.strip()[-200:]}"), p.returncode
+
+
+def launch(run, ident, remote, *extra):
+    """Writes the prompt of task `ident` and returns its launch line, or the FAIL line."""
+    line, rc = script("task_prompt", run, ident, *(["--remote"] if remote else []), *extra)
+    if rc or not line.startswith("OK "):
+        return line
+    fields = line.split(" ", 3)
+    if fields[2] == "remote":
+        return f"remote {ident} {fields[3][fields[3].index('args='):]}  (build.md)"
+    prompt = fields[3].split(" ")[0]
+    title = taskwt.title(runfolder.task_file(run, ident))
+    return f"agent {ident} {prompt} description=implement: {ident} {title}  (build.md)"
+
+
+def go(run, remote, out, ship=True):
+    """Does every action needing no decision until nothing moves; appends what it ran and launched to `out`."""
+    launched = False
+    held = None
+    for _ in range(100):
+        d = decisions.load(run)
+        if not d or (d.get("approved") or "").strip() != "yes":
+            return
+        slots = int(d.get("parallel") or 1)
+        lines = build_actions(run, d, slots)
+        moved = False
+        launches = []
+        for line in lines:
+            act, _, rest = line.partition(" ")
+            ident = rest.split(" ")[0]
+            if act == "start":
+                res, rc = script("start_ticket", run, ident)
+                out.append(res)
+                moved |= rc == 0
+            elif act == "finish":
+                res, rc = script("finish_task", run, ident)
+                out.append(res)
+                moved |= rc == 0
+            elif ship and act == "ship" and rest.split(" ")[1:2] in (["open"], ["merge"]):
+                if rest.split(" ")[1] == "merge":
+                    held = unguarded(run, d) if held is None else held
+                    if held:
+                        continue
+                res, rc = script("ship_ticket", run, ident, rest.split(" ")[1])
+                out.append(res)
+                moved |= rc == 0
+            elif act == "dispatch":
+                res, rc = script("start_task", run, ident)
+                out.append(res)
+                if rc:
+                    continue
+                conflict = re.search(r"conflict=(\S+)", res)
+                if conflict:
+                    launches.append(launch(run, ident, False, "--sync", conflict.group(1)))
+                else:
+                    launches.append(launch(run, ident, remote))
+                moved = True
+        out.extend(launches)
+        launched |= bool(launches)
+        if launches or moved:
+            continue
+        if launched:  # the agents start first: a merge would hold them for its Checks
+            return
+        for line in lines:  # merges run the Checks, minutes each: only once no agent waits to be started
+            act, _, rest = line.partition(" ")
+            if act == "merge":
+                res, rc = script("merge_task", run, rest.split(" ")[0])
+                out.append(res)
+                moved |= rc == 0
+        if not moved:
+            return
+
+
+def ran_remote(run, ident):
+    """True when task `ident`'s latest prompt (`prompts/<ident>-<n>.md`) started a remote agent."""
+    prompts = [(int(p.stem.rsplit("-", 1)[1]), p) for p in (run / "prompts").glob(f"{ident}-*.md")
+               if p.stem.rsplit("-", 1)[1].isdigit()]
+    if not prompts:
+        return False
+    return '"remote": true' in max(prompts)[1].read_text(encoding="utf-8")
+
+
+def run_remote(run, flags):
+    """Whether this call dispatches remotely: `--local` or `--remote` when given, else `decisions.md`'s `remote:`."""
+    if "--local" in flags:
+        return False
+    if "--remote" in flags:
+        return True
+    d = decisions.load(run)
+    return bool(d) and (d.get("remote") or "").strip() == "on"
+
+
+def returned(run, ident, remote, title, message, out, ship=True):
+    """`--returned`: the checks and finish after a task's agent returned, then `go`; `remote` is where the task
+    ran."""
+    args = [run, ident] + (["--from-report"] if remote else [])
+    res, rc = script("report_check", *args, stdin=None if remote else message)
+    out.append(res)
+    if rc:
+        if "brief-violation" in res and not list((run / "prompts").glob(f"{ident}-*-output.json")):
+            out.append(launch(run, ident, remote, "--reissue"))
+        return
+    if not remote:
+        capped = Path.home() / ".agents" / "bin" / "capped"
+        if capped.exists():  # an agent's capped commands can outlive it: stop them before committing its work
+            subprocess.run([str(capped), "stop", str(run / "worktrees" / ident)], capture_output=True)
+    res, rc = script("finish_task", run, ident, *(["--title", title] if title else []))
+    out.append(res)
+    if rc == 0:
+        go(run, run_remote(run, []), out, ship)
+
+
+def reviewed(run, tt, path, base, note, remote, out, ship=True):
+    """`--reviewed`: posts a ticket review and renders it for the triage, then `go`."""
+    text = runfolder.ticket_file(run, tt).read_text(encoding="utf-8")
+    pr = ci.pr_number(runfolder.header(text, "PR"))
+    if not pr:
+        out.append(f"FAIL {tt} no-pr")
+        return
+    if not base:
+        d = decisions.load(run)
+        base = "origin/" + ((d.get("base") if d else None) or runfolder.run_info(run)["Default"])
+    res, rc = script("post_review", run, pr, path, "--base", base, *(["--note", note] if note else []))
+    out.append(res)
+    if rc:
+        return
+    role = "security" if str(path).endswith("-security.json") else "reviewer"
+    view = subprocess.run([sys.executable, "-I", str(SCRIPTS.parents[1] / "_shared" / "protocol" / "render.py"), role,
+                           str(path)], capture_output=True, text=True)
+    out.extend(line for line in view.stdout.splitlines())
+    go(run, remote, out, ship)
 
 
 def main(argv):
@@ -249,13 +486,39 @@ def main(argv):
         line, code = record_triage(run, argv[2], argv[3])
         print(line)
         return code
-    if len(argv) != 1:
-        print("FAIL run usage: next.py <run> [--triaged <TT> fix|none]")
+    flags = argv[1:]
+    if flags and flags[0] in ("--go", "--returned", "--reviewed"):
+        remote = run_remote(run, flags)
+        ship = "--no-ship" not in flags
+        title = flags[flags.index("--title") + 1] if "--title" in flags[:-1] else None
+        out = []
+        if flags[0] == "--returned" and len(flags) > 1 and not flags[1].startswith("--"):
+            here = "--local" in flags or ("--remote" not in flags and not ran_remote(run, flags[1]))
+            returned(run, flags[1], not here, title, sys.stdin.read() if here else None, out, ship)
+        elif flags[0] == "--reviewed" and len(flags) > 2:
+            opt = {k: flags[flags.index(k) + 1] for k in ("--base", "--note") if k in flags[:-1]}
+            reviewed(run, flags[1], flags[2], opt.get("--base"), opt.get("--note"), remote, out, ship)
+        elif flags[0] == "--go":
+            go(run, remote, out, ship)
+        else:
+            print("FAIL run usage: next.py <run> --returned <TT-NN> [--title <subject>]")
+            return 2
+        d = decisions.load(run)
+        slots = int(d.get("parallel") or 1) if d else 1
+        left = setup_action(run, d, slots) or build_actions(run, d, slots)
+        launched = {ln.split(" ")[1] for ln in out if ln.startswith(("agent ", "remote "))}
+        left = [ln for ln in left if not (ln.startswith("wait ") and ln.split(" ")[1] in launched)]
+        held = unguarded(run, d) if any(ln.startswith("ship ") for ln in left) else []
+        print("\n".join(out + [how(line, run_remote(run, []), held) for line in left]))
+        return 0
+    if len(flags) != 0:
+        print("FAIL run usage: next.py <run> [--go | --returned <TT-NN> ... | --triaged <TT> fix|none]")
         return 2
     d = decisions.load(run)
     slots = int(d.get("parallel") or 1) if d else 1
     lines = setup_action(run, d, slots) or build_actions(run, d, slots)
-    print("\n".join(lines))
+    held = unguarded(run, d) if any(ln.startswith("ship ") for ln in lines) else []
+    print("\n".join(how(line, run_remote(run, []), held) for line in lines))
     return 0
 
 

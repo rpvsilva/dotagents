@@ -3,7 +3,7 @@
 tools its suite skips without.
 
 Usage: python3 -I setup.py <run>
-Prints `OK run set up ci=<on|off> env=<run>/env skips=<n> caps=<mb>MB,<secs>s`, then ` parallel=<n> (<cpus> cores, <gb> GB)` when no
+Prints `OK run set up ci=<on|off> env=<run>/env skips=<n> caps=<mb>MB,<secs>s remote=<on|off>`, then ` parallel=<n> (<cpus> cores, <gb> GB)` when no
 Level sets `max_parallel` (`steplib/machine.py`: `max(1, min(6, cpus - 2, GB // 4))`; `BUILD_EPIC_MACHINE=<cpus>,<gb>`
 overrides the probe).
 
@@ -21,10 +21,15 @@ overrides the probe).
   `in_env`: `$HOME/.agents/bin` appended to PATH so `capped` is found whatever PATH the shell has, then
   `export BUILD_EPIC_ENV=<env>` once `Setup` made it, then `. <env>/bin/activate` (`Scripts/activate` on
   Windows) when it made a virtualenv there), as the merge runs them. Recorded as `decisions.md`'s `test_command:`;
-  every agent is given that exact line.
+  every agent here is given that exact line. A remote agent, whose sandbox has no `<run>/env/`, is given
+  `remote_test_command:` instead (`checks.remote_in_env`): the same suites and caps, in `$HOME/.build-epic-env`,
+  which `Setup` makes in the sandbox the first time the line runs.
 - **CI**: `ci: on` when the repo's Actions are enabled and a `.github/workflows/*.yml` on the base (`decisions.md`'s
   `base:`, else `run.md`'s `Default:`) triggers on `pull_request` (or `pull_request_target`) into it, its `branches`
   and `branches-ignore` filters applied; else `ci: off`. When the Actions setting cannot be read, the workflows decide.
+- **Remote**: `remote: on` when `~/.agents/bin/remote-agent ready` exits 0 in the repo, else `remote: off`, recorded
+  only when `decisions.md` has none (a run started with `--local` sets `remote: off` first). `next.py --go` reads
+  it to dispatch each task here or remotely, and the ticket reviews follow it.
 - **Identity**: `merge_identity:` from the `merge_identity` Setting (default `app`), and `human:` from `gh api user`
   run with the tokens unset (left unset when that does not answer), each recorded only when `decisions.md` has none:
   a rerun after the Setting or the login changed leaves the record, so the merge still refuses (`wrong-identity`).
@@ -38,6 +43,7 @@ overrides the probe).
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -304,6 +310,20 @@ def list_skips(ctx, repo, base, map_md, suites):
                if line.startswith("| ") and not line.startswith(("| tool |", "| --- |")))
 
 
+def remote_ready(ctx, repo):
+    """`on` when `remote-agent ready` exits 0 in `repo`, else `off`."""
+    agent = Path.home() / ".agents" / "bin" / "remote-agent"
+    if not agent.is_file():
+        return "off"
+    try:
+        p = subprocess.run([str(agent), "ready"], cwd=str(repo), capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        ctx.note(f"remote-agent ready: {e}")
+        return "off"
+    ctx.note(f"remote-agent ready: rc={p.returncode} {(p.stdout + p.stderr).strip()[-300:]}")
+    return "on" if p.returncode == 0 else "off"
+
+
 # -- the step ------------------------------------------------------------------------------------------------------
 
 def step(ctx):
@@ -320,13 +340,15 @@ def step(ctx):
     mb, secs = machine.caps(repo, ctx.log)
     caps = f"{mb} {secs}"
     command = test_command(ctx.run_dir, suites, caps)
+    remote_command = checks.remote_in_env(commands, " && ".join(suites), caps)
 
     base = decisions.get(ctx.run_dir, "base") or info["Default"]
     ci = "on" if ci_runs(ctx, repo, base) else "off"
     who = identity.mode(ctx.run_dir, lambda: tracker.setting("build-epic", "merge_identity", str(repo), ctx.log))
     human = identity.human_login(repo, ctx.log)
-    facts = {"ci": ci, "test_command": command, "caps": caps}
+    facts = {"ci": ci, "test_command": command, "remote_test_command": remote_command, "caps": caps}
     kept = {"merge_identity": who, "human": human}  # recorded once: a rerun never widens who may merge
+    ready = None if decisions.get(ctx.run_dir, "remote") else remote_ready(ctx, repo)  # slow: outside the lock
     for key, value in {**facts, **kept}.items():
         if value:
             decisions.check_value(key, value)
@@ -338,10 +360,14 @@ def step(ctx):
                 d.headers[key] = value
             elif value and d.headers[key].strip() != value:
                 ctx.note(f"{key}: decisions.md keeps {d.headers[key].strip()}, now {value}")
+        if not (d.headers.get("remote") or "").strip():
+            d.headers["remote"] = ready or remote_ready(ctx, repo)
+        remote = d.headers["remote"].strip()
         decisions.save(ctx.run_dir, d)
 
     skips = list_skips(ctx, repo, base, map_md, suites)
-    return "set up", f"ci={ci} env={env_dir} skips={skips} caps={mb}MB,{secs}s{machine.note(repo, ctx.log)}"
+    return "set up", (f"ci={ci} env={env_dir} skips={skips} caps={mb}MB,{secs}s remote={remote}"
+                      f"{machine.note(repo, ctx.log)}")
 
 
 if __name__ == "__main__":
