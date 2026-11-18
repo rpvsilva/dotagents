@@ -237,10 +237,25 @@ export function parseResult(text: string | null): Result | null {
 }
 
 /** A subagent a run ran, as its transcript's task events describe it. */
-export type Task = { id: string; type: string; desc: string; toolUseId: string | null; status: 'running' | 'done' | 'failed'; started: number | null; ended: number | null; steps: number; step: string | null }
+export type Task = {
+  id: string; type: string; desc: string; toolUseId: string | null; status: 'running' | 'done' | 'failed'; started: number | null; ended: number | null; steps: number; step: string | null
+  /** The model its own requests named, and the context its latest one used; null before its first. */
+  model: string | null; ctx: number | null
+}
 
-/** What a run's transcript says: its model, its tool calls, the one running now, and the subagents it ran. */
-export type Scan = { model: string | null; steps: number; step: string | null; tasks: Task[] }
+/**
+ * What a run's transcript says: its model, its tool calls, the one running now, the subagents it ran, the context
+ * its latest request used (null before one), and each model's context window as its final result names them.
+ */
+export type Scan = { model: string | null; steps: number; step: string | null; tasks: Task[]; ctx: number | null; windows: Record<string, number> }
+
+/** The context a request used, as the engine's tokenCount counts it: its whole input and its output. */
+function usedBy(usage: unknown): number | null {
+  const u = obj(usage)
+  if (!u) return null
+  const parts = [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens, u.output_tokens].map(num)
+  return parts.some(n => n !== null) ? parts.reduce<number>((sum, n) => sum + (n ?? 0), 0) : null
+}
 
 const blocks = (ev: TranscriptEvent): Record<string, unknown>[] => {
   const m = obj(ev.message)
@@ -254,7 +269,7 @@ const blocks = (ev: TranscriptEvent): Record<string, unknown>[] => {
  */
 export function scanTranscript(text: string): Scan {
   const { events } = parseLines(text.endsWith('\n') ? text : `${text}\n`)
-  const scan: Scan = { model: null, steps: 0, step: null, tasks: [] }
+  const scan: Scan = { model: null, steps: 0, step: null, tasks: [], ctx: null, windows: {} }
   const tasks = new Map<string, Task>()
   const byToolUse = new Map<string, Task>()
   let open: { id: string; text: string } | null = null
@@ -266,7 +281,7 @@ export function scanTranscript(text: string): Scan {
       if (!id) continue
       let t = tasks.get(id)
       if (ev.subtype === 'task_started' && !t) {
-        t = { id, type: str(ev.subagent_type) ?? 'agent', desc: str(ev.description) ?? '', toolUseId: str(ev.tool_use_id), status: 'running', started: null, ended: null, steps: 0, step: null }
+        t = { id, type: str(ev.subagent_type) ?? 'agent', desc: str(ev.description) ?? '', toolUseId: str(ev.tool_use_id), status: 'running', started: null, ended: null, steps: 0, step: null, model: null, ctx: null }
         tasks.set(id, t)
         if (t.toolUseId) byToolUse.set(t.toolUseId, t)
       }
@@ -281,8 +296,23 @@ export function scanTranscript(text: string): Scan {
       if (t.status !== 'running') t.step = null
       continue
     }
+    if (ev.type === 'result') {
+      for (const [model, u] of Object.entries(obj(ev.modelUsage) ?? {})) {
+        const w = num(obj(u)?.contextWindow)
+        if (w && w > 0) scan.windows[model] = w
+      }
+      continue
+    }
     const owner = parent === null ? null : (byToolUse.get(parent) ?? null)
     if (parent !== null && !owner) continue
+    if (ev.type === 'assistant') {
+      const m = obj(ev.message)
+      const used = usedBy(m?.usage)
+      if (owner) {
+        owner.model = str(m?.model) ?? owner.model
+        if (used !== null) owner.ctx = used
+      } else if (used !== null) scan.ctx = used
+    }
     // A subagent starts at its first event's time (its prompt), which the task events do not carry.
     const at = typeof ev.timestamp === 'string' ? Date.parse(ev.timestamp) : NaN
     if (owner && owner.started === null && Number.isFinite(at)) owner.started = at
@@ -358,13 +388,22 @@ export function remoteRun(run: Run, result: Result | null, scan: Scan | null, no
   }
 }
 
-/** The graph events of one run: the run, then each subagent it ran. */
-export function runEvents(r: RemoteRun, scan: Scan | null, at: number): FlowEvent[] {
+/**
+ * The graph events of one run: the run, then each subagent it ran, each with a context reading when its transcript
+ * has one and `windowOf` knows its model's window.
+ */
+export function runEvents(r: RemoteRun, scan: Scan | null, at: number, windowOf: (model: string) => number | null = () => null): FlowEvent[] {
   const evs: FlowEvent[] = [{ kind: 'remote', at, run: r }]
+  const reading = (agent: string, used: number | null, model: string | null) => {
+    const window = model === null ? null : (scan?.windows[model] ?? windowOf(model))
+    if (used !== null && window) evs.push({ kind: 'ctx', at, agent, used, window })
+  }
+  reading(`remote:${r.runId}`, scan?.ctx ?? null, r.model)
   for (const t of scan?.tasks ?? []) {
     // A run that ended leaves no task running.
     const status = t.status === 'running' && r.status !== 'running' ? (r.status === 'done' ? 'done' : 'failed') : t.status
     evs.push({ kind: 'remoteTask', at, runId: r.runId, folder: r.folder, task: { ...t, status, ended: status === 'running' ? null : (t.ended ?? r.ended ?? at) }, model: r.model })
+    reading(`remote:${r.runId}:${t.id}`, t.ctx, t.model ?? r.model)
   }
   return evs
 }
