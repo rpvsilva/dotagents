@@ -121,6 +121,46 @@ class GoTest(unittest.TestCase):
         self.assertEqual(len(review), 1, p.stdout)
         self.assertIn("(ship.md: a `pr-reviewer` on `review_prompt.py ticket --pr <n>`", review[0])
 
+    def remote_on(self):
+        path = self.run / "decisions.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("approved: yes", "remote: on\napproved: yes"),
+                        encoding="utf-8")
+
+    def test_with_remote_on_go_prepares_remote_runs_with_no_flag(self):
+        # Replay e1 of #402 ran every agent here: the orchestrator never passed `--go --remote`.
+        self.remote_on()
+        lines = self.next("--go")
+        remote = [line for line in lines if line.startswith("remote ")]
+        self.assertEqual([line.split(" ")[1] for line in remote], ["01-01", "01-02"], lines)
+        self.assertIn("--name 01-01-x", remote[0])
+        self.assertFalse([line for line in lines if line.startswith("agent ")], lines)
+
+    def test_local_overrides_remote_on(self):
+        self.remote_on()
+        lines = self.next("--go", "--local")
+        self.assertEqual([line.split(" ")[1] for line in lines if line.startswith("agent ")], ["01-01", "01-02"])
+
+    def test_returned_reads_a_remote_tasks_saved_output_with_no_flag(self):
+        self.remote_on()
+        self.next("--go")
+        self.implement("01-01", "x.txt")
+        lines = self.next("--returned", "01-01", message="ignored: a remote agent's output is its saved report")
+        self.assertEqual(lines[0], "OK 01-01 done")
+        self.assertIn("Status: done", (self.run / "tasks" / "01-01-x.md").read_text(encoding="utf-8"))
+
+    def test_with_remote_on_the_ticket_review_names_the_remote_way(self):
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.next("--go")
+        self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        self.remote_on()
+        p = subprocess.run([sys.executable, "-I", str(NEXT), str(self.run), "--returned", "01-02"],
+                           input=self.implement("01-02", "y.txt"), capture_output=True, text=True, env=self.kit.env)
+        review = [line for line in p.stdout.splitlines() if line.startswith("ship 01 review")]
+        self.assertEqual(len(review), 1, p.stdout)
+        self.assertIn("(ship.md: remote is on: a remote `pr-reviewer`", review[0])
+        self.assertIn("remote-agent --name review-<n>-<sha7>", review[0])
+
     def test_a_first_brief_violation_writes_the_reissue_prompt(self):
         self.next("--go")
         self.implement("01-01", "x.txt")
