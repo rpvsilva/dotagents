@@ -299,7 +299,8 @@ HOW = {
     "dispatch": "`next.py <run> --go` prepares it",
     "wait": "a remote run `next.py <run> --go` started: `next.py <run> --wait` collects it once it ends",
     "post": "verify each finding of the output (and of its `-security.json` beside it, when there is one) against the "
-            "code, then `next.py <run> --reviewed <id> <output> [--base <base>] [--note <your verification>]` for each",
+            "code, then `next.py <run> --reviewed <id> <output> [--note <your verification>]` for each, with "
+            "`--base <the line's base=>` only when the line has `base=` (a re-review); never the head reviewed",
     "open": "`next.py <run> --go` opens it", "ship-merge": "`next.py <run> --go` merges it",
     "ship-review": "a `pr-reviewer` on `review_prompt.py ticket --pr <n>` (plus a `security-reviewer` when `tier.py` "
                    "says high), then `next.py <run> --reviewed <id> <output>`",
@@ -452,10 +453,14 @@ def collect(run, out):
             continue
         # no exit code: the wrapper itself is gone (a reboot, a kill), so none will come
         code = f["exit"].read_text(encoding="utf-8").strip() if f["exit"].is_file() else "lost"
+        if code in ("0", "3") and f["out"].is_file():
+            # the output moves before the run's files go: a run folder with no `reports/` yet (a replay) once crashed
+            # here after the pid was gone, and the output was lost
+            (run / "reports").mkdir(exist_ok=True)
+            os.replace(f["out"], run / "reports" / f"{ident}.json")
         f["pid"].unlink()
         f["exit"].unlink(missing_ok=True)
-        if code in ("0", "3") and f["out"].is_file():
-            os.replace(f["out"], run / "reports" / f"{ident}.json")
+        if (run / "reports" / f"{ident}.json").is_file() and code in ("0", "3"):
             moved |= check_finish(run, ident, True, None, None, out)
             continue
         tail = [ln for ln in (f["log"].read_text(encoding="utf-8", errors="replace").splitlines()
@@ -603,6 +608,7 @@ def start_review(run, tt, kind, pr):
     d = decisions.load(run)
     base = (d.get("base") if d else None) or info["Default"]
     branch = runfolder.header(text, "Branch")
+    (run / "logs").mkdir(exist_ok=True)
     log = open(run / "logs" / f"{tt}-remote-review.log", "a", encoding="utf-8")
     with log:
         head = git(repo, "rev-parse", branch)
@@ -688,6 +694,7 @@ def collect_review(run, name, out):
     stem = name.split("-", 1)[1]
     ok = code in ("0", "3") and report and report.is_file() and report.read_text(encoding="utf-8").strip()
     if ok:
+        Path(meta["output"]).parent.mkdir(exist_ok=True)
         shutil.copyfile(report, meta["output"])
         check = subprocess.run([sys.executable, "-I", str(PROTOCOL / "check.py"), meta["role"], "output",
                                 meta["output"]], capture_output=True, text=True)
