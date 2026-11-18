@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from test_ship import REVIEWS  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
 
 NEXT = SCRIPTS / "next.py"
@@ -80,6 +81,45 @@ class GoTest(unittest.TestCase):
         self.assertTrue(any(line.startswith("OK 01-01 done suites=") for line in lines), lines)
         self.assertIn("Status: done", (self.run / "tasks" / "01-01-x.md").read_text(encoding="utf-8"))
         self.assertIn("wait 01-02 implementer", lines)
+
+    def test_once_every_task_merged_go_opens_the_ticket_pr(self):
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.next("--go")
+        self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        lines = self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
+        self.assertIn("OK 01 open pr=99", lines)
+        self.assertTrue(any(line.startswith("ship 01 review pr=99") for line in lines), lines)
+
+    def test_reviewed_posts_the_review_and_shows_its_findings_for_the_triage(self):
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.kit.answer(REVIEWS.format(n=99), out=json.dumps({"html_url": "https://github.com/o/r/pull/99#r1"}))
+        self.next("--go")
+        self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
+        review = self.run / "reviews" / "99-abc1234.json"
+        review.parent.mkdir(exist_ok=True)
+        review.write_text(json.dumps({
+            "status": "done", "mode": "ticket", "checked": "every hunk", "process": [], "followups": [],
+            "findings": [{"severity": "should-fix", "axis": "bugs", "path": "x.txt", "line": 1,
+                          "claim": "x is wrong", "scenario": "read x"}]}), encoding="utf-8")
+        head = self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", "feat/a")
+        self.kit.answer("pr-view", out=json.dumps({"headRefOid": head}))
+        lines = self.next("--reviewed", "01", str(review))
+        self.assertEqual(lines[0], "OK PR99 review https://github.com/o/r/pull/99#r1")
+        self.assertTrue(any("x is wrong" in line for line in lines), lines)
+
+    def test_each_action_line_carries_its_instruction(self):
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.next("--go")
+        self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        p = subprocess.run([sys.executable, "-I", str(NEXT), str(self.run), "--returned", "01-02"],
+                           input=self.implement("01-02", "y.txt"), capture_output=True, text=True, env=self.kit.env)
+        review = [line for line in p.stdout.splitlines() if line.startswith("ship 01 review")]
+        self.assertEqual(len(review), 1, p.stdout)
+        self.assertIn("(ship.md: a `pr-reviewer` on `review_prompt.py ticket --pr <n>`", review[0])
 
     def test_a_first_brief_violation_writes_the_reissue_prompt(self):
         self.next("--go")

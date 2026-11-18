@@ -4,10 +4,12 @@
 Usage: python3 -I next.py <run>
        python3 -I next.py <run> --go [--remote]
        python3 -I next.py <run> --returned <TT-NN> [--remote] [--title <subject>] [< message]
+       python3 -I next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>] [--remote]
        python3 -I next.py <run> --triaged <TT> fix|none
 
 Prints one line per action, most urgent first, each `<action> <id> [details]  (<step file>)`, the step file under
-`skills/build-epic/steps/` holding how to do it. A run that is not built yet prints its one next setup action:
+`skills/build-epic/steps/` holding how to do it; a build action's note also carries the one instruction it needs,
+`(<step file>: <instruction>)` (`HOW`), so the step file is read only for a `FAIL` or a case it does not cover. A run that is not built yet prints its one next setup action:
 
   init run            (no `run.md`)                         setup.md
   rules run           (`decisions.md` lacks `merge_identity:` or `review_before_agent_merge:`)   setup.md
@@ -45,7 +47,8 @@ review at the ticket branch's tip on that line (`Triage: <sha7> fix|none, ...`) 
 `--go` does, once the run is approved, every action that needs no decision, then prints what is left. It repeats
 until nothing more moves: `start` (`start_ticket.py`), `finish` (`finish_task.py`, the commit titled as the task),
 `dispatch` (`start_task.py`, then `task_prompt.py`, `--remote` for a task with no sync conflict when `--remote` is
-given), and `merge` (`merge_task.py`) once no agent waits to be started. Each script's line is printed as it ran.
+given), `merge` (`merge_task.py`) once no agent waits to be started, and a ticket's `ship open` and `ship merge`
+(`ship_ticket.py`). Each script's line is printed as it ran.
 A prepared task prints `agent <TT-NN> prompt=<file> description=<text>` (start an `epic-implementer` with the file's
 text) or `remote <TT-NN> args=<arguments>` (run `remote-agent` with them in the background, its stdout to
 `<run>/reports/<TT-NN>.json`); then the actions left, as without `--go`. A script's `FAIL` stops that action and is
@@ -55,6 +58,10 @@ printed with its log; its step file says what to do.
 `--remote`, the saved output, `--from-report`), `capped stop` on its worktree when it ran here, `finish_task.py`
 (`--title`, when given, is the commit subject), then `--go`. A first `brief-violation` writes the reissue prompt
 (`task_prompt.py --reissue`) and prints it as an `agent` or `remote` line; a second prints the `FAIL` alone.
+
+`--reviewed <TT> <output>` is `--go` after a ticket's reviewer returned: `post_review.py` posts the output on the
+ticket's PR (`--base`, default `origin/<the run's base>`; `--note` passes through) and prints its line, then the
+output rendered (`render.py`, `security` for a `-security.json` output) for the triage, then `--go`.
 """
 import json
 import re
@@ -241,6 +248,38 @@ def build_actions(run, d, slots):
     return lines
 
 
+HOW = {
+    "human": "show `view.py <run> task <id>` and ask the one question; for a ticket's review-round-3, its review's link",
+    "finish": "`next.py <run> --returned <id>` checks, finishes and merges it",
+    "review": "a `pr-reviewer` on `review_prompt.py task --worktree <run>/worktrees/<id> --head <its HEAD> --base "
+              "<ticket branch> --run <run> --task <task file> --output <run>/reviews/<id>-<sha7>.json`; post nothing",
+    "merge": "`next.py <run> --go` merges it", "start": "`next.py <run> --go` starts it",
+    "dispatch": "`next.py <run> --go` prepares it",
+    "open": "`next.py <run> --go` opens it", "ship-merge": "`next.py <run> --go` merges it",
+    "ship-review": "a `pr-reviewer` on `review_prompt.py ticket --pr <n>` (plus a `security-reviewer` when `tier.py` "
+                   "says high), then `next.py <run> --reviewed <id> <output>`",
+    "triage": "Fix = a blocker, or a should-fix breaking an acceptance criterion or a written rule; none: "
+              "`--triaged <id> none`; else a `<id>-NN-review-fixes` task and `--triaged <id> fix`",
+    "re-review": "a `pr-reviewer` on `review_prompt.py re-review --base <head reviewed> --findings <findings file>`, "
+                 "then `next.py <run> --reviewed <id> <output> --base <head reviewed>`",
+    "clean": "`clean.py <run>`", "report": "`status.py <run> --write`, then show `view.py <run> report`",
+}
+
+
+def how(line):
+    """`line` with the one instruction its action needs inside its step-file note, so the step file is read only for
+    a `FAIL` or a case the instruction does not cover."""
+    head, sep, note = line.partition("  (")
+    if not sep:
+        return line
+    words = head.split(" ")
+    key = words[0]
+    if key == "ship" and len(words) > 2:
+        key = {"review": "ship-review", "merge": "ship-merge"}.get(words[2], words[2])
+    text = HOW.get(key)
+    return f"{head}  ({note[:-1]}: {text})" if text else line
+
+
 def record_triage(run, tt, kind):
     path = runfolder.ticket_file(run, tt)
     text = path.read_text(encoding="utf-8")
@@ -300,6 +339,10 @@ def go(run, remote, out):
                 res, rc = script("finish_task", run, ident)
                 out.append(res)
                 moved |= rc == 0
+            elif act == "ship" and rest.split(" ")[1:2] in (["open"], ["merge"]):
+                res, rc = script("ship_ticket", run, ident, rest.split(" ")[1])
+                out.append(res)
+                moved |= rc == 0
             elif act == "dispatch":
                 res, rc = script("start_task", run, ident)
                 out.append(res)
@@ -346,6 +389,27 @@ def returned(run, ident, remote, title, message, out):
         go(run, remote, out)
 
 
+def reviewed(run, tt, path, base, note, remote, out):
+    """`--reviewed`: posts a ticket review and renders it for the triage, then `go`."""
+    text = runfolder.ticket_file(run, tt).read_text(encoding="utf-8")
+    pr = ci.pr_number(runfolder.header(text, "PR"))
+    if not pr:
+        out.append(f"FAIL {tt} no-pr")
+        return
+    if not base:
+        d = decisions.load(run)
+        base = "origin/" + ((d.get("base") if d else None) or runfolder.run_info(run)["Default"])
+    res, rc = script("post_review", run, pr, path, "--base", base, *(["--note", note] if note else []))
+    out.append(res)
+    if rc:
+        return
+    role = "security" if str(path).endswith("-security.json") else "reviewer"
+    view = subprocess.run([sys.executable, "-I", str(SCRIPTS.parents[1] / "_shared" / "protocol" / "render.py"), role,
+                           str(path)], capture_output=True, text=True)
+    out.extend(line for line in view.stdout.splitlines())
+    go(run, remote, out)
+
+
 def main(argv):
     if not argv:
         print(__doc__.split("\n\n")[1])
@@ -359,12 +423,15 @@ def main(argv):
         print(line)
         return code
     flags = argv[1:]
-    if flags and flags[0] in ("--go", "--returned"):
+    if flags and flags[0] in ("--go", "--returned", "--reviewed"):
         remote = "--remote" in flags
         title = flags[flags.index("--title") + 1] if "--title" in flags[:-1] else None
         out = []
         if flags[0] == "--returned" and len(flags) > 1 and not flags[1].startswith("--"):
             returned(run, flags[1], remote, title, sys.stdin.read() if not remote else None, out)
+        elif flags[0] == "--reviewed" and len(flags) > 2:
+            opt = {k: flags[flags.index(k) + 1] for k in ("--base", "--note") if k in flags[:-1]}
+            reviewed(run, flags[1], flags[2], opt.get("--base"), opt.get("--note"), remote, out)
         elif flags[0] == "--go":
             go(run, remote, out)
         else:
@@ -375,7 +442,7 @@ def main(argv):
         left = setup_action(run, d, slots) or build_actions(run, d, slots)
         launched = {ln.split(" ")[1] for ln in out if ln.startswith(("agent ", "remote "))}
         left = [ln for ln in left if not (ln.startswith("wait ") and ln.split(" ")[1] in launched)]
-        print("\n".join(out + left))
+        print("\n".join(out + [how(line) for line in left]))
         return 0
     if len(flags) != 0:
         print("FAIL run usage: next.py <run> [--go [--remote] | --returned <TT-NN> ... | --triaged <TT> fix|none]")
@@ -383,7 +450,7 @@ def main(argv):
     d = decisions.load(run)
     slots = int(d.get("parallel") or 1) if d else 1
     lines = setup_action(run, d, slots) or build_actions(run, d, slots)
-    print("\n".join(lines))
+    print("\n".join(how(line) for line in lines))
     return 0
 
 
