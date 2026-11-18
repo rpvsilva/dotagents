@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce } from './flow.ts'
+import { emptyGraph, type FlowEvent, type Graph, MAIN, reduce, withoutJson } from './flow.ts'
 import { chart, type ChartOpts, newTween } from './layout.ts'
 import {
   endedRuns,
-  withoutJson,
   markNotified,
   notifyText,
   OTHERS_MAX,
