@@ -330,7 +330,7 @@ export function modelColor(id: string | null): string {
 export const findAgent = (g: Pick<Graph, 'agents' | 'others'>, id: string): Agent | undefined => g.agents.find(a => a.id === id) ?? g.others.find(a => a.id === id)
 
 /**
- * The band above the prompt: this turn's running agents by task up to `BAND_NAMES`, past it only their count; how
+ * The band, drawn on the status line: this turn's running agents by task up to `BAND_NAMES`, past it only their count; how
  * many wait for the person or failed; the repo's live remote runs, this session's and others'; how many of this
  * turn's agents ended. Null when nothing runs, waits or failed this turn.
  */
@@ -366,6 +366,35 @@ export function band(g: Graph, now: number): Band | null {
 function bandName(s: string): string {
   const t = printable(s.replace(/\s+/g, ' ').trim())
   return t.length > 32 ? t.slice(0, 31) + '…' : t
+}
+
+/** A spinner's frames, one a step. */
+export const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+/**
+ * The band as a status line script prints it: one line per spinner frame (`SPIN.length` of them), coloured with ANSI
+ * truecolor in the plan's palette, so the script picks the line of the second it runs in and the spinners turn; each
+ * running agent's spinner starts 3 frames after the one before. Empty when there is no band.
+ */
+export function bandLines(b: Band | null): string {
+  if (b === null) return ''
+  const fg = (hex: string, t: string) => {
+    const n = parseInt(hex.slice(1), 16)
+    return `\x1b[38;2;${n >> 16};${(n >> 8) & 255};${n & 255}m${t}\x1b[0m`
+  }
+  const c = (key: string) => PALETTE[key] ?? (key.startsWith('#') ? key : PALETTE.text!)
+  const dim = (t: string) => `\x1b[2m${t}\x1b[0m`
+  const frame = (f: number) => {
+    const s = (i: number) => SPIN.charAt((f + i * 3) % SPIN.length)
+    const parts = b.names.map((n, i) => fg(c(modelColor(n.model)), `${s(i)} ${n.name}`))
+    if (!b.names.length && b.running) parts.push(`\x1b[1m${fg(c('claude'), `${s(0)} ${b.running} running`)}`)
+    if (b.waiting) parts.push(fg(c('warning'), `◐ ${b.waiting} needs you`))
+    if (b.remote) parts.push(fg(c('suggestion'), `☁ ${b.remote} remote`))
+    if (b.failed) parts.push(fg(c('error'), `✗ ${b.failed} failed`))
+    const bar = b.total > 1 ? `   ${fg(c(b.failed ? 'error' : 'success'), gauge(b.ended / b.total, 8))}${dim(` ${b.ended}/${b.total}`)}` : ''
+    return parts.join(dim('  ·  ')) + bar
+  }
+  return Array.from({ length: SPIN.length }, (_, f) => frame(f)).join('\n') + '\n'
 }
 
 /** `text` without a JSON object: the whole of it when it is one, else each line that is one. */

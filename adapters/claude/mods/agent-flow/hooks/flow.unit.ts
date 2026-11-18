@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { costSum, ctxColor, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, band, summarize, WAIT_MS } from './flow.ts'
+import { costSum, ctxColor, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, band, bandLines, SPIN, summarize, WAIT_MS } from './flow.ts'
 
 const T = 1_800_000_000_000
 const run = (evs: FlowEvent[], g: Graph = emptyGraph()) => evs.reduce(reduce, g)
@@ -176,4 +176,18 @@ test('fmtUsd and costSum: cents, under a cent, from a hundred; null when no agen
   assert.equal(fmtUsd(123.4), '$123')
   assert.equal(costSum([{ cost: 0.5, remote: null }, { cost: null, remote: null }, { cost: 0.25, remote: null }]), 0.75)
   assert.equal(costSum([{ cost: null, remote: null }]), null)
+})
+
+test('the band as status line text: a line per spinner frame, each agent spinner 3 frames on, coloured; empty with no band', () => {
+  assert.equal(bandLines(null), '')
+  const b = { names: [{ id: 'a1', name: 'fix login', model: 'claude-haiku-5-5' }, { id: 'a2', name: 'run tests', model: 'claude-opus-5-5' }], running: 2, waiting: 1, remote: 0, failed: 0, ended: 1, total: 4 }
+  const out = bandLines(b)
+  const lines = out.trimEnd().split('\n')
+  assert.equal(lines.length, SPIN.length)
+  const plain = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, '')
+  assert.equal(plain(lines[0]!), '⠋ fix login  ·  ⠸ run tests  ·  ◐ 1 needs you   ▰▰▱▱▱▱▱▱ 1/4')
+  assert.equal(plain(lines[9]!), '⠏ fix login  ·  ⠹ run tests  ·  ◐ 1 needs you   ▰▰▱▱▱▱▱▱ 1/4')
+  assert.ok(lines[0]!.startsWith('\x1b[38;2;92;201;167m'), 'haiku teal')
+  const many = plain(bandLines({ names: [], running: 9, waiting: 0, remote: 2, failed: 1, ended: 3, total: 12 }).split('\n')[0]!)
+  assert.equal(many, '⠋ 9 running  ·  ☁ 2 remote  ·  ✗ 1 failed   ▰▰▱▱▱▱▱▱ 3/12')
 })
