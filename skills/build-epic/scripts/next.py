@@ -49,7 +49,8 @@ until nothing more moves: `start` (`start_ticket.py`), `finish` (`finish_task.py
 `dispatch` (`start_task.py`, then `task_prompt.py`, `--remote` for a task with no sync conflict when
 `decisions.md` says `remote: on`, as `setup.py` records it; `--remote` or `--local` given to any of these calls
 overrides it), `merge` (`merge_task.py`) once no agent waits to be started, and a ticket's `ship open` and `ship merge`
-(`ship_ticket.py`; `--no-ship` leaves those two as `ship` lines, for a run told to stop before shipping). Each
+(`ship_ticket.py`; `--no-ship` leaves those two as `ship` lines, for a run told to stop before shipping). It never
+runs `ship merge` while `unguarded` finds clauses: the line is left for the orchestrator, naming them. Each
 script's line is printed as it ran.
 A prepared task prints `agent <TT-NN> prompt=<file> description=<text>` (start an `epic-implementer` with the file's
 text) or `remote <TT-NN> args=<arguments>` (run `remote-agent` with them in the background, its stdout to
@@ -74,7 +75,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import status  # noqa: E402
-from steplib import ci, decisions, runfolder, taskwt  # noqa: E402
+from steplib import ci, core, decisions, guard, runfolder, taskwt  # noqa: E402
 
 PLAN_CHECK = Path(__file__).resolve().parents[1] / "plan_check.py"
 DONE_LIKE = ("merged", "in-review", "claimed")
@@ -279,9 +280,26 @@ HOW = {
 }
 
 
-def how(line, remote=False):
+def unguarded(run, d):
+    """The Authorizations clauses `d` does not waive `yes`, when `origin/<default>` has no `agent-merge-guard` block
+    to enforce them (`../merge-guard.md`); [] when it has one or every clause is waived. Without a block the guard
+    passes every diff, so a `no` the human gave would go unenforced if `--go` merged the ticket PR itself."""
+    open_ = [a.clause for a in (d.authorizations if d else []) if a.waived != "yes"]
+    if not open_:
+        return []
+    repo = core.resolve(runfolder.run_info(run)["Repo"])
+    (run / "logs").mkdir(exist_ok=True)
+    with open(run / "logs" / "next-guard.log", "a", encoding="utf-8") as log:
+        try:
+            return [] if guard.load(repo, f"origin/{runfolder.run_info(run)['Default']}", log) else open_
+        except core.Fail:
+            return open_
+
+
+def how(line, remote=False, held=()):
     """`line` with the one instruction its action needs inside its step-file note, so the step file is read only for
-    a `FAIL` or a case the instruction does not cover; a ticket review's names the remote way when `remote`."""
+    a `FAIL` or a case the instruction does not cover; a ticket review's names the remote way when `remote`, and a
+    ticket merge the clauses `held` (`unguarded`) to check by hand."""
     head, sep, note = line.partition("  (")
     if not sep:
         return line
@@ -290,7 +308,15 @@ def how(line, remote=False):
     if key == "ship" and len(words) > 2:
         key = {"review": "ship-review", "merge": "ship-merge"}.get(words[2], words[2])
     text = (remote and HOW.get(f"{key}-remote")) or HOW.get(key)
+    if key == "ship-merge" and held:
+        text = HELD.format(clauses="; ".join(f'"{c}"' for c in held))
     return f"{head}  ({note[:-1]}: {text})" if text else line
+
+
+HELD = ("no `agent-merge-guard` block enforces the clauses this run did not waive ({clauses}): check the PR's files "
+        "and diff (`gh pr view <n> --json files`, `gh pr diff <n>`) against each; on a hit, ask the human and merge "
+        "only once they waive it (`decide.py <run> clause \"<clause>\" yes \"<their words>\"`); with no hit, "
+        "`ship_ticket.py <run> <id> merge`, then `next.py <run> --go`")
 
 
 def record_triage(run, tt, kind):
@@ -333,6 +359,7 @@ def launch(run, ident, remote, *extra):
 def go(run, remote, out, ship=True):
     """Does every action needing no decision until nothing moves; appends what it ran and launched to `out`."""
     launched = False
+    held = None
     for _ in range(100):
         d = decisions.load(run)
         if not d or (d.get("approved") or "").strip() != "yes":
@@ -353,6 +380,10 @@ def go(run, remote, out, ship=True):
                 out.append(res)
                 moved |= rc == 0
             elif ship and act == "ship" and rest.split(" ")[1:2] in (["open"], ["merge"]):
+                if rest.split(" ")[1] == "merge":
+                    held = unguarded(run, d) if held is None else held
+                    if held:
+                        continue
                 res, rc = script("ship_ticket", run, ident, rest.split(" ")[1])
                 out.append(res)
                 moved |= rc == 0
@@ -477,7 +508,8 @@ def main(argv):
         left = setup_action(run, d, slots) or build_actions(run, d, slots)
         launched = {ln.split(" ")[1] for ln in out if ln.startswith(("agent ", "remote "))}
         left = [ln for ln in left if not (ln.startswith("wait ") and ln.split(" ")[1] in launched)]
-        print("\n".join(out + [how(line, run_remote(run, [])) for line in left]))
+        held = unguarded(run, d) if any(ln.startswith("ship ") for ln in left) else []
+        print("\n".join(out + [how(line, run_remote(run, []), held) for line in left]))
         return 0
     if len(flags) != 0:
         print("FAIL run usage: next.py <run> [--go | --returned <TT-NN> ... | --triaged <TT> fix|none]")
@@ -485,7 +517,8 @@ def main(argv):
     d = decisions.load(run)
     slots = int(d.get("parallel") or 1) if d else 1
     lines = setup_action(run, d, slots) or build_actions(run, d, slots)
-    print("\n".join(how(line, run_remote(run, [])) for line in lines))
+    held = unguarded(run, d) if any(ln.startswith("ship ") for ln in lines) else []
+    print("\n".join(how(line, run_remote(run, []), held) for line in lines))
     return 0
 
 

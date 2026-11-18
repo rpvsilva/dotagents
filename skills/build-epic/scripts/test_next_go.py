@@ -100,6 +100,56 @@ class GoTest(unittest.TestCase):
         self.assertIn("ship 01 open", lines)
         self.assertNotIn("PR:", (self.run / "tickets" / "01-a.md").read_text(encoding="utf-8"))
 
+    def ready_to_merge(self, clause_waived):
+        # Run #16 e1 on turns-remote: `--go` merged a ticket PR touching AGENTS.md although the human said no to it;
+        # the sandbox has no agent-merge-guard block, so the guard passed it.
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.kit.answer(REVIEWS.format(n=99), out=json.dumps({"html_url": "https://github.com/o/r/pull/99#r1"}))
+        path = self.run / "decisions.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\n## Authorizations\n\n| clause | waived | quote |\n"
+                        f"| --- | --- | --- |\n| AGENTS.md changes | {clause_waived} | no for AGENTS.md |\n",
+                        encoding="utf-8")
+        self.next("--go")
+        self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
+        review = self.run / "reviews" / "99-abc1234.json"
+        review.parent.mkdir(exist_ok=True)
+        review.write_text(json.dumps({"status": "done", "mode": "ticket", "checked": "every hunk", "process": [],
+                                      "followups": [], "findings": []}), encoding="utf-8")
+        head = self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", "feat/a")
+        self.kit.answer("pr-view", out=json.dumps({"headRefOid": head}))
+        self.next("--reviewed", "01", str(review))
+        self.next("--triaged", "01", "none")
+
+    def test_an_unwaived_clause_no_guard_block_enforces_holds_the_ticket_merge(self):
+        self.ready_to_merge("no")
+        p = subprocess.run([sys.executable, "-I", str(NEXT), str(self.run), "--go"], capture_output=True, text=True,
+                           env=self.kit.env)
+        merge = [line for line in p.stdout.splitlines() if line.startswith("ship 01 merge")]
+        self.assertEqual(len(merge), 1, p.stdout)
+        self.assertIn('no `agent-merge-guard` block enforces the clauses this run did not waive ("AGENTS.md changes")',
+                      merge[0])
+        self.assertFalse([line for line in p.stdout.splitlines() if line.startswith("OK 01 ")], p.stdout)
+
+    def test_unguarded_is_empty_with_a_guard_block_or_every_clause_waived(self):
+        import importlib
+        nxt = importlib.import_module("next")
+        from steplib import decisions
+        self.ready_to_merge("no")
+        self.assertEqual(nxt.unguarded(self.run, decisions.load(self.run)), ["AGENTS.md changes"])
+        clone = self.kit.clone
+        (clone / "AGENTS.md").write_text("# Rules\n\n```agent-merge-guard\nagents path AGENTS.md\n```\n",
+                                         encoding="utf-8")
+        self.kit.git("add", "AGENTS.md", cwd=clone)
+        self.kit.git("commit", "-qm", "docs: guard block", cwd=clone)
+        self.kit.git("push", "-q", "origin", "HEAD:main", cwd=clone)
+        self.kit.git("fetch", "-q", "origin", cwd=clone)
+        self.assertEqual(nxt.unguarded(self.run, decisions.load(self.run)), [])
+        d = decisions.load(self.run)
+        d.authorizations = [d.authorizations[0]._replace(waived="yes")]
+        self.assertEqual(nxt.unguarded(self.run, d), [])
+
     def test_reviewed_posts_the_review_and_shows_its_findings_for_the_triage(self):
         self.kit.answer("pr-list", out="[]")
         self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
