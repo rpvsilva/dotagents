@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Finishes a task once its implementer reports: commits what it left in the worktree, merges the ticket branch and
-amends the task's `Writes` line with every changed path outside it.
+amends the task's `Writes` line with every path it changed outside it: not a file a hub task's base merge brought in
+and left as the base has it (`own_changes`).
 
 Usage: python3 -I finish_task.py <run> <TT-NN> [--report <file>] [--title <commit subject>]
 
@@ -28,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import core, gitops, runfolder, taskwt  # noqa: E402
+from steplib import ci, core, gitops, runfolder, taskwt  # noqa: E402
 
 
 def options(args):
@@ -104,6 +105,22 @@ def copy_remote_result(ctx, task):
     return found
 
 
+def own_changes(task, changed):
+    """The paths of `changed` the task itself changed: a path the run's base changed (a hub task's base merge brought
+    it in) counts only when HEAD's content differs from the base's, as a resolved conflict or the task's own edit
+    does. The base's commit is the newest one HEAD holds (`merge-base HEAD origin/<base>`)."""
+    synced = task.git("merge-base", "HEAD", f"refs/remotes/origin/{ci.base(task.ctx.run_dir)}", check=False).out.strip()
+    if not synced:
+        return changed
+    brought = set(task.git("diff", "--name-only", f"{task.upstream}...{synced}", check=False).out.split())
+
+    def blob(ref, path):
+        res = task.git("rev-parse", "-q", "--verify", f"{ref}:{path}", check=False)
+        return res.out.strip() if res.rc == 0 else None
+
+    return [p for p in changed if p not in brought or blob("HEAD", p) != blob(synced, p)]
+
+
 def amend_writes(task, changed):
     """Appends each changed path outside the task's `Writes` line to it; returns those paths."""
     writes = runfolder.get(task.path, "Writes")
@@ -152,7 +169,7 @@ def step(ctx):
         return no_change(ctx, task)
     task.merge_upstream()
     changed = task.changed()
-    extra = amend_writes(task, changed)
+    extra = amend_writes(task, own_changes(task, changed))
     if extra:
         ctx.note(f"Writes amended with: {', '.join(extra)}")
     if not runfolder.get(task.path, "Finished"):
