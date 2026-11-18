@@ -82,6 +82,18 @@ class MergeSectionTest(unittest.TestCase):
         self.assertIn("the App", merge)
         self.assertNotIn("own login", merge)
         self.assertIn("Authorizations: none recorded.", merge)
+        self.assertNotIn("left for", merge)
+
+    def test_app_merge_names_the_rules_that_leave_it_for_the_human(self):
+        # #16 run gh-16-e3: PR #730 (an AGENTS.md edit, left for the human) said the App would merge it.
+        self.decide("set", "merge_identity", "app")
+        self.decide("set", "human", "rpvsilva")
+        self.decide("clause", "Changes to tests/", "yes", QUOTE)
+        self.decide("clause", "AGENTS.md changes", "no", QUOTE)
+        merge = self.merge(self.ticket_body())
+        self.assertIn("Unless its diff hits a rule not waived `yes` below (AGENTS.md changes): then it is left for "
+                      "`rpvsilva` to approve and merge.", merge)
+        self.assertNotIn("Changes to tests/)", merge)
 
     def test_merge_section_sits_before_the_issue_refs(self):
         self.human_run()
