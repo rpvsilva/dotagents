@@ -284,6 +284,19 @@ class StartTaskTest(StartCase):
         self.kit.git("merge-base", "--is-ancestor", self.remote_tip(BRANCH), head, cwd=wt)
         self.assertEqual((wt / "hub.md").read_text(encoding="utf-8"), "merged ticket\n")
 
+    def test_a_hub_tasks_writes_gains_only_what_it_changed_not_what_its_base_merge_brought_in(self):
+        # #521: 02-02's Writes in the hub-sync-conflict eval gained ticket 01's files from main.
+        self.commit("main", "other_ticket.py", "from another ticket\n", "another ticket")
+        self.one_line(self.kit.step(START_TASK, self.kit.run_dir, "01-02"))
+        wt = self.kit.run_dir / "worktrees" / "01-02"
+        self.assertTrue((wt / "other_ticket.py").is_file())
+        (wt / "hub.txt").write_text("hub work\n", encoding="utf-8")
+        task = self.task("01-02-hub.md")
+        runfolder.set_header(task, "Writes", "README.md")
+        p = self.kit.step(SCRIPTS / "finish_task.py", self.kit.run_dir, "01-02")
+        self.assertTrue(self.one_line(p).startswith("OK 01-02 committed "), p.stdout)
+        self.assertEqual(runfolder.get(task, "Writes"), "README.md, hub.txt")
+
     def test_a_hub_task_conflict_is_left_in_its_worktree_for_the_implementer(self):
         self.commit(BRANCH, "README.md", "ticket side\n", "ticket edit")
         self.commit("main", "README.md", "main side\n", "main edit")
