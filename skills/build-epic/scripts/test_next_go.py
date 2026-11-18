@@ -250,6 +250,24 @@ class GoTest(unittest.TestCase):
         self.assertTrue(any(line.startswith("ship 01 open") for line in lines), lines)
         self.assertEqual(list((self.run / "remote").glob("*.pid")), [])
 
+    def test_wait_collects_into_a_run_folder_with_no_reports_folder_yet(self):
+        # Replay e3 of #402: a replayed run folder had no `reports/`, `--wait` crashed moving 01-01's output there,
+        # after the pid was gone, and the output was lost.
+        self.remote_on()
+        self.stub_remote()
+        (self.run / "reports").rmdir()
+        self.next("--go", "--no-ship")
+        self.next("--wait", "--no-ship")
+        for ident in ("01-01-x", "01-02-y"):
+            self.assertIn("Status: done", (self.run / "tasks" / f"{ident}.md").read_text(encoding="utf-8"))
+
+    def test_the_post_instruction_keeps_base_to_a_re_review(self):
+        # Replay e3: on a first review the orchestrator passed the head as `--base`, so the posted header read
+        # `git diff <head>...<head>`.
+        import next as nxt
+        line = nxt.how("ship 01 post pr=9 output=/r/9-abc1234.json  (ship.md)")
+        self.assertIn("only when the line has `base=`", line)
+
     def test_a_failed_remote_run_is_left_to_the_orchestrator_with_its_stderr(self):
         self.remote_on()
         self.stub_remote(exit_code=5)
