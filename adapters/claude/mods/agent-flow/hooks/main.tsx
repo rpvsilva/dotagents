@@ -445,7 +445,8 @@ async function back($: EngineInterface): Promise<void> {
  */
 async function openNode($: EngineInterface, id: string): Promise<void> {
   if (id.startsWith('squad:')) {
-    const group = id.slice('squad:'.length)
+    // A squad's id ends in `@<first member>`, its wave; the Agents tab groups by parent and type alone.
+    const group = id.slice('squad:'.length, id.lastIndexOf('@'))
     await update($, view, (v): View => ({ ...v, tab: 'agents', agentId: null, trail: [], filter: 'all', groups: v.groups.includes(group) ? v.groups : [...v.groups, group] }))
   } else if (id.startsWith('fold:')) await update($, view, (v): View => ({ ...v, tab: 'agents', agentId: null, trail: [], filter: 'all' }))
   else if (id !== MAIN) await openLog($, id, 'chart')
