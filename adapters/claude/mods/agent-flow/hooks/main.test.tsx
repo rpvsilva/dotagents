@@ -490,6 +490,22 @@ test('a remote run started by a subagent hangs under it in the chart, and opens 
   expect(log).toContain('caller: epic-implementer')
 })
 
+test("a remote run's box carries a context gauge from its transcript, once its model's window is known", async ($, on) => {
+  const w = engine(on)
+  const usage = { input_tokens: 2, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 1_998, output_tokens: 0 }
+  const tr = TRANSCRIPT + `${JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage, content: [] } })}\n`
+  repoFs(on, { [`${RUNDIR}/run.json`]: runFile({}), [`${RUNDIR}/transcript.jsonl`]: tr }, { '/repo/.git': ['remote-agent'], '/repo/.git/remote-agent': [RUN] }, () => '4242 Tue Nov 17 11:44:47 2026\n')
+  // A window an earlier session learned, as $.store keeps it.
+  on('store.get', (_: unknown, e: any) => ({ value: e.key === 'windows' ? { 'claude-opus-5-5': 1_000_000 } : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: `~/.agents/bin/remote-agent --name probe @b.md`, description: 'probe remotely', run_in_background: true, agentId: 'main', tool_use_id: 'b1' })
+  await w.clock.advance(3000)
+  const chart = await drawn($)
+  expect(chart).toContain('☁ probe')
+  expect(chart).toContain('42k/1M')
+})
+
 test("another session's run is listed under other sessions, never on the chart; its log offers resume", async ($, on) => {
   const w = engine(on)
   const files = {
