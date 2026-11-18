@@ -91,6 +91,15 @@ class GoTest(unittest.TestCase):
         self.assertIn("OK 01 open pr=99", lines)
         self.assertTrue(any(line.startswith("ship 01 review pr=99") for line in lines), lines)
 
+    def test_no_ship_leaves_the_ticket_pr_to_a_ship_line(self):
+        # The ticket-commits and hub-sync-conflict evals stop before shipping, with no GitHub.
+        self.next("--go", "--no-ship")
+        self.next("--returned", "01-01", "--no-ship", message=self.implement("01-01", "x.txt"))
+        lines = self.next("--returned", "01-02", "--no-ship", message=self.implement("01-02", "y.txt"))
+        self.assertFalse([line for line in lines if line.startswith("OK 01 open")], lines)
+        self.assertIn("ship 01 open", lines)
+        self.assertNotIn("PR:", (self.run / "tickets" / "01-a.md").read_text(encoding="utf-8"))
+
     def test_reviewed_posts_the_review_and_shows_its_findings_for_the_triage(self):
         self.kit.answer("pr-list", out="[]")
         self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")

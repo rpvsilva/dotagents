@@ -2,9 +2,9 @@
 """Says what the orchestrator does next, read from the run folder alone: build-epic's state machine.
 
 Usage: python3 -I next.py <run>
-       python3 -I next.py <run> --go
-       python3 -I next.py <run> --returned <TT-NN> [--title <subject>] [< message]
-       python3 -I next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>]
+       python3 -I next.py <run> --go [--no-ship]
+       python3 -I next.py <run> --returned <TT-NN> [--title <subject>] [--no-ship] [< message]
+       python3 -I next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>] [--no-ship]
        python3 -I next.py <run> --triaged <TT> fix|none
 
 Prints one line per action, most urgent first, each `<action> <id> [details]  (<step file>)`, the step file under
@@ -49,7 +49,8 @@ until nothing more moves: `start` (`start_ticket.py`), `finish` (`finish_task.py
 `dispatch` (`start_task.py`, then `task_prompt.py`, `--remote` for a task with no sync conflict when
 `decisions.md` says `remote: on`, as `setup.py` records it; `--remote` or `--local` given to any of these calls
 overrides it), `merge` (`merge_task.py`) once no agent waits to be started, and a ticket's `ship open` and `ship merge`
-(`ship_ticket.py`). Each script's line is printed as it ran.
+(`ship_ticket.py`; `--no-ship` leaves those two as `ship` lines, for a run told to stop before shipping). Each
+script's line is printed as it ran.
 A prepared task prints `agent <TT-NN> prompt=<file> description=<text>` (start an `epic-implementer` with the file's
 text) or `remote <TT-NN> args=<arguments>` (run `remote-agent` with them in the background, its stdout to
 `<run>/reports/<TT-NN>.json`); then the actions left, as without `--go`. A script's `FAIL` stops that action and is
@@ -329,7 +330,7 @@ def launch(run, ident, remote, *extra):
     return f"agent {ident} {prompt} description=implement: {ident} {title}  (build.md)"
 
 
-def go(run, remote, out):
+def go(run, remote, out, ship=True):
     """Does every action needing no decision until nothing moves; appends what it ran and launched to `out`."""
     launched = False
     for _ in range(100):
@@ -351,7 +352,7 @@ def go(run, remote, out):
                 res, rc = script("finish_task", run, ident)
                 out.append(res)
                 moved |= rc == 0
-            elif act == "ship" and rest.split(" ")[1:2] in (["open"], ["merge"]):
+            elif ship and act == "ship" and rest.split(" ")[1:2] in (["open"], ["merge"]):
                 res, rc = script("ship_ticket", run, ident, rest.split(" ")[1])
                 out.append(res)
                 moved |= rc == 0
@@ -401,7 +402,7 @@ def run_remote(run, flags):
     return bool(d) and (d.get("remote") or "").strip() == "on"
 
 
-def returned(run, ident, remote, title, message, out):
+def returned(run, ident, remote, title, message, out, ship=True):
     """`--returned`: the checks and finish after a task's agent returned, then `go`; `remote` is where the task
     ran."""
     args = [run, ident] + (["--from-report"] if remote else [])
@@ -418,10 +419,10 @@ def returned(run, ident, remote, title, message, out):
     res, rc = script("finish_task", run, ident, *(["--title", title] if title else []))
     out.append(res)
     if rc == 0:
-        go(run, run_remote(run, []), out)
+        go(run, run_remote(run, []), out, ship)
 
 
-def reviewed(run, tt, path, base, note, remote, out):
+def reviewed(run, tt, path, base, note, remote, out, ship=True):
     """`--reviewed`: posts a ticket review and renders it for the triage, then `go`."""
     text = runfolder.ticket_file(run, tt).read_text(encoding="utf-8")
     pr = ci.pr_number(runfolder.header(text, "PR"))
@@ -439,7 +440,7 @@ def reviewed(run, tt, path, base, note, remote, out):
     view = subprocess.run([sys.executable, "-I", str(SCRIPTS.parents[1] / "_shared" / "protocol" / "render.py"), role,
                            str(path)], capture_output=True, text=True)
     out.extend(line for line in view.stdout.splitlines())
-    go(run, remote, out)
+    go(run, remote, out, ship)
 
 
 def main(argv):
@@ -457,16 +458,17 @@ def main(argv):
     flags = argv[1:]
     if flags and flags[0] in ("--go", "--returned", "--reviewed"):
         remote = run_remote(run, flags)
+        ship = "--no-ship" not in flags
         title = flags[flags.index("--title") + 1] if "--title" in flags[:-1] else None
         out = []
         if flags[0] == "--returned" and len(flags) > 1 and not flags[1].startswith("--"):
             here = "--local" in flags or ("--remote" not in flags and not ran_remote(run, flags[1]))
-            returned(run, flags[1], not here, title, sys.stdin.read() if here else None, out)
+            returned(run, flags[1], not here, title, sys.stdin.read() if here else None, out, ship)
         elif flags[0] == "--reviewed" and len(flags) > 2:
             opt = {k: flags[flags.index(k) + 1] for k in ("--base", "--note") if k in flags[:-1]}
-            reviewed(run, flags[1], flags[2], opt.get("--base"), opt.get("--note"), remote, out)
+            reviewed(run, flags[1], flags[2], opt.get("--base"), opt.get("--note"), remote, out, ship)
         elif flags[0] == "--go":
-            go(run, remote, out)
+            go(run, remote, out, ship)
         else:
             print("FAIL run usage: next.py <run> --returned <TT-NN> [--title <subject>]")
             return 2
