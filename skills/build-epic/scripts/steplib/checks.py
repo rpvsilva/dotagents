@@ -88,6 +88,25 @@ def in_env(run, command, caps=None):
     return " && ".join([CAPPED_PATH] + caps_prefix(run, caps) + env_prefix(run) + [command])
 
 
+REMOTE_ENV = "$HOME/.build-epic-env"
+
+
+def remote_in_env(setup, command, caps):
+    """`command` as a remote agent runs it: like `in_env`, but the environment is the sandbox's own
+    (`$HOME/.build-epic-env`), made there by `setup` (map.md's Setup commands) the first time the line runs, since the
+    run's `env/` is on this machine. `caps` (`"<mb> <secs>"`) are defaults only: the sandbox's own exports win."""
+    parts = [CAPPED_PATH]
+    if caps:
+        mb, secs = caps.split()
+        parts.append(f'export CAPPED_MB="${{CAPPED_MB:-{int(mb)}}}" CAPPED_SECS="${{CAPPED_SECS:-{int(secs)}}}"')
+    if setup:
+        done = f'"${ENV_VAR}/{SETUP_DONE}"'
+        made = " && ".join([f"( {cmd} )" for cmd in setup] + [f"touch {done}"])
+        parts += [f'export {ENV_VAR}="{REMOTE_ENV}"', f"{{ [ -f {done} ] || {{ {made}; }}; }}",
+                  f'{{ [ ! -f "${ENV_VAR}/bin/activate" ] || . "${ENV_VAR}/bin/activate"; }}']
+    return " && ".join(parts + [command])
+
+
 def commands(map_md):
     """The suite commands of `map.md`'s `## Checks` section, in order. Fails `no-checks` when there are none."""
     path = core.resolve(map_md)
