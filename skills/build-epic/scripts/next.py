@@ -36,6 +36,8 @@ build at once, in this order:
   dispatch <TT-NN> [hub]   a ready task of a building ticket: blockers done, Writes disjoint from every task
                            in flight or dispatched above, while a slot is free             build.md
   ship <TT> open|review|triage|re-review|merge   a building ticket whose tasks are all done          ship.md
+  ship <TT> post pr=<n> output=<file> [base=<sha>]   a review of the head, not yet posted: verify, then `--reviewed`
+                                                  ship.md
   wait <id> [why]      a task in flight with no output yet (`remote`: a run `--go` started, `--wait` collects it),
                        or a ticket waiting on a human or another PR
   clean run / report run   once nothing is left to build or start                        finish.md
@@ -70,6 +72,12 @@ task whose latest prompt was a remote one, the saved output, `--from-report`, an
 (`--title`, when given, is the commit subject), then `--go`. A first `brief-violation` writes the reissue prompt
 (`task_prompt.py --reissue`) and prints it as an `agent` or `remote` line; a second prints the `FAIL` alone.
 
+With remote on, `--go` also starts a `ship <TT> review` or `re-review` line's reviewers itself, detached, as
+`start_review` says (`remote <TT> review|security started name=<name> log=<file>`); the ticket shows `wait <TT> review
+remote` until they end, then `ship <TT> post ...` once `collect_review` copied, checked and rendered each output. A
+review it cannot run remotely prints `FAIL <TT> remote-review <why>` or `FAIL <TT> remote-exit <code>: ...`, leaves a
+`remote/review-<PR>-<sha7>.local` marker, and the `review` line comes back for a reviewer here.
+
 `--wait` is `--go`, then, while every action left is a `wait` line and a detached run is in flight, waits for one to
 end and does `--go` again, for up to `BUILD_EPIC_WAIT_SECS` seconds (default 540, under a 10-minute shell timeout);
 it returns at the first `FAIL` or the first line that is not a `wait`.
@@ -82,6 +90,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -90,11 +99,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import status  # noqa: E402
-from steplib import ci, core, decisions, guard, runfolder, taskwt  # noqa: E402
+from steplib import ci, core, decisions, guard, identity, runfolder, taskwt  # noqa: E402
 
 PLAN_CHECK = Path(__file__).resolve().parents[1] / "plan_check.py"
 DONE_LIKE = ("merged", "in-review", "claimed")
 REMOTE_AGENT = Path.home() / ".agents" / "bin" / "remote-agent"
+REVIEW_PR = Path(__file__).resolve().parents[2] / "review-pr" / "scripts"
+PROTOCOL = Path(__file__).resolve().parents[2] / "_shared" / "protocol"
 WAIT_SECS = int(os.environ.get("BUILD_EPIC_WAIT_SECS") or 540)  # under a 10-minute shell timeout
 POLL_SECS = 3
 
@@ -174,9 +185,17 @@ def ship_action(run, r, tt, repo):
     except (OSError, ValueError, AttributeError):
         posted = None
     rounds = triage(text)
+    fresh = not posted or (tip and not tip.startswith(posted[:7]) and not posted.startswith(tip[:7]))
+    if fresh and tip:
+        stem = f"{pr}-{tip[:7]}"
+        if any((run / "remote" / f"{who}-{stem}.pid").is_file() for who in ("review", "security")):
+            return f"wait {ident} review remote  (ship.md)"
+        out = run / "reviews" / f"{stem}.json"
+        if out.is_file():
+            return f"ship {ident} post pr={pr} output={out}{f' base={posted}' if posted else ''}  (ship.md)"
     if not posted:
         return f"ship {ident} review pr={pr}  (ship.md)"
-    if tip and not tip.startswith(posted[:7]) and not posted.startswith(tip[:7]):
+    if fresh:
         return f"ship {ident} re-review pr={pr}  (ship.md)"
     last = rounds[-1] if rounds and posted.startswith(rounds[-1][0][:7]) else None
     if last is None:
@@ -279,23 +298,22 @@ HOW = {
     "merge": "`next.py <run> --go` merges it", "start": "`next.py <run> --go` starts it",
     "dispatch": "`next.py <run> --go` prepares it",
     "wait": "a remote run `next.py <run> --go` started: `next.py <run> --wait` collects it once it ends",
+    "post": "verify each finding of the output (and of its `-security.json` beside it, when there is one) against the "
+            "code, then `next.py <run> --reviewed <id> <output> [--base <base>] [--note <your verification>]` for each",
     "open": "`next.py <run> --go` opens it", "ship-merge": "`next.py <run> --go` merges it",
     "ship-review": "a `pr-reviewer` on `review_prompt.py ticket --pr <n>` (plus a `security-reviewer` when `tier.py` "
                    "says high), then `next.py <run> --reviewed <id> <output>`",
-    "ship-review-remote": "remote is on: a remote `pr-reviewer` as review-pr step 3 **Remotely** says "
-                          "(`review_prompt.py ticket --pr <n> --remote <run>/reviews/<n>-<sha7>-remote/`, then "
-                          "`remote-agent --name review-<n>-<sha7> --agent <its agent.txt>` in the background), plus a "
-                          "`security-<n>-<sha7>` one when `tier.py` says high; `remote-agent result <name>` to "
-                          "`<run>/remote/<name>.json`, its report copied to `<run>/reviews/<n>-<sha7>.json`, then "
-                          "`next.py <run> --reviewed <id> <output>`",
+    "ship-review-remote": "remote is on: `next.py <run> --go` starts its remote reviewers itself; after a "
+                          "`FAIL <id> remote-review` or `remote-exit` line, a `pr-reviewer` here on "
+                          "`review_prompt.py ticket --pr <n>` (plus a `security-reviewer` when `tier.py` says high), "
+                          "then `next.py <run> --reviewed <id> <output>`",
     "triage": "Fix = a blocker, or a should-fix breaking an acceptance criterion or a written rule; none: "
               "`--triaged <id> none`; else a `<id>-NN-review-fixes` task and `--triaged <id> fix`",
     "re-review": "a `pr-reviewer` on `review_prompt.py re-review --base <head reviewed> --findings <findings file>`, "
                  "then `next.py <run> --reviewed <id> <output> --base <head reviewed>`",
-    "re-review-remote": "remote is on: a remote `pr-reviewer` as review-pr step 3 **Remotely** says, on "
-                        "`review_prompt.py re-review --base <head reviewed> --findings <findings file> --remote "
-                        "<run>/reviews/<n>-<sha7>-remote/`; `remote-agent result <name>` to `<run>/remote/<name>.json`, "
-                        "its report copied to `<run>/reviews/<n>-<sha7>.json`, then "
+    "re-review-remote": "remote is on: `next.py <run> --go` starts its remote reviewer itself; after a "
+                        "`FAIL <id> remote-review` or `remote-exit` line, a `pr-reviewer` here on `review_prompt.py "
+                        "re-review --base <head reviewed> --findings <findings file>`, then "
                         "`next.py <run> --reviewed <id> <output> --base <head reviewed>`",
     "clean": "`clean.py <run>`", "report": "`status.py <run> --write`, then show `view.py <run> report`",
 }
@@ -388,16 +406,17 @@ def remote_files(run, ident):
     return {k: base.with_name(f"{ident}.{k}") for k in ("pid", "exit", "out", "log")}
 
 
-def start_remote(run, ident, args):
-    """Starts `remote-agent <args>` detached from this call, its stdout to `remote/<id>.out`, stderr to
-    `remote/<id>.log`, and its exit code to `remote/<id>.exit` once it ends; returns its `started` line."""
+def start_remote(run, ident, args, cwd=None):
+    """Starts `remote-agent <args>` detached from this call, in `cwd` (default: task `ident`'s worktree), its stdout
+    to `remote/<id>.out`, stderr to `remote/<id>.log`, and its exit code to `remote/<id>.exit` once it ends; returns
+    its `started` line."""
     f = remote_files(run, ident)
     f["pid"].parent.mkdir(parents=True, exist_ok=True)
     for k in ("exit", "out"):
         f[k].unlink(missing_ok=True)
     wrapper = '"$@" >"$OUT" 2>"$LOG"; echo $? >"$EXIT.tmp" && mv "$EXIT.tmp" "$EXIT"'
     env = dict(os.environ, OUT=str(f["out"]), LOG=str(f["log"]), EXIT=str(f["exit"]))
-    p = subprocess.Popen(["/bin/sh", "-c", wrapper, "sh", str(REMOTE_AGENT), *args], cwd=str(run / "worktrees" / ident),
+    p = subprocess.Popen(["/bin/sh", "-c", wrapper, "sh", str(REMOTE_AGENT), *args], cwd=str(cwd or run / "worktrees" / ident),
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     f["pid"].write_text(f"{p.pid}\n", encoding="utf-8")
@@ -427,6 +446,9 @@ def collect(run, out):
     for ident in in_flight(run):
         f = remote_files(run, ident)
         if not ended(run, ident):
+            continue
+        if f["pid"].with_suffix(".meta").is_file():
+            collect_review(run, ident, out)
             continue
         # no exit code: the wrapper itself is gone (a reboot, a kill), so none will come
         code = f["exit"].read_text(encoding="utf-8").strip() if f["exit"].is_file() else "lost"
@@ -473,6 +495,9 @@ def go(run, remote, out, ship=True):
                 res, rc = script("ship_ticket", run, ident, rest.split(" ")[1])
                 out.append(res)
                 moved |= rc == 0
+            elif (act == "ship" and remote and REMOTE_AGENT.exists()
+                  and rest.split(" ")[1:2] in (["review"], ["re-review"])):
+                launches += start_review(run, ident, rest.split(" ")[1], re.search(r"pr=(\d+)", rest).group(1))
             elif act == "dispatch":
                 res, rc = script("start_task", run, ident)
                 out.append(res)
@@ -563,6 +588,124 @@ def wait(run, remote, out, ship=True, timeout=WAIT_SECS):
             return
         while time.monotonic() < deadline and not any(ended(run, i) for i in flying):
             time.sleep(POLL_SECS)
+
+
+def start_review(run, tt, kind, pr):
+    """Prepares and starts, detached, the remote reviewers of ticket `tt`'s PR `pr` (`kind` `review` or
+    `re-review`) as review-pr step 3 **Remotely** says: a worktree at the PR's head, `review_prompt.py --remote`, and
+    `remote-agent` for the `pr-reviewer` (`review-<pr>-<sha7>`), plus the `security-reviewer` (`security-<pr>-<sha7>`)
+    on a ticket review `tier.py` calls high. Returns its lines; on a refusal, a `FAIL` line and a `.local` marker so the
+    orchestrator runs that review here."""
+    path = runfolder.ticket_file(run, tt)
+    text = path.read_text(encoding="utf-8")
+    info = runfolder.run_info(run)
+    repo = core.resolve(info["Repo"])
+    d = decisions.load(run)
+    base = (d.get("base") if d else None) or info["Default"]
+    branch = runfolder.header(text, "Branch")
+    log = open(run / "logs" / f"{tt}-remote-review.log", "a", encoding="utf-8")
+    with log:
+        head = git(repo, "rev-parse", branch)
+        stem = f"{pr}-{head[:7]}"
+        marker = run / "remote" / f"review-{stem}.local"
+
+        def refuse(why):
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(why + "\n", encoding="utf-8")
+            return [f"FAIL {tt} remote-review {why}: run this review here (ship.md)"]
+
+        if marker.is_file():
+            return []
+        try:
+            posted = json.loads((run / "logs" / f"PR{pr}-review.json").read_text(encoding="utf-8")).get("commit_id")
+        except (OSError, ValueError, AttributeError):
+            posted = None
+        findings = run / "reviews" / f"{pr}-{(posted or '')[:7]}-findings.md"
+        if kind == "re-review" and not (posted and findings.is_file()):
+            return refuse(f"no-findings {findings.name}")
+        allowed = [a for a in (identity.human_login(repo, log), runfolder.header(text, "Opened by")) if a]
+        wt = run / "worktrees" / f"review-{stem}"
+        if not wt.is_dir() and git(repo, "worktree", "add", "-q", "--detach", str(wt), head) is None:
+            return refuse("worktree")
+        roles = ["review"]
+        if kind == "review":
+            since = git(wt, "merge-base", f"origin/{base}", "HEAD")
+            tier = subprocess.run([sys.executable, "-I", str(REVIEW_PR / "tier.py"), "--git", str(wt), since or ""],
+                                  capture_output=True, text=True)
+            if tier.stdout.split("\n", 1)[0].strip() == "high":
+                roles.append("security")
+        lines = []
+        for role in roles:
+            mode = "security" if role == "security" else ("re-review" if kind == "re-review" else "ticket")
+            name = f"{role}-{stem}"
+            folder = run / "reviews" / f"{stem}{'-security' if role == 'security' else ''}-remote"
+            argv = [sys.executable, "-I", str(REVIEW_PR / "review_prompt.py"), mode, "--pr", pr, "--worktree", str(wt),
+                    "--head", head, "--base", posted if kind == "re-review" else f"origin/{base}", "--run", str(run),
+                    "--task", str(path), *(["--findings", str(findings)] if kind == "re-review" else []),
+                    "--remote", str(folder)]
+            for login in allowed:
+                argv += ["--allow-author", login]
+            p = subprocess.run(argv, capture_output=True, text=True, cwd=str(repo))
+            log.write(f"$ {shlex.join(argv)}\n{p.stderr}")
+            if p.returncode:
+                reason = (p.stderr.strip().splitlines() or ["review_prompt"])[-1]
+                return lines + refuse(f"{name} {reason}")
+            prompt = run / "prompts" / f"{name}.md"
+            prompt.parent.mkdir(exist_ok=True)
+            prompt.write_text(p.stdout, encoding="utf-8")
+            args = ["--name", name, "--agent", (folder / "agent.txt").read_text(encoding="utf-8").strip()]
+            for line in (folder / "attach.txt").read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    args += ["--attach", line.strip()]
+            meta = {"ticket": tt, "role": "security" if role == "security" else "reviewer", "worktree": str(wt),
+                    "output": str(run / "reviews" / f"{stem}{'-security' if role == 'security' else ''}.json")}
+            (run / "remote").mkdir(exist_ok=True)
+            (run / "remote" / f"{name}.meta").write_text(json.dumps(meta), encoding="utf-8")
+            lines.append(start_remote(run, name, args + [f"@{prompt}", str(wt)], cwd=repo).replace(
+                f"remote {name} started", f"remote {tt} {role} started name={name}"))
+        return lines
+
+
+def collect_review(run, name, out):
+    """A detached remote reviewer `name` that ended: `remote-agent result` saved to `remote/<name>.json` (its cost),
+    its report copied to the review's output file and checked, rendered for the triage; its worktree removed once no
+    reviewer of that head is left. Any failure prints a `FAIL` line and a `.local` marker, so the review runs here."""
+    f = remote_files(run, name)
+    meta = json.loads(f["pid"].with_suffix(".meta").read_text(encoding="utf-8"))
+    code = f["exit"].read_text(encoding="utf-8").strip() if f["exit"].is_file() else "lost"
+    for k in ("pid", "exit", "out"):
+        f[k].unlink(missing_ok=True)
+    f["pid"].with_suffix(".meta").unlink()
+    repo = core.resolve(runfolder.run_info(run)["Repo"])
+    res = subprocess.run([str(REMOTE_AGENT), "result", name], capture_output=True, text=True, cwd=str(repo))
+    report = None
+    if res.returncode == 0:
+        (run / "remote" / f"{name}.json").write_text(res.stdout, encoding="utf-8")
+        try:
+            report = Path(json.loads(res.stdout).get("report_path") or "")
+        except (ValueError, AttributeError):
+            report = None
+    stem = name.split("-", 1)[1]
+    ok = code in ("0", "3") and report and report.is_file() and report.read_text(encoding="utf-8").strip()
+    if ok:
+        shutil.copyfile(report, meta["output"])
+        check = subprocess.run([sys.executable, "-I", str(PROTOCOL / "check.py"), meta["role"], "output",
+                                meta["output"]], capture_output=True, text=True)
+        line = (check.stdout.strip().splitlines() or ["FAIL check no-output"])[-1]
+        out.append(line)
+        if line.startswith("OK "):
+            view = subprocess.run([sys.executable, "-I", str(PROTOCOL / "render.py"), meta["role"], meta["output"]],
+                                  capture_output=True, text=True)
+            out.extend(view.stdout.splitlines())
+    else:
+        tail = [ln for ln in (f["log"].read_text(encoding="utf-8", errors="replace").splitlines()
+                              if f["log"].is_file() else []) if ln.strip()][-3:]
+        out.append(f"FAIL {meta['ticket']} remote-exit {code}: {' | '.join(tail) or 'no report'} log={f['log']}"
+                   " (ship.md: run this review here)")
+        Path(meta["output"]).unlink(missing_ok=True)
+        (run / "remote" / f"review-{stem}.local").write_text(f"{name} exit {code}\n", encoding="utf-8")
+    if not any((run / "remote" / f"{who}-{stem}.pid").is_file() for who in ("review", "security")):
+        git(repo, "worktree", "remove", "--force", meta["worktree"])
 
 
 def ended(run, ident):
