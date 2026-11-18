@@ -5,6 +5,7 @@ Usage: python3 -I next.py <run>
        python3 -I next.py <run> --go [--no-ship]
        python3 -I next.py <run> --returned <TT-NN> [--title <subject>] [--no-ship] [< message]
        python3 -I next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>] [--no-ship]
+       python3 -I next.py <run> --wait [--no-ship]
        python3 -I next.py <run> --triaged <TT> fix|none
 
 Prints one line per action, most urgent first, each `<action> <id> [details]  (<step file>)`, the step file under
@@ -35,7 +36,8 @@ build at once, in this order:
   dispatch <TT-NN> [hub]   a ready task of a building ticket: blockers done, Writes disjoint from every task
                            in flight or dispatched above, while a slot is free             build.md
   ship <TT> open|review|triage|re-review|merge   a building ticket whose tasks are all done          ship.md
-  wait <id> [why]      a task in flight with no output yet, or a ticket waiting on a human or another PR
+  wait <id> [why]      a task in flight with no output yet (`remote`: a run `--go` started, `--wait` collects it),
+                       or a ticket waiting on a human or another PR
   clean run / report run   once nothing is left to build or start                        finish.md
 
 The slots are `decisions.md`'s `parallel:` (default 1); every in-progress task without an output holds one. A
@@ -53,8 +55,14 @@ overrides it), `merge` (`merge_task.py`) once no agent waits to be started, and 
 runs `ship merge` while `unguarded` finds clauses: the line is left for the orchestrator, naming them. Each
 script's line is printed as it ran.
 A prepared task prints `agent <TT-NN> prompt=<file> description=<text>` (start an `epic-implementer` with the file's
-text) or `remote <TT-NN> args=<arguments>` (run `remote-agent` with them in the background, its stdout to
-`<run>/reports/<TT-NN>.json`); then the actions left, as without `--go`. A script's `FAIL` stops that action and is
+text) or, remotely, `remote <TT-NN> started log=<file>`: `--go` started `remote-agent` with the prompt's arguments
+itself, detached, its stdout to `<run>/remote/<TT-NN>.out`, stderr to `.log` and exit code to `.exit` beside it, its
+pid in `.pid` (without `~/.agents/bin/remote-agent`, `remote <TT-NN> args=<arguments>`: run it in the background,
+its stdout to `<run>/reports/<TT-NN>.json`); then the actions left, as without `--go`. Every `--go`, `--returned`,
+`--reviewed` and `--wait` first collects each detached run that ended: on exit 0 or 3 its output becomes
+`reports/<TT-NN>.json`, checked and finished as `--returned` does; any other exit, or a wrapper gone with no exit code
+(`lost`), prints `FAIL <TT-NN> remote-exit <code>: <its last stderr lines> log=<file>` and leaves the task to the
+orchestrator. A script's `FAIL` stops that action and is
 printed with its log; its step file says what to do.
 
 `--returned <TT-NN>` is `--go` after a task's agent returned: `report_check.py` on the final message (stdin; for a
@@ -62,14 +70,21 @@ task whose latest prompt was a remote one, the saved output, `--from-report`, an
 (`--title`, when given, is the commit subject), then `--go`. A first `brief-violation` writes the reissue prompt
 (`task_prompt.py --reissue`) and prints it as an `agent` or `remote` line; a second prints the `FAIL` alone.
 
+`--wait` is `--go`, then, while every action left is a `wait` line and a detached run is in flight, waits for one to
+end and does `--go` again, for up to `BUILD_EPIC_WAIT_SECS` seconds (default 540, under a 10-minute shell timeout);
+it returns at the first `FAIL` or the first line that is not a `wait`.
+
 `--reviewed <TT> <output>` is `--go` after a ticket's reviewer returned: `post_review.py` posts the output on the
 ticket's PR (`--base`, default `origin/<the run's base>`; `--note` passes through) and prints its line, then the
 output rendered (`render.py`, `security` for a `-security.json` output) for the triage, then `--go`.
 """
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -79,6 +94,9 @@ from steplib import ci, core, decisions, guard, runfolder, taskwt  # noqa: E402
 
 PLAN_CHECK = Path(__file__).resolve().parents[1] / "plan_check.py"
 DONE_LIKE = ("merged", "in-review", "claimed")
+REMOTE_AGENT = Path.home() / ".agents" / "bin" / "remote-agent"
+WAIT_SECS = int(os.environ.get("BUILD_EPIC_WAIT_SECS") or 540)  # under a 10-minute shell timeout
+POLL_SECS = 3
 
 
 def git(repo, *args):
@@ -214,6 +232,8 @@ def build_actions(run, d, slots):
             if not runfolder.header(text, "Finished"):
                 if reported and fresh:
                     finish.append(f"finish {ident}  (build.md)")
+                elif (run / "remote" / f"{ident}.pid").is_file():
+                    wait.append(f"wait {ident} remote  (build.md)")
                 else:
                     wait.append(f"wait {ident} implementer")
                 continue
@@ -258,6 +278,7 @@ HOW = {
               "<ticket branch> --run <run> --task <task file> --output <run>/reviews/<id>-<sha7>.json`; post nothing",
     "merge": "`next.py <run> --go` merges it", "start": "`next.py <run> --go` starts it",
     "dispatch": "`next.py <run> --go` prepares it",
+    "wait": "a remote run `next.py <run> --go` started: `next.py <run> --wait` collects it once it ends",
     "open": "`next.py <run> --go` opens it", "ship-merge": "`next.py <run> --go` merges it",
     "ship-review": "a `pr-reviewer` on `review_prompt.py ticket --pr <n>` (plus a `security-reviewer` when `tier.py` "
                    "says high), then `next.py <run> --reviewed <id> <output>`",
@@ -344,16 +365,81 @@ def script(name, *args, stdin=None):
 
 
 def launch(run, ident, remote, *extra):
-    """Writes the prompt of task `ident` and returns its launch line, or the FAIL line."""
+    """Writes the prompt of task `ident` and returns its launch line, or the FAIL line. A remote one is started here,
+    detached (`start_remote`), when `remote-agent` is installed."""
     line, rc = script("task_prompt", run, ident, *(["--remote"] if remote else []), *extra)
     if rc or not line.startswith("OK "):
         return line
     fields = line.split(" ", 3)
     if fields[2] == "remote":
-        return f"remote {ident} {fields[3][fields[3].index('args='):]}  (build.md)"
+        args = fields[3][fields[3].index("args=") + 5:]
+        if REMOTE_AGENT.exists():
+            return start_remote(run, ident, shlex.split(args))
+        return f"remote {ident} args={args}  (build.md)"
     prompt = fields[3].split(" ")[0]
     title = taskwt.title(runfolder.task_file(run, ident))
     return f"agent {ident} {prompt} description=implement: {ident} {title}  (build.md)"
+
+
+def remote_files(run, ident):
+    """The files of task `ident`'s detached remote run under `<run>/remote/`: its pid, its exit code once it ended,
+    its stdout (the agent's output) and its stderr (progress, the `transcript:` line among it)."""
+    base = run / "remote" / ident
+    return {k: base.with_name(f"{ident}.{k}") for k in ("pid", "exit", "out", "log")}
+
+
+def start_remote(run, ident, args):
+    """Starts `remote-agent <args>` detached from this call, its stdout to `remote/<id>.out`, stderr to
+    `remote/<id>.log`, and its exit code to `remote/<id>.exit` once it ends; returns its `started` line."""
+    f = remote_files(run, ident)
+    f["pid"].parent.mkdir(parents=True, exist_ok=True)
+    for k in ("exit", "out"):
+        f[k].unlink(missing_ok=True)
+    wrapper = '"$@" >"$OUT" 2>"$LOG"; echo $? >"$EXIT.tmp" && mv "$EXIT.tmp" "$EXIT"'
+    env = dict(os.environ, OUT=str(f["out"]), LOG=str(f["log"]), EXIT=str(f["exit"]))
+    p = subprocess.Popen(["/bin/sh", "-c", wrapper, "sh", str(REMOTE_AGENT), *args], cwd=str(run / "worktrees" / ident),
+                         env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    f["pid"].write_text(f"{p.pid}\n", encoding="utf-8")
+    return f"remote {ident} started log={f['log']}  (build.md)"
+
+
+def in_flight(run):
+    """The ids of detached remote runs not yet collected."""
+    return sorted(p.stem for p in (run / "remote").glob("*.pid")) if (run / "remote").is_dir() else []
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def collect(run, out):
+    """For each detached remote run that ended: its output moved to `reports/<id>.json` and checked, then the task
+    finished (exit 0 or 3), or a `FAIL <id> remote-exit <code>: <its last stderr lines>` for the orchestrator to act on
+    as remote-subagents step 4 says. Returns whether a task finished."""
+    moved = False
+    for ident in in_flight(run):
+        f = remote_files(run, ident)
+        if not ended(run, ident):
+            continue
+        # no exit code: the wrapper itself is gone (a reboot, a kill), so none will come
+        code = f["exit"].read_text(encoding="utf-8").strip() if f["exit"].is_file() else "lost"
+        f["pid"].unlink()
+        f["exit"].unlink(missing_ok=True)
+        if code in ("0", "3") and f["out"].is_file():
+            os.replace(f["out"], run / "reports" / f"{ident}.json")
+            moved |= check_finish(run, ident, True, None, None, out)
+            continue
+        tail = [ln for ln in (f["log"].read_text(encoding="utf-8", errors="replace").splitlines()
+                              if f["log"].is_file() else []) if ln.strip()][-3:]
+        out.append(f"FAIL {ident} remote-exit {code}: {' | '.join(tail) or 'no stderr'} log={f['log']}")
+    return moved
 
 
 def go(run, remote, out, ship=True):
@@ -365,8 +451,8 @@ def go(run, remote, out, ship=True):
         if not d or (d.get("approved") or "").strip() != "yes":
             return
         slots = int(d.get("parallel") or 1)
+        moved = collect(run, out)
         lines = build_actions(run, d, slots)
-        moved = False
         launches = []
         for line in lines:
             act, _, rest = line.partition(" ")
@@ -433,24 +519,61 @@ def run_remote(run, flags):
     return bool(d) and (d.get("remote") or "").strip() == "on"
 
 
-def returned(run, ident, remote, title, message, out, ship=True):
-    """`--returned`: the checks and finish after a task's agent returned, then `go`; `remote` is where the task
-    ran."""
+def check_finish(run, ident, remote, title, message, out):
+    """`report_check.py` on a returned task's output, then `finish_task.py`; `remote` is where the task ran.
+    Returns whether it finished."""
     args = [run, ident] + (["--from-report"] if remote else [])
     res, rc = script("report_check", *args, stdin=None if remote else message)
     out.append(res)
     if rc:
         if "brief-violation" in res and not list((run / "prompts").glob(f"{ident}-*-output.json")):
             out.append(launch(run, ident, remote, "--reissue"))
-        return
+        return False
     if not remote:
         capped = Path.home() / ".agents" / "bin" / "capped"
         if capped.exists():  # an agent's capped commands can outlive it: stop them before committing its work
             subprocess.run([str(capped), "stop", str(run / "worktrees" / ident)], capture_output=True)
     res, rc = script("finish_task", run, ident, *(["--title", title] if title else []))
     out.append(res)
-    if rc == 0:
+    return rc == 0
+
+
+def returned(run, ident, remote, title, message, out, ship=True):
+    """`--returned`: the checks and finish after a task's agent returned, then `go`; `remote` is where the task
+    ran."""
+    for k in ("pid", "exit", "out"):  # a detached run the orchestrator collected itself
+        remote_files(run, ident)[k].unlink(missing_ok=True)
+    if check_finish(run, ident, remote, title, message, out):
         go(run, run_remote(run, []), out, ship)
+
+
+def wait(run, remote, out, ship=True, timeout=WAIT_SECS):
+    """`--wait`: `go`, then, while every action left is a `wait` and a detached remote run is in flight, polls until
+    one ends and does `go` again (which collects it), for up to `timeout` seconds."""
+    deadline = time.monotonic() + timeout
+    while True:
+        go(run, remote, out, ship)
+        d = decisions.load(run)
+        slots = int(d.get("parallel") or 1) if d else 1
+        left = setup_action(run, d, slots) or build_actions(run, d, slots)
+        if any(ln.startswith("FAIL ") for ln in out) or not all(ln.startswith("wait ") for ln in left):
+            return
+        flying = in_flight(run)
+        if not flying or time.monotonic() >= deadline:
+            return
+        while time.monotonic() < deadline and not any(ended(run, i) for i in flying):
+            time.sleep(POLL_SECS)
+
+
+def ended(run, ident):
+    """Whether task `ident`'s detached run ended: its exit code written, or its wrapper process gone."""
+    f = remote_files(run, ident)
+    if f["exit"].is_file():
+        return True
+    try:
+        return not alive(int(f["pid"].read_text(encoding="utf-8").strip()))
+    except (OSError, ValueError):
+        return True
 
 
 def reviewed(run, tt, path, base, note, remote, out, ship=True):
@@ -487,7 +610,7 @@ def main(argv):
         print(line)
         return code
     flags = argv[1:]
-    if flags and flags[0] in ("--go", "--returned", "--reviewed"):
+    if flags and flags[0] in ("--go", "--returned", "--reviewed", "--wait"):
         remote = run_remote(run, flags)
         ship = "--no-ship" not in flags
         title = flags[flags.index("--title") + 1] if "--title" in flags[:-1] else None
@@ -500,8 +623,10 @@ def main(argv):
             reviewed(run, flags[1], flags[2], opt.get("--base"), opt.get("--note"), remote, out, ship)
         elif flags[0] == "--go":
             go(run, remote, out, ship)
+        elif flags[0] == "--wait":
+            wait(run, remote, out, ship)
         else:
-            print("FAIL run usage: next.py <run> --returned <TT-NN> [--title <subject>]")
+            print("FAIL run usage: next.py <run> --returned <TT-NN> [--title <subject>] | --wait")
             return 2
         d = decisions.load(run)
         slots = int(d.get("parallel") or 1) if d else 1
@@ -512,7 +637,7 @@ def main(argv):
         print("\n".join(out + [how(line, run_remote(run, []), held) for line in left]))
         return 0
     if len(flags) != 0:
-        print("FAIL run usage: next.py <run> [--go | --returned <TT-NN> ... | --triaged <TT> fix|none]")
+        print("FAIL run usage: next.py <run> [--go | --wait | --returned <TT-NN> ... | --triaged <TT> fix|none]")
         return 2
     d = decisions.load(run)
     slots = int(d.get("parallel") or 1) if d else 1
