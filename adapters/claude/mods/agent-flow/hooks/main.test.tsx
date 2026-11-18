@@ -143,18 +143,32 @@ test('a failed agent shows why, and the needs-you strip names it', async ($, on)
   expect(out).toContain('draft the changelog')
 })
 
-test('the status line names running agents, counts failed ones, and is set only when it changes', async ($, on) => {
+// The band above the prompt as the terminal asks for it: its texts joined, or null when the mod passes.
+async function bandDrawn($: any): Promise<string | null> {
+  const ui = await $.ui.mount({
+    plugin: 'agent-flow', component: 'AbovePrompt', surface: 'terminal',
+    props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 } },
+  })
+  const texts = (await ui.findAll({})).filter((el: any) => el.type === 'Text').map((el: any) => el.text)
+  await ui.unmount()
+  return texts.length ? texts.join('') : null
+}
+
+test('the band above the prompt names running agents with a turning spinner, counts failed ones and the ended bar; no status line', async ($, on) => {
   const w = engine(on)
   await start($)
+  expect(await bandDrawn($)).toBeNull()
   await spawn($, 'one')
   await spawn($, 'two')
   await w.clock.advance(1000)
   await endTurn($, 'agent-2', 'error')
   await w.clock.advance(500)
-  expect(w.status.filter(s => s !== undefined)).toContain('● one · ✗ 1 failed  ▰▰▰▱▱ 1/2')
-  const set = w.status.length
-  await w.clock.advance(1000)
-  expect(w.status.length).toBe(set)
+  const a = await bandDrawn($)
+  expect(a).toContain(' one  ·  ✗ 1 failed')
+  expect(a).toContain('▰▰▰▰▱▱▱▱ 1/2')
+  await w.clock.advance(125)
+  expect(await bandDrawn($)).not.toBe(a)
+  expect(w.status.filter(s => s !== undefined)).toEqual([])
 })
 
 test('four agents of one type draw as one squad box, and x expands it', async ($, on) => {

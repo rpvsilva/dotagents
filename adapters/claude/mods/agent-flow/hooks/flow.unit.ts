@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { costSum, ctxColor, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, statusText, summarize, WAIT_MS } from './flow.ts'
+import { costSum, ctxColor, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, band, summarize, WAIT_MS } from './flow.ts'
 
 const T = 1_800_000_000_000
 const run = (evs: FlowEvent[], g: Graph = emptyGraph()) => evs.reduce(reduce, g)
@@ -116,28 +116,30 @@ test('models read as people say them, coloured by family, Bedrock ids too', () =
   assert.deepEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2', 'x'].map(modelColor), ['claude', 'suggestion', '#5cc9a7', 'merged', 'text'])
 })
 
-test('the status line counts running, waiting and failed agents of this turn; none when there is nothing to say', () => {
-  assert.equal(statusText(emptyGraph(), T), undefined)
+test('the band counts running, waiting and failed agents of this turn and how many ended; null when there is nothing to say', () => {
+  assert.equal(band(emptyGraph(), T), null)
   const g = run([
     { kind: 'turnStart', at: T, agent: MAIN }, spawn('a1', T), spawn('a2', T), spawn('a3', T),
     { kind: 'check', at: T, agent: 'a2', toolUseId: 't' },
     { kind: 'turnEnd', at: T + 1, agent: 'a3', reason: 'error', outputTokens: null },
   ])
-  assert.equal(statusText(g, T + WAIT_MS), '● task a1 · ◐ 1 needs you · ✗ 1 failed  ▰▰▱▱▱ 1/3')
+  assert.deepEqual(band(g, T + WAIT_MS), {
+    names: [{ id: 'a1', name: 'task a1', model: 'claude-sonnet-5-5' }], running: 1, waiting: 1, remote: 0, failed: 1, ended: 1, total: 3,
+  })
 })
 
-test('the status line names up to 4 running agents by task, one line each cut at 24 columns; past 4 it counts them', () => {
-  const one = run([{ kind: 'turnStart', at: T, agent: MAIN }, spawn('a1', T, { desc: 'review the\nlogin   flow and its tests' })])
-  assert.equal(statusText(one, T), '● review the login flow a…')
+test('the band names up to 4 running agents by task, one line each cut at 32 columns; past 4 it counts them', () => {
+  const one = run([{ kind: 'turnStart', at: T, agent: MAIN }, spawn('a1', T, { desc: 'review the\nlogin   flow, its tests and the docs' })])
+  assert.equal(band(one, T)!.names[0]!.name, 'review the login flow, its test…')
   const ids = ['a1', 'a2', 'a3', 'a4', 'a5']
   const four = run([{ kind: 'turnStart', at: T, agent: MAIN }, ...ids.slice(0, 4).map(id => spawn(id, T))])
-  assert.equal(statusText(four, T), '● task a1 · task a2 · task a3 · task a4  ▱▱▱▱▱ 0/4')
+  assert.deepEqual(band(four, T)!.names.map(n => n.name), ['task a1', 'task a2', 'task a3', 'task a4'])
   const five = run([
     { kind: 'turnStart', at: T, agent: MAIN }, ...ids.map(id => spawn(id, T)), spawn('a6', T), spawn('a7', T),
-    { kind: 'turnEnd', at: T + 1, agent: 'a6', reason: 'done', outputTokens: null },
-    { kind: 'turnEnd', at: T + 1, agent: 'a7', reason: 'done', outputTokens: null },
+    { kind: 'turnEnd', at: T + 1, agent: 'a6', reason: 'answer', outputTokens: null },
+    { kind: 'turnEnd', at: T + 1, agent: 'a7', reason: 'answer', outputTokens: null },
   ])
-  assert.equal(statusText(five, T + 1), '● 5 running  ▰▱▱▱▱ 2/7')
+  assert.deepEqual(band(five, T + 1), { names: [], running: 5, waiting: 0, remote: 0, failed: 0, ended: 2, total: 7 })
 })
 
 test('a context reading sets used and window; the same reading again changes nothing; an unknown agent is ignored', () => {
