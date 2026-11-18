@@ -14,9 +14,9 @@ You are the **orchestrator**. You run scripts, start subagents and talk to the h
 
 The run folder is `~/.agents/runs/<repo>/<epic-slug>/` (`<repo>` the repo folder's name, `<epic-slug>` the tracker ID plus a few words, `gh-12-due-dates`); `<run>` below. Every script is `python3 -I ~/.agents/skills/build-epic/scripts/<name>.py <run> ...`.
 
-1. Run `next.py <run>`. Each line is one action, most urgent first: `<action> <id> [details]  (<step file>)`.
-2. Do each action as its step file under [steps/](steps/) says. Read a step file the first time an action names it, and again after your context was compacted or cleared; never read the step files ahead of time.
-3. Repeat from 1 once an action completes or a subagent returns. `wait` lines need nothing: a subagent is still running, or the ticket waits on a human or another PR.
+1. Run `next.py <run>` until the run is approved; from then on `next.py <run> --go` (`--remote` when remote is on), which does every action needing no decision itself (starting tickets, preparing tasks, finishing and merging them) and prints each script's line. Each other line is one action, most urgent first: `<action> <id> [details]  (<step file>)`.
+2. Start each `agent <TT-NN> prompt=<file> description=<text>` line's `epic-implementer` with the file's text, and run each `remote <TT-NN> args=<arguments>` line's `remote-agent` with those arguments in the background, its stdout to `<run>/reports/<TT-NN>.json`. Do each other action as its step file under [steps/](steps/) says; read a step file the first time an action names it, and again after your context was compacted or cleared; never read the step files ahead of time.
+3. When a task's agent returns, pipe its final message to `next.py <run> --returned <TT-NN> [--title "<subject in the commit convention>"]` (a remote one: `--returned <TT-NN> --remote`, once `remote-agent` exits 0 or 3), which checks, finishes and merges it and prepares what that frees, then go to 2. Repeat from 1 when another action completes. `wait` lines need nothing: a subagent is still running, or the ticket waits on a human or another PR.
 
 Do every action `next.py` prints before running it again, starting subagents for all of them at once where the step says so. When `next.py` and a step file disagree, trust `next.py` and tell the human the line.
 
