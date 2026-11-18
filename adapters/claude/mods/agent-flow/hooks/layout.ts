@@ -6,7 +6,7 @@
 // type fold into a squad box; when a row is still too wide, its finished siblings fold into `✓ N done`, and when even
 // that does not fit, the caller lists the running agents instead.
 
-import { type Agent, costOf, costSum, ctxColor, ctxShare, fmtTokens, fmtUsd, gauge, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus } from './flow.ts'
+import { type Agent, costOf, costSum, ctxColor, ctxShare, fmtTokens, fmtUsd, gauge, type Graph, MAIN, modelColor, modelLabel, printable, shownStatus, SPIN } from './flow.ts'
 import { ENTER_MS, phaseOf, type Phase, schedule } from './lifecycle.ts'
 import { costLine } from './remote.ts'
 
@@ -27,7 +27,6 @@ export const H = 6
 export const GAP = 2
 const VG = 3 // rows between a box and its children's: stub, bar, arrow
 export const TWEEN_MS = 320
-const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 const FAINT = 'inactive'
 
 type Node = {
