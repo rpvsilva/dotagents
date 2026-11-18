@@ -18,7 +18,8 @@ REVIEW_OUTPUT = json.dumps({"status": "done", "mode": "ticket", "findings": [], 
 REPO = SCRIPTS.parents[2]
 
 # `gh pr view` answers like GitHub: the PR's head is the ticket branch's tip on origin, its state `answers/pr-state`
-# (default MERGED), its base `answers/pr-base` (default main). Every other call goes to the testkit stub.
+# (default MERGED), its base `answers/pr-base` (default main), its author `answers/pr-author` (default none). Every
+# other call goes to the testkit stub.
 PR_VIEW = r'''#!{python} -IS
 import os, sys
 d = os.environ["GH_STUB_DIR"]
@@ -40,8 +41,10 @@ def answer(name, default):
 
 head = subprocess.run(["git", "--git-dir", {origin!r}, "rev-parse", "feat/t"], capture_output=True, text=True,
                       encoding="utf-8")
-print(json.dumps({{"state": answer("pr-state", "MERGED"), "headRefOid": head.stdout.strip(),
-                  "baseRefName": answer("pr-base", "main")}}))
+view = {{"state": answer("pr-state", "MERGED"), "headRefOid": head.stdout.strip(), "baseRefName": answer("pr-base", "main")}}
+if answer("pr-author", ""):
+    view["author"] = {{"login": answer("pr-author", "")}}
+print(json.dumps(view))
 '''
 
 TICKET = "# 01: Ship JSON things\nStatus: building\nIssue: #7, #8\nBranch: feat/t\nBlocked by: none\n"
@@ -182,6 +185,14 @@ class ShipOpenTest(Base):
         self.assertTrue((self.kit.run_dir / "worktrees" / "01").is_dir())
         self.assertEqual(self.calls("pr", "ready"), [])
 
+    def test_a_pr_it_opened_records_its_opener_and_one_it_found_does_not(self):
+        # next.py lets a remote reviewer run only on a PR by the human or the run's identity: this is the identity.
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
+        (self.kit.answers / "pr-author").write_text("app/agent", encoding="utf-8")
+        self.assertEqual(self.ship("open"), "OK 01 open pr=30")
+        self.assertEqual(runfolder.get(self.ticket, "Opened by"), "app/agent")
+
     def test_open_pushes_the_local_ticket_branch_and_leaves_its_worktree_detached(self):
         clone = self.kit.clone
         self.kit.git("branch", "--no-track", "feat/t", "origin/feat/t", cwd=clone)
@@ -217,6 +228,7 @@ class ShipOpenTest(Base):
         self.assertEqual(self.calls("pr", "edit")[0][:3], ["pr", "edit", "21"])
         self.assertEqual(self.calls("pr", "create"), [])
         self.assertEqual(runfolder.get(self.ticket, "PR"), "https://github.com/o/r/pull/21")
+        self.assertIsNone(runfolder.get(self.ticket, "Opened by"))
 
     def test_opens_against_the_base_decisions_md_names(self):
         (self.kit.run_dir / "decisions.md").write_text("# Decisions\nbase: `integ`\n", encoding="utf-8")
@@ -432,9 +444,9 @@ class IdentityTest(Base):
         self.kit.answer("pr-list", out="[]")
         self.kit.answer("pr-create", out="https://github.com/o/r/pull/30\n")
         self.assertEqual(self.one_line(self.kit.step(SHIP, self.kit.run_dir, "01", "open")), "OK 01 open pr=30")
-        tokens = self.kit.gh_tokens()
-        self.assertEqual(len(tokens), 3)
-        self.assertEqual(len(set(tokens)), 3, tokens)
+        tokens = self.kit.gh_tokens()  # pr list twice, pr create, pr view (the opener)
+        self.assertEqual(len(tokens), 4)
+        self.assertEqual(len(set(tokens)), 4, tokens)
         self.assertTrue(all(t.startswith("tok") for t in tokens), tokens)
         log = (self.kit.run_dir / "logs" / "01-ship_ticket.log").read_text(encoding="utf-8")
         self.assertNotIn("tok1", log)
