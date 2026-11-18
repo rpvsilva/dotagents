@@ -472,10 +472,24 @@ class ListsSkippedTools(SetupCase):
         for tool in ("node", "shellcheck", "docker"):
             self.assertRegex(skips, rf"(?m)^\| {tool} \|")
 
-    def test_a_red_suite_still_lists_its_skips(self):
+    def test_a_red_suite_fails_setup_and_still_lists_its_skips(self):
         self.write_map("echo '== tests/zsh.test.sh (0s)'; echo 'zsh.test.sh: skipped (zsh is not installed)'; exit 1")
-        self.assertTrue(self.setup().endswith(" skips=1 caps=1500MB,300s remote=off"))
+        self.assertRegex(self.setup(ok=False), r"^FAIL run red-base echo .* rc=1 \(log: ")
         self.assertRegex((self.run_dir / "skips.md").read_text(encoding="utf-8"), r"(?m)^\| zsh \|")
+
+    def test_a_base_with_no_tests_yet_is_not_red(self):
+        self.write_map("echo 'NO TESTS RAN'; exit 5")
+        self.assertTrue(self.setup().startswith("OK run set up "))
+
+    def test_a_suite_that_cannot_run_on_the_base_fails_setup_until_the_human_accepts_it(self):
+        # The #16 baseline: the base's suite exited 127 (`capped` not found) and setup still printed OK.
+        self.write_map("no-such-tool --all")
+        self.assertRegex(self.setup(ok=False), r"^FAIL run red-base no-such-tool --all rc=127 \(command not found\)")
+        self.assertIn("test_command", decisions.load(self.run_dir).headers)
+        p = self.kit.step(SCRIPTS / "decide.py", self.run_dir, "set", "red_base", "accept")
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertTrue(self.setup().startswith("OK run set up "))
+        self.assertTrue(self.setup().startswith("OK run set up "))  # recorded once: a rerun goes on too
 
     def test_suites_run_in_a_throwaway_worktree_of_the_base_not_the_checkout(self):
         where = self.kit.tmp / "where"

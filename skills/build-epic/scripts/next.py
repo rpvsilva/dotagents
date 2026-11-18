@@ -160,7 +160,9 @@ def setup_action(run, d, slots):
     if not check.stdout.startswith("plan ok"):
         problems = len([line for line in check.stdout.splitlines() if line.strip()])
         return [f"plan revise problems={problems}  (plan.md)"]
-    if not get("test_command"):
+    red = re.search(r"^rc: *(\d+)", (run / "skips.md").read_text(encoding="utf-8"), re.MULTILINE) \
+        if (run / "skips.md").is_file() else None
+    if not get("test_command") or (red and red.group(1) != "0" and get("red_base") != "accept"):
         return ["setup run  (setup.md)"]
     if get("approved") != "yes":
         return ["approve run  (approve.md)"]
