@@ -44,6 +44,15 @@ test('a first read that came back full says older messages were left out, and ha
   assert.ok(l.lines.every(x => x.kind !== 'prompt'))
 })
 
+test("an agent's message drops its JSON (a task's outcome): all of it when that is all it is, else the JSON lines", () => {
+  const say = (text: string) => texts(messageLines({ role: 'assistant', text }, false))
+  assert.deepEqual(say('{"status":"done","files":["a.ts"]}'), [])
+  assert.deepEqual(say('{\n  "status": "done"\n}'), [])
+  assert.deepEqual(say('Built the parser.\n{"status": "done"}'), ['Built the parser.'])
+  assert.deepEqual(say('Counted {a} and [b].'), ['Counted {a} and [b].'])
+  assert.deepEqual(texts(messageLines({ role: 'user', text: '{"task": "go"}' }, true)), ['{"task": "go"}'])
+})
+
 test('lines are one printable line each, control characters dropped', () => {
   assert.deepEqual(texts(messageLines({ role: 'assistant', text: 'a\u001b[31mred\n\n  b  ' }, false)), ['a[31mred', 'b'])
   assert.deepEqual(texts(messageLines({ role: 'user', toolResults: [{ text: '' }] }, false)), ['⎿ (no output)'])

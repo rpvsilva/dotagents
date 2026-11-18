@@ -4,7 +4,7 @@
 // The scrolling (scrollLog, windowLines, appendLines) follows the remote-runs mod's transcript.ts; it is copied, not
 // imported, since each mod is installed as its own plugin.
 
-import { type Agent, findAgent, type Graph, MAIN, printable, shownStatus, summarize } from './flow.ts'
+import { type Agent, findAgent, type Graph, MAIN, printable, shownStatus, summarize, withoutJson } from './flow.ts'
 import type { Filter, Log, LogLine, View } from './state.d.ts'
 
 export type { Filter, Log, LogLine }
@@ -74,7 +74,8 @@ const linesOf = (text: string) =>
 /**
  * The lines one message draws as. A user message: the agent's prompt (`isFirst`) or a later message to it, and the
  * first line of each tool result (`⎿`, an error's in red), with how many lines it held. An assistant message: its
- * text, then each tool call (`▸ Bash npm test`).
+ * text less any JSON object in it (an outcome a skill's brief asks for, which the end line already says), then each
+ * tool call (`▸ Bash npm test`).
  */
 export function messageLines(m: Message, isFirst: boolean): LogLine[] {
   const out: LogLine[] = []
@@ -87,7 +88,7 @@ export function messageLines(m: Message, isFirst: boolean): LogLine[] {
     }
     return out
   }
-  for (const l of linesOf(m.text ?? '')) out.push({ kind: 'text', text: l })
+  for (const l of linesOf(withoutJson(m.text ?? ''))) out.push({ kind: 'text', text: l })
   for (const u of m.toolUses ?? []) {
     const text = `▸ ${oneLine(summarize(u.tool ?? 'tool', u.input ?? {}))}`
     // An Agent call that started an agent links to that agent's log.

@@ -343,3 +343,20 @@ export function statusText(g: Graph, now: number): string | undefined {
   const parts = [running && `● ${running} running`, waiting && `◐ ${waiting} needs you`, remote && `☁ ${remote} remote`, failed && `✗ ${failed} failed`].filter(Boolean)
   return parts.length ? parts.join(' · ') : undefined
 }
+
+/** `text` without a JSON object: the whole of it when it is one, else each line that is one. */
+export function withoutJson(text: string): string {
+  const isObject = (t: string) => {
+    try {
+      const v: unknown = JSON.parse(t.trim())
+      return v !== null && typeof v === 'object' && !Array.isArray(v)
+    } catch {
+      return false
+    }
+  }
+  if (isObject(text)) return ''
+  return text
+    .split('\n')
+    .filter(l => !isObject(l))
+    .join('\n')
+}
