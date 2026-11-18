@@ -1,6 +1,6 @@
-# Ship: `ship <TT> open|review|triage|re-review|merge`
+# Ship: `ship <TT> open|review|post|triage|re-review|merge`
 
-`next.py <run> --go` runs `open` and `merge` itself and prints their lines; the sections below say what those lines mean. When a ticket's reviewer returns (a remote one: its output copied to `<run>/reviews/<PR>-<sha7>.json` first), `next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>]` posts it, prints it rendered for the triage, and goes on as `--go`.
+`next.py <run> --go` runs `open` and `merge` itself and prints their lines; the sections below say what those lines mean. With remote on, it also starts a `review` or `re-review`'s reviewers itself (`remote <TT> review started name=<name> log=<file>`; see [Remotely](#remotely)). When a ticket's reviewer returns (a remote one: its output copied to `<run>/reviews/<PR>-<sha7>.json` first), `next.py <run> --reviewed <TT> <output> [--base <ref>] [--note <text>]` posts it, prints it rendered for the triage, and goes on as `--go`.
 
 ## `open`
 
@@ -9,6 +9,10 @@
 ## `review`
 
 The ticket's one deep review, covering all its tasks: follow [review-pr](../../review-pr/SKILL.md) steps 1-5 on the PR with `--mode ticket --run <run> --base origin/<the run's base> --task <ticket file>`: the default reviewer, plus the security reviewer only when the ticket's tier is `high`. A remote reviewer is named `review-<PR>-<sha7>` (`security-<PR>-<sha7>`); once it ends, write `remote-agent result <name>` to `<run>/remote/<name>.json` so telemetry counts its cost. Each review's output lands in `<run>/reviews/<PR>-<sha7>.json` (`-security.json`), and `next.py <run> --reviewed <TT> <output> [--note <your verification>]` posts it (review-pr's step 5, `post_review.py`), rendered from the output. `FAIL PR<n> post-denied <path>`, or a harness that denies running `post_review.py`: do not retry; the final report names the path. `FAIL PR<n> brief-violation <problems>`: the output broke its schema and nothing was posted; continue the reviewer once naming the problems, as the [Protocol](../../_shared/conventions.md#protocol) says.
+
+### Remotely
+
+With remote on, `next.py --go` does review-pr steps 2 and 3 **Remotely** itself for `review` and `re-review`: a worktree `<run>/worktrees/review-<PR>-<sha7>` at the PR's head, `tier.py` (a ticket review), `review_prompt.py --remote <run>/reviews/<PR>-<sha7>[-security]-remote/` with `--allow-author` the human's login and the ticket's `Opened by:` login, and `remote-agent` detached as `review-<PR>-<sha7>` (and `security-<PR>-<sha7>` when the tier is high). The ticket then shows `wait <TT> review remote`. `next.py --wait` collects each one that ends: `remote-agent result <name>` into `<run>/remote/<name>.json`, its report copied to `<run>/reviews/<PR>-<sha7>.json` (`-security.json`), checked (`OK reviewer done`) and rendered, and the worktree removed once both ended. Then it prints `ship <TT> post pr=<n> output=<file> [base=<head reviewed>]`: verify each finding (review-pr step 4), then `next.py <run> --reviewed <TT> <output> [--base <head reviewed>] [--note <your verification>]` for each output. `FAIL <TT> remote-review <why>` (its prompt refused, e.g. a PR by another author) or `FAIL <TT> remote-exit <code>: ...` (the run failed or left no report): `next.py` keeps a `<run>/remote/review-<PR>-<sha7>.local` marker and prints the `review` line again; run that review here, as review-pr step 3 says without **Remotely**.
 
 Then post each review a `Tier: high` task of the ticket had before it merged, the last one per task: `post_review.py <run> <PR> <run>/reviews/TT-NN-<sha7>.json --base <ticket-branch>`; always after the deep review, which must be the first review on the PR.
 

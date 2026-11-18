@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_ship import REVIEWS  # noqa: E402
 from testkit import SCRIPTS, Kit  # noqa: E402
+from steplib import runfolder  # noqa: E402
 
 NEXT = SCRIPTS / "next.py"
 REPO = SCRIPTS.parents[2]
@@ -219,8 +220,7 @@ class GoTest(unittest.TestCase):
                            input=self.implement("01-02", "y.txt"), capture_output=True, text=True, env=self.kit.env)
         review = [line for line in p.stdout.splitlines() if line.startswith("ship 01 review")]
         self.assertEqual(len(review), 1, p.stdout)
-        self.assertIn("(ship.md: remote is on: a remote `pr-reviewer`", review[0])
-        self.assertIn("remote-agent --name review-<n>-<sha7>", review[0])
+        self.assertIn("(ship.md: remote is on: `next.py <run> --go` starts its remote reviewers itself", review[0])
 
     def stub_remote(self, exit_code=0, sleep=0):
         """A `remote-agent` that edits `<name's last word>.txt` in the worktree, leaves it uncommitted as a remote run
@@ -274,6 +274,67 @@ class GoTest(unittest.TestCase):
         self.assertEqual(len(list((self.run / "remote").glob("*.pid"))), 2)
         for pid in (self.run / "remote").glob("*.pid"):
             os.killpg(int(pid.read_text(encoding="utf-8")), signal.SIGTERM)
+
+    def stub_remote_reviewer(self, exit_code=3):
+        """A `remote-agent` for reviewers: a run saves a clean review as its report and its `result.json`, exits
+        `exit_code`; `remote-agent result <name>` prints that result."""
+        state = self.kit.tmp / "remote-state"
+        state.mkdir(exist_ok=True)
+        report = json.dumps({"status": "done", "mode": "ticket", "findings": [], "checked": "every hunk",
+                             "process": [], "followups": []})
+        stub = self.kit.home / ".agents" / "bin" / "remote-agent"
+        stub.write_text("#!/bin/sh\n"
+                        f'S={state}\n'
+                        'if [ "$1" = result ]; then cat "$S/$2.json"; exit 0; fi\n'
+                        'echo "$*" >"$S/argv"\n'
+                        'while [ "$1" != "${1#--}" ]; do [ "$1" = --name ] && name=$2; shift 2; done\n'
+                        f"echo '{report}' >\"$S/$name.md\"\n"
+                        f'echo "{{\\"exit_code\\": {exit_code}, \\"report_path\\": \\"$S/$name.md\\"}}" >"$S/$name.json"\n'
+                        f"exit {exit_code}\n", encoding="utf-8")
+        stub.chmod(0o755)
+        return state
+
+    def ship_with_remote_review(self, exit_code=3):
+        self.kit.answer("pr-list", out="[]")
+        self.kit.answer("pr-create", out="https://github.com/o/r/pull/99\n")
+        self.next("--go")
+        self.next("--returned", "01-01", message=self.implement("01-01", "x.txt"))
+        self.remote_on()
+        state = self.stub_remote_reviewer(exit_code)
+        head = self.kit.git("--git-dir", str(self.kit.origin), "rev-parse", "feat/a")
+        self.kit.answer("pr-view", out=json.dumps({
+            "author": {"login": "app/agent"}, "title": "t", "body": "", "headRefOid": head, "baseRefName": "main",
+            "files": []}))
+        lines = self.next("--returned", "01-02", message=self.implement("01-02", "y.txt"))
+        head = self.kit.git("rev-parse", "feat/a", cwd=self.kit.clone)
+        return lines, state, head[:7]
+
+    def test_go_starts_the_remote_ticket_review_and_wait_collects_it_for_the_triage(self):
+        # e1b and e2 of #402: each remote review cost the orchestrator a prompt, a launch and a result call.
+        lines, state, head7 = self.ship_with_remote_review()
+        self.assertTrue(any(line.startswith("OK 01 open pr=99") for line in lines), lines)
+        self.assertIn(f"remote 01 review started name=review-99-{head7}", " ".join(lines))
+        self.assertEqual(runfolder.get(self.run / "tickets" / "01-a.md", "Opened by"), "app/agent")
+        lines = self.next("--wait")
+        argv = (state / "argv").read_text(encoding="utf-8")
+        self.assertIn("--agent pr-reviewer", argv)
+        self.assertIn(f"/worktrees/review-99-{head7}", argv)
+        output = self.run / "reviews" / f"99-{head7}.json"
+        self.assertIn("OK reviewer done", lines)
+        self.assertIn(f"ship 01 post pr=99 output={output}", lines)
+        self.assertTrue(output.is_file())
+        self.assertTrue((self.run / "remote" / f"review-99-{head7}.json").is_file())
+        self.assertFalse((self.run / "worktrees" / f"review-99-{head7}").exists())
+        prompt = (self.run / "prompts" / f"review-99-{head7}.md").read_text(encoding="utf-8")
+        self.assertIn('"remote": true', prompt)
+
+    def test_a_failed_remote_review_falls_back_to_a_review_here(self):
+        _, _, head7 = self.ship_with_remote_review(exit_code=1)
+        lines = self.next("--wait")
+        self.assertTrue(any(line.startswith("FAIL 01 remote-exit 1") for line in lines), lines)
+        self.assertIn("ship 01 review pr=99", lines)
+        self.assertTrue((self.run / "remote" / f"review-99-{head7}.local").is_file())
+        self.assertEqual(self.next("--go").count("ship 01 review pr=99"), 1)
 
     def test_a_first_brief_violation_writes_the_reissue_prompt(self):
         self.next("--go")

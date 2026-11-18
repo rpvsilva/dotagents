@@ -14,7 +14,9 @@ and `reports/*.checks.json`, then the tasks with their merge commits and accepta
 prose. When the repo has a template and the run cannot
 fill a section of it (a heading it does not know, or `Testing` with no saved suite results), it fails
 `empty-template-section <sections>` and sends nothing. Otherwise it edits the ticket's `PR:` (or the open PR from the
-ticket branch: a rerun), or opens one and records it as the ticket's `PR:` line. Prints `OK TT open pr=<n>`.
+ticket branch: a rerun), or opens one and records it as the ticket's `PR:` line, and its author (`gh pr view`: the
+run's identity) as `Opened by:`, the login `next.py` allows a remote reviewer for besides the human's. Prints
+`OK TT open pr=<n>`.
 
 `merge` reads the PR's real base (`baseRefName`). Into the default branch with the `merge_command` Setting unset, a
 repo with a `.review-gate.yml` fails `no-merge-rule`: a bare `gh pr merge` would land around the repo's gate. Otherwise
@@ -122,9 +124,22 @@ class Ship:
             if not m:
                 raise core.Fail("pr-create")
             number, url = m.group(1), m.group(0)
+            self.record_opener(number)
         if not line:
             runfolder.set_header(self.ticket, "PR", url)
         return "open", f"pr={number}"
+
+    def record_opener(self, number):
+        """Records the login that opened PR `number` (the run's identity, since this call created it) as the ticket's
+        `Opened by:` line: `next.py` lets a remote reviewer run only on a PR by the human or that login. Best effort:
+        no line when `gh pr view` does not say."""
+        res = gh.gh(["pr", "view", number, "--json", "author"], self.ctx.log, cwd=self.repo)
+        try:
+            login = json.loads(res.out).get("author", {}).get("login") if res.rc == 0 else None
+        except (ValueError, AttributeError):
+            login = None
+        if login:
+            runfolder.set_header(self.ticket, "Opened by", login)
 
     def gated(self):
         """True when the repo has a `.review-gate.yml`, on the default branch's tip on origin or in its checkout."""
