@@ -143,7 +143,7 @@ test('a failed agent shows why, and the needs-you strip names it', async ($, on)
   expect(out).toContain('draft the changelog')
 })
 
-test('the status line counts running and failed agents, and is set only when it changes', async ($, on) => {
+test('the status line names running agents, counts failed ones, and is set only when it changes', async ($, on) => {
   const w = engine(on)
   await start($)
   await spawn($, 'one')
@@ -151,7 +151,7 @@ test('the status line counts running and failed agents, and is set only when it 
   await w.clock.advance(1000)
   await endTurn($, 'agent-2', 'error')
   await w.clock.advance(500)
-  expect(w.status.filter(s => s !== undefined)).toContain('● 1 running · ✗ 1 failed')
+  expect(w.status.filter(s => s !== undefined)).toContain('● one · ✗ 1 failed  ▰▰▰▱▱ 1/2')
   const set = w.status.length
   await w.clock.advance(1000)
   expect(w.status.length).toBe(set)

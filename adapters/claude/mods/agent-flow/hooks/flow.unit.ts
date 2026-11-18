@@ -123,7 +123,21 @@ test('the status line counts running, waiting and failed agents of this turn; no
     { kind: 'check', at: T, agent: 'a2', toolUseId: 't' },
     { kind: 'turnEnd', at: T + 1, agent: 'a3', reason: 'error', outputTokens: null },
   ])
-  assert.equal(statusText(g, T + WAIT_MS), '● 1 running · ◐ 1 needs you · ✗ 1 failed')
+  assert.equal(statusText(g, T + WAIT_MS), '● task a1 · ◐ 1 needs you · ✗ 1 failed  ▰▰▱▱▱ 1/3')
+})
+
+test('the status line names up to 4 running agents by task, one line each cut at 24 columns; past 4 it counts them', () => {
+  const one = run([{ kind: 'turnStart', at: T, agent: MAIN }, spawn('a1', T, { desc: 'review the\nlogin   flow and its tests' })])
+  assert.equal(statusText(one, T), '● review the login flow a…')
+  const ids = ['a1', 'a2', 'a3', 'a4', 'a5']
+  const four = run([{ kind: 'turnStart', at: T, agent: MAIN }, ...ids.slice(0, 4).map(id => spawn(id, T))])
+  assert.equal(statusText(four, T), '● task a1 · task a2 · task a3 · task a4  ▱▱▱▱▱ 0/4')
+  const five = run([
+    { kind: 'turnStart', at: T, agent: MAIN }, ...ids.map(id => spawn(id, T)), spawn('a6', T), spawn('a7', T),
+    { kind: 'turnEnd', at: T + 1, agent: 'a6', reason: 'done', outputTokens: null },
+    { kind: 'turnEnd', at: T + 1, agent: 'a7', reason: 'done', outputTokens: null },
+  ])
+  assert.equal(statusText(five, T + 1), '● 5 running  ▰▱▱▱▱ 2/7')
 })
 
 test('a context reading sets used and window; the same reading again changes nothing; an unknown agent is ignored', () => {

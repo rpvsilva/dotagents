@@ -75,7 +75,7 @@ The log follows the end while the agent runs (read again every second, and once 
 
 Over the chart: the counts of this turn (`3 running · 1 need you · 4 done · 1 failed`) and the **needs you** strip, naming every agent waiting for you or failed this turn (two, then `+N more`), wherever it sits, never hidden in a squad. Above it, the Chart and Agents tabs (`g`, `a`). Under it: the Expand button, with a hotkey (quick repeated clicks select text in Claude Code and are lost, keys never are), and what the keys do.
 
-The status line, set only when its text changes: `● 3 running · ◐ 1 needs you · ☁ 2 remote · ✗ 1 failed`, where `☁` counts the repo's live remote runs, this session's and others'; cleared when nothing runs, waits or failed this turn.
+The status line, under the prompt at any width and with the pane closed, set only when its text changes: up to 4 running agents by task (`● fix login · run tests`), past 4 their count (`● 18 running`), then `◐ 1 needs you · ☁ 2 remote · ✗ 1 failed`, where `☁` counts the repo's live remote runs, this session's and others', and with two or more agents this turn a bar of how many ended (`▰▰▱▱▱ 5/26`); cleared when nothing runs, waits or failed this turn. Plain text: no colours, no spinner, nothing to click.
 
 A timer runs every 125 ms. It redraws the pane only while something on it moves (an agent running, a box entering, gliding or leaving, a box lingering towards its leave) and the pane was drawn in the last 2 s, so a closed or still pane costs nothing. Spinners, the dot that runs along a live connector, and the glide are terminal-only; on other surfaces, or with option `motion` off, the chart is still.
 

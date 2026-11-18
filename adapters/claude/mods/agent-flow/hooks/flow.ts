@@ -330,18 +330,34 @@ export function modelColor(id: string | null): string {
 export const findAgent = (g: Pick<Graph, 'agents' | 'others'>, id: string): Agent | undefined => g.agents.find(a => a.id === id) ?? g.others.find(a => a.id === id)
 
 /**
- * The status line: `● 3 running · ◐ 1 needs you · ☁ 2 remote · ✗ 1 failed`, the remote part counting the repo's live
- * remote runs, this session's and others'; undefined when nothing runs, waits or failed this turn.
+ * The status line: the running agents by task up to `STATUS_NAMES` (`● fix login · run tests`), past it their count
+ * (`● 18 running`), then `◐ 1 needs you · ☁ 2 remote · ✗ 1 failed`, the remote part counting the repo's live remote runs,
+ * this session's and others'; with two or more agents this turn, a bar of how many ended (`▰▰▱▱▱ 5/26`).
+ * Undefined when nothing runs, waits or failed this turn.
  */
 export function statusText(g: Graph, now: number): string | undefined {
   const mine = g.agents.filter(a => a.id !== MAIN && (a.status === 'running' || a.turn === g.turn))
   const waiting = mine.filter(a => shownStatus(a, now) === 'waiting').length
-  const running = mine.filter(a => a.status === 'running').length - waiting
+  const busy = mine.filter(a => a.status === 'running' && shownStatus(a, now) !== 'waiting')
   const failed = mine.filter(a => a.status === 'failed').length
   const isRun = (a: Agent) => a.remote !== null && a.remote.taskId === null && a.status === 'running'
   const remote = g.agents.filter(isRun).length + g.others.filter(isRun).length
-  const parts = [running && `● ${running} running`, waiting && `◐ ${waiting} needs you`, remote && `☁ ${remote} remote`, failed && `✗ ${failed} failed`].filter(Boolean)
-  return parts.length ? parts.join(' · ') : undefined
+  const names = busy.length <= STATUS_NAMES ? busy.map(a => statusName(a.desc || a.type)) : []
+  const running = busy.length && (names.length ? `● ${names.join(' · ')}` : `● ${busy.length} running`)
+  const parts = [running, waiting && `◐ ${waiting} needs you`, remote && `☁ ${remote} remote`, failed && `✗ ${failed} failed`].filter(Boolean)
+  if (!parts.length) return undefined
+  const ended = mine.length - mine.filter(a => a.status === 'running').length
+  const bar = mine.length > 1 ? `  ${gauge(ended / mine.length, 5)} ${ended}/${mine.length}` : ''
+  return parts.join(' · ') + bar
+}
+
+/** The status line names its running agents up to this many; past it, it counts them. */
+export const STATUS_NAMES = 4
+
+/** An agent's task as the status line names it: one line, at most 24 columns. */
+function statusName(s: string): string {
+  const t = printable(s.replace(/\s+/g, ' ').trim())
+  return t.length > 24 ? t.slice(0, 23) + '…' : t
 }
 
 /** `text` without a JSON object: the whole of it when it is one, else each line that is one. */
