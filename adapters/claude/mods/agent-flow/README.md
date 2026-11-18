@@ -44,7 +44,7 @@ A run of `remote-agent` (the `remote` group) shows as a box of its own, `☁ <na
 
 ## Many agents
 
-- **Squads**: 4 or more siblings with the same parent and type (option `squad_min`) fold into one squad box, 48 columns wide however many: the type and count, the model, one cell per agent in launch order (its status glyph; a gap every 5; past 36, `+N`), a progress bar (done, running, waiting, left) with counts. `x` (or the Expand button) lists the members under the chart, one line each, in up to 3 columns.
+- **Squads**: 4 or more siblings with the same parent and type (option `squad_min`) fold into one squad box, 48 columns wide however many. A squad counts only the agents launched while it is shown: once it has gone from the chart, the next agents of that type start from zero, one alone as its own box, 4 or more as a new squad. The box shows the type and count, the model, one cell per agent in launch order (its status glyph; a gap every 5; past 36, `+N`), a progress bar (done, running, waiting, left) with counts. `x` (or the Expand button) lists the members under the chart, one line each, in up to 3 columns.
 - **Folding**: when a row is wider than the pane, finished siblings fold into one `✓ N done` box, the parent with the most children first. Running and failed boxes never fold.
 - **Too narrow**: when even folded the chart does not fit, the pane lists its running agents instead, as the Agents tab draws them, and says how many columns the chart needs. It goes back to the chart only once the chart has fitted with 4 columns to spare for 2 s, so a chart on the edge never flickers between the two.
 

@@ -59,7 +59,7 @@ function squadAgent(members: [Agent, ...Agent[]]): Agent {
   const failed = members.some(m => m.status === 'failed')
   return {
     ...members[0],
-    id: `squad:${members[0].parent}:${members[0].type}`,
+    id: `squad:${members[0].parent}:${members[0].type}@${members[0].id}`,
     status: running ? 'running' : failed ? 'failed' : 'done',
     started: members[0].started,
     ended: running ? null : Math.max(...members.map(m => m.ended ?? 0)),
@@ -67,6 +67,21 @@ function squadAgent(members: [Agent, ...Agent[]]): Agent {
     checks: {},
     why: null,
   }
+}
+
+/**
+ * Siblings of one type, in launch order, cut into waves: an agent started once every agent before it had gone from
+ * the chart starts a new wave, so a squad counts only the agents launched while it was shown.
+ */
+function waves(same: Agent[], sched: ReturnType<typeof schedule>): Agent[][] {
+  const out: Agent[][] = []
+  let goneAt = -Infinity
+  for (const a of same) {
+    if (a.started >= goneAt) out.push([])
+    out[out.length - 1]!.push(a)
+    goneAt = Math.max(goneAt, sched.goneAt(a))
+  }
+  return out
 }
 
 /** The tree of nodes shown at `now`: agents by parent, squads folded, `+N done` folds where `foldUnder` says. */
@@ -78,8 +93,7 @@ function nodes(g: Graph, now: number, opts: ChartOpts, foldUnder: Set<string>): 
     const kids = childrenOf(id).sort((x, y) => x.started - y.started)
     const out: Node[] = []
     const types = [...new Set(kids.map(a => a.type))]
-    for (const type of types) {
-      const same = kids.filter(a => a.type === type)
+    for (const type of types) for (const same of waves(kids.filter(a => a.type === type), sched)) {
       if (same.length >= opts.squadMin && same[0]) {
         const sq = squadAgent(same as [Agent, ...Agent[]])
         const ph = phaseOf(sq, now, schedule({ ...g, agents: [...g.agents, sq] }, opts.lingerMs))

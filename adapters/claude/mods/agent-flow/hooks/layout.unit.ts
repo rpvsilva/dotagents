@@ -44,6 +44,24 @@ test('four siblings of one type fold into one squad box with a cell each; three 
   assert.ok(lines(c.rows).some(l => l.includes('epic-implementer ×4')))
 })
 
+test('a squad that has gone does not count again: a later lone agent of its type is a box, a later four a new squad ×4', () => {
+  const first = [0, 1, 2, 3].flatMap(i => [spawn(`e${i}`, T + i, 'epic-implementer'), end(`e${i}`, T + 1000 + i)])
+  const gone = T + 1003 + OPTS.lingerMs + 1000 + 1
+  const solo = [...first, spawn('s0', gone + 100, 'epic-implementer')]
+  const c1 = settled(solo, gone + 2000)
+  assert.equal(c1.squads.length, 0)
+  assert.ok(lines(c1.rows).some(l => l.includes('epic-implementer') && !l.includes('×')))
+  const four = [...first, ...[0, 1, 2, 3].map(i => spawn(`n${i}`, gone + 100 + i, 'epic-implementer'))]
+  const c2 = settled(four, gone + 2000)
+  assert.deepEqual(c2.squads.map(s => s.label), ['epic-implementer ×4'])
+  assert.notEqual(c2.squads[0]!.id, settled(first, T + 1500).squads[0]!.id)
+})
+
+test('an agent started while its type\'s squad is still shown joins it', () => {
+  const evs = [...[0, 1, 2, 3].map(i => spawn(`e${i}`, T + i, 'epic-implementer')), end('e0', T + 1000), spawn('e4', T + 1500, 'epic-implementer')]
+  assert.deepEqual(settled(evs, T + 3000).squads.map(s => s.label), ['epic-implementer ×5'])
+})
+
 test('a squad box stays one width from 5 agents to 24', () => {
   const widthOf = (n: number) => {
     const c = settled(Array.from({ length: n }, (_, i) => spawn(`e${i}`, T + i, 'epic-implementer')), T + 2000)
