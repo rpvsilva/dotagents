@@ -1,5 +1,7 @@
 # Build: `start`, `dispatch`, `finish`, `review`, `merge`, `human`
 
+`next.py <run> --go` and `--returned <TT-NN>` run `start`, `dispatch`, `finish` and `merge` themselves and print each script's line; the sections below say what those lines mean and what to do on a `FAIL`. Run a script yourself only when `next.py` without `--go` names its action.
+
 ## `start <TT>`
 
 `start_ticket.py <run> <TT>` makes the ticket's branch (its `Branch` line) from the run's base, here and on origin, sets it `building` and marks its issues started: the `in progress` label, assigned to the human (`OK TT building branch=<b> base=<sha7>`). With `started=manual` on its line (the `in_progress` Setting names a project field, or another tracker), mark the issues started yourself as that Setting says. `FAIL TT push` leaves it `ready`.
