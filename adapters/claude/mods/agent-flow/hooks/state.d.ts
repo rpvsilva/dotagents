@@ -139,6 +139,6 @@ export type Log = {
 declare module 'claude-code' {
   interface PluginState {
     // Change an atom's shape tag when its fields change: it declines what an earlier version stored.
-    'agent-flow': { graph: Shaped<Graph>; view: Shaped<View>; frame: Shaped<number>; log: Shaped<Log> }
+    'agent-flow': { graph: Shaped<Graph>; view: Shaped<View>; frame: Shaped<number>; log: Shaped<Log>; bandFrame: Shaped<number> }
   }
 }
