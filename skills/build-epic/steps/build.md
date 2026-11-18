@@ -1,6 +1,6 @@
 # Build: `start`, `dispatch`, `finish`, `review`, `merge`, `human`
 
-`next.py <run> --go` and `--returned <TT-NN>` run `start`, `dispatch`, `finish` and `merge` themselves and print each script's line; the sections below say what those lines mean and what to do on a `FAIL`. Run a script yourself only when `next.py` without `--go` names its action.
+`next.py <run> --go`, `--wait` and `--returned <TT-NN>` run `start`, `dispatch`, `finish` and `merge` themselves and print each script's line; the sections below say what those lines mean and what to do on a `FAIL`. Run a script yourself only when `next.py` without `--go` names its action.
 
 ## `start <TT>`
 
@@ -12,11 +12,11 @@ All dispatch lines at once:
 
 1. `start_task.py <run> <TT-NN>` adds `worktrees/TT-NN` on a new task branch from the ticket branch and sets the task `in-progress` (`OK TT-NN in-progress wt=<path> tip=<sha7>`). For a `hub` task it also merges the run's base in (`synced=<sha7>`); when that merge conflicts it adds `conflict=<files>` and leaves the markers for the implementer: add `--sync <files>` below, and run that task here, never remotely.
 2. `task_prompt.py <run> <TT-NN> [--sync <files>]` writes the prompt and prints `OK TT-NN local prompt=<file> agent=epic-implementer`. Start that agent with the file's text, description `implement: TT-NN <title>`.
-3. **Remotely** (remote is on and the task has no `--sync`): `task_prompt.py <run> <TT-NN> --remote` prints `OK TT-NN remote prompt=<file> args=<arguments>`; run `~/.agents/bin/remote-agent` with those arguments as printed, in the background, and send its stdout (the agent's output) to `<run>/reports/TT-NN.json`. Keep the name and worktree it gives (`TT-NN-<slug>`, `<run>/worktrees/TT-NN`): `finish_task.py` finds the run's cost by them.
+3. **Remotely** (remote is on and the task has no `--sync`): `task_prompt.py <run> <TT-NN> --remote` prints `OK TT-NN remote prompt=<file> args=<arguments>`; `next.py` starts `~/.agents/bin/remote-agent` with them itself, detached, its stdout to `<run>/remote/TT-NN.out`, its stderr to `<run>/remote/TT-NN.log` and its exit code to `<run>/remote/TT-NN.exit`, and prints `remote TT-NN started log=<file>`; `next.py --wait` (or any later `--go`, `--returned` or `--reviewed`) collects it once it ends, its output moved to `<run>/reports/TT-NN.json`. Run it yourself, in the background with its stdout to `<run>/reports/TT-NN.json`, only for a `remote TT-NN args=<arguments>` line or a run this file tells you to start. Keep the name and worktree it gives (`TT-NN-<slug>`, `<run>/worktrees/TT-NN`): `finish_task.py` finds the run's cost by them.
 
 ## `finish <TT-NN>`
 
-When the implementer returns: pipe its final message to `report_check.py <run> <TT-NN>` (a remote one: `report_check.py <run> <TT-NN> --from-report` once `remote-agent` exits 0 or 3; any other exit is `blocked` with stderr's last lines as the why, as [Remote subagents](../../remote-subagents/SKILL.md) step 4 says). A `brief-violation` gets one new agent with `task_prompt.py <run> <TT-NN> --reissue` (`--remote` when it ran remotely); a second one is `blocked`.
+When the implementer returns: pipe its final message to `report_check.py <run> <TT-NN>` (a remote one: `report_check.py <run> <TT-NN> --from-report` once `remote-agent` exits 0 or 3, which `next.py` does itself for a run it started; any other exit, `FAIL TT-NN remote-exit <code>: <stderr>` from `next.py`, is acted on as [Remote subagents](../../remote-subagents/SKILL.md) step 4 says: `blocked` with stderr's last lines as the why, unless the code says otherwise). A `brief-violation` gets one new agent with `task_prompt.py <run> <TT-NN> --reissue` (`--remote` when it ran remotely); a second one is `blocked`.
 
 Then, for an agent that ran here, `capped stop <run>/worktrees/TT-NN`; then `finish_task.py <run> <TT-NN> --title "<the task's title in the commit convention>"`. It commits what the agent left uncommitted, merges the ticket branch in, and adds paths changed outside `Writes` to that line:
 

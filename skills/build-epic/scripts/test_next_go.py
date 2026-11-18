@@ -1,5 +1,7 @@
 """Tests for `next.py --go` and `--returned`: the actions needing no decision done in one call, as a run does them."""
 import json
+import os
+import signal
 import subprocess
 import sys
 import unittest
@@ -219,6 +221,59 @@ class GoTest(unittest.TestCase):
         self.assertEqual(len(review), 1, p.stdout)
         self.assertIn("(ship.md: remote is on: a remote `pr-reviewer`", review[0])
         self.assertIn("remote-agent --name review-<n>-<sha7>", review[0])
+
+    def stub_remote(self, exit_code=0, sleep=0):
+        """A `remote-agent` that edits `<name's last word>.txt` in the worktree, leaves it uncommitted as a remote run
+        does, and prints the output object on stdout."""
+        stub = self.kit.home / ".agents" / "bin" / "remote-agent"
+        out = json.dumps(output("NAME.txt")).replace("NAME", "$word")
+        stub.write_text("#!/bin/sh\n"
+                        f"sleep {sleep}\n"
+                        'while [ "$1" != "${1#--}" ]; do [ "$1" = --name ] && name=$2; shift 2; done\n'
+                        'word=${name##*-}; echo "[$name] transcript: /t/$name.jsonl" >&2\n'
+                        f'[ {exit_code} = 0 ] && echo done > "$2/$word.txt"\n'
+                        f"echo '{out}'\n"
+                        f'[ {exit_code} = 0 ] || echo "[$name] usage limit: resets 5pm" >&2\n'
+                        f"exit {exit_code}\n", encoding="utf-8")
+        stub.chmod(0o755)
+
+    def test_go_starts_remote_runs_and_wait_finishes_them(self):
+        # e1b and e2 of #402: each remote task cost the orchestrator a background launch and a `--returned` call.
+        self.remote_on()
+        self.stub_remote()
+        lines = self.next("--go", "--no-ship")
+        started = [line for line in lines if line.startswith("remote ")]
+        self.assertEqual([line.split(" ")[1:3] for line in started], [["01-01", "started"], ["01-02", "started"]])
+        lines = self.next("--wait", "--no-ship")
+        for ident in ("01-01-x", "01-02-y"):
+            self.assertIn("Status: done", (self.run / "tasks" / f"{ident}.md").read_text(encoding="utf-8"), lines)
+        self.assertTrue(any(line.startswith("ship 01 open") for line in lines), lines)
+        self.assertEqual(list((self.run / "remote").glob("*.pid")), [])
+
+    def test_a_failed_remote_run_is_left_to_the_orchestrator_with_its_stderr(self):
+        self.remote_on()
+        self.stub_remote(exit_code=5)
+        lines, fails = [], []
+        for args in (("--go",), ("--wait",), ("--wait",)):  # each call collects the runs that ended by then
+            if len(fails) < 2:
+                lines = self.next(*args, "--no-ship")
+                fails += [line for line in lines if line.startswith("FAIL ")]
+        self.assertEqual(sorted(line.split(" ")[1:4] for line in fails),
+                         [["01-01", "remote-exit", "5:"], ["01-02", "remote-exit", "5:"]], lines)
+        self.assertIn("usage limit: resets 5pm", fails[0])
+        self.assertIn("Status: in-progress", (self.run / "tasks" / "01-01-x.md").read_text(encoding="utf-8"))
+        self.assertEqual(list((self.run / "remote").glob("*.pid")), [])
+
+    def test_wait_returns_the_wait_lines_when_its_time_runs_out(self):
+        self.remote_on()
+        self.stub_remote(sleep=30)
+        self.next("--go", "--no-ship")
+        self.kit.env["BUILD_EPIC_WAIT_SECS"] = "1"
+        lines = self.next("--wait", "--no-ship")
+        self.assertEqual(lines, ["wait 01-01 remote", "wait 01-02 remote"])
+        self.assertEqual(len(list((self.run / "remote").glob("*.pid"))), 2)
+        for pid in (self.run / "remote").glob("*.pid"):
+            os.killpg(int(pid.read_text(encoding="utf-8")), signal.SIGTERM)
 
     def test_a_first_brief_violation_writes_the_reissue_prompt(self):
         self.next("--go")
