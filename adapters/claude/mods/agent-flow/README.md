@@ -60,7 +60,7 @@ A run of `remote-agent` (the `remote` group) shows as a box of its own, `☁ <na
 `1`–`9` (or a click) on a row, or a click on a box or squad cell in the chart, opens that agent's log. It reads the session's own record, `$.session.messages({ agentId })`, which keeps a finished agent's messages:
 
 - a header card: Back, the agent, a state badge (`RUNNING`, `WAITING`, `DONE`, `FAILED`, or a remote run's setup phase), its model and time; under it its task, its parent, steps and context (a remote run: its run id, its caller, turns and cost);
-- a rule with the agent and its model, `task: ` its task; its own text; `▸ Bash npm test`, each tool call; `⎿ ` the first line of each result, with how many more lines it held, an error's in red;
+- a rule with the agent and its model, `task: ` its task; its own text, less any JSON object in it (an outcome a skill's brief asks for, which the end line already says); `▸ Bash npm test`, each tool call; `⎿ ` the first line of each result, with how many more lines it held, an error's in red;
 - `▸ Agent fork · try bash 3.2` and under it `⎿ open its log →`: a call that started an agent links to that agent's log, `1`–`9` in the order shown; a call still running, `⎿ ● running…` (`⎿ ◐ waiting for your permission` while it waits);
 - once it finished, how it ended: ` ✓ done  in 0:42 · 12 steps`, or ` ✗ failed  (error) after 0:42`; a remote run's adds its cost, turns and changes, and that its `session.jsonl` is kept, never read;
 - under a rule: `● Following live` (or `■ End of log`), back, copy log, open transcript (a remote run: copy path, copy resume).
