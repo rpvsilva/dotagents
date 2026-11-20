@@ -98,9 +98,10 @@ done
 # An outsider's PR merges only after a maintainer's latest review approves its head; maintainer and App PRs need none.
 review() { printf '{"author":{"login":"%s"},"state":"%s","commit":{"oid":"%s"}}' "$1" "$2" "$3"; }
 oos="$(verdict out-of-scope)"
-for a in rpvsilva rpvsilva-agent app/rpvsilva-agent; do
+for a in rpvsilva app/rpvsilva-agent; do
   AUTHOR=$a pr OPEN false "$oos" 0;                                   expect merge  "maintainer-side author $a, no review"
 done
+AUTHOR=rpvsilva-agent pr OPEN false "$oos" 0;                         expect refuse "plain user named like the App, no approval"
 FORK=true AUTHOR=outsider pr OPEN false "$oos" 0;                     expect refuse "outsider, no approval"
 grep -q "not a maintainer" "$SANDBOX/out" || fail "outsider: refusal reason not printed"
 [ "$(wc -l <"$SANDBOX/out")" -eq 1 ] || fail "outsider: refusal is not one line"
@@ -113,6 +114,13 @@ FORK=true AUTHOR=outsider REVIEWS="$(review rpvsilva APPROVED old999)" pr OPEN f
 FORK=true AUTHOR=outsider REVIEWS="$(review outsider2 APPROVED abc123)" pr OPEN false "$oos" 0; expect refuse "approval by a non-maintainer"
 FORK=true AUTHOR=outsider REVIEWS="$(review rpvsilva APPROVED abc123),$(review rpvsilva CHANGES_REQUESTED abc123)" pr OPEN false "$oos" 0; expect refuse "approval then changes requested"
 FORK=true AUTHOR=outsider REVIEWS="$(review rpvsilva APPROVED abc123),$(review rpvsilva COMMENTED abc123)" pr OPEN false "$oos" 0; expect merge "comment after approval"
+# The head moves while the gate waits: the approval covered abc123, the gate judged def456.
+moved='{"pr":7,"head_sha":"def456","result":"out-of-scope","missing":[],"problems":[]}'
+FORK=true AUTHOR=outsider REVIEWS="$(review rpvsilva APPROVED abc123)" pr OPEN false "$moved" 0
+rm -f "$SANDBOX/merged"
+if PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" 7 >"$SANDBOX/out" 2>&1; then fail "head moved after approval: merged"; fi
+[ ! -e "$SANDBOX/merged" ] || fail "head moved after approval: still called gh pr merge"
+grep -q "head moved" "$SANDBOX/out" || fail "head moved: refusal reason not printed"
 
 # The CI wait is configurable, so a caller can judge at once.
 pr OPEN false "$(verdict pass)" 0

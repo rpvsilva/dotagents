@@ -10,7 +10,7 @@
 # them, on a ticket head). The PR into the default branch that carries it (the ticket's own PR, or the
 # integration branch's) is judged in full, approvals included.
 # A PR into the default branch whose author is not a maintainer (`maintainers:` in .review-gate.yml, read
-# from the base branch) or the maintainer's agent App (`<maintainer>-agent`) merges only after a maintainer's
+# from the base branch) or the maintainer's agent App (`app/<maintainer>-agent`) merges only after a maintainer's
 # latest review is an approval of its current head: the gate calls an outsider's medium-tier PR out of scope.
 # It squashes, or with --merge (build-epic's task_merge_method=merge) makes a merge commit.
 # Usage: scripts/merge-pr.sh [--merge] <pr-number>   (needs GH_TOKEN, node and npx)
@@ -45,10 +45,10 @@ rules="$(gh api -H "Accept: application/vnd.github.raw" "repos/{owner}/{repo}/co
 maintainers="$(sed -n 's/^maintainers:[[:space:]]*\[\(.*\)\].*/\1/p' <<<"$rules" | tr -d ' "'"'" | tr ',' '\n' | sed '/^$/d')"
 [ -n "$maintainers" ] || { echo "PR #$pr: could not read the maintainers from .review-gate.yml on $base, not merging"; exit 1; }
 author="$(jq -r '.author.login // empty' <<<"$view")"
-author="${author#app/}"
 trusted=false
 while IFS= read -r m; do
-  if [ "$author" = "$m" ] || [ "$author" = "$m-agent" ]; then trusted=true; fi
+  # The App's login is `app/<maintainer>-agent`; a plain user named `<maintainer>-agent` is an outsider.
+  if [ "$author" = "$m" ] || [ "$author" = "app/$m-agent" ]; then trusted=true; fi
 done <<<"$maintainers"
 if [ "$trusted" = false ]; then
   approved=false
@@ -76,4 +76,9 @@ fi
 
 # --match-head-commit: GitHub refuses the merge unless the head is still the commit the gate judged.
 sha="$(jq -r .head_sha <<<"$verdict")"
+# An outsider's PR was approved on $head: if it moved while the gate waited, that approval no longer covers it.
+if [ "$trusted" = false ] && [ "$sha" != "$head" ]; then
+  echo "PR #$pr: head moved from ${head:0:7} to ${sha:0:7} after the maintainer approved it, not merging"
+  exit 1
+fi
 gh pr merge "$pr" "$method" ${delete[@]+"${delete[@]}"} --match-head-commit "$sha"
