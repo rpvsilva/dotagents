@@ -1,0 +1,87 @@
+name: runner-image
+
+# Builds the remote runner image (remote/runner/Dockerfile). A PR only builds it and smoke-tests it; main publishes
+# ghcr.io/<owner>/agent-runner:main and a dated tag, for linux/amd64 and linux/arm64. The weekly run rebuilds without
+# cache on the same pins, picking up Debian's security fixes; Renovate (renovate.json) bumps the pins themselves.
+on:
+  push:
+    branches: [main]
+    paths: [remote/runner/**, .github/workflows/runner-image.yml]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: [remote/runner/**, .github/workflows/runner-image.yml]
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      LOCAL: agent-runner:smoke
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Smoke test on this runner's architecture first: every tool a run relies on (remote/README.md) answers.
+      - name: build for the smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: remote/runner
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.LOCAL }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: smoke test
+        run: |
+          docker run --rm "$LOCAL" bash -c '
+            set -e
+            [ "$(id -un)" = node ]
+            claude --version; gh --version | head -1; git --version; jq --version; python3 --version
+            python3 -m venv /tmp/v
+            git config --global --get credential.https://github.com.helper'
+      - name: log in to ghcr.io
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: tags
+        if: env.PUBLISH == 'true'
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/agent-runner
+          # `main` moves; the dated tag names one build, since the weekly rebuild changes the image on the same commit.
+          tags: |
+            type=raw,value=main
+            type=raw,value={{date 'YYYYMMDD'}}-{{sha}}
+      - name: publish
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: remote/runner
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
