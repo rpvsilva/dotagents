@@ -1,6 +1,6 @@
 ---
 name: security-audit
-description: Security-audit a whole repo of any size: a map split into areas and flows, one reviewer per piece, gap sweeps until nothing new; then fix the findings the human picks in a PR.
+description: "Security-audit a whole repo of any size: a map split into areas and flows, one reviewer per piece, gap sweeps until nothing new; then fix the findings the human picks in a PR."
 disable-model-invocation: true
 ---
 
