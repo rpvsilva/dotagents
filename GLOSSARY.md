@@ -1,6 +1,6 @@
 # dotagents
 
-Rui's portable AI setup: skills, instructions, MCP servers and hooks shared across coding tools.
+A portable AI setup: skills, instructions, MCP servers and hooks shared across coding tools.
 
 ## Telemetry
 
@@ -57,7 +57,7 @@ One installable piece of the setup: a skill, a subagent, a mod, a hook, or one o
 _Avoid_: Component, module, package
 
 **Group**:
-A named feature made of Parts, which a person can take on its own: `core`, `remote`, `pr-loop`, `epics`, `security`, `safety-hooks`, `small-tools` or `personal`. Every Part belongs to exactly one; `groups.json` names them.
+A named feature made of Parts, which a person can take on its own: `core`, `remote`, `pr-loop`, `epics`, `security`, `safety-hooks`, `agent-flow`, `small-tools` or `personal`. Every Part belongs to exactly one; `groups.json` names them.
 _Avoid_: Bundle, set, profile
 
 **Need**:
