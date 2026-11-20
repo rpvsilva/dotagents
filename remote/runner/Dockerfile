@@ -5,7 +5,7 @@
 FROM node:26-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_CODE_VERSION=2.1.312
+ARG CLAUDE_CODE_VERSION=2.1.327
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 python3-pip python3-venv tini \
