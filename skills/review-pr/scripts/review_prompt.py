@@ -4,7 +4,7 @@ the role's input object as JSON (`_shared/protocol`). File pointers only: no sum
 
 Usage: python3 -I review_prompt.py <mode> [--pr <n>] --worktree <path> --head <sha> --base <ref>
          [--run <run>] [--decisions <file>] [--task <file>] [--findings <file>]
-         [--output <file> | --remote <dir> --allow-author <login>...]
+         [--output <file> | --remote <dir> --allow-author <login>...] [--skills-root <dir>]
 
 Modes, the role in brackets: `task` [reviewer] (one task PR; with no `--pr`, a task's local commits before they
 merge, `--base` its ticket branch and `--task` required: build-epic's review of a high-tier task, which has no PR),
@@ -19,6 +19,8 @@ works. `--decisions` names the decisions file instead of `<run>/decisions.md`, w
 the file the reviewer writes its output object to (a run's `<run>/reviews/<PR>-<sha7>.json`, `-security.json` for the
 security reviewer), the only file it may write.
 
+The brief is named under the skills folder this script sits in, or `--skills-root`; a `--remote` prompt always names the
+sandbox's `~/.agents/skills`.
 `--remote <dir>` renders the prompt for a reviewer run remotely, on a snapshot of the worktree with no history and no
 GitHub access: `remote: true`, no `output` (its final message is its output object). It writes into `<dir>` the diff
 (`pr-<n>.diff`) and the PR facts (`pr-<n>.json`, from `gh pr view <n> --json author,title,body,headRefOid,baseRefName,
@@ -75,6 +77,7 @@ def parse(argv):
     p.add_argument("--output", "--report", dest="output", type=absolute)
     p.add_argument("--remote", type=absolute)
     p.add_argument("--allow-author", action="append", default=[])
+    p.add_argument("--skills-root")
     args = p.parse_args(argv)
     if args.remote and args.output:
         p.error("--remote takes no --output: a remote reviewer returns its output object as its final message")
@@ -245,7 +248,7 @@ def main(argv):
         sys.stderr.write(f"review_prompt.py: {e}\n")
         return 1
     try:
-        text = protocol.prompt(role, values)
+        text = protocol.prompt(role, values, "~/.agents/skills" if args.remote else args.skills_root)
     except ValueError as e:
         parser.error(f"bad input: {e}")
     sys.stdout.write(text)

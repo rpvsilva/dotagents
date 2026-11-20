@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Blocks shell commands that would bypass the merge gate: `gh pr merge`, merging through `gh api`,
 # approving a PR (`gh pr review`, or `gh api` with APPROVE in the command), and pushing to main/master. Only in repos with a .review-gate.yml at their root,
-# where the repo's merge script is the only way to merge (GitHub Free enforces nothing on private repos).
+# where the repo's merge script is the only way to merge: GitHub enforces the main ruleset, and this hook stops an agent merging directly, approving as the maintainer or pushing to main.
 # Input: the command as $1, or a hook's JSON on stdin with .tool_input.command (and optional .cwd).
 # Exit 2 with the reason on stderr blocks the command; exit 0 lets it run.
 set -euo pipefail
