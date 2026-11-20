@@ -30,7 +30,7 @@ chmod +x "$SANDBOX/bin/gh" "$SANDBOX/bin/npx"
 
 # Sets the PR (state $1, draft $2) and the gate's answer: JSON $3, exit code $4. The base is $BASE, else main.
 pr() {
-  printf '{"state":"%s","isDraft":%s,"baseRefName":"%s","headRefOid":"abc123"}' "$1" "$2" "${BASE:-main}" >"$SANDBOX/view.json"
+  printf '{"state":"%s","isDraft":%s,"baseRefName":"%s","headRefOid":"abc123","isCrossRepository":%s}' "$1" "$2" "${BASE:-main}" "${FORK:-false}" >"$SANDBOX/view.json"
   printf '%s' "$3" >"$SANDBOX/verdict.json"
   echo "$4" >"$SANDBOX/code"
 }
@@ -81,6 +81,18 @@ rm -f "$SANDBOX/merged"
 PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" --merge 7 >"$SANDBOX/out" 2>&1 || fail "--merge through the gate: $(cat "$SANDBOX/out")"
 grep -qx -- "pr merge 7 --merge --delete-branch --match-head-commit abc123" "$SANDBOX/merged" || fail "--merge gated: $(cat "$SANDBOX/merged")"
 if PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" --rebase 7 >"$SANDBOX/out" 2>&1; then fail "--rebase: accepted an unknown option"; fi
+
+# A fork PR merges without --delete-branch, gated or not; a same-repo PR still deletes its branch.
+for b in main feat/gh-12-due-dates; do
+  FORK=true BASE=$b pr OPEN false "$(verdict pass)" 0
+  rm -f "$SANDBOX/merged"
+  PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" 7 >"$SANDBOX/out" 2>&1 || fail "fork PR into $b: $(cat "$SANDBOX/out")"
+  grep -qx -- "pr merge 7 --squash --match-head-commit abc123" "$SANDBOX/merged" || fail "fork PR into $b: $(cat "$SANDBOX/merged")"
+  BASE=$b pr OPEN false "$(verdict pass)" 0
+  rm -f "$SANDBOX/merged"
+  PATH="$SANDBOX/bin:$PATH" "$REPO/scripts/merge-pr.sh" 7 >"$SANDBOX/out" 2>&1 || fail "same-repo PR into $b: $(cat "$SANDBOX/out")"
+  grep -qx -- "pr merge 7 --squash --delete-branch --match-head-commit abc123" "$SANDBOX/merged" || fail "same-repo PR into $b: $(cat "$SANDBOX/merged")"
+done
 
 # The CI wait is configurable, so a caller can judge at once.
 pr OPEN false "$(verdict pass)" 0

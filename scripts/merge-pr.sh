@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Merges a PR only when agent-pr-gate passes it on its current head commit.
-# The only way an agent may merge here: GitHub Free has no rulesets on private repos, so this script is the gate.
+# The only way an agent may merge here: GitHub enforces the main ruleset (PR, CI, code-owner review on high-tier paths), and this script adds the agent-pr-gate judgement pinned to the head commit and the tier rules.
 # It runs the gate's read-only CLI (`agent-pr-gate check`, pinned to GATE_REF, the commit the gate
 # workflow uses): the same rules, read from the base commit, so a PR cannot change its own gate. The
 # CLI waits for CI, judges CI, evidence, approvals and code owners, and prints the verdict as JSON.
@@ -20,16 +20,19 @@ case "${1:-}" in -*) echo "usage: merge-pr.sh [--merge] <pr-number>"; exit 2 ;; 
 pr="${1:?usage: merge-pr.sh [--merge] <pr-number>}"
 wait="${MERGE_PR_CI_WAIT:-1800}"
 
-view="$(gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid)"
+view="$(gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid,isCrossRepository)"
 [ "$(jq -r .state <<<"$view")" = "OPEN" ] || { echo "PR #$pr is $(jq -r .state <<<"$view"), not merging"; exit 1; }
 [ "$(jq -r .isDraft <<<"$view")" = "false" ] || { echo "PR #$pr is a draft, not merging"; exit 1; }
 
 base="$(jq -r .baseRefName <<<"$view")"
+# A fork PR's branch is the contributor's: never try to delete it.
+delete=(--delete-branch)
+[ "$(jq -r .isCrossRepository <<<"$view")" = "true" ] && delete=()
 default="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
 [ -n "$default" ] || { echo "PR #$pr: could not read the default branch, not merging"; exit 1; }
 if [ "$base" != "$default" ]; then
   echo "PR #$pr: base $base is not $default, merging without the gate"
-  gh pr merge "$pr" "$method" --delete-branch --match-head-commit "$(jq -r .headRefOid <<<"$view")"
+  gh pr merge "$pr" "$method" ${delete[@]+"${delete[@]}"} --match-head-commit "$(jq -r .headRefOid <<<"$view")"
   exit 0
 fi
 
@@ -46,4 +49,4 @@ fi
 
 # --match-head-commit: GitHub refuses the merge unless the head is still the commit the gate judged.
 sha="$(jq -r .head_sha <<<"$verdict")"
-gh pr merge "$pr" "$method" --delete-branch --match-head-commit "$sha"
+gh pr merge "$pr" "$method" ${delete[@]+"${delete[@]}"} --match-head-commit "$sha"
