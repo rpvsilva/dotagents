@@ -9,6 +9,9 @@
 # merges it runs the checks locally first (ship_ticket.py runs map.md's Checks, tests/run.sh among
 # them, on a ticket head). The PR into the default branch that carries it (the ticket's own PR, or the
 # integration branch's) is judged in full, approvals included.
+# A PR into the default branch whose author is not a maintainer (`maintainers:` in .review-gate.yml, read
+# from the base branch) or the maintainer's agent App (`app/<maintainer>-agent`) merges only after a maintainer's
+# latest review is an approval of its current head: the gate calls an outsider's medium-tier PR out of scope.
 # It squashes, or with --merge (build-epic's task_merge_method=merge) makes a merge commit.
 # Usage: scripts/merge-pr.sh [--merge] <pr-number>   (needs GH_TOKEN, node and npx)
 set -euo pipefail
@@ -20,7 +23,7 @@ case "${1:-}" in -*) echo "usage: merge-pr.sh [--merge] <pr-number>"; exit 2 ;; 
 pr="${1:?usage: merge-pr.sh [--merge] <pr-number>}"
 wait="${MERGE_PR_CI_WAIT:-1800}"
 
-view="$(gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid,isCrossRepository)"
+view="$(gh pr view "$pr" --json state,isDraft,baseRefName,headRefOid,isCrossRepository,author,reviews)"
 [ "$(jq -r .state <<<"$view")" = "OPEN" ] || { echo "PR #$pr is $(jq -r .state <<<"$view"), not merging"; exit 1; }
 [ "$(jq -r .isDraft <<<"$view")" = "false" ] || { echo "PR #$pr is a draft, not merging"; exit 1; }
 
@@ -36,6 +39,30 @@ if [ "$base" != "$default" ]; then
   exit 0
 fi
 
+head="$(jq -r .headRefOid <<<"$view")"
+rules="$(gh api -H "Accept: application/vnd.github.raw" "repos/{owner}/{repo}/contents/.review-gate.yml?ref=$base")" || rules=""
+# `maintainers: [a, b]` on one line; no list read means nobody is trusted.
+maintainers="$(sed -n 's/^maintainers:[[:space:]]*\[\(.*\)\].*/\1/p' <<<"$rules" | tr -d ' "'"'" | tr ',' '\n' | sed '/^$/d')"
+[ -n "$maintainers" ] || { echo "PR #$pr: could not read the maintainers from .review-gate.yml on $base, not merging"; exit 1; }
+author="$(jq -r '.author.login // empty' <<<"$view")"
+trusted=false
+while IFS= read -r m; do
+  # The App's login is `app/<maintainer>-agent`; a plain user named `<maintainer>-agent` is an outsider.
+  if [ "$author" = "$m" ] || [ "$author" = "app/$m-agent" ]; then trusted=true; fi
+done <<<"$maintainers"
+if [ "$trusted" = false ]; then
+  approved=false
+  while IFS= read -r m; do
+    # A maintainer's latest approving or rejecting review counts; comments do not undo an approval.
+    state="$(jq -r --arg m "$m" --arg h "$head" '[.reviews[]? | select(.author.login == $m and (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))] | last | if . != null and .state == "APPROVED" and .commit.oid == $h then "ok" else "no" end' <<<"$view")"
+    [ "$state" = ok ] && approved=true
+  done <<<"$maintainers"
+  if [ "$approved" = false ]; then
+    echo "PR #$pr: author ${author:-unknown} is not a maintainer and no maintainer has approved head ${head:0:7}, not merging"
+    exit 1
+  fi
+fi
+
 echo "PR #$pr: running agent-pr-gate (waits up to ${wait}s for CI)"
 code=0
 verdict="$(npx --yes "github:0xgui/agent-pr-gate#$GATE_REF" check "$pr" --ci-wait-seconds "$wait")" || code=$?
@@ -49,4 +76,9 @@ fi
 
 # --match-head-commit: GitHub refuses the merge unless the head is still the commit the gate judged.
 sha="$(jq -r .head_sha <<<"$verdict")"
+# An outsider's PR was approved on $head: if it moved while the gate waited, that approval no longer covers it.
+if [ "$trusted" = false ] && [ "$sha" != "$head" ]; then
+  echo "PR #$pr: head moved from ${head:0:7} to ${sha:0:7} after the maintainer approved it, not merging"
+  exit 1
+fi
 gh pr merge "$pr" "$method" ${delete[@]+"${delete[@]}"} --match-head-commit "$sha"

@@ -50,6 +50,7 @@ The first time you open a PR from a fork, its workflows wait until the maintaine
 
 - CI must be green.
 - A code owner must approve any PR that touches a high-tier path. [`.review-gate.yml`](.review-gate.yml) lists them, and [`CODEOWNERS`](CODEOWNERS) mirrors the list. Paths that run code, guard the gate or reach every tool's instructions are high-tier.
+- If you are not a maintainer, your PR merges only after the maintainer approves its latest commit: a push after the approval needs a new one.
 - The maintainer merges the PR. Do not merge it yourself, and do not push to `main`.
 
 Review comments and requested changes go on the PR. Push fixes to the same branch.
