@@ -1,0 +1,68 @@
+{
+  "claudeVersions": [
+    "2.1.327"
+  ],
+  "cost": 1.0,
+  "date": "2026-11-04",
+  "end": "2026-11-04T10:00:00.000Z",
+  "label": "planted-label",
+  "pricingAsOf": "2026-01-01",
+  "repo": "/Users/someone/secret-client-repo",
+  "schemaVersion": 6,
+  "sessionId": "5e55105e-aaaa-bbbb-cccc-planted00001",
+  "spans": [
+    {
+      "end": "2026-11-04T10:00:00.000Z",
+      "name": "build-epic",
+      "skill": "build-epic",
+      "start": "2026-11-04T09:00:00.000Z",
+      "subagents": [
+        {
+          "description": "planted subagent description",
+          "tokensByModel": {
+            "model-a": {
+              "cacheRead": 0,
+              "cacheWrite1h": 0,
+              "cacheWrite5m": 0,
+              "input": 200000,
+              "output": 20000
+            }
+          },
+          "toolCalls": 2,
+          "tools": {
+            "Bash": 2
+          },
+          "turns": 4,
+          "type": "epic-implementer"
+        }
+      ],
+      "tokensByModel": {
+        "model-a": {
+          "cacheRead": 0,
+          "cacheWrite1h": 0,
+          "cacheWrite5m": 0,
+          "input": 1000000,
+          "output": 100000
+        }
+      },
+      "toolCalls": 4,
+      "tools": {
+        "Bash": 4
+      },
+      "turns": 10,
+      "wallClockSeconds": 3600
+    }
+  ],
+  "start": "2026-11-04T09:00:00.000Z",
+  "steps": [
+    {
+      "failed": false,
+      "label": "deploy planted-label",
+      "seconds": 1.0,
+      "start": "2026-11-04T09:01:00.000Z",
+      "subagent": null,
+      "tool": "Bash"
+    }
+  ],
+  "wallClockSeconds": 3600
+}
