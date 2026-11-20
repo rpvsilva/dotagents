@@ -47,6 +47,9 @@ class TaskPromptTest(unittest.TestCase):
         if rest:
             fields["args"] = rest
         first, _, inputs = Path(fields["prompt"]).read_text(encoding="utf-8").partition("\n")
+        # A local prompt names the brief under the skills folder the script ran from; a remote one the pod's.
+        if "remote" not in fields["prompt"] and "args" not in fields:
+            first = first.replace(str(SCRIPTS.parents[1]), "~/.agents/skills")
         self.assertEqual(first, FIRST)
         return line, fields, json.loads(inputs)
 
