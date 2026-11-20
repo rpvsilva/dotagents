@@ -8,7 +8,7 @@ Add one Claude Code plugin to dotagents, so every machine that runs `install.sh 
 
 Input: a plugin name, a `<plugin>@<marketplace>` id, or a marketplace source (GitHub `owner/repo`, URL or path).
 
-Work in the dotagents checkout this skill's folder lives in: `cd -P ~/.agents/skills/add-plugin && cd ../..`. Paths below are relative to it.
+Work in the dotagents checkout this skill's folder lives in: `cd -P <this skill's folder>/../..`. Paths below are relative to it.
 
 ## Steps
 
