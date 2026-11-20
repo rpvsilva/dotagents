@@ -1,6 +1,6 @@
 ---
 name: tune-tests
-description: Make a repo's tests faster and their coverage wider in one PR, by a test-tuner subagent: profile, fix stalls, close gaps, with before/after times you verify.
+description: "Make a repo's tests faster and their coverage wider in one PR, by a test-tuner subagent: profile, fix stalls, close gaps, with before/after times you verify."
 disable-model-invocation: true
 ---
 
