@@ -454,6 +454,24 @@ if grep -rnE 'enforces nothing|enforces no branch protection|GitHub Free' AGENTS
   fail "AGENTS.md, docs/ or scripts/ hold 'enforces nothing', 'enforces no branch protection' or 'GitHub Free': say what GitHub enforces (the main ruleset) and what merge-pr.sh and guard-merge add"
 fi
 
+# Public docs: no first-person wording about the maintainer (whole words my, mine, Rui) in README.md, docs/*.md or
+# groups.json, and the README quick start installs every public group (all of groups.json but core and personal).
+for f in README.md docs/*.md groups.json; do
+  while IFS= read -r hit; do
+    [ -z "$hit" ] || fail "$f:$hit: first-person wording (my, mine, Rui)"
+  done < <(grep -nwiE 'my|mine|rui' "$f")
+done
+qs_line="$(grep -E '^\./install\.sh [a-z]' README.md | head -1)"
+[ -n "$qs_line" ] || fail "README.md: no quick-start './install.sh <groups>' line"
+while IFS= read -r g; do
+  case "$g" in core | personal) continue ;; esac
+  case " $qs_line " in
+    *" $g "*) ;;
+    *) fail "README.md: the quick-start install line does not name the public group '$g'" ;;
+  esac
+done < <(jq -r 'keys[]' groups.json)
+case " $qs_line " in *" personal "*) fail "README.md: the quick-start install line names 'personal'" ;; esac
+
 # CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
 mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
 if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then

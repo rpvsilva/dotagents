@@ -10,14 +10,14 @@
 Before replacing a real file, `install.sh` moves it to `~/.dotagents-backup/<timestamp>/`. Running it twice changes nothing but re-creates the links.
 
 ```sh
-./install.sh                    # every tool, every part, `personal` included
+./install.sh                    # every tool, every group, the maintainer's `personal` example included
 ./install.sh shared             # only ~/.agents/
 ./install.sh claude             # shared + Claude Code (likewise codex, cursor)
 ./install.sh pr-loop remote     # only these groups (or parts), on every tool
 ./install.sh claude safety-hooks
 ```
 
-Words come in any order: one of `all`, `shared`, `claude`, `codex` or `cursor` picks the tools, and every other word is a **group** (`groups.json`) or a **part** (`scripts/parts.sh list`). An unknown word, or a second tool word, prints the usage and exits 1. A selection installs its parts, core, and the **closure**: every part they require, transitively (`scripts/parts.sh closure <words>`). Optional needs stay out. Installs add up: a later `install.sh epics` keeps what an earlier `install.sh remote` linked. A bare `./install.sh` installs every part, `personal` included (global instructions, guardrails and plugins), so a public install names its groups.
+Words come in any order: one of `all`, `shared`, `claude`, `codex` or `cursor` picks the tools, and every other word is a **group** (`groups.json`) or a **part** (`scripts/parts.sh list`). An unknown word, or a second tool word, prints the usage and exits 1. A selection installs its parts, core, and the **closure**: every part they require, transitively (`scripts/parts.sh closure <words>`). Optional needs stay out. Installs add up: a later `install.sh epics` keeps what an earlier `install.sh remote` linked. A bare `./install.sh` installs every group, including the maintainer's `personal` example (global instructions, guardrails and plugins). The README quick start installs only the public groups, by naming them.
 
 ## Shared: `~/.agents/`
 
