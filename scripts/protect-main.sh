@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Applies the `main` ruleset: GitHub refuses direct pushes to main, merges without passing CI, and high-tier
 # changes (CODEOWNERS) without a code owner's approval. Run it once the repo is public (rulesets need a public repo
-# on GitHub Free); run again, it updates the ruleset named `main` instead of adding a second.
+# on a free plan); run again, it updates the ruleset named `main` instead of adding a second.
 # Usage: scripts/protect-main.sh [--dry-run] [<owner/repo>]   (needs GH_TOKEN or a gh login, and jq)
 #   --dry-run  prints the ruleset JSON and calls nothing that writes.
 # Required checks are the job ids in .github/workflows/ci.yml; never agent-pr-gate-job (merge-pr.sh runs the gate).
