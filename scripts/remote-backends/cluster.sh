@@ -3,7 +3,7 @@
 # SandboxClaim and driven with `kubectl exec`.
 # Usage: cluster.sh acquire <run> | put <run> <pod> <dir> | run <run> <pod> <argv>... | get <run> <pod> <dir> | release <run> | check | ping
 # acquire claims a sandbox and prints its pod; its shutdownTime deletes it after REMOTE_HOURS if release never comes.
-# put extracts the tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
+# put extracts the gzipped tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release deletes the claim (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # check names, one line each, what is missing: kubectl, the context, permission to create sandboxclaims and pods/exec
 # in the namespace.
@@ -91,12 +91,13 @@ YAML
     sandbox="$(kc get sandboxclaim "$claim" -o jsonpath='{.status.sandbox.name}')"
     pod="$(kc get sandbox "$sandbox" -o jsonpath='{.metadata.annotations.agents\.x-k8s\.io/pod-name}')"
     pod="${pod:-$sandbox}"
-    say "claimed $claim ($pod)"
+    node="$(kc get pod "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)"
+    say "claimed $claim ($pod${node:+ on $node})"
     printf '%s\n' "$pod"
     ;;
   put)
     dir="\"\$HOME\"/$(sq "$4")"
-    kc exec -i "$3" -- sh -c "mkdir -p $dir && $untar -C $dir"
+    kc exec -i "$3" -- sh -c "mkdir -p $dir && gzip -dc | $untar -C $dir"
     ;;
   run)
     pod="$3"

@@ -89,6 +89,30 @@ grep -q "SOME_TOKEN\|secret" -r "$P" && fail "pack: a secret value was copied"
 grep -q "env.SOME_TOKEN" "$SANDBOX/pack.err" || fail "pack: dropped env not reported"
 grep -q "keyed" "$SANDBOX/pack.err" || fail "pack: dropped MCP server not reported"
 
+# #564: a skill linked into both ~/.claude/skills and ~/.agents/skills (as install.sh does) is staged once, the
+# ~/.claude/skills entry a relative link to the copy; ~/.claude/skills/synced and Python caches are left out.
+H3="$SANDBOX/home3"
+mkdir -p "$H3/repo/shared/__pycache__" "$H3/.claude/skills/synced/acct/s" "$H3/.claude/skills/own" "$H3/.agents/skills"
+printf -- '---\nname: shared\n---\n' >"$H3/repo/shared/SKILL.md"
+printf 'x' >"$H3/repo/shared/__pycache__/m.cpython-315.pyc"
+printf 'x' >"$H3/repo/shared/old.pyc"
+printf -- '---\nname: own\n---\n' >"$H3/.claude/skills/own/SKILL.md"
+printf 'synced\n' >"$H3/.claude/skills/synced/acct/s/SKILL.md"
+ln -s "$H3/repo/shared" "$H3/.agents/skills/shared"
+ln -s "$H3/.agents/skills/shared" "$H3/.claude/skills/shared"
+P3="$SANDBOX/packed3"
+"$REPO/scripts/remote-agent-pack.sh" "$P3" "$H3" 2>"$SANDBOX/pack3.err" || fail "pack dedupe: exited non-zero: $(cat "$SANDBOX/pack3.err")"
+[ -f "$P3/.agents/skills/shared/SKILL.md" ] && [ ! -L "$P3/.agents/skills/shared" ] || fail "pack dedupe: ~/.agents/skills copy missing"
+[ "$(readlink "$P3/.claude/skills/shared")" = "../../.agents/skills/shared" ] \
+  || fail "pack dedupe: ~/.claude/skills/shared is not a relative link to its copy: $(ls -la "$P3/.claude/skills")"
+[ -f "$P3/.claude/skills/shared/SKILL.md" ] || fail "pack dedupe: the link does not resolve in the stage"
+[ -f "$P3/.claude/skills/own/SKILL.md" ] && [ ! -L "$P3/.claude/skills/own" ] || fail "pack dedupe: a skill only in ~/.claude/skills not copied"
+[ ! -e "$P3/.claude/skills/synced" ] || fail "pack dedupe: ~/.claude/skills/synced was staged"
+[ -z "$(find "$P3" -name __pycache__ -o -name '*.pyc')" ] || fail "pack dedupe: Python caches staged: $(find "$P3" -name __pycache__ -o -name '*.pyc')"
+mkdir -p "$SANDBOX/unpacked3"
+(cd "$P3" && tar -cf - .) | gzip | (cd "$SANDBOX/unpacked3" && gzip -dc | tar -xf -)
+[ -f "$SANDBOX/unpacked3/.claude/skills/shared/SKILL.md" ] || fail "pack dedupe: the link does not survive the gzipped tar round trip"
+
 # --- remote-agent.sh against a stub kubectl. The "pod" is $POD (its $HOME). Exec runs the given sh -c
 # command locally with HOME=$POD, except the sandbox script, which is replaced by a fake run that writes
 # $POD/out from $SANDBOX/patch (empty file = no changes); with $SANDBOX/real, the real script runs, with a fake

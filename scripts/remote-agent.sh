@@ -45,7 +45,8 @@
 # token's value is redacted in every kept file. The session is not placed for /resume at the end: the sandbox wrote it,
 # so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
 # in the worktree's project folder, its cwd the worktree, after a warning saying so. Beside the transcript, for any reader:
-# run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s, first_event_s, caller;
+# run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s (send_setup_s and
+# send_work_s, the setup's and the snapshot's part of it; setup_kb, the gzipped setup's size), first_event_s, caller;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
 # exit_code, status, report_status, changed, report_path, duration_ms, num_turns, total_cost_usd, usage,
@@ -508,14 +509,23 @@ run_json '.claim_s = $s' --argjson s "$took"
 
 # macOS tar would add AppleDouble files and xattr headers.
 export COPYFILE_DISABLE=1
-t0=$SECONDS
+# Each goes gzipped: the link to a sandbox can be slow (#564), and the setup is mostly text. Its links (a skill in
+# ~/.claude/skills pointing at its ~/.agents/skills copy) stay links.
 # shellcheck disable=SC2154 # remote_tar: set by remote-settings.sh
-"${remote_tar[@]}" -C "$stage/home" -chf - . | with_progress "$backend" put "$run" "$handle" .
-(cd "$root" && "${remote_tar[@]}" -cf - --null -T "$stage/files") | with_progress "$backend" put "$run" "$handle" work
+"${remote_tar[@]}" -C "$stage/home" -cf - . | gzip -6 >"$stage/setup.tgz"
+setup_kb=$(( ($(wc -c <"$stage/setup.tgz") + 1023) / 1024 ))
+t0=$SECONDS
+with_progress "$backend" put "$run" "$handle" . <"$stage/setup.tgz"
+setup_s=$((SECONDS - t0))
+t1=$SECONDS
+(cd "$root" && "${remote_tar[@]}" -cf - --null -T "$stage/files") | gzip -6 | with_progress "$backend" put "$run" "$handle" work
+work_s=$((SECONDS - t1))
 took=$((SECONDS - t0))
 say "sent setup and snapshot in ${took}s"
+say "setup: ${setup_kb} KB gzipped, sent in ${setup_s}s; snapshot sent in ${work_s}s"
 # shellcheck disable=SC2016 # jq's variables
-run_json '.send_s = $s' --argjson s "$took"
+run_json '.send_s = $s | .send_setup_s = $a | .send_work_s = $b | .setup_kb = $k' --argjson s "$took" \
+  --argjson a "$setup_s" --argjson b "$work_s" --argjson k "$setup_kb"
 send_log
 
 # In the background, so INT or TERM reach the traps at once rather than when the run ends; with job control on, in
