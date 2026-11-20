@@ -32,7 +32,7 @@ default="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
 [ -n "$default" ] || { echo "PR #$pr: could not read the default branch, not merging"; exit 1; }
 if [ "$base" != "$default" ]; then
   echo "PR #$pr: base $base is not $default, merging without the gate"
-  gh pr merge "$pr" "$method" "${delete[@]}" --match-head-commit "$(jq -r .headRefOid <<<"$view")"
+  gh pr merge "$pr" "$method" ${delete[@]+"${delete[@]}"} --match-head-commit "$(jq -r .headRefOid <<<"$view")"
   exit 0
 fi
 
@@ -49,4 +49,4 @@ fi
 
 # --match-head-commit: GitHub refuses the merge unless the head is still the commit the gate judged.
 sha="$(jq -r .head_sha <<<"$verdict")"
-gh pr merge "$pr" "$method" "${delete[@]}" --match-head-commit "$sha"
+gh pr merge "$pr" "$method" ${delete[@]+"${delete[@]}"} --match-head-commit "$sha"
