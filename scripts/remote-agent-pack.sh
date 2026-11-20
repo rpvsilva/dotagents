@@ -3,6 +3,9 @@
 # Usage: scripts/remote-agent-pack.sh <dir> [home]   (home: where the setup is read from, default $HOME)
 # Copies, following links: ~/.claude/{CLAUDE.md,skills,agents,commands,rules} and ~/.agents/{skills,hooks}, and
 # this repo's scripts/capped as ~/.agents/bin/capped, which the sandbox runs the agent's shell commands under.
+# A ~/.claude/skills/<name> that is the same folder as ~/.agents/skills/<name> is staged as a relative link to that
+# copy; ~/.claude/skills/synced (the account's claude.ai skills) and Python caches (__pycache__, *.pyc) are left out:
+# together they were most of the setup's 25 MB, sent to every run (#564).
 # Writes a filtered ~/.claude/settings.json (hooks that call ~/.agents/hooks, permissions, model, enabled
 # plugins and their GitHub-hosted marketplaces) and ~/.claude/remote-mcp.json (MCP servers with no env or
 # headers, which could hold secrets). Never copies credentials, history, transcripts, caches or settings env.
@@ -17,16 +20,35 @@ home="${2:-$HOME}"
 mkdir -p "$out/.claude" "$out/.agents"
 note() { echo "remote-agent-pack: $*" >&2; }
 
-for p in .claude/CLAUDE.md .claude/skills .claude/agents .claude/commands .claude/rules .agents/skills .agents/hooks; do
+real() { (cd -P "$1" 2>/dev/null && pwd); }
+for p in .claude/CLAUDE.md .claude/agents .claude/commands .claude/rules .agents/skills .agents/hooks; do
   [ -e "$home/$p" ] || continue
   cp -RL "$home/$p" "$out/$p" 2>/dev/null || note "some of ~/$p could not be copied (broken links?)"
 done
+# ~/.claude/skills: a skill that is the same folder as ~/.agents/skills/<name> (install.sh links it there) becomes a
+# relative link to that copy, not a second one; `synced`, Claude's copy of the account's claude.ai skills, stays here.
+if [ -d "$home/.claude/skills" ]; then
+  mkdir -p "$out/.claude/skills"
+  for s in "$home/.claude/skills"/* "$home/.claude/skills"/.[!.]*; do
+    [ -e "$s" ] || continue
+    name="$(basename "$s")"
+    case "$name" in synced | .DS_Store) continue ;; esac
+    if [ -d "$home/.agents/skills/$name" ] && [ "$(real "$s")" = "$(real "$home/.agents/skills/$name")" ]; then
+      ln -s "../../.agents/skills/$name" "$out/.claude/skills/$name"
+    else
+      cp -RL "$s" "$out/.claude/skills/$name" 2>/dev/null || note "some of ~/.claude/skills/$name could not be copied (broken links?)"
+    fi
+  done
+fi
 
 # Secret-looking files never leave the machine, wherever they sit.
 while IFS= read -r -d '' f; do
   if is_secret "${f#"$out"/}"; then rm -f "$f"; note "left out ${f#"$out"/} (looks like a secret)"; fi
 done < <(find "$out" -type f -print0)
 find "$out" -name .DS_Store -delete
+# Python's caches: rebuilt where the scripts run, and most of a skill folder's size.
+find "$out" -name __pycache__ -type d -prune -exec rm -rf {} +
+find "$out" -name '*.pyc' -type f -delete
 
 mkdir -p "$out/.agents/bin"
 cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/capped" "$out/.agents/bin/capped"

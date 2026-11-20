@@ -75,7 +75,7 @@ handle="$("$backend" acquire "$run" </dev/null)" || step_failed "acquire"
 [ -n "$handle" ] || step_failed "acquire"
 export COPYFILE_DISABLE=1
 # shellcheck disable=SC2154 # remote_tar: set by remote-settings.sh
-"${remote_tar[@]}" -C "$tmp" -cf - ping | "$backend" put "$run" "$handle" work || step_failed "put"
+"${remote_tar[@]}" -C "$tmp" -cf - ping | gzip | "$backend" put "$run" "$handle" work || step_failed "put"
 code=0
 # shellcheck disable=SC2016 # expanded in the sandbox
 found="$("$backend" run "$run" "$handle" sh -c 'mkdir -p "$HOME/out" && cat "$HOME/work/ping" >"$HOME/out/ping" &&
