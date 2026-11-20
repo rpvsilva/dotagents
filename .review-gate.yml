@@ -1,6 +1,6 @@
 # Rules for agent-pr-gate (.github/workflows/agent-pr-gate.yml), read from the base branch.
 # Policy: an agent may merge medium (default) PRs once evidence and CI are green;
-# high PRs (anything that runs code, guards the gate, or reaches every tool's instructions) need Rui.
+# high PRs (anything that runs code, guards the gate, or reaches every tool's instructions) need the maintainer.
 
 default_tier: medium
 
@@ -31,7 +31,7 @@ routing:
 
 maintainers: [rpvsilva]
 
-# Gate PRs from bots, and agent PRs opened under Rui's account (label them "agent").
+# Gate PRs from bots, and agent PRs opened under the maintainer's account (label them "agent").
 # High-tier PRs and PRs touching gate files are gated whatever the scope says.
 scope:
   bots: true

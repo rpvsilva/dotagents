@@ -16,9 +16,9 @@ These are guardrails against mistakes, not a security boundary: you can still ru
 - approving a PR (`gh pr review`, or `gh api` with `APPROVE`)
 - pushing to `main` or `master`
 
-**Where:** only in repos with a `.review-gate.yml` at their root. In those repos, `scripts/merge-pr.sh` is the only way to merge.
+**Where:** only in repos with a `.review-gate.yml` at their root. In those repos, `scripts/merge-pr.sh` is the only way for an agent to merge.
 
-**Why:** on a private repo on GitHub Free, GitHub enforces no branch protection, so this hook and the merge script are the only gate. An agent approving a PR with my login would fake my approval.
+**Why:** GitHub enforces the `main` ruleset that `scripts/protect-main.sh` applies: a PR, green CI, and a code owner's review on high-tier paths. `scripts/merge-pr.sh` adds the `agent-pr-gate` judgement, pinned to the head commit, and the tier rules. This hook stops an agent from merging directly, approving as the maintainer or pushing to `main`: an agent approving with the maintainer's login would fake their approval.
 
 **Tools:** Claude Code, Codex, Cursor.
 
