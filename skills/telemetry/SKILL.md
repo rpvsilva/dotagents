@@ -1,6 +1,6 @@
 ---
 name: telemetry
-description: Show what the run that just finished cost, split by skill or by subagent role: wall clock, turns, tool calls, tokens, cost; optionally save it as JSON. Or compare a skill's saved runs over time, analyse its steps across them and suggest changes to the skill, or measure and compare build-epic runs.
+description: "Show what the run that just finished cost, split by skill or by subagent role: wall clock, turns, tool calls, tokens, cost; optionally save it as JSON. Or compare a skill's saved runs over time, analyse its steps across them and suggest changes to the skill, or measure and compare build-epic runs."
 disable-model-invocation: true
 ---
 
