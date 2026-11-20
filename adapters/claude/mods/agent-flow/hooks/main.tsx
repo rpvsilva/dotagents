@@ -63,6 +63,8 @@ const LIST_EVERY_MS = 1000
 // engine keeps a finished agent listed for a while, so its last reading is taken too).
 const CTX_EVERY_MS = 1000
 const CTX_AFTER_END_MS = 10_000
+// With nothing running, the engine's agent list is still read this often: an agent the hook events lost shows again.
+const LIST_QUIET_MS = 5000
 // How often an open log is read again while its agent runs, and for how long after it ends (its last messages).
 const LOG_EVERY_MS = 1000
 const LOG_AFTER_END_MS = 5000
@@ -428,25 +430,35 @@ async function learnWindows($: EngineInterface, found: Record<string, number>): 
 }
 
 /**
- * Takes a context reading for main and every subagent the engine lists, recorded as one graph write. Only while
- * something runs or ended a moment ago: a still session costs nothing. Never throws.
+ * Takes a context reading for main and every subagent the engine lists, and where each stands, recorded as one graph
+ * write: every CTX_EVERY_MS while something runs or ended a moment ago, else every LIST_QUIET_MS, so an agent the
+ * hook events lost or ended too early comes back. Never throws.
  */
 async function readCtx($: EngineInterface, t: number): Promise<void> {
   try {
     const g = await read($, graph)
     const recent = g.agents.some(a => a.status === 'running' || (a.ended !== null && t - a.ended < CTX_AFTER_END_MS))
-    if (!recent || t - ctxReadAt < CTX_EVERY_MS) return
+    if (t - ctxReadAt < (recent ? CTX_EVERY_MS : LIST_QUIET_MS)) return
     ctxReadAt = t
     const evs: FlowEvent[] = []
     const found: Record<string, number> = {}
     try {
-      for (const info of await $.agent.list()) {
+      const infos = await $.agent.list()
+      evs.push({
+        kind: 'listed', at: t,
+        agents: infos.map(i => ({ id: i.id, status: i.status, parent: i.parentId ?? null, type: i.type, desc: i.description, model: i.model ?? null })),
+      })
+      for (const info of infos) {
         if (info.model && info.contextWindowSize) found[info.model] = info.contextWindowSize
         if (info.contextWindowSize && info.tokenCount > 0) evs.push({ kind: 'ctx', at: t, agent: info.id, used: info.tokenCount, window: info.contextWindowSize })
         if (info.cost) evs.push({ kind: 'cost', at: t, agent: info.id, usd: info.cost.usd })
       }
     } catch {
       // no agents listed on this surface
+    }
+    if (!recent) {
+      await update($, graph, x => evs.reduce(reduce, x))
+      return
     }
     try {
       const { context, cost } = await $.session.usage()
