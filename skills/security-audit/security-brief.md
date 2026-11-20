@@ -33,7 +33,7 @@ Any scope may also name `known` (findings already found or accepted: report only
 
    Done when every source-to-sink pair on your list has been traced on all six axes.
 
-4. **Check the output** once it is written, before your final message. For each `path` and `line` in it, read that line in the worktree: it must hold the code the claim is about, not a nearby line; fix any number that misses. Before your final message, run `python3 -I ~/.agents/skills/_shared/protocol/check.py security output <file>` on the object and fix each problem it prints until it prints `OK security <status>`: with an `output` file, on that file; with none (a remote run), write the object to a file outside the worktree (`/tmp/security-output.json`) first. Done when every cited line holds what its claim says and the output passes its check.
+4. **Check the output** once it is written, before your final message. For each `path` and `line` in it, read that line in the worktree: it must hold the code the claim is about, not a nearby line; fix any number that misses. Before your final message, run `python3 -I ../_shared/protocol/check.py security output <file>` on the object and fix each problem it prints until it prints `OK security <status>`: with an `output` file, on that file; with none (a remote run), write the object to a file outside the worktree (`/tmp/security-output.json`) first. Done when every cited line holds what its claim says and the output passes its check.
 
 ## When you run remotely
 

@@ -5,4 +5,4 @@ model: sonnet
 disallowedTools: Agent
 ---
 
-Read and follow `~/.agents/skills/build-epic/implementer-brief.md`. The orchestrator's message holds the task path, the run folder, the worktree path and the ticket branch name.
+Read and follow `~/.claude/skills/build-epic/implementer-brief.md`. The orchestrator's message holds the task path, the run folder, the worktree path and the ticket branch name.

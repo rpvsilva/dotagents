@@ -24,8 +24,21 @@ export type FlowEvent =
   /** A context reading: `used` tokens of a `window` (both from the engine). */
   | { kind: 'ctx'; at: number; agent: string; used: number; window: number }
   | { kind: 'cost'; at: number; agent: string; usd: number }
+  /** The engine's own list of the session's agents (`$.agent.list()`), with where each loop stands. */
+  | { kind: 'listed'; at: number; agents: Listed[] }
   /** The repo's runs of other sessions, as one scan found them (OTHERS_MAX newest): they replace the last list. */
   | { kind: 'others'; at: number; runs: RemoteRun[] }
+
+/** An agent as `$.agent.list()` gives it: its id, status (AgentStatus), parent (absent: main), type, task and model. */
+export type Listed = { id: string; status: string; parent: string | null; type: string; desc: string; model: string | null }
+
+/** How long after an agent's end the engine's list may still call it at work. */
+export const LIST_LAG_MS = 3000
+
+/** Statuses of a loop that is still at work; `idle` is not, nor an ended one. */
+const LIVE = new Set(['pending', 'running', 'waiting'])
+/** Statuses of an ended loop, and why a failed one failed. */
+const ENDED: Readonly<Record<string, string | null>> = { completed: null, failed: 'error', killed: 'stopped' }
 
 /** Agents kept at most: past it the oldest finished ones go (main never). */
 export const MAX_AGENTS = 100
@@ -205,6 +218,40 @@ export function reduce(g: Graph, ev: FlowEvent): Graph {
         return cap({ ...g, agents: [...g.agents, agent] })
       }
       return patch(id, a => (same(a, fields) ? a : { ...a, ...fields }))
+    }
+    case 'listed': {
+      // The engine's word wins over the hook events: a missed or early turn end never hides an agent at work, a
+      // missed one never leaves an ended agent spinning, and one spawned before this graph (a reload, a mod loaded
+      // late) joins it.
+      let next = g
+      for (const l of ev.agents) {
+        const was = next.agents.find(a => a.id === l.id)
+        const live = LIVE.has(l.status)
+        if (!was) {
+          if (!live || l.id === MAIN) continue
+          const parent = l.parent !== null && next.agents.some(a => a.id === l.parent) ? l.parent : MAIN
+          const agent: Agent = {
+            id: l.id, parent, type: printable(l.type) || 'agent', desc: printable(l.desc), model: l.model, status: 'running', why: null, started: at, ended: null,
+            steps: 0, tokens: 0, step: null, toolUseId: null, turn: next.turn, checks: {}, ctx: null, window: null, cost: null, remote: null,
+          }
+          next = cap({ ...next, agents: [...next.agents, agent] })
+          continue
+        }
+        if (was.remote || was.id === MAIN) continue
+        const i = next.agents.indexOf(was)
+        let now: Agent = was
+        // An agent that ended a moment ago may still be listed as at work: the list lags the turn's end.
+        if (live && isFinished(was) && at - (was.ended ?? at) >= LIST_LAG_MS) now = { ...was, ...reopen(was) }
+        else if (l.status in ENDED && was.status === 'running') {
+          const why = ENDED[l.status] ?? null
+          now = { ...was, status: why ? 'failed' : 'done', why, ended: at, step: null, checks: {} }
+        }
+        if (now === was) continue
+        const agents = next.agents.slice()
+        agents[i] = now
+        next = { ...next, agents }
+      }
+      return next
     }
     case 'others': {
       const others = ev.runs.map((r): Agent => {

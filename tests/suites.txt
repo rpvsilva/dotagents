@@ -32,3 +32,4 @@ run.test.sh tests/run.sh scripts/shellcheck-version scripts/shellcheck-image eva
 parts.test.sh scripts/parts.sh groups.json *needs.json
 settings.test.sh scripts/settings.sh *settings.json
 telemetry-save.test.sh scripts/hooks/telemetry-save.sh adapters/claude/hooks/telemetry-save.json adapters/claude/telemetry/* skills/telemetry/settings.json scripts/settings.sh
+protect-main.test.sh scripts/protect-main.sh

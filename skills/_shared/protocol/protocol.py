@@ -10,6 +10,7 @@ additionalProperties (false), items, minItems, minLength, maxLength, minimum, pa
 $ref (`#/$defs/x` in the same file, `common.json#/$defs/x` across files).
 """
 import json
+import os
 import re
 from pathlib import Path
 
@@ -136,14 +137,25 @@ def _trailing_object(text):
     raise ValueError("no JSON object")
 
 
-def prompt(role, inputs):
-    """The prompt for `role` with `inputs`: the agent and brief line, then the inputs as JSON. ValueError on a bad input."""
+def default_skills_root():
+    """The skills folder above this file, unresolved (a link stays a link), written with `~` when under `$HOME`."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    home = os.path.expanduser("~")
+    if home not in ("~", "/") and (root == home or root.startswith(home.rstrip("/") + "/")):
+        return "~" + root[len(home.rstrip("/")):]
+    return root
+
+
+def prompt(role, inputs, skills_root=None):
+    """The prompt for `role` with `inputs`: the agent and brief line, then the inputs as JSON. The brief is named under
+    `skills_root` (default: the skills folder this file sits in). ValueError on a bad input."""
+    skills_root = (skills_root or default_skills_root()).rstrip("/")
     problems = check(role, "input", inputs)
     if problems:
         raise ValueError("; ".join(problems))
     doc = schema(role)
     head = f"You are an {doc['agent']}." if doc["agent"][0] in "aeiou" else f"You are a {doc['agent']}."
-    return f"{head} Follow ~/.agents/skills/{doc['brief']}.\n{json.dumps(inputs, indent=1, ensure_ascii=False)}\n"
+    return f"{head} Follow {skills_root}/{doc['brief']}.\n{json.dumps(inputs, indent=1, ensure_ascii=False)}\n"
 
 
 def prompt_inputs(text):
