@@ -221,11 +221,11 @@ evals/              eval cases per skill (evals/<skill>/<case>/) and their runne
 
 ## 🤝 Contributing
 
-Read [AGENTS.md](AGENTS.md) first. It covers:
+Start with [CONTRIBUTING.md](CONTRIBUTING.md): how to set up, run the checks and open a PR. Then read [AGENTS.md](AGENTS.md), the rules your agent follows. It covers:
 - the principles
 - how to add a skill, subagent, tool, hook, plugin, mod or MCP server
 - the checks (`tests/run.sh`)
-- the PR rules: PRs merge only through `scripts/merge-pr.sh` and the `agent-pr-gate`
+- the PR rules: what every contributor follows, and the maintainer-only merge path (`scripts/merge-pr.sh` and the `agent-pr-gate`)
 
 ## 📄 License
 
