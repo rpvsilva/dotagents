@@ -520,7 +520,7 @@ case "$e" in
     ;;
 esac
 mkdir -p "$SANDBOX/stage" && printf '0\n' >"$SANDBOX/stage/.expires"
-tar -cf - -C "$SANDBOX/stage" . | bare_op put agent-expiry "$h" . 2>/dev/null || fail "bare expiry: put failed"
+tar -cf - -C "$SANDBOX/stage" . | gzip | bare_op put agent-expiry "$h" . 2>/dev/null || fail "bare expiry: put failed"
 [ "$(tr -d '\r' <"$h/.expires" 2>/dev/null)" = "$e" ] || fail "bare expiry: put overwrote .expires: $(cat "$h/.expires")"
 
 # run keeps a heartbeat, .heartbeat touched while the run lives, from a loop holding none of the connection's

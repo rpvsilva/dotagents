@@ -8,7 +8,7 @@
 # the host's memory and CPUs (docker info) over REMOTE_MAX_SANDBOXES (4), since other runs, and other people's, share
 # it. A share under 2048 MB is said: Claude and the tests may not fit. The sandbox derives its commands' memory cap
 # from that limit (scripts/remote-agent-sandbox.sh).
-# put extracts the tar on stdin under the container's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
+# put extracts the gzipped tar on stdin under the container's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release removes the container (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # The container is labelled sandbox.users.io/remote-agent-run=<run> and, with REMOTE_TASK (set by remote-agent.sh
 # from --name), sandbox.users.io/remote-agent-task=<task>: the cluster's keys, so
@@ -112,7 +112,7 @@ case "$op" in
     ;;
   put)
     dir="\"\$HOME\"/$(sq "$4")"
-    dk exec -i "$3" sh -c "mkdir -p $dir && $untar -C $dir"
+    dk exec -i "$3" sh -c "mkdir -p $dir && gzip -dc | $untar -C $dir"
     ;;
   run)
     container="$3"

@@ -14,8 +14,8 @@
 # than 3 minutes, or once the clock is more than 10 minutes past its .expires whatever the heartbeat (a hard limit:
 # what still runs there is killed first, as release does); one with no .expires (an older client's) once its mtime is
 # older than REMOTE_HOURS. run uses that folder as HOME, with the XDG folders and Claude Code's config inside it, so
-# runs stay apart from the host user's own setup and from each other. put and get use plain tar flags (the host's tar
-# may be GNU or BSD). run records the command's pid (and process group, under setsid where the host has it) in the
+# runs stay apart from the host user's own setup and from each other. put (its stdin a gzipped tar, which gzip -dc unpacks) and get
+# use plain tar flags (the host's tar may be GNU or BSD). run records the command's pid (and process group, under setsid where the host has it) in the
 # folder's .pid, since killing the ssh client does not stop it; release kills what that names (TERM, then KILL), then
 # removes the folder, or keeps it under REMOTE_KEEP. A pid counts as the run's, for the heartbeat and for any signal,
 # only while its working folder is inside the run folder (read from /proc, else lsof): a pid reused by another
@@ -156,7 +156,7 @@ cd "$root"/'"$(sq "$run")"' && pwd' </dev/null
     x="$(sq "$3")/.expires"
     # Extracting into . would give the run folder the mode of the tar's root: back to 700. The run's .expires (see
     # acquire) is put back as it was, whatever the tar held.
-    on_host "e=\$(cat $x 2>/dev/null); mkdir -p $dir && tar -xf - -C $dir && chmod 700 $(sq "$3") &&
+    on_host "e=\$(cat $x 2>/dev/null); mkdir -p $dir && gzip -dc | tar -xf - -C $dir && chmod 700 $(sq "$3") &&
 if [ -n \"\$e\" ]; then rm -f $x && echo \"\$e\" >$x; fi"
     ;;
   run)
