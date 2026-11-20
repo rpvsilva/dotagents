@@ -472,6 +472,21 @@ while IFS= read -r g; do
 done < <(jq -r 'keys[]' groups.json)
 case " $qs_line " in *" personal "*) fail "README.md: the quick-start install line names 'personal'" ;; esac
 
+# Renovate: renovate.json parses and manages github-actions, and every `uses: <owner>/<repo>@<ref>` is a 40-hex SHA
+# (a `docker://` ref is exempt: Renovate pins it by digest), so Renovate can keep the pins current.
+jq -e . renovate.json >/dev/null 2>&1 || fail "renovate.json: does not parse as JSON"
+jq -e '(.enabledManagers // []) | index("github-actions")' renovate.json >/dev/null 2>&1 || fail "renovate.json: enabledManagers lacks github-actions"
+unpinned_uses() { # $@: workflow files; prints each `uses:` whose ref is not a 40-hex SHA
+  grep -nE '^[[:space:]-]*uses:[[:space:]]*[^[:space:]]' "$@" | tr -d '\r' \
+    | grep -vE 'uses:[[:space:]]*(docker://|\./)' | grep -vE 'uses:[[:space:]]*[^@[:space:]]+@[0-9a-f]{40}([[:space:]]|$)' || true
+}
+while IFS= read -r bad; do [ -z "$bad" ] || fail "$bad: a workflow action is not pinned to a 40-hex SHA"; done < <(unpinned_uses .github/workflows/*.yml)
+# Negative case: a tag ref is reported.
+bad_wf="$(mktemp -d)/wf.yml"
+printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n      - uses: docker://x/y:1\n' >"$bad_wf"
+[ "$(unpinned_uses "$bad_wf" | wc -l | tr -d ' ')" = 1 ] || fail "Renovate check: a tag-pinned action is not reported (or a docker:// ref is)"
+rm -rf "$(dirname "$bad_wf")"
+
 # CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
 mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
 if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then
