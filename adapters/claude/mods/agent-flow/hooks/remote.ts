@@ -241,13 +241,79 @@ export type Task = {
   id: string; type: string; desc: string; toolUseId: string | null; status: 'running' | 'done' | 'failed'; started: number | null; ended: number | null; steps: number; step: string | null
   /** The model its own requests named, and the context its latest one used; null before its first. */
   model: string | null; ctx: number | null
+  /** What its own requests cost so far, in dollars, priced by PRICES; null before its first or when a model is not priced. */
+  cost: number | null
 }
 
 /**
  * What a run's transcript says: its model, its tool calls, the one running now, the subagents it ran, the context
  * its latest request used (null before one), and each model's context window as its final result names them.
  */
-export type Scan = { model: string | null; steps: number; step: string | null; tasks: Task[]; ctx: number | null; windows: Record<string, number> }
+export type Scan = {
+  model: string | null; steps: number; step: string | null; tasks: Task[]; ctx: number | null; windows: Record<string, number>
+  /** What the whole run cost so far, its subagents' requests included, priced by PRICES; null as Task.cost. */
+  cost: number | null
+}
+
+/** A model's list prices in dollars per million tokens: input, output, cache read, cache write (5 min), cache write (1 h). */
+export type Price = readonly [input: number, output: number, cacheRead: number, cacheWrite5m: number, cacheWrite1h: number]
+
+/**
+ * List prices by model id, copied from the telemetry skill's pricing.json (as of 2026-10-23). They price a live run
+ * only: once its result.json lands, the run shows the cost it names instead. A model missing here shows no cost
+ * until then.
+ */
+export const PRICES: Readonly<Record<string, Price>> = {
+  'claude-fable-5-1': [10, 50, 0.25, 12.5, 20],
+  'claude-mythos-5-1': [10, 50, 0.25, 12.5, 20],
+  'claude-fable-5': [10, 50, 1, 12.5, 20],
+  'claude-mythos-5': [10, 50, 1, 12.5, 20],
+  'claude-opus-5-5': [4, 20, 0.2, 5, 8],
+  'claude-opus-5': [5, 25, 0.5, 6.25, 10],
+  'claude-opus-4-8': [5, 25, 0.5, 6.25, 10],
+  'claude-opus-4-7': [5, 25, 0.5, 6.25, 10],
+  'claude-opus-4-6': [5, 25, 0.5, 6.25, 10],
+  'claude-sonnet-5-5': [2, 10, 0.1, 2.5, 4],
+  'claude-sonnet-5': [2, 10, 0.2, 2.5, 4],
+  'claude-sonnet-4-6': [3, 15, 0.3, 3.75, 6],
+  'claude-haiku-5-5': [0.1, 0.5, 0.01, 0.125, 0.2],
+  'claude-haiku-4-5': [1, 5, 0.1, 1.25, 2],
+}
+
+/**
+ * A model id's prices: the id without a provider prefix (`us.anthropic.`), a `[1m]` tag, a date or a `-v1:0`
+ * version, then shortened a `-<n>` at a time until PRICES has it (`claude-opus-5-1` → `claude-opus-5`); null when
+ * none matches.
+ */
+export function priceOf(model: string | null): Price | null {
+  if (!model) return null
+  let id = model.toLowerCase().replace(/\[[^\]]*\]/g, '').replace(/^.*?(?=claude-)/, '').replace(/[@-]\d{8}.*$/, '').replace(/-v\d+(:\d+)?$/, '')
+  for (;;) {
+    const p = PRICES[id]
+    if (p) return p
+    const cut = id.replace(/-\d+$/, '')
+    if (cut === id) return null
+    id = cut
+  }
+}
+
+/**
+ * What one request cost in dollars, from its `usage` and its model's prices: cache writes by their split into 5 min
+ * and 1 h when the usage gives it, else all at the 5 min rate. 0 for a request with no tokens (a synthetic message),
+ * priced or not; null when its model has no price or it has no usage.
+ */
+export function usdOf(usage: unknown, model: string | null): number | null {
+  const u = obj(usage)
+  if (!u) return null
+  const n = (v: unknown) => num(v) ?? 0
+  const write = n(u.cache_creation_input_tokens)
+  const split = obj(u.cache_creation)
+  const write1h = split ? Math.min(write, n(split.ephemeral_1h_input_tokens)) : 0
+  const counts = [n(u.input_tokens), n(u.output_tokens), n(u.cache_read_input_tokens), write - write1h, write1h]
+  if (counts.every(c => c === 0)) return 0
+  const p = priceOf(model)
+  return p ? counts.reduce((sum, c, i) => sum + (c * p[i]!) / 1e6, 0) : null
+}
 
 /** The context a request used, as the engine's tokenCount counts it: its whole input and its output. */
 function usedBy(usage: unknown): number | null {
@@ -269,8 +335,11 @@ const blocks = (ev: TranscriptEvent): Record<string, unknown>[] => {
  */
 export function scanTranscript(text: string): Scan {
   const { events } = parseLines(text.endsWith('\n') ? text : `${text}\n`)
-  const scan: Scan = { model: null, steps: 0, step: null, tasks: [], ctx: null, windows: {} }
+  const scan: Scan = { model: null, steps: 0, step: null, tasks: [], ctx: null, windows: {}, cost: null }
   const tasks = new Map<string, Task>()
+  // Each request's cost by its message id, with the subagent that made it: a message of several content blocks comes
+  // as several events with the same id, and the last one's usage counts.
+  const spent = new Map<string, { owner: Task | null; usd: number | null }>()
   const byToolUse = new Map<string, Task>()
   let open: { id: string; text: string } | null = null
   for (const ev of events) {
@@ -281,7 +350,7 @@ export function scanTranscript(text: string): Scan {
       if (!id) continue
       let t = tasks.get(id)
       if (ev.subtype === 'task_started' && !t) {
-        t = { id, type: str(ev.subagent_type) ?? 'agent', desc: str(ev.description) ?? '', toolUseId: str(ev.tool_use_id), status: 'running', started: null, ended: null, steps: 0, step: null, model: null, ctx: null }
+        t = { id, type: str(ev.subagent_type) ?? 'agent', desc: str(ev.description) ?? '', toolUseId: str(ev.tool_use_id), status: 'running', started: null, ended: null, steps: 0, step: null, model: null, ctx: null, cost: null }
         tasks.set(id, t)
         if (t.toolUseId) byToolUse.set(t.toolUseId, t)
       }
@@ -308,6 +377,7 @@ export function scanTranscript(text: string): Scan {
     if (ev.type === 'assistant') {
       const m = obj(ev.message)
       const used = usedBy(m?.usage)
+      if (m?.usage !== undefined) spent.set(str(m.id) ?? `#${spent.size}`, { owner, usd: usdOf(m.usage, str(m.model) ?? owner?.model ?? scan.model) })
       if (owner) {
         owner.model = str(m?.model) ?? owner.model
         if (used !== null) owner.ctx = used
@@ -334,6 +404,10 @@ export function scanTranscript(text: string): Scan {
     }
   }
   scan.tasks = [...tasks.values()]
+  const total = (rows: { usd: number | null }[]) => (rows.length === 0 || rows.some(r => r.usd === null) ? null : rows.reduce((sum, r) => sum + r.usd!, 0))
+  const rows = [...spent.values()]
+  scan.cost = total(rows)
+  for (const t of scan.tasks) t.cost = total(rows.filter(r => r.owner === t))
   return scan
 }
 
@@ -379,7 +453,8 @@ export function remoteRun(run: Run, result: Result | null, scan: Scan | null, no
     steps: scan?.steps ?? 0,
     step: status === 'running' ? (scan?.step ?? null) : null,
     exit: run.exit,
-    cost: result?.cost ?? null,
+    // result.json's figure once there; until then the transcript's priced tokens.
+    cost: result?.cost ?? scan?.cost ?? null,
     turns: result?.turns ?? null,
     files: result?.files ?? null,
     session: run.session,
@@ -390,7 +465,7 @@ export function remoteRun(run: Run, result: Result | null, scan: Scan | null, no
 
 /**
  * The graph events of one run: the run, then each subagent it ran, each with a context reading when its transcript
- * has one and `windowOf` knows its model's window.
+ * has one and `windowOf` knows its model's window, and a subagent with its cost once its requests are priced.
  */
 export function runEvents(r: RemoteRun, scan: Scan | null, at: number, windowOf: (model: string) => number | null = () => null): FlowEvent[] {
   const evs: FlowEvent[] = [{ kind: 'remote', at, run: r }]
@@ -404,6 +479,7 @@ export function runEvents(r: RemoteRun, scan: Scan | null, at: number, windowOf:
     const status = t.status === 'running' && r.status !== 'running' ? (r.status === 'done' ? 'done' : 'failed') : t.status
     evs.push({ kind: 'remoteTask', at, runId: r.runId, folder: r.folder, task: { ...t, status, ended: status === 'running' ? null : (t.ended ?? r.ended ?? at) }, model: r.model })
     reading(`remote:${r.runId}:${t.id}`, t.ctx, t.model ?? r.model)
+    if (t.cost !== null) evs.push({ kind: 'cost', at, agent: `remote:${r.runId}:${t.id}`, usd: t.cost })
   }
   return evs
 }

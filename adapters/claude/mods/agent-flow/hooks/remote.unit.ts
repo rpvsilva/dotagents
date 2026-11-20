@@ -21,6 +21,7 @@ import {
   launchName,
   parseResult,
   parseRun,
+  priceOf,
   remoteLog,
   remoteRun,
   resolvePath,
@@ -30,6 +31,7 @@ import {
   scanTranscript,
   STALE_MS,
   upwards,
+  usdOf,
 } from './remote.ts'
 import type { Launch } from './state.d.ts'
 
@@ -128,7 +130,7 @@ test("a transcript gives the run's model, its own steps, and each subagent with 
   assert.equal(s.model, 'claude-opus-5-5')
   assert.equal(s.steps, 2)
   assert.equal(s.step, 'Agent Find settings')
-  assert.deepEqual(s.tasks, [{ id: 'tk1', type: 'Explore', desc: 'Find skills with settings.json', toolUseId: 'agent1', status: 'done', started: T + 5_000, ended: T + 20_000, steps: 1, step: null, model: null, ctx: null }])
+  assert.deepEqual(s.tasks, [{ id: 'tk1', type: 'Explore', desc: 'Find skills with settings.json', toolUseId: 'agent1', status: 'done', started: T + 5_000, ended: T + 20_000, steps: 1, step: null, model: null, ctx: null, cost: null }])
 })
 
 test("a transcript gives the context the run and each subagent used at its latest request, and the windows a result names", () => {
@@ -153,6 +155,49 @@ test("a transcript gives the context the run and each subagent used at its lates
   assert.deepEqual(evs.filter(e => e.kind === 'ctx'), [{ kind: 'ctx', at: T, agent: `remote:${ID}`, used: 2142, window: 1_000_000 }])
   const g = runEvents(r, s, T, m => (m === 'claude-opus-5-5' ? 1_000_000 : 200_000)).reduce(reduce, emptyGraph())
   assert.deepEqual(g.agents.filter(a => a.remote).map(a => [a.ctx, a.window]), [[2142, 1_000_000], [330, 200_000]])
+})
+
+test('a model id finds its prices without its provider prefix, tag, date or version, else by a shorter id', () => {
+  assert.deepEqual(priceOf('claude-opus-5-5'), [4, 20, 0.2, 5, 8])
+  assert.deepEqual(priceOf('us.anthropic.claude-opus-5-5-v1:0'), priceOf('claude-opus-5-5'))
+  assert.deepEqual(priceOf('claude-sonnet-5-5[1m]'), priceOf('claude-sonnet-5-5'))
+  assert.deepEqual(priceOf('claude-haiku-4-5-20251001'), priceOf('claude-haiku-4-5'))
+  assert.deepEqual(priceOf('claude-opus-5-1'), priceOf('claude-opus-5'))
+  assert.equal(priceOf('gpt-5'), null)
+  assert.equal(priceOf(null), null)
+})
+
+test("a request's cost: each token kind at its rate, cache writes split by 1 h when the usage says; none for an unpriced model", () => {
+  const close = (a: number | null, b: number) => assert.ok(a !== null && Math.abs(a - b) < 1e-12, `${a} ≈ ${b}`)
+  // opus 5.5: $4 in, $20 out, $0.2 read, $5 write 5m, $8 write 1h, per million.
+  close(usdOf({ input_tokens: 1e6, output_tokens: 1e6, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6 }, 'claude-opus-5-5'), 4 + 20 + 0.2 + 5)
+  close(usdOf({ cache_creation_input_tokens: 1e6, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1e6 } }, 'claude-opus-5-5'), 8)
+  assert.equal(usdOf({ input_tokens: 10 }, 'gpt-5'), null)
+  assert.equal(usdOf({ input_tokens: 0, output_tokens: 0 }, '<synthetic>'), 0)
+  assert.equal(usdOf(undefined, 'claude-opus-5-5'), null)
+})
+
+test("a live run's cost comes from its transcript, a message counted once, each subagent's its own; result.json's replaces it", () => {
+  const M = 1e6
+  const tr = jsonl(
+    { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+    // One message in two events (a text block, then a tool call): its usage counts once.
+    { type: 'assistant', message: { id: 'm1', model: 'claude-opus-5-5', usage: { input_tokens: M, output_tokens: 0 }, content: [{ type: 'text', text: 'looking' }] } },
+    { type: 'assistant', message: { id: 'm1', model: 'claude-opus-5-5', usage: { input_tokens: M, output_tokens: 0 }, content: [{ type: 'tool_use', id: 'agent1', name: 'Agent', input: {} }] } },
+    { type: 'system', subtype: 'task_started', task_id: 'tk1', tool_use_id: 'agent1', description: 'look', subagent_type: 'Explore' },
+    { type: 'assistant', parent_tool_use_id: 'agent1', message: { id: 'm2', model: 'claude-haiku-5-5', usage: { input_tokens: M, output_tokens: M }, content: [] } },
+  )
+  const s = scanTranscript(tr)
+  assert.equal(s.cost, 4 + 0.6)
+  assert.equal(s.tasks[0]!.cost, 0.6)
+  const r = remoteRun(run(), null, s, T)
+  assert.equal(r.cost, 4.6)
+  const g = runEvents(r, s, T).reduce(reduce, emptyGraph())
+  assert.deepEqual(g.agents.filter(a => a.remote).map(a => a.cost ?? a.remote!.cost), [4.6, 0.6])
+  assert.equal(remoteRun(run({ state: 'done' }), { cost: 4.7, turns: 2, files: 0, model: null, why: null }, s, T).cost, 4.7)
+  // A request on a model with no price: no cost until result.json, rather than a part of it.
+  assert.equal(scanTranscript(tr + jsonl({ type: 'assistant', message: { id: 'm3', model: 'gpt-5', usage: { input_tokens: 1 }, content: [] } })).cost, null)
+  assert.equal(scanTranscript(jsonl({ type: 'system', subtype: 'init', model: 'claude-opus-5-5' })).cost, null)
 })
 
 test("a remote log: the run's setup, its own events, then its summary; a subagent's log only its own events", () => {

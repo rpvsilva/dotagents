@@ -11,7 +11,7 @@ import json
 import os
 import re
 
-from . import core, gh, identity
+from . import core, corecmd, gh, identity
 
 MARKER = "<!-- build-epic-plan -->"
 IN_PROGRESS = "in progress"
@@ -26,8 +26,8 @@ def issues(value):
 
 
 def setting(section, key, repo, log):
-    """A Setting's effective value through `~/.agents/bin/settings`, or None when unset or the tool is missing."""
-    tool = os.path.join(core.home(), ".agents", "bin", "settings")
+    """A Setting's effective value through the `settings` command, or None when unset or the tool is missing."""
+    tool = corecmd.path("settings")
     if not os.path.exists(tool):
         log.write(f"no {tool}: {section}.{key} taken as unset\n")
         return None

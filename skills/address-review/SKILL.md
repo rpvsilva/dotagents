@@ -1,6 +1,6 @@
 ---
 name: address-review
-description: Work through a PR's open review threads: fix what holds up, reply to the rest, push; disagreements go to the human first. Never approves or merges.
+description: "Work through a PR's open review threads: fix what holds up, reply to the rest, push; disagreements go to the human first. Never approves or merges."
 disable-model-invocation: true
 ---
 
