@@ -18,6 +18,7 @@ Process every open Renovate PR: fix what is fixable, verify each locally and in 
 2. **Triage.** `gh pr list --state open --author app/renovate` plus `gh pr checks <n>` per PR. Sort each into:
    - **green**: CI passes. Still needs a local look for breaking changes CI can't see (code paths with no tests, deploy-only tooling).
    - **artifact failure**: `renovate/artifacts` fails and install complains the lock file is out of date. Renovate failed to write the lock; the fix is regenerating it, unless a real constraint conflict sits behind it.
+   - **lockless pin**: the PR bumps a pin with no lock file (a Docker digest, an Action SHA, a one-line version file). There is no artifact to regenerate: judge it on CI alone, and merge it when green.
    - **red**: install works but lint/test/build fails: a code breakage to port.
 
    **Couple** PRs that can only move together (a framework and its plugin, a test runner and its adapter) into one unit. Done when every PR is in exactly one unit.
@@ -28,6 +29,8 @@ Process every open Renovate PR: fix what is fixable, verify each locally and in 
    1. If it conflicts with main: in its worktree, `git rebase origin/main`, resolve the lock by taking main's copy (`git checkout origin/main -- <lockfile>`), re-run the same targeted update, then lint + test, `git rebase --continue`, `git push --force-with-lease=<branch>:<old-sha>`.
    2. `gh pr checks <n> --watch` until every check passes.
    3. Merge with the merge command from step 1, then delete the PR branch.
+
+   A green PR on a path that needs a code owner's approval is not merged: leave it waiting and report it as waiting on that approval.
 
    Done when every fixed PR shows `MERGED`, or is green and waiting on a named person (an approval the merge rule requires).
 
