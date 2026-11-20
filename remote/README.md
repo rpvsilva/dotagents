@@ -63,12 +63,12 @@ An agent-sandbox SandboxClaim on a warm pool, driven with `kubectl exec`; the ha
 A fresh container of the runner image on this machine for each run, driven with `docker exec`; the handle is the container, named after the run. It runs `sleep <REMOTE_HOURS*3600>` under `--rm`, so it removes itself after `REMOTE_HOURS` if `remote-agent` dies; otherwise `docker rm -f` removes it at the end, also on failure, Ctrl-C or `kill`. Like the cluster's pods, it carries the labels `sandbox.users.io/remote-agent-run=<run>` and, with `--name`, `sandbox.users.io/remote-agent-task=<task>`: `docker ps --filter label=sandbox.users.io/remote-agent-task` lists the named runs, and `docker logs -f <run>` follows one. Needs only Docker and the image. Settings, in `remote.env`:
 
 - `REMOTE_BACKEND=docker`.
-- `REMOTE_IMAGE`: the runner image, the `image` Setting's default, `ghcr.io/xgeekshq/agent-runner:main`, unless you set your own (`remote.image`). That default is private: log in once with `docker login ghcr.io` (a GitHub user and a token with `read:packages`) if you have access, or build your own runner image and set `remote.image` to it. Empty, the backend refuses with `REMOTE_IMAGE not set`.
+- `REMOTE_IMAGE`: the runner image, the `image` Setting's default, `ghcr.io/rpvsilva/agent-runner:main` (public, for `linux/amd64` and `linux/arm64`; see [The runner image](#the-runner-image)), unless you set your own (`remote.image`). Empty, the backend refuses with `REMOTE_IMAGE not set`.
 - `REMOTE_PLATFORM`: passed to `docker run --platform` when set (e.g. `linux/amd64`); unset, Docker picks this machine's architecture.
 - `REMOTE_HOURS` (2) and `REMOTE_KEEP=1` (keep the container: `kept container <run>`; it still removes itself after `REMOTE_HOURS`).
 - `REMOTE_SANDBOX_MB` and `REMOTE_SANDBOX_CPUS` (`remote.sandbox_mb`, `remote.sandbox_cpus`): each run's share of the host, as `docker run --memory` (with `--memory-swap` the same: no swap past it) and `--cpus`. Unset, the host's memory and CPUs (`docker info`) over `REMOTE_MAX_SANDBOXES`, since other runs, and other people's, share it; `started container <run> (<image>; 4096 MB, 2 CPUs)` says what it got, and a share under 2048 MB adds a note. The sandbox caps its commands' memory under that limit.
 
-**Apple Silicon** needs the image published for `linux/arm64` as well as `linux/amd64`, or built locally as above. An amd64-only image runs under emulation with `REMOTE_PLATFORM=linux/amd64`, but slowly.
+**Apple Silicon** runs the default image natively: it is published for `linux/arm64` too. An image of your own published for amd64 only runs under emulation with `REMOTE_PLATFORM=linux/amd64`, but slowly.
 
 The container gets Docker's default network: internet egress, and whatever this machine's network reaches. Anyone who can run `docker` here can see the snapshot and the token during a run.
 
@@ -138,3 +138,16 @@ No GitHub credentials are needed or sent: the PR, if any, is opened from the lap
 ## What the sandbox can reach
 
 On the cluster: internet egress only: Anthropic and package registries work, so agents can install dependencies and run tests. Cluster services and the LAN are blocked. It holds no GitHub credentials and no git remote, so it cannot read or push to any private repo. Anyone with admin rights on the cluster can still exec into a running pod and see the snapshot and the token during a run.
+
+## The runner image
+
+[`runner/Dockerfile`](runner/Dockerfile) builds the image the `docker` and `ssh` backends run, and a cluster's SandboxTemplate can run too. It holds tools only, no credentials and no one's setup: a run sends its tokens through stdin and installs its own setup when it execs in. What a run can rely on:
+
+- **User**: `node` (uid 1000), home `/home/node`, writable.
+- **Tools**: Claude Code (pinned by `CLAUDE_CODE_VERSION`, auto-update off), node, git, `gh`, `jq`, `curl`, `python3` with `venv` and `pip` (Debian marks the system Python externally managed, so install packages into a venv).
+- **GitHub auth**: git uses `gh auth git-credential` for `https://github.com`, so exporting `GH_TOKEN` is enough for clone, push and `gh`.
+- **Idle**: the container runs `sleep infinity` under `tini` until a run execs in; removing it stops it at once.
+
+`.github/workflows/runner-image.yml` builds it on every PR that changes it, runs a smoke test (each tool answers, as user `node`), and on `main` publishes `ghcr.io/rpvsilva/agent-runner:main` and a dated tag, for `linux/amd64` and `linux/arm64`. Every Monday it rebuilds without cache on the same pins, for Debian's security fixes. Renovate (`renovate.json`) opens one PR a week bumping the pins: the node base image's digest and Claude Code, each at least 3 days old.
+
+To build your own: `docker build -t agent-runner:dev remote/runner`, then `~/.agents/bin/settings set remote image agent-runner:dev --machine`.
