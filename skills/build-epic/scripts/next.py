@@ -108,11 +108,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import status  # noqa: E402
-from steplib import ci, core, decisions, guard, identity, runfolder, taskwt  # noqa: E402
+from steplib import ci, core, corecmd, decisions, guard, identity, runfolder, taskwt  # noqa: E402
 
 PLAN_CHECK = Path(__file__).resolve().parents[1] / "plan_check.py"
 DONE_LIKE = ("merged", "in-review", "claimed")
-REMOTE_AGENT = Path.home() / ".agents" / "bin" / "remote-agent"
+
+
+def remote_agent():
+    """The `remote-agent` command: `$HOME/.agents/bin` first, then PATH."""
+    return Path(corecmd.path("remote-agent"))
+
+
 REVIEW_PR = Path(__file__).resolve().parents[2] / "review-pr" / "scripts"
 PROTOCOL = Path(__file__).resolve().parents[2] / "_shared" / "protocol"
 WAIT_SECS = int(os.environ.get("BUILD_EPIC_WAIT_SECS") or 540)  # under a 10-minute shell timeout
@@ -407,7 +413,7 @@ def launch(run, ident, remote, *extra):
     fields = line.split(" ", 3)
     if fields[2] == "remote":
         args = fields[3][fields[3].index("args=") + 5:]
-        if REMOTE_AGENT.exists():
+        if remote_agent().exists():
             return start_remote(run, ident, shlex.split(args))
         return f"remote {ident} args={args}  (build.md)"
     prompt = fields[3].split(" ")[0]
@@ -432,7 +438,7 @@ def start_remote(run, ident, args, cwd=None):
         f[k].unlink(missing_ok=True)
     wrapper = '"$@" >"$OUT" 2>"$LOG"; echo $? >"$EXIT.tmp" && mv "$EXIT.tmp" "$EXIT"'
     env = dict(os.environ, OUT=str(f["out"]), LOG=str(f["log"]), EXIT=str(f["exit"]))
-    p = subprocess.Popen(["/bin/sh", "-c", wrapper, "sh", str(REMOTE_AGENT), *args], cwd=str(cwd or run / "worktrees" / ident),
+    p = subprocess.Popen(["/bin/sh", "-c", wrapper, "sh", str(remote_agent()), *args], cwd=str(cwd or run / "worktrees" / ident),
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     f["pid"].write_text(f"{p.pid}\n", encoding="utf-8")
@@ -521,7 +527,7 @@ def go(run, remote, out, ship=True):
                 pr = re.search(r"pr=(\d+)", rest).group(1)
                 tip = git(core.resolve(runfolder.run_info(run)["Repo"]), "rev-parse",
                           runfolder.header(runfolder.ticket_file(run, ident).read_text(encoding="utf-8"), "Branch"))
-                here = not (remote and REMOTE_AGENT.exists()) or (
+                here = not (remote and remote_agent().exists()) or (
                     tip and (run / "remote" / f"review-{pr}-{tip[:7]}.local").is_file())
                 launches += start_review(run, ident, rest.split(" ")[1], pr, here=bool(here))
             elif act == "ship" and rest.split(" ")[1:2] == ["post"]:
@@ -586,7 +592,7 @@ def check_finish(run, ident, remote, title, message, out):
             out.append(launch(run, ident, remote, "--reissue"))
         return False
     if not remote:
-        capped = Path.home() / ".agents" / "bin" / "capped"
+        capped = Path(corecmd.path("capped"))
         if capped.exists():  # an agent's capped commands can outlive it: stop them before committing its work
             subprocess.run([str(capped), "stop", str(run / "worktrees" / ident)], capture_output=True)
     res, rc = script("finish_task", run, ident, *(["--title", title] if title else []))
@@ -793,7 +799,7 @@ def collect_review(run, name, out):
         f[k].unlink(missing_ok=True)
     f["pid"].with_suffix(".meta").unlink()
     repo = core.resolve(runfolder.run_info(run)["Repo"])
-    res = subprocess.run([str(REMOTE_AGENT), "result", name], capture_output=True, text=True, cwd=str(repo))
+    res = subprocess.run([str(remote_agent()), "result", name], capture_output=True, text=True, cwd=str(repo))
     report = None
     if res.returncode == 0:
         (run / "remote" / f"{name}.json").write_text(res.stdout, encoding="utf-8")
