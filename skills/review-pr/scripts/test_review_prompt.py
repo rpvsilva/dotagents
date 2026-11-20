@@ -41,8 +41,9 @@ def posix(out, args):
     return out
 
 
-def run(*args, cwd=None):
-    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
+def run(*args, cwd=None, root="~/.agents/skills"):
+    """The script's result, naming briefs under `root`: the goldens keep the `~/.agents/skills` text wherever it runs."""
+    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args, *(["--skills-root", root] if root else [])], capture_output=True, text=True, encoding="utf-8",
                           cwd=cwd)
 
 
@@ -82,6 +83,13 @@ class ReviewPromptTest(unittest.TestCase):
                 got = subprocess.run([sys.executable, "-I", str(CHECK), ROLE[mode], "input", str(prompt)],
                                      capture_output=True, text=True, encoding="utf-8")
                 self.assertEqual(got.stdout, f"OK {ROLE[mode]} input\n")
+
+    def test_a_skills_root_shows_in_the_line_and_a_default_is_the_scripts_own_skills_folder(self):
+        args = ["task", *ARGS["task"]]
+        self.assertTrue(run(*args, root="/opt/skills").stdout.startswith(
+            "You are a pr-reviewer. Follow /opt/skills/review-pr/reviewer-brief.md.\n"))
+        line = run(*args, root=None).stdout.splitlines()[0]
+        self.assertTrue(line.endswith("/skills/review-pr/reviewer-brief.md."), line)
 
     def test_every_mode_diffs_against_the_merge_base(self):
         for mode in MODES:

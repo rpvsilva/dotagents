@@ -1,9 +1,11 @@
 """Tests of the agent protocol: every role's schema, check.py, prompt.py and render.py, run as a caller runs them."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -146,7 +148,7 @@ class Check(unittest.TestCase):
     def test_a_prompt_is_checked_as_the_role_input(self):
         code, line = run("prompt.py", "explorer", "areas=/r/areas.md", "area=store", "spec=/r/spec.md",
                          "note=/r/notes/store.md", "output=/r/reports/explore-store.json",
-                         "--out", str(self.dir / "p.md"))
+                         "--skills-root", "~/.agents/skills", "--out", str(self.dir / "p.md"))
         self.assertEqual((code, line), (0, f"OK explorer prompt={self.dir / 'p.md'}\n"))
         text = (self.dir / "p.md").read_text()
         self.assertTrue(text.startswith("You are an epic-explorer. Follow ~/.agents/skills/build-epic/explorer-brief.md.\n"))
@@ -154,6 +156,18 @@ class Check(unittest.TestCase):
 
 
 class Prompt(unittest.TestCase):
+    def test_a_skills_root_shows_in_the_line_and_the_default_is_the_skills_folder_above_protocol(self):
+        inputs = {"pass": "A", "run": "/r", "notes": "/n", "output": "/o"}
+        self.assertTrue(protocol.prompt("planner", inputs, "/opt/skills/").startswith(
+            "You are an epic-planner. Follow /opt/skills/"))
+        self.assertEqual(protocol.prompt("planner", inputs, "~/.agents/skills").split(".\n")[0],
+                         "You are an epic-planner. Follow ~/.agents/skills/" + protocol.schema("planner")["brief"])
+        self.assertEqual(os.path.expanduser(protocol.default_skills_root()), str(HERE.parent.parent))
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}):
+            under = Path(home) / ".claude" / "skills" / "_shared" / "protocol" / "protocol.py"
+            with mock.patch.object(protocol, "__file__", str(under)):
+                self.assertEqual(protocol.default_skills_root(), "~/.claude/skills")
+
     def test_json_values_and_texts_that_look_like_numbers(self):
         code, text = run("prompt.py", "reviewer", "mode=ticket", "pr:=12", "worktree=/w", "head=1234567",
                          "base=origin/main", "diff=git diff a b", "remote:=true")
