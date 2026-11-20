@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, with any error output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you thought would happen.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran, in order.
+      placeholder: |
+        1. ./install.sh ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: tool
+    attributes:
+      label: Tool and version
+      description: The AI tool you use this with, e.g. Claude Code 2.1, Codex, Cursor.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: e.g. macOS 15, Ubuntu 24.04, Windows 11 with Git Bash.
+    validations:
+      required: true
