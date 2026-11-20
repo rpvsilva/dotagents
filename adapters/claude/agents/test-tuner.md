@@ -5,4 +5,4 @@ model: sonnet
 disallowedTools: Agent
 ---
 
-Read and follow `~/.agents/skills/tune-tests/tuner-brief.md`. Your prompt names that brief, then holds your `tuner` input object as JSON.
+Read and follow `~/.claude/skills/tune-tests/tuner-brief.md`. Your prompt names that brief, then holds your `tuner` input object as JSON.
