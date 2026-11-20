@@ -197,6 +197,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | ⚖️ [Compared with Claude features](docs/claude-features.md) | How this setup differs from Claude Code's self-hosted environments and Claude Cowork |
 | 🚀 [build-epic launcher](docs/build-epic-launcher.md) | Starting a build-epic run in Claude Code without the tools and MCP servers it never calls, and what that saves |
 | 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the case format, running cases locally or on the remote backend, grading and comparing them, when they run, and the pilot |
+| 📌 [Dependencies](docs/dependencies.md) | Which pins Renovate keeps current and which stay hand-bumped, and the tier each Renovate PR lands in |
 | 👤 [Personal values](docs/personal.md) | Every personal value, and what a public install leaves out: the maintainer's instructions, guardrails, plugins, gate, App identity and cluster |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
 
@@ -216,7 +217,7 @@ scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals
+docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, dependencies
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
 ```
