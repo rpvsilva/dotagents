@@ -16,15 +16,15 @@ import os
 import re
 import time
 
-from . import core, gh, identity
+from . import core, corecmd, gh, identity
 
 HEAD_TRIES = 6
 HEAD_WAIT = 5
 
 
 def setting(repo, key, log, section="build-epic"):
-    """The effective value of Setting `key` for `repo`, through `~/.agents/bin/settings`; None when unset."""
-    tool = os.path.join(core.home(), ".agents", "bin", "settings")
+    """The effective value of Setting `key` for `repo`, through the `settings` command; None when unset."""
+    tool = corecmd.path("settings")
     if not os.path.exists(tool):
         raise core.Fail(f"no-settings: {tool} is missing; run install.sh")
     res = core.run([tool, "--dir", repo, "get", section, key], log)

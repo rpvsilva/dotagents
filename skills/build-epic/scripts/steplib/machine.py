@@ -2,7 +2,7 @@
 each test command's memory cap, the machine's share per slot, when no Level sets `cap_mb`."""
 import os
 
-from . import core
+from . import core, corecmd
 
 ENV_VAR = "BUILD_EPIC_MACHINE"
 
@@ -42,8 +42,8 @@ def cap_mb(gb, slots):
 
 
 def setting(repo, key, log):
-    """build-epic Setting `key`'s value as `~/.agents/bin/settings get` prints it, or None (unset, or no tool)."""
-    tool = os.path.join(core.home(), ".agents", "bin", "settings")
+    """build-epic Setting `key`'s value as `settings get` prints it, or None (unset, or no tool)."""
+    tool = corecmd.path("settings")
     if not os.path.exists(tool):
         return None
     res = core.run([tool, "--dir", str(repo), "get", "build-epic", key], log)
@@ -68,7 +68,7 @@ def caps(repo, log):
 
 def max_parallel_level(repo, log):
     """The Level `max_parallel` is read from (`default`, `machine`, `repo`, ...), or None when unknown."""
-    tool = os.path.join(core.home(), ".agents", "bin", "settings")
+    tool = corecmd.path("settings")
     if not os.path.exists(tool):
         return None
     res = core.run([tool, "--dir", str(repo), "list", "build-epic"], log)
