@@ -18,7 +18,7 @@ Each value gets one of three treatments:
 | GitHub App identity for build-epic (`scripts/gh-app-token.sh`) | `build-epic.identity_command`, same file | Setting, default unset: the current `gh` login. This repo sets it in `.agents/settings.json` |
 | Cluster kube context | `remote.context`, declared in [`remote/settings.json`](../remote/settings.json) | Setting, default unset: the cluster backend stops with a "not set" error until you save one |
 | Cluster warm pool | `remote.pool`, same file | Setting, default unset, as `context` |
-| Runner image (`ghcr.io/xgeekshq/agent-runner:main`) | `remote.image`, same file, and [`remote/README.md`](../remote/README.md) | Setting whose default stays, documented as the default. The image is private: without access, build your own and save it with `settings set remote image <image> --machine` |
+| Runner image (`ghcr.io/rpvsilva/agent-runner:main`) | `remote.image`, same file, and [`remote/README.md`](../remote/README.md) | Setting whose default stays, documented as the default. The image is public and built from [`remote/runner/Dockerfile`](../remote/runner/Dockerfile); to use your own, build it and save it with `settings set remote image <image> --machine` |
 | My global instructions | [`global/AGENTS.md`](../global/AGENTS.md), linked as `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` | `personal` group (part `global`) |
 | Claude guardrail: no `gh pr review`, no `gh auth token` | [`adapters/claude/settings/agent-identity.json`](../adapters/claude/settings/agent-identity.json) | `personal` group (part `global`) |
 | Codex guardrail: the agent never acts as my login | [`adapters/codex/rules/agent-identity.rules`](../adapters/codex/rules/agent-identity.rules) | `personal` group (part `global`) |
@@ -35,7 +35,7 @@ Each value gets one of three treatments:
 
 ## The repo check
 
-`tests/repo.test.sh` scans every file a part of a public group ships (every group but `personal`) and every core file, as `scripts/parts.sh files` lists them. It skips files under a `fixtures/` folder, `test_*` files and `*.test.*` files: they hold sample data. It fails on `rpvsilva`, `maxibombo`, `0xgui` or `xgeekshq` anywhere in a line, and on `Rui` as a whole word. `xgeekshq`, the image's owner, is allowed only in `remote/settings.json` and `remote/README.md`, where the image is the documented default.
+`tests/repo.test.sh` scans every file a part of a public group ships (every group but `personal`) and every core file, as `scripts/parts.sh files` lists them. It skips files under a `fixtures/` folder, `test_*` files and `*.test.*` files: they hold sample data. It fails on `rpvsilva`, `maxibombo`, `0xgui` or `xgeekshq` anywhere in a line, and on `Rui` as a whole word. `rpvsilva`, the image's owner, is allowed only in `remote/settings.json` and `remote/README.md`, where the image is the documented default.
 
 ## Keep today's setup
 

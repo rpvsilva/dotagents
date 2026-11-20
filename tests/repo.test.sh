@@ -355,7 +355,7 @@ if grep -q '^## Remote subagents' skills/_shared/conventions.md; then
 fi
 
 # Public groups name no one: the files a part outside group personal ships (and core's, through _shared) never name
-# Rui, his accounts, the company org or his cluster. The image default is the one documented Setting value, so xgeekshq
+# Rui, his accounts, the company org or his cluster. The image default is the one documented Setting value, so rpvsilva
 # may appear in remote/settings.json and remote/README.md. Tests and fixtures are sample data, skipped on purpose.
 personal_files=()
 while IFS=$'\t' read -r p _ g _; do
@@ -367,7 +367,7 @@ while IFS=$'\t' read -r p _ g _; do
 done < <(printf '%s\n_shared\t\tcore\n' "$parts_list")
 if [ ${#personal_files[@]} -gt 0 ]; then
   while IFS=: read -r f t; do
-    case "$t:$f" in xgeekshq:remote/settings.json | xgeekshq:remote/README.md) continue ;; esac
+    case "$t:$f" in rpvsilva:remote/settings.json | rpvsilva:remote/README.md) continue ;; esac
     fail "$f: names $t"
   done < <({
     grep -oHE 'rpvsilva|maxibombo|0xgui|xgeekshq' "${personal_files[@]}" || true
