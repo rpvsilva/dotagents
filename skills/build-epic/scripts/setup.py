@@ -55,7 +55,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from steplib import checks, core, decisions, gh, gitops, identity, machine, runfolder, tracker  # noqa: E402
+from steplib import checks, core, corecmd, decisions, gh, gitops, identity, machine, runfolder, tracker  # noqa: E402
 
 ENV_VAR = checks.ENV_VAR
 DONE = checks.SETUP_DONE
@@ -331,7 +331,7 @@ def red_base(run_dir):
 
 def remote_ready(ctx, repo):
     """`on` when `remote-agent ready` exits 0 in `repo`, else `off`."""
-    agent = Path.home() / ".agents" / "bin" / "remote-agent"
+    agent = Path(corecmd.path("remote-agent"))
     if not agent.is_file():
         return "off"
     try:

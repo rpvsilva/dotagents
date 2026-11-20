@@ -204,6 +204,8 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 README.md           this file
 AGENTS.md           how to work on this repo (CLAUDE.md links to it)
 GLOSSARY.md         the repo's terms
+LICENSE             the MIT license
+SECURITY.md         how to report a vulnerability
 groups.json         the groups every part belongs to
 global/AGENTS.md    my global instructions, linked into every tool
 skills/             tool-neutral skills; skills/_shared/ holds what they share
@@ -219,8 +221,12 @@ evals/              eval cases per skill (evals/<skill>/<case>/) and their runne
 
 ## 🤝 Contributing
 
-Read [AGENTS.md](AGENTS.md) first. It covers:
+Start with [CONTRIBUTING.md](CONTRIBUTING.md): how to set up, run the checks and open a PR. Then read [AGENTS.md](AGENTS.md), the rules your agent follows. It covers:
 - the principles
 - how to add a skill, subagent, tool, hook, plugin, mod or MCP server
 - the checks (`tests/run.sh`)
-- the PR rules: PRs merge only through `scripts/merge-pr.sh` and the `agent-pr-gate`
+- the PR rules: what every contributor follows, and the maintainer-only merge path (`scripts/merge-pr.sh` and the `agent-pr-gate`)
+
+## 📄 License
+
+MIT-licensed: see [LICENSE](LICENSE). To report a vulnerability privately, follow [SECURITY.md](SECURITY.md).

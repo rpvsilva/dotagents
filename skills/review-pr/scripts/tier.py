@@ -226,6 +226,8 @@ def max_lines(folder, base_settings=None):
     # `HOME` first, as in Git Bash: on Windows `expanduser` reads the profile folder, not where install.sh linked.
     tool = os.path.join(os.environ.get("HOME") or os.path.expanduser("~"), ".agents", "bin", "settings")
     if not os.path.exists(tool):
+        tool = shutil.which("settings") or tool
+    if not os.path.exists(tool):
         return DEFAULT_MAX_LINES
     with tempfile.TemporaryDirectory() as scratch:
         if base_settings is not None:
