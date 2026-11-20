@@ -55,6 +55,7 @@ export type Remote = {
   /** The setup phase while the sandbox starts (`claiming`, `sending`, `booting`); null once Claude runs. */
   phase: string | null
   exit: number | null
+  /** The run's cost in dollars: result.json's once there, else its transcript's tokens priced (remote.ts PRICES); null for a subagent. */
   cost: number | null
   turns: number | null
   /** Files the run changed (result.json `changed`). */
