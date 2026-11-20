@@ -1,6 +1,6 @@
 ---
 name: pr-reviewer
-description: PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR; never edits the repo, writes only its output file.
+description: "PR reviewer with a fresh context: finds bugs, rule breaks, spec gaps and missing tests in one PR; never edits the repo, writes only its output file."
 model: inherit
 ---
 

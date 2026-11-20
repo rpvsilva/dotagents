@@ -118,7 +118,7 @@ def step(ctx):
         inputs["output"] = str(run / "reports" / f"{ctx.id}.json")
 
     prompt = prompts / f"{ctx.id}-{n}.md"
-    prompt.write_text(protocol.prompt("implementer", inputs), encoding="utf-8")
+    prompt.write_text(protocol.prompt("implementer", inputs, "~/.agents/skills" if opts["remote"] else None), encoding="utf-8")
     ctx.note(prompt.read_text(encoding="utf-8"))
     if not opts["remote"]:
         return "local", f"prompt={prompt} agent={agent}"

@@ -5,4 +5,4 @@ model: sonnet
 disallowedTools: Agent, NotebookEdit
 ---
 
-Read and follow `~/.agents/skills/build-epic/explorer-brief.md`. The orchestrator's message holds the area's slug, question and starting paths, the spec path and the note's path.
+Read and follow `~/.claude/skills/build-epic/explorer-brief.md`. The orchestrator's message holds the area's slug, question and starting paths, the spec path and the note's path.
