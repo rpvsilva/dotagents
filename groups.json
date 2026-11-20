@@ -7,5 +7,5 @@
   "safety-hooks": {"about": "Hooks that block leaked secrets and direct merges, and allow cleaning up task folders."},
   "agent-flow": {"about": "See this session's agents as a live org chart, and each one's log: the agent-flow mod."},
   "small-tools": {"about": "Remember lessons, read telemetry of past sessions, and the MCP servers."},
-  "personal": {"about": "Rui's own instructions, guardrails and plugins; a public install leaves it out."}
+  "personal": {"about": "The maintainer's own instructions, guardrails and plugins, kept as an example and left out of a public install."}
 }
