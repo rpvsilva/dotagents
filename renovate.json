@@ -1,27 +1,103 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Only the remote runner image's pins (remote/runner/Dockerfile): the node base image digest and Claude Code, in one weekly PR.",
-  "extends": ["config:recommended"],
-  "enabledManagers": ["dockerfile", "custom.regex"],
+  "description": "Pins Renovate keeps current: the remote runner image (node base image digest and Claude Code), GitHub Actions digests (grouped, weekly, `docker://` refs included) and the shellcheck version with its image (one PR). Not managed: the agent-pr-gate pin and CI's node-version. No automerge; every PR body carries the gate's Testing, Risk and How to revert sections.",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "dockerfile",
+    "custom.regex",
+    "github-actions"
+  ],
   "timezone": "Europe/Lisbon",
-  "schedule": ["before 6am on monday"],
+  "schedule": [
+    "before 6am on monday"
+  ],
   "minimumReleaseAge": "3 days",
   "semanticCommits": "enabled",
   "customManagers": [
     {
       "customType": "regex",
       "description": "ARG pins marked `# renovate: datasource=<x> depName=<y>` on the line above.",
-      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
-      "matchStrings": ["# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\nARG \\S+?_VERSION=(?<currentValue>\\S+)"]
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\nARG \\S+?_VERSION=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "scripts/shellcheck-version: the bare shellcheck version.",
+      "managerFilePatterns": [
+        "/(^|/)scripts/shellcheck-version$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>\\d\\S*)\\s*$"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "koalaman/shellcheck",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "scripts/shellcheck-image: the image tag and digest, moved with the version file.",
+      "managerFilePatterns": [
+        "/(^|/)scripts/shellcheck-image$/"
+      ],
+      "matchStrings": [
+        "^(?<depName>\\S+?):(?<currentValue>v\\S+?)@(?<currentDigest>sha256:[a-f0-9]+)\\s*$"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
     {
-      "matchFileNames": ["remote/runner/**"],
+      "matchFileNames": [
+        "remote/runner/**"
+      ],
       "groupName": "runner image",
       "commitMessageTopic": "the runner image",
       "semanticCommitType": "chore",
       "semanticCommitScope": "remote"
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions",
+      "commitMessageTopic": "GitHub Actions",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "ci"
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "node"
+      ],
+      "enabled": false,
+      "description": "CI's node-version is hand-bumped."
+    },
+    {
+      "matchPackageNames": [
+        "0xgui/agent-pr-gate",
+        "https://github.com/0xgui/agent-pr-gate"
+      ],
+      "enabled": false,
+      "description": "The gate pin lives in the workflow and scripts/merge-pr.sh and moves by hand."
+    },
+    {
+      "matchPackageNames": [
+        "koalaman/shellcheck"
+      ],
+      "groupName": "shellcheck",
+      "commitMessageTopic": "shellcheck",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "scripts"
     }
-  ]
+  ],
+  "prBodyTemplate": "{{{header}}}{{{table}}}{{{warnings}}}{{{notes}}}{{{changelogs}}}{{{configDescription}}}{{{controls}}}\n\n## Testing\n\nCI runs the `lint`, `test` and `secrets` jobs on this PR; all three must pass before it merges, and `scripts/merge-pr.sh` waits for them.\n\n## Risk\n\nThis PR only moves dependency pins, with no code change. Its tier follows the paths it touches in `.review-gate.yml`: a PR under `.github/` or `scripts/` is high tier and waits for the code owner's approval.\n\n## How to revert\n\nRevert this PR (`git revert` its merge commit) to restore the previous pins.\n\n{{{footer}}}"
 }
