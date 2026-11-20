@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { costSum, ctxColor, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, band, bandLines, SPIN, summarize, WAIT_MS } from './flow.ts'
+import { costSum, ctxColor, LIST_LAG_MS, fmtUsd, ctxShare, emptyGraph, fmtTokens, type FlowEvent, gauge, type Graph, ink, MAIN, MAX_AGENTS, modelColor, modelLabel, printable, reduce, shownStatus, band, bandLines, SPIN, summarize, WAIT_MS } from './flow.ts'
 
 const T = 1_800_000_000_000
 const run = (evs: FlowEvent[], g: Graph = emptyGraph()) => evs.reduce(reduce, g)
@@ -190,4 +190,30 @@ test('the band as status line text: a line per spinner frame, each agent spinner
   assert.ok(lines[0]!.startsWith('\x1b[38;2;92;201;167m'), 'haiku teal')
   const many = plain(bandLines({ names: [], running: 9, waiting: 0, remote: 2, failed: 1, ended: 3, total: 12 }).split('\n')[0]!)
   assert.equal(many, '⠋ 9 running  ·  ☁ 2 remote  ·  ✗ 1 failed   ▰▰▱▱▱▱▱▱ 3/12')
+})
+
+test("the engine's agent list reopens an agent ended too early, ends one still spinning, and adds one the graph missed", () => {
+  const listed = (at: number, ...agents: [string, string][]): FlowEvent => ({
+    kind: 'listed', at, agents: agents.map(([id, status]) => ({ id, status, parent: null, type: 'epic-planner', desc: `task ${id}`, model: 'claude-opus-5-5' })),
+  })
+  // A background agent whose turn end came while it still works: it runs again once the list says so.
+  let g = run([spawn('a1', T), { kind: 'turnEnd', at: T + 1000, agent: 'a1', reason: 'answer', outputTokens: null }])
+  assert.equal(agent(g, 'a1').status, 'done')
+  // Not a moment after its end: the list lags a turn's end.
+  assert.equal(agent(reduce(g, listed(T + 1000 + LIST_LAG_MS - 1, ['a1', 'running'])), 'a1').status, 'done')
+  g = reduce(g, listed(T + 1000 + LIST_LAG_MS, ['a1', 'running']))
+  assert.deepEqual([agent(g, 'a1').status, agent(g, 'a1').ended], ['running', null])
+  // Idle is not at work: an ended agent stays ended.
+  assert.equal(agent(run([listed(T + 60_000, ['a1', 'idle'])], run([spawn('a1', T), { kind: 'turnEnd', at: T + 1, agent: 'a1', reason: 'answer', outputTokens: null }])), 'a1').status, 'done')
+  // A turn end that never came: the list ends it, a killed one as stopped.
+  g = reduce(g, listed(T + 90_000, ['a1', 'completed']))
+  assert.deepEqual([agent(g, 'a1').status, agent(g, 'a1').ended], ['done', T + 90_000])
+  const k = run([spawn('a2', T), listed(T + 5000, ['a2', 'killed'])])
+  assert.deepEqual([agent(k, 'a2').status, agent(k, 'a2').why], ['failed', 'stopped'])
+  // One the graph never heard spawn (a reload, a mod loaded late): added while at work, never once ended.
+  const n = run([listed(T, ['a3', 'running'], ['a4', 'completed'])])
+  assert.deepEqual([agent(n, 'a3').status, agent(n, 'a3').type, agent(n, 'a3').parent], ['running', 'epic-planner', MAIN])
+  assert.equal(n.agents.some(a => a.id === 'a4'), false)
+  // Nothing changed: the same graph back.
+  assert.equal(reduce(n, listed(T + 1, ['a3', 'running'])), n)
 })
