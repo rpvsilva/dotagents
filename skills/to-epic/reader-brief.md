@@ -14,7 +14,7 @@ You read one source for `to-epic` and write one note. You read; you write **only
 
 ## Output
 
-Return the `reader` output object as [Protocol](../_shared/conventions.md#protocol) says: with an `output` input, write the object there as JSON, then your final message is only `{"status": "<status>", "output": "<that path>"}`; with none, your final message is the object itself, and nothing else. Before your final message, run `python3 -I ~/.agents/skills/_shared/protocol/check.py reader output <file>` on the object and fix each problem it prints until it prints `OK reader <status>`: with an `output` file, on that file; with none (a remote run), write the object to a file outside the worktree (`/tmp/reader-output.json`) first. Details belong in the note.
+Return the `reader` output object as [Protocol](../_shared/conventions.md#protocol) says: with an `output` input, write the object there as JSON, then your final message is only `{"status": "<status>", "output": "<that path>"}`; with none, your final message is the object itself, and nothing else. Before your final message, run `python3 -I ../_shared/protocol/check.py reader output <file>` on the object and fix each problem it prints until it prints `OK reader <status>`: with an `output` file, on that file; with none (a remote run), write the object to a file outside the worktree (`/tmp/reader-output.json`) first. Details belong in the note.
 
 - `status`: `done`, or `blocked` with `why` (one line, at most 300 characters): the source you could not reach or read.
 - `note`: the note's path.

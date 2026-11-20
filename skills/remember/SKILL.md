@@ -15,7 +15,7 @@ Input: optional skill name(s); default: every skill run in this conversation.
 2. **Harvest lessons** from the conversation, per skill: commands or paths you had to search for, steps that failed and why, every correction or answer the human gave, guesses that turned out wrong. Keep a lesson only when it holds for future runs in this repo and nothing in the repo already says it (`AGENTS.md`, CI config, manifest scripts, `--help`): those stay the source of truth. Done when each lesson is one line, tied to the evidence in the conversation.
 
 3. **Route each lesson** to where it belongs:
-   - A value the skill declares as a Setting (`~/.agents/bin/settings list <skill>` lists them, e.g. `max_parallel`): not a lesson. Hand it to [configure](../configure/SKILL.md) as a change to confirm with the human.
+   - A value the skill declares as a Setting (`settings list <skill>` lists them, e.g. `max_parallel`): not a lesson. Hand it to [configure](../configure/SKILL.md) as a change to confirm with the human.
    - About this skill in this repo: the skill's notes file.
    - About every agent in this repo (a build quirk, a rule for all PRs): the repo's `AGENTS.md`, as a proposal.
    - About the skill itself, in any repo (a step that is wrong or missing): a change to the skill in dotagents, as a proposal.

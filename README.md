@@ -18,7 +18,7 @@
 
 ---
 
-My personal AI setup, written once and shared by every AI coding tool I use: Claude Code, Codex and Cursor.
+One portable source of skills, subagents, hooks and MCP servers, written once and shared by Claude Code, Codex and Cursor, and installed by [group](#-groups): take the features you want and leave the rest.
 
 Each tool keeps its own instructions, skills, MCP servers and hooks in its own folder, in its own format. Keeping them in sync by hand means they drift, and switching tools or machines means starting over. This repo is the single source of truth. `install.sh` links it into each tool's config, so editing a file here changes every tool at once.
 
@@ -49,7 +49,7 @@ flowchart LR
 
 ### 📝 Instructions
 
-[`global/AGENTS.md`](global/AGENTS.md) holds my personal instructions for every project. It's linked as `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`.
+[`global/AGENTS.md`](global/AGENTS.md) holds the maintainer's personal instructions for every project, kept as an example (the `personal` group). It's linked as `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`.
 
 ### 🧩 Skills
 
@@ -132,7 +132,7 @@ Subagents can also run on a remote machine (a Kubernetes cluster, Docker or an S
 - **Plugins** ([`adapters/claude/plugins.txt`](adapters/claude/plugins.txt)): `mattpocock-skills`, a set of engineering skills (grilling, TDD, code review, ...).
 - **Mods** ([`adapters/claude/mods/`](adapters/claude/mods/)): `agent-flow` adds an `/agent-flow` pane drawing the session's agents as a live org chart, with a list of every agent and its log, remote-agent runs included (this session's under the agent that started them, other sessions' in the list).
 - **build-epic launcher** ([`adapters/claude/build-epic/launch.sh`](adapters/claude/build-epic/launch.sh)): `~/.agents/bin/build-epic <epic>` starts the orchestrator with no MCP servers and only the tools a run calls, then runs `/build-epic`. See [docs/build-epic-launcher.md](docs/build-epic-launcher.md).
-- **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow my GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
+- **Guardrails** ([`adapters/claude/settings/`](adapters/claude/settings/)): deny `gh pr review` and `gh auth token`, so an agent can't approve PRs or borrow the user's GitHub login. Codex gets the same rule in [`adapters/codex/rules/`](adapters/codex/rules/).
 
 ### 🧱 Groups
 
@@ -148,7 +148,7 @@ Every skill, subagent, mod, hook and folder part belongs to one **group**, a fea
 | `safety-hooks` | The `guard-secrets`, `guard-merge` and `allow-task-cleanup` hooks |
 | `agent-flow` | The `agent-flow` mod: the session's agents, remote runs included, as a live org chart, and each one's log |
 | `small-tools` | `remember`, `telemetry`, the `telemetry-save` hook and the MCP servers |
-| `personal` | My own instructions, guardrails and plugins (`global/`) and `add-plugin`; a public install leaves it out |
+| `personal` | The maintainer's own instructions, guardrails and plugins (`global/`) and `add-plugin`, kept as an example; a public install leaves it out |
 
 Install one group with `./install.sh <group>` (see [Install](#-install)).
 
@@ -157,13 +157,15 @@ Install one group with `./install.sh <group>` (see [Install](#-install)).
 Needs `bash`, `git` and `jq`. The `claude` CLI is needed for plugins and MCP servers. `python3` (3.9 or later) is needed for `telemetry` and `build-epic` (its step scripts), and `gh` for the PR skills.
 
 ```sh
-git clone git@github.com:rpvsilva/dotagents.git ~/Desktop/Projects/dotagents
-~/Desktop/Projects/dotagents/install.sh          # everything, for every tool
+git clone https://github.com/rpvsilva/dotagents.git && cd dotagents
+./install.sh remote pr-loop epics security safety-hooks agent-flow small-tools
 ```
+
+That installs every public group for every tool and leaves out `personal`. A bare `./install.sh` installs everything, including the maintainer's `personal` example (their global instructions, guardrails and plugins).
 
 `install.sh [tool] [<group>|<part>...]` and `uninstall.sh [--dry-run] [--purge] [tool] [<group>|<part>...]` take their words in any order: at most one tool word and any groups or parts (`scripts/parts.sh list`). `install.sh` takes the tool words `all`, `shared`, `claude`, `codex` and `cursor`; `uninstall.sh` takes `all`, `claude`, `codex` and `cursor`, not `shared` (the shared `~/.agents` links go only with `all`). A second tool word or an unknown word prints the usage and exits 1.
 
-- A bare `./install.sh` installs every group, `personal` included. To install one feature only, name it: `./install.sh remote`, or for Claude Code only, `./install.sh claude pr-loop`.
+- To install one feature only, name it: `./install.sh remote`, or for Claude Code only, `./install.sh claude pr-loop`.
 - A selection brings core and every part it requires. An optional need comes only when you name it too.
 - Installs add up: `./install.sh remote`, then `./install.sh pr-loop`, keeps remote and adds pr-loop.
 - `./uninstall.sh <group>` removes that group, keeping core and anything another installed group still requires.
@@ -195,7 +197,8 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | ⚖️ [Compared with Claude features](docs/claude-features.md) | How this setup differs from Claude Code's self-hosted environments and Claude Cowork |
 | 🚀 [build-epic launcher](docs/build-epic-launcher.md) | Starting a build-epic run in Claude Code without the tools and MCP servers it never calls, and what that saves |
 | 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the case format, running cases locally or on the remote backend, grading and comparing them, when they run, and the pilot |
-| 👤 [Personal values](docs/personal.md) | Every value that is mine, and what a public install leaves out: my instructions, guardrails, plugins, gate, App identity and cluster |
+| 📌 [Dependencies](docs/dependencies.md) | Which pins Renovate keeps current and which stay hand-bumped, and the tier each Renovate PR lands in |
+| 👤 [Personal values](docs/personal.md) | Every personal value, and what a public install leaves out: the maintainer's instructions, guardrails, plugins, gate, App identity and cluster |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
 
 ## 🗂️ Layout
@@ -204,23 +207,29 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 README.md           this file
 AGENTS.md           how to work on this repo (CLAUDE.md links to it)
 GLOSSARY.md         the repo's terms
+LICENSE             the MIT license
+SECURITY.md         how to report a vulnerability
 groups.json         the groups every part belongs to
-global/AGENTS.md    my global instructions, linked into every tool
+global/AGENTS.md    the maintainer's global instructions, linked into every tool
 skills/             tool-neutral skills; skills/_shared/ holds what they share
 mcp/servers.json    MCP servers for every tool
 scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals
+docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, dependencies
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
 ```
 
 ## 🤝 Contributing
 
-Read [AGENTS.md](AGENTS.md) first. It covers:
+Start with [CONTRIBUTING.md](CONTRIBUTING.md): how to set up, run the checks and open a PR. Then read [AGENTS.md](AGENTS.md), the rules your agent follows. It covers:
 - the principles
 - how to add a skill, subagent, tool, hook, plugin, mod or MCP server
 - the checks (`tests/run.sh`)
-- the PR rules: PRs merge only through `scripts/merge-pr.sh` and the `agent-pr-gate`
+- the PR rules: what every contributor follows, and the maintainer-only merge path (`scripts/merge-pr.sh` and the `agent-pr-gate`)
+
+## 📄 License
+
+MIT-licensed: see [LICENSE](LICENSE). To report a vulnerability privately, follow [SECURITY.md](SECURITY.md).

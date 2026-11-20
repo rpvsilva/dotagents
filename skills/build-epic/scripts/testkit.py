@@ -117,7 +117,10 @@ class Kit:
         (self.bin / "gh").write_text(STUB_GH.format(python=sys.executable), encoding="utf-8")
         (self.bin / "gh").chmod(0o755)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "GH_", "BUILD_EPIC_"))}
-        self.env.update(HOME=str(self.home), PATH=f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        # No `remote-agent` from the caller's PATH: the sandbox has one only when a test links it into its `HOME`.
+        outer = os.pathsep.join(d for d in os.environ.get("PATH", "").split(os.pathsep)
+                                if not shutil.which("remote-agent", path=d))
+        self.env.update(HOME=str(self.home), PATH=f"{self.bin}{os.pathsep}{outer}",
                         GH_STUB_DIR=str(self.stub), GIT_CONFIG_NOSYSTEM="1", BUILD_EPIC_RETRY_SLEEP="0")
         (self.home / ".gitconfig").write_text(
             "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n", encoding="utf-8")

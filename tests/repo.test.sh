@@ -11,6 +11,36 @@ fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 # Prints the value of frontmatter key $2 in file $1.
 frontmatter() { awk -v k="$2" 'NR==1 && $0!="---" {exit} NR>1 && $0=="---" {exit} NR>1 && index($0, k": ")==1 {print substr($0, length(k)+3); exit}' "$1"; }
 
+# Prints `<path>: frontmatter is not valid YAML: <message>` for each file among $@ whose frontmatter (between the first
+# two `---` lines) a strict YAML parse rejects, or is not a Hash with String `name` and `description`. One ruby call.
+yaml_frontmatter_fails() {
+  command -v ruby >/dev/null 2>&1 || { echo "ruby is missing: the frontmatter YAML check needs it (stdlib psych)"; return; }
+  ruby -ryaml -e '
+    ARGV.each do |path|
+      begin
+        lines = File.read(path, encoding: "UTF-8").lines.map(&:chomp)
+        raise "no frontmatter" unless lines.first == "---"
+        stop = (1...lines.size).find { |i| lines[i] == "---" } or raise "no closing ---"
+        doc = YAML.safe_load(lines[1...stop].join("\n"))
+        raise "not a mapping" unless doc.is_a?(Hash)
+        %w[name description].each { |k| raise "#{k} is not a String" unless doc[k].is_a?(String) }
+      rescue StandardError, ScriptError => e
+        puts "#{path}: frontmatter is not valid YAML: #{e.message.lines.first.to_s.strip}"
+      end
+    end' "$@"
+}
+yaml_files=()
+for f in skills/*/SKILL.md adapters/claude/agents/*.md adapters/cursor/agents/*.md; do [ -f "$f" ] && yaml_files+=("$f"); done
+while IFS= read -r bad; do [ -z "$bad" ] || fail "$bad"; done < <(yaml_frontmatter_fails "${yaml_files[@]}")
+# Negative case: an unquoted ": " in a description must be reported, by path.
+bad_yaml="$(mktemp -d)/bad.md"
+printf -- '---\nname: bad\ndescription: a: b\n---\n' >"$bad_yaml"
+case "$(yaml_frontmatter_fails "$bad_yaml")" in
+  "$bad_yaml: frontmatter is not valid YAML: "*) ;;
+  *) fail "frontmatter check: an unquoted ': ' in a description is not reported by path" ;;
+esac
+rm -rf "$(dirname "$bad_yaml")"
+
 # Skills: SKILL.md with a matching name, a description, and a README row.
 # Folders starting with _ hold shared files skills link to, not skills.
 for d in skills/*/; do
@@ -153,11 +183,11 @@ owners=""
 while read -r bad; do fail "$bad"; done < <({
   [ -z "$owners" ] || awk '{print "O\t" $0}' <<<"$owners"
   for a in adapters/*/agents/*; do [ ! -f "$a" ] || printf 'W\t%s\n' "$a"; done
-  grep -oHE '[~]/\.agents/skills/[^`" ]+' adapters/*/agents/* 2>/dev/null | sed 's/^/R\t/' || true
+  grep -oHE '[~]/\.(agents|claude)/skills/[^`" ]+' adapters/*/agents/* 2>/dev/null | sed 's/^/R\t/' || true
 } | awk -F'\t' '
   $1 == "O" { if ($2 in own) own[$2] = own[$2] " " $3; else own[$2] = $3; next }
   $1 == "W" { s = $2; sub(/.*\//, "", s); sub(/\.[^.]*$/, "", s); stem[$2] = s; wrapped[s] = 1; next }
-  $1 == "R" { i = index($2, ":"); f = substr($2, 1, i - 1); r = substr($2, i + 1); sub(/^~\/\.agents\/skills\//, "", r); refs[f] = refs[f] " " r }
+  $1 == "R" { i = index($2, ":"); f = substr($2, 1, i - 1); r = substr($2, i + 1); sub(/^~\/\.(agents|claude)\/skills\//, "", r); refs[f] = refs[f] " " r }
   END {
     for (f in stem) {
       s = stem[f]; o = own[s]
@@ -194,13 +224,13 @@ while read -r md; do
   done < <(grep -oE '\]\([^)[:space:]]+\)' "$md" | sed -E 's/^\]\((.*)\)$/\1/' | grep -vE '^(https?:|mailto:|#)' || true)
 done < <(git ls-files '*.md')
 
-# Adapter agents point at a brief that exists in skills/.
+# Adapter agents point at a brief that exists in skills/, under the tool's own skills folder.
 for a in adapters/*/agents/*; do
   [ -f "$a" ] || continue
-  refs="$(grep -oE '[~]/\.agents/skills/[^`" ]+' "$a" || true)"
-  [ -n "$refs" ] || fail "$a: no ~/.agents/skills/... brief referenced"
+  refs="$(grep -oE '[~]/\.(agents|claude)/skills/[^`" ]+' "$a" || true)"
+  [ -n "$refs" ] || fail "$a: no ~/.agents/skills/... or ~/.claude/skills/... brief referenced"
   for r in $refs; do
-    [ -f "skills/${r#\~/.agents/skills/}" ] || fail "$a: $r does not exist in skills/"
+    [ -f "skills/${r#\~/.agents/skills/}" ] || [ -f "skills/${r#\~/.claude/skills/}" ] || fail "$a: $r does not exist in skills/"
   done
 done
 
@@ -212,7 +242,7 @@ done
 # ~/.agents/bin/settings, the hooks library).
 agent_names="$(awk -F'\t' '$2 == "agent" {print $1}' <<<"$parts_list" | paste -sd'|' -)"
 # shellcheck disable=SC2016 # a regex: $HOME is matched, not expanded
-refs_re='\]\([^)[:space:]]+\)|(~|\$HOME)/\.agents/(skills|bin)/[A-Za-z0-9_-]+|\.agents/hooks/[A-Za-z0-9_.-]+'
+refs_re='\]\([^)[:space:]]+\)|`\.\./[A-Za-z0-9_-]+/|(~|\$HOME)/\.agents/(skills|bin)/[A-Za-z0-9_-]+|\.agents/hooks/[A-Za-z0-9_.-]+'
 [ -z "$agent_names" ] || refs_re="$refs_re|\`($agent_names)\`"
 # One awk reads tagged lines: P (part, kind, declaration), O (agent, owning skill), N (declaration, its needs and
 # agents), S (part, a file it ships), F (part, a file of it scanned), then R (file:reference, from one grep over the
@@ -267,6 +297,7 @@ coupling_fails="$({
         t = out[1]; for (j = 2; j <= top; j++) t = t "/" out[j]
         if (t in ships && ships[t] != "*") n = ships[t]
       }
+    } else if (m ~ /^`\.\.\//) { n = substr(m, 5, length(m) - 5)
     } else if (m ~ /agents\/skills\//) { n = m; sub(/.*agents\/skills\//, "", n) }
     else if (m ~ /agents\/bin\//) { n = m; sub(/.*agents\/bin\//, "", n); n = (n == "remote-agent") ? "remote" : "settings" }
     else if (m ~ /agents\/hooks\//) { n = m; sub(/.*agents\/hooks\//, "", n); sub(/\.[a-z]+$/, "", n) }
@@ -414,6 +445,47 @@ for t in tests/*.test.sh; do
   awk -v s="${t##*/}" '$1 == s { found = 1 } END { exit !found }' tests/suites.txt \
     || fail "tests/suites.txt: no line for ${t##*/}"
 done
+
+# Contributor files exist, and no doc claims GitHub enforces nothing.
+for f in CONTRIBUTING.md .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml .github/ISSUE_TEMPLATE/config.yml; do
+  [ -f "$f" ] || fail "$f is missing"
+done
+if grep -rnE 'enforces nothing|enforces no branch protection|GitHub Free' AGENTS.md docs/*.md scripts >/dev/null 2>&1; then
+  fail "AGENTS.md, docs/ or scripts/ hold 'enforces nothing', 'enforces no branch protection' or 'GitHub Free': say what GitHub enforces (the main ruleset) and what merge-pr.sh and guard-merge add"
+fi
+
+# Public docs: no first-person wording about the maintainer (whole words my, mine, Rui) in README.md, docs/*.md or
+# groups.json, and the README quick start installs every public group (all of groups.json but core and personal).
+for f in README.md docs/*.md groups.json; do
+  while IFS= read -r hit; do
+    [ -z "$hit" ] || fail "$f:$hit: first-person wording (my, mine, Rui)"
+  done < <(grep -nwiE 'my|mine|rui' "$f")
+done
+qs_line="$(grep -E '^\./install\.sh [a-z]' README.md | head -1)"
+[ -n "$qs_line" ] || fail "README.md: no quick-start './install.sh <groups>' line"
+while IFS= read -r g; do
+  case "$g" in core | personal) continue ;; esac
+  case " $qs_line " in
+    *" $g "*) ;;
+    *) fail "README.md: the quick-start install line does not name the public group '$g'" ;;
+  esac
+done < <(jq -r 'keys[]' groups.json)
+case " $qs_line " in *" personal "*) fail "README.md: the quick-start install line names 'personal'" ;; esac
+
+# Renovate: renovate.json parses and manages github-actions, and every `uses: <owner>/<repo>@<ref>` is a 40-hex SHA
+# (a `docker://` ref is exempt: Renovate pins it by digest), so Renovate can keep the pins current.
+jq -e . renovate.json >/dev/null 2>&1 || fail "renovate.json: does not parse as JSON"
+jq -e '(.enabledManagers // []) | index("github-actions")' renovate.json >/dev/null 2>&1 || fail "renovate.json: enabledManagers lacks github-actions"
+unpinned_uses() { # $@: workflow files; prints each `uses:` whose ref is not a 40-hex SHA
+  grep -nE '^[[:space:]-]*uses:[[:space:]]*[^[:space:]]' "$@" | tr -d '\r' \
+    | grep -vE 'uses:[[:space:]]*(docker://|\./)' | grep -vE 'uses:[[:space:]]*[^@[:space:]]+@[0-9a-f]{40}([[:space:]]|$)' || true
+}
+while IFS= read -r bad; do [ -z "$bad" ] || fail "$bad: a workflow action is not pinned to a 40-hex SHA"; done < <(unpinned_uses .github/workflows/*.yml)
+# Negative case: a tag ref is reported.
+bad_wf="$(mktemp -d)/wf.yml"
+printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n      - uses: docker://x/y:1\n' >"$bad_wf"
+[ "$(unpinned_uses "$bad_wf" | wc -l | tr -d ' ')" = 1 ] || fail "Renovate check: a tag-pinned action is not reported (or a docker:// ref is)"
+rm -rf "$(dirname "$bad_wf")"
 
 # CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
 mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"

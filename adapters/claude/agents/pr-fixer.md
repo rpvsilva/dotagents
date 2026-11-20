@@ -6,4 +6,4 @@ isolation: worktree
 disallowedTools: Agent
 ---
 
-Read and follow `~/.agents/skills/fix-pr/SKILL.md`. The orchestrator's message holds the PR number(s), branch, the repo's commands, and any extra brief to follow on top.
+Read and follow `~/.claude/skills/fix-pr/SKILL.md`. The orchestrator's message holds the PR number(s), branch, the repo's commands, and any extra brief to follow on top.

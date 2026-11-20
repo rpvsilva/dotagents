@@ -19,12 +19,14 @@ type World = {
   ctx: Record<string, [number, number]>
   // Each agent's cost in dollars, as $.agent.list() gives it.
   cost: Record<string, number>
+  // Each agent's status (AgentStatus), as $.agent.list() gives it; an agent listed here is listed even with no reading.
+  listed: Record<string, string>
   // What the mod wrote, by path, last write winning.
   files: Record<string, string>
 }
 
 function engine(on: any): World {
-  const w: World = { opened: [], status: [], spawned: 0, clock: mock.clock(on, { now: NOW }), messages: {}, reads: {}, viewed: [], ctx: {}, cost: {}, files: {} }
+  const w: World = { opened: [], status: [], spawned: 0, clock: mock.clock(on, { now: NOW }), messages: {}, reads: {}, viewed: [], ctx: {}, cost: {}, listed: {}, files: {} }
   on('session.messages', (_: unknown, e: any) => {
     w.reads[e.agentId] = (w.reads[e.agentId] ?? 0) + 1
     const all = w.messages[e.agentId]
@@ -32,7 +34,12 @@ function engine(on: any): World {
     const from = e.after ? all.findIndex(m => m.uuid === e.after) + 1 : Math.max(0, all.length - (e.last ?? all.length))
     return { value: all.slice(from) }
   })
-  on('agent.list', () => ({ value: [...new Set([...Object.keys(w.ctx), ...Object.keys(w.cost)])].map(id => ({ id, tokenCount: w.ctx[id]?.[0] ?? 0, contextWindowSize: w.ctx[id]?.[1] ?? 0, ...(id in w.cost ? { cost: { usd: w.cost[id] } } : {}) })) }))
+  on('agent.list', () => ({
+    value: [...new Set([...Object.keys(w.ctx), ...Object.keys(w.cost), ...Object.keys(w.listed)])].map(id => ({
+      id, tokenCount: w.ctx[id]?.[0] ?? 0, contextWindowSize: w.ctx[id]?.[1] ?? 0, ...(id in w.cost ? { cost: { usd: w.cost[id] } } : {}),
+      status: w.listed[id] ?? 'running', type: 'epic-planner', description: `listed ${id}`,
+    })),
+  }))
   on('session.usage', () => ({ value: { context: { tokens: 61_000, window: 1_000_000 }, cost: { usd: 1.84 } } }))
   on('ui.view', (_: unknown, e: any) => {
     w.viewed.push(e)
@@ -633,4 +640,26 @@ test('a graph stored before remote runs (graph-2, no launches) is declined: the 
   await w.clock.advance(3000)
   await press($, 'tab-agents')
   expect(await drawn($)).toContain('☁ probe')
+})
+
+test("a background agent the engine still lists as running stays on the chart, even after its turn end; one the graph missed joins it", async ($, on) => {
+  const w = engine(on)
+  await start($)
+  await spawn($, 'plan pass B', 'epic-planner')
+  await endTurn($, undefined)
+  // A turn end for it that came while it still works: without the list, it would linger, then leave.
+  await endTurn($, 'agent-1')
+  w.listed['agent-1'] = 'running'
+  await w.clock.advance(60_000)
+  const out = await drawn($)
+  expect(out).toContain('plan pass B')
+  expect(out).not.toContain('✓ 0 steps')
+  // An agent no spawn hook told the mod of, listed as running.
+  w.listed['agent-9'] = 'running'
+  await w.clock.advance(7000)
+  expect(await drawn($)).toContain('listed agent-9')
+  // Once the engine says it completed, it ends.
+  w.listed['agent-1'] = 'completed'
+  await w.clock.advance(7000)
+  expect(await drawn($)).toContain('✓')
 })
