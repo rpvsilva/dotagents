@@ -446,6 +446,14 @@ for t in tests/*.test.sh; do
     || fail "tests/suites.txt: no line for ${t##*/}"
 done
 
+# Contributor files exist, and no doc claims GitHub enforces nothing.
+for f in CONTRIBUTING.md .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml .github/ISSUE_TEMPLATE/config.yml; do
+  [ -f "$f" ] || fail "$f is missing"
+done
+if grep -rnE 'enforces nothing|enforces no branch protection|GitHub Free' AGENTS.md docs/*.md scripts >/dev/null 2>&1; then
+  fail "AGENTS.md, docs/ or scripts/ hold 'enforces nothing', 'enforces no branch protection' or 'GitHub Free': say what GitHub enforces (the main ruleset) and what merge-pr.sh and guard-merge add"
+fi
+
 # CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
 mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
 if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then
