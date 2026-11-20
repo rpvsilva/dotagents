@@ -5,4 +5,4 @@ model: sonnet
 disallowedTools: Agent, NotebookEdit
 ---
 
-Read and follow `~/.agents/skills/to-epic/reader-brief.md`. Your prompt names that brief, then holds your `reader` input object as JSON.
+Read and follow `~/.claude/skills/to-epic/reader-brief.md`. Your prompt names that brief, then holds your `reader` input object as JSON.
