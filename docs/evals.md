@@ -490,13 +490,13 @@ A baseline measures a whole build-epic run rather than one case: `evals/_baselin
 
 ## Results page
 
-[docs/results.md](results.md) holds aggregates of the latest three completed build-epic runs and the local eval store: cost per task, human round trips, PRs merged by the agent and eval pass rates, each with its date, model and Claude Code version. `evals/_results/page.py` writes it and calls no model:
+`evals/_results/page.py` writes a results page from the run folders and eval store given to it: cost per task, human round trips, PRs merged by the agent and eval pass rates, each with its date, model and Claude Code version. It calls no model:
 
 ```bash
-python3 -I evals/_results/page.py --run <run folder> [--metrics <metrics.json>] [--run <run folder> ...] --evals-results <dir> --out docs/results.md
+python3 -I evals/_results/page.py --run <run folder> [--metrics <metrics.json>] [--run <run folder> ...] --evals-results <dir> --out <file>
 ```
 
-Rerun it after a build-epic run completes, after a new eval baseline, and after a change to the telemetry, pricing or eval grading code that moves the figures. It is dev tooling, not a Part: no part ships it. Evals are never committed (`compare.py` refuses an in-repo report); the page is a separate exception because it holds aggregates only, with no session id, repo name, path or login.
+No page is committed until the evals have a clean run on `main` (the test environment available) and real run data. Run it after a build-epic run completes, after a new eval baseline, and after a change to the telemetry, pricing or eval grading code that moves the figures. It is dev tooling, not a Part: no part ships it. Evals are never committed (`compare.py` refuses an in-repo report); a page is held to aggregates only, with no session id, repo name, path or login.
 
 ## Pilot
 
