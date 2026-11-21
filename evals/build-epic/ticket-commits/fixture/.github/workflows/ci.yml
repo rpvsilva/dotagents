@@ -12,7 +12,7 @@ jobs:
         # Keep the token out of .git/config, where the PR's own test code could read it.
         with: { persist-credentials: false }
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.15" }
       - run: pip install --require-hashes -r requirements-ci.txt
       # Python imports a tracked .pyc/.pyd/.so in place of the reviewed source; .gitignore does not stop `git add -f`.
       - run: "! git ls-files -- '*.pyc' '*.pyd' '*.so' | grep ."
