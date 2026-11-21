@@ -8,9 +8,9 @@ Aggregates only. Costs are repriced at the table dated in each row. Human round 
 
 | run | date | model(s) | Claude Code | cost per task | cost basis | pricing as of | human round trips | PRs merged by the agent |
 |---|---|---|---|---|---|---|---|---|
-| run 1 | 2026-11-18 | claude-opus-5-5, claude-sonnet-5-5 | 2.1.312 | unknown | unknown | unknown | 0 | 5 |
-| run 2 | 2026-11-18 | claude-opus-5-5, claude-sonnet-5-5 | 2.1.312 | unknown | unknown | unknown | 1 | 5 |
-| run 3 | 2026-11-19 | unknown | unknown | unknown | unknown | unknown | 0 | 5 |
+| run 1 | 2026-11-10 | claude-opus-5-5, claude-sonnet-5-5 | 2.1.321 | $1.62 | measured | 2026-10-23 | 4 | 25 |
+| run 2 | 2026-11-09 | claude-opus-5-5, claude-sonnet-5-5 | unknown | $1.52 | measured | 2026-10-23 | 2 | 24 |
+| run 3 | 2026-11-09 | claude-opus-5-5 | unknown | $2.03 | measured | 2026-10-23 | 1 | 21 |
 
 ## Eval pass rates
 
