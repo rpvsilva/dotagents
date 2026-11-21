@@ -1,4 +1,4 @@
-# Mirrors the high tier in .review-gate.yml: these paths need Rui's approval.
+# Mirrors the high tier in .review-gate.yml: these paths need the maintainer's approval.
 /.github/ @rpvsilva
 /.review-gate.yml @rpvsilva
 /CODEOWNERS @rpvsilva

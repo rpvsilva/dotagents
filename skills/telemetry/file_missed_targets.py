@@ -43,6 +43,8 @@ def identity_command():
     # `HOME` first, as in Git Bash: on Windows `expanduser` reads the profile folder, not where install.sh linked.
     tool = os.path.join(os.environ.get("HOME") or os.path.expanduser("~"), ".agents", "bin", "settings")
     if not os.path.exists(tool):
+        tool = shutil.which("settings") or tool
+    if not os.path.exists(tool):
         return None
     res = run([tool, "get", "telemetry", "identity_command"])
     if res.returncode != 0:
