@@ -76,7 +76,7 @@ pyexpect() {
   [ "$got" = "$want" ] || fail "python.test.sh, $desc: wanted '$want', got '$got'"
 }
 PYALL="$(cd "$REPO" && PYTHON_TEST_LIST=1 tests/python.test.sh | tr '\n' ' ')"
-pyexpect "a file in a folder" "skills/telemetry " skills/telemetry/report.py
+pyexpect "a file in a folder" "evals/_results skills/telemetry " skills/telemetry/report.py
 pyexpect "the deepest of nested folders" "skills/build-epic/scripts " skills/build-epic/scripts/steplib/core.py
 pyexpect "the outer of nested folders" "skills/build-epic " skills/build-epic/test_plan_check.py
 pyexpect "a file another folder reads" "evals evals/_baseline/402 skills/build-epic " skills/build-epic/plan_check.py
@@ -88,9 +88,9 @@ pyexpect "a .py in no folder" "$PYALL" skills/telemetry/a.py scripts/x.py
 pyexpect "a file Python tests read" "$PYALL" scripts/hooks/secret-patterns.txt
 pyexpect "a file no Python test reads is ignored" "skills/telemetry " docs/x.md skills/telemetry/a.py
 pyexpect "--all" "$PYALL" --all
-pyexpect "a file other folders' tests run by path" "adapters/claude/telemetry evals evals/_runner/adapters " \
+pyexpect "a file other folders' tests run by path" "adapters/claude/telemetry evals evals/_results evals/_runner/adapters " \
   adapters/claude/telemetry/extract.py
-pyexpect "a file other folders' tests read by path" "evals evals/_runner evals/_runner/adapters skills/telemetry " \
+pyexpect "a file other folders' tests read by path" "evals evals/_results evals/_runner evals/_runner/adapters skills/telemetry " \
   skills/telemetry/pricing.json
 # This repo's own suites.txt: a fixture a Python test reads selects python.test.sh, and its test folder.
 case " $(cd "$REPO" && tests/affected.sh -- evals/_runner/fixtures/cases/good/configure/minimal/case.json | tr '\n' ' ')" in

@@ -25,6 +25,14 @@ scripts/settings.sh evals
 skills/_shared/settings.json evals
 skills/build-epic/settings.json evals
 docs/evals.md evals evals/_runner
+skills/telemetry/run_metrics.py evals/_results
+skills/telemetry/compare_runs.py evals/_results
+skills/telemetry/report.py evals/_results
+skills/telemetry/pricing.json evals/_results
+adapters/claude/telemetry/extract.py evals/_results
+evals/_runner/results.py evals/_results
+evals/_runner/verdict.py evals/_results
+evals/grade.py evals/_results
 tests/affected.sh evals
 skills/_shared/protocol/protocol.py skills/review-pr/scripts skills/build-epic/scripts
 skills/_shared/protocol/render.py skills/build-epic/scripts
