@@ -4,7 +4,7 @@
 # only the folders holding one of them, the deepest when folders nest. Every folder when it is unset, empty or
 # `--all`, or when a changed file a Python test may read (a .py, scripts/hooks/secret-patterns.txt) is in none.
 # A file some folder's code reads or runs by path from elsewhere in the checkout also picks that folder, as READERS
-# lists.
+# lists (tools/apm-study reads groups.json, scripts/parts.sh and every needs.json).
 # PYTHON_TEST_LIST=1 prints the folders it would run and stops.
 set -euo pipefail
 
@@ -12,11 +12,11 @@ set -euo pipefail
 READERS="adapters/claude/telemetry/extract.py evals evals/_runner/adapters
 skills/telemetry/pricing.json evals evals/_runner evals/_runner/adapters
 install.sh evals evals/_runner evals/_runner/adapters
-scripts/parts.sh evals evals/_runner evals/_runner/adapters
+scripts/parts.sh evals evals/_runner evals/_runner/adapters tools/apm-study
 scripts/capped evals evals/_runner evals/_runner/adapters
 skills/configure/SKILL.md evals evals/_runner evals/_runner/adapters
-skills/configure/needs.json evals evals/_runner evals/_runner/adapters
-skills/build-epic/needs.json evals evals/_runner/adapters
+skills/configure/needs.json evals evals/_runner evals/_runner/adapters tools/apm-study
+skills/build-epic/needs.json evals evals/_runner/adapters tools/apm-study
 skills/build-epic/plan_check.py evals evals/_baseline/402
 skills/build-epic/scripts/status.py evals/_baseline/402
 skills/build-epic/scripts/resume.py evals/_baseline/402
@@ -42,7 +42,28 @@ skills/_shared/protocol/schemas/reviewer.json skills/review-pr/scripts skills/bu
 skills/_shared/protocol/schemas/security.json skills/review-pr/scripts skills/build-epic/scripts
 skills/_shared/protocol/schemas/implementer.json skills/build-epic/scripts
 skills/_shared/protocol/schemas/planner.json skills/build-epic/scripts
-skills/_shared/protocol/schemas/explorer.json skills/build-epic/scripts"
+skills/_shared/protocol/schemas/explorer.json skills/build-epic/scripts
+groups.json tools/apm-study
+adapters/claude/mods/agent-flow/needs.json tools/apm-study
+global/needs.json tools/apm-study
+mcp/needs.json tools/apm-study
+remote/needs.json tools/apm-study
+scripts/hooks/allow-task-cleanup.needs.json tools/apm-study
+scripts/hooks/guard-merge.needs.json tools/apm-study
+scripts/hooks/guard-secrets.needs.json tools/apm-study
+scripts/hooks/telemetry-save.needs.json tools/apm-study
+skills/add-plugin/needs.json tools/apm-study
+skills/address-review/needs.json tools/apm-study
+skills/fix-pr/needs.json tools/apm-study
+skills/remember/needs.json tools/apm-study
+skills/remote-subagents/needs.json tools/apm-study
+skills/renovate-prs/needs.json tools/apm-study
+skills/review-pr/needs.json tools/apm-study
+skills/security-audit/needs.json tools/apm-study
+skills/ship-pr/needs.json tools/apm-study
+skills/telemetry/needs.json tools/apm-study
+skills/to-epic/needs.json tools/apm-study
+skills/tune-tests/needs.json tools/apm-study"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"

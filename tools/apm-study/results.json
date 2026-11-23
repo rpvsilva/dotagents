@@ -1,0 +1,497 @@
+{
+  "apm_version": "0.36.1",
+  "date": "2026-11-20",
+  "cells": {
+    "remote": {
+      "codex": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "command-not-installed",
+            "description": "The remote-agent command and its scripts are not installed: the remote-subagents skill has nothing to call."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "command-not-installed",
+            "description": "The remote-agent command and its scripts are not installed: the remote-subagents skill has nothing to call."
+          }
+        ]
+      },
+      "claude": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "command-not-installed",
+            "description": "The remote-agent command and its scripts are not installed: the remote-subagents skill has nothing to call."
+          }
+        ]
+      }
+    },
+    "safety-hooks": {
+      "codex": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "hooks-not-installed",
+            "description": "No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "hooks-not-installed",
+            "description": "No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run."
+          }
+        ]
+      },
+      "claude": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "hooks-not-installed",
+            "description": "No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run."
+          }
+        ]
+      }
+    },
+    "agent-flow": {
+      "codex": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "mod-not-installed",
+            "description": "The agent-flow mod is a Claude Code plugin: nothing lands, only the core skill."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "mod-not-installed",
+            "description": "The agent-flow mod is a Claude Code plugin: nothing lands, only the core skill."
+          }
+        ]
+      },
+      "claude": {
+        "status": "fails",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "mod-not-installed",
+            "description": "The agent-flow mod is a Claude Code plugin: nothing lands, only the core skill."
+          }
+        ]
+      }
+    },
+    "small-tools": {
+      "codex": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "hooks-not-installed",
+            "description": "No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run."
+          },
+          {
+            "id": "mcp-not-installed",
+            "description": "The MCP servers are not installed: no ${ENV_VAR} filling from `mcp/servers.json`."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "hooks-not-installed",
+            "description": "No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run."
+          },
+          {
+            "id": "mcp-not-installed",
+            "description": "The MCP servers are not installed: no ${ENV_VAR} filling from `mcp/servers.json`."
+          }
+        ]
+      },
+      "claude": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "hooks-not-installed",
+            "description": "No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run."
+          },
+          {
+            "id": "mcp-not-installed",
+            "description": "The MCP servers are not installed: no ${ENV_VAR} filling from `mcp/servers.json`."
+          }
+        ]
+      }
+    },
+    "pr-loop": {
+      "codex": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "codex-toml-skipped",
+            "description": "Codex `.toml` wrappers are skipped as non-agent assets; Codex gets the Claude `.md` compiled to `.toml` instead."
+          },
+          {
+            "id": "codex-agent-lossy",
+            "description": "Compiled Codex agents keep a Claude model alias, drop `isolation` and `disallowedTools`, and name the brief under `~/.claude/skills`."
+          },
+          {
+            "id": "agent-name-collision",
+            "description": "The claude, codex and cursor wrapper packages of an agent deploy the same file name: the first (Claude's) wins and APM skips the others as local files."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "cursor-agent-is-claude",
+            "description": "Cursor agents are Claude's wrappers (`model: sonnet`, `isolation`, brief under `~/.claude/skills`), not the Cursor wrappers."
+          },
+          {
+            "id": "agent-name-collision",
+            "description": "The claude, codex and cursor wrapper packages of an agent deploy the same file name: the first (Claude's) wins and APM skips the others as local files."
+          }
+        ]
+      },
+      "claude": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          }
+        ]
+      }
+    },
+    "epics": {
+      "codex": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "codex-toml-skipped",
+            "description": "Codex `.toml` wrappers are skipped as non-agent assets; Codex gets the Claude `.md` compiled to `.toml` instead."
+          },
+          {
+            "id": "codex-agent-lossy",
+            "description": "Compiled Codex agents keep a Claude model alias, drop `isolation` and `disallowedTools`, and name the brief under `~/.claude/skills`."
+          },
+          {
+            "id": "agent-name-collision",
+            "description": "The claude, codex and cursor wrapper packages of an agent deploy the same file name: the first (Claude's) wins and APM skips the others as local files."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "cursor-agent-is-claude",
+            "description": "Cursor agents are Claude's wrappers (`model: sonnet`, `isolation`, brief under `~/.claude/skills`), not the Cursor wrappers."
+          },
+          {
+            "id": "agent-name-collision",
+            "description": "The claude, codex and cursor wrapper packages of an agent deploy the same file name: the first (Claude's) wins and APM skips the others as local files."
+          }
+        ]
+      },
+      "claude": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          }
+        ]
+      }
+    },
+    "security": {
+      "codex": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "codex-toml-skipped",
+            "description": "Codex `.toml` wrappers are skipped as non-agent assets; Codex gets the Claude `.md` compiled to `.toml` instead."
+          },
+          {
+            "id": "codex-agent-lossy",
+            "description": "Compiled Codex agents keep a Claude model alias, drop `isolation` and `disallowedTools`, and name the brief under `~/.claude/skills`."
+          },
+          {
+            "id": "agent-name-collision",
+            "description": "The claude, codex and cursor wrapper packages of an agent deploy the same file name: the first (Claude's) wins and APM skips the others as local files."
+          }
+        ]
+      },
+      "cursor": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          },
+          {
+            "id": "cursor-agent-is-claude",
+            "description": "Cursor agents are Claude's wrappers (`model: sonnet`, `isolation`, brief under `~/.claude/skills`), not the Cursor wrappers."
+          },
+          {
+            "id": "agent-name-collision",
+            "description": "The claude, codex and cursor wrapper packages of an agent deploy the same file name: the first (Claude's) wins and APM skips the others as local files."
+          }
+        ]
+      },
+      "claude": {
+        "status": "partial",
+        "breakages": [
+          {
+            "id": "relative-path-deps",
+            "description": "A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute."
+          },
+          {
+            "id": "shared-missing",
+            "description": "The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere."
+          },
+          {
+            "id": "core-commands-missing",
+            "description": "No `settings` or `capped` command lands on PATH or in `~/.agents/bin`: skills that call them need `./install.sh core` as well."
+          }
+        ]
+      }
+    }
+  }
+}
