@@ -197,6 +197,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | ⚖️ [Compared with Claude features](docs/claude-features.md) | How this setup differs from Claude Code's self-hosted environments and Claude Cowork |
 | 🚀 [build-epic launcher](docs/build-epic-launcher.md) | Starting a build-epic run in Claude Code without the tools and MCP servers it never calls, and what that saves |
 | 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the case format, running cases locally or on the remote backend, grading and comparing them, when they run, and the pilot |
+| 🧭 [APM study](docs/apm.md) | Whether APM can install the Groups instead of `install.sh`: the Group by tool matrix, each breakage and who fixes it, and the decision |
 | 📌 [Dependencies](docs/dependencies.md) | Which pins Renovate keeps current and which stay hand-bumped, and the tier each Renovate PR lands in |
 | 👤 [Personal values](docs/personal.md) | Every personal value, and what a public install leaves out: the maintainer's instructions, guardrails, plugins, gate, App identity and cluster |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
@@ -220,6 +221,7 @@ remote/             remote subagents
 docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, results, dependencies
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
+tools/              dev tooling such as the APM study (tools/apm-study/); never installed
 ```
 
 ## 🤝 Contributing
