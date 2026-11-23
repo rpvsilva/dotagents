@@ -42,5 +42,24 @@ class Results(unittest.TestCase):
         self.assertIsNone(re.search(r"/(Users|home)/", self.text))
 
 
+class DraftIssues(unittest.TestCase):
+    def drafts(self):
+        text = (ROOT / "docs" / "apm.md").read_text().split("## Draft upstream issues", 1)[1]
+        sections = re.split(r"(?m)^### `([a-z0-9-]+)`$", text)
+        return {sections[i]: sections[i + 1] for i in range(1, len(sections), 2)}
+
+    def test_each_draft_says_what_happens_with_its_own_breakage(self):
+        data = json.loads((HERE / "results.json").read_text())
+        described = {b["id"]: b["description"] for t in data["cells"].values() for c in t.values() for b in c["breakages"]}
+        seen = {}
+        for name, body in self.drafts().items():
+            with self.subTest(draft=name):
+                match = re.search(r"(?m)^> What happens: (.+)$", body)
+                self.assertIsNotNone(match, "no What happens line")
+                self.assertEqual(match.group(1), described[name])
+                self.assertNotIn(match.group(1), seen, f"same sentence as {seen.get(match.group(1))}")
+                seen[match.group(1)] = name
+
+
 if __name__ == "__main__":
     unittest.main()
