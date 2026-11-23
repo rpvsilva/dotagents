@@ -199,6 +199,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 | 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the case format, running cases locally or on the remote backend, grading and comparing them, when they run, and the pilot |
 | 🧭 [APM study](docs/apm.md) | Whether APM can install the Groups instead of `install.sh`: the Group by tool matrix, each breakage and who fixes it, and the decision |
 | 📌 [Dependencies](docs/dependencies.md) | Which pins Renovate keeps current and which stay hand-bumped, and the tier each Renovate PR lands in |
+| 🌍 [Going public](docs/going-public.md) | The history scan, the decision to keep the history, and the maintainer's steps to switch the repo to public, in order |
 | 👤 [Personal values](docs/personal.md) | Every personal value, and what a public install leaves out: the maintainer's instructions, guardrails, plugins, gate, App identity and cluster |
 | 📖 [Glossary](GLOSSARY.md) | The repo's terms |
 
@@ -207,6 +208,7 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 ```
 README.md           this file
 AGENTS.md           how to work on this repo (CLAUDE.md links to it)
+CONTRIBUTING.md     how to set up, run the checks and open a PR
 GLOSSARY.md         the repo's terms
 LICENSE             the MIT license
 SECURITY.md         how to report a vulnerability
@@ -218,7 +220,7 @@ scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, dependencies
+docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, APM study, dependencies, going public
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
 tools/              dev tooling such as the APM study (tools/apm-study/); never installed
