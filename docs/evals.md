@@ -496,7 +496,7 @@ A baseline measures a whole build-epic run rather than one case: `evals/_baselin
 python3 -I evals/_results/page.py --run <run folder> [--metrics <metrics.json>] [--run <run folder> ...] --evals-results <dir> --out <file>
 ```
 
-No page is committed until the evals have a clean run on `main` (the test environment available) and real run data. Run it after a build-epic run completes, after a new eval baseline, and after a change to the telemetry, pricing or eval grading code that moves the figures. It is dev tooling, not a Part: no part ships it. Evals are never committed (`compare.py` refuses an in-repo report); a page is held to aggregates only, with no session id, repo name, path or login.
+The page is not committed: run it locally and keep the output out of the repo. Run it after a build-epic run completes, after a new eval baseline, and after a change to the telemetry, pricing or eval grading code that moves the figures. It is dev tooling, not a Part: no part ships it. Evals are never committed (`compare.py` refuses an in-repo report); a page is held to aggregates only, with no session id, repo name, path or login.
 
 ## Pilot
 

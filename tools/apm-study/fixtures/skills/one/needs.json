@@ -1,0 +1,1 @@
+{"group": "alpha", "needs": {"two": "required", "three": "optional"}, "agents": ["one-agent"]}
