@@ -103,12 +103,13 @@ for f in install.sh scripts/parts.sh scripts/capped skills/configure/SKILL.md sk
     *" python.test.sh "*) ;; *) fail "suites.txt: $f, run by the evals tests, does not select python.test.sh" ;;
   esac
 done
+# tools/apm-study runs scripts/parts.sh and reads every needs.json, so those files pick it too (READERS in python.test.sh).
 pyexpect "install.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " install.sh
-pyexpect "parts.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/parts.sh
+pyexpect "parts.sh, run by the evals tests" "evals evals/_runner evals/_runner/adapters tools/apm-study " scripts/parts.sh
 pyexpect "capped, run by the evals tests" "evals evals/_runner evals/_runner/adapters " scripts/capped
 pyexpect "the configure skill, installed by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/SKILL.md
-pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner evals/_runner/adapters " skills/configure/needs.json
-pyexpect "the build-epic skill's needs, read by the evals tests" "evals evals/_runner/adapters skills/build-epic " \
+pyexpect "the configure skill's needs, read by the evals tests" "evals evals/_runner evals/_runner/adapters tools/apm-study " skills/configure/needs.json
+pyexpect "the build-epic skill's needs, read by the evals tests" "evals evals/_runner/adapters skills/build-epic tools/apm-study " \
   skills/build-epic/needs.json
 case " $(cd "$REPO" && tests/affected.sh -- docs/evals.md | tr '\n' ' ')" in
   *" python.test.sh "*) ;; *) fail "suites.txt: docs/evals.md, read by the evals tests, does not select python.test.sh" ;;
