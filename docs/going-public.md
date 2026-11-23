@@ -9,11 +9,12 @@ This page records the history scan and the decision to keep the git history, and
 | Item | Record |
 |---|---|
 | Scanner | [gitleaks](https://github.com/gitleaks/gitleaks), the `secrets` job of [`ci.yml`](../.github/workflows/ci.yml), on every PR, with `fetch-depth: 0` (full history); the maintainer's local run uses the same tool |
+| Version and run | gitleaks v8.21.2, built from source (the `zricethezav/gitleaks` Docker image is the alternative), run on 2026-11-23 |
 | Local command | `gitleaks git --log-opts="--branches --tags" --redact -v .` (or the `zricethezav/gitleaks` Docker image when gitleaks is not installed) |
 | Refs scanned | `main` and every branch and tag pushed to GitHub. Local-only refs (`refs/build-epic/*`, `refs/review/*`, stashes) are never pushed and are out of scope |
-| Commits | 427 when the scan ran |
-| Token patterns | A search of history with the token rules of [`secret-patterns.txt`](../scripts/hooks/secret-patterns.txt) (`gh_`, `github_pat_`, `AKIA`, `xox`, `sk-ant-`, `AIza`, private keys) found one hit: a fake key in a telemetry test. No `.pem`, `.key`, `.p12` or `.netrc` file was ever added |
-| Findings | Each accepted finding is an entry in [`.gitleaksignore`](../.gitleaksignore) with a `#` reason above it. All are fake credentials built for masking tests |
+| Commits | 180 commits on origin's branches and tags, no leaks after the `.gitleaksignore` entry below. A `--all` scan of local refs too (389 commits) is also clean |
+| Token patterns | A search of history with the token rules of [`secret-patterns.txt`](../scripts/hooks/secret-patterns.txt) (`gh_`, `github_pat_`, `AKIA`, `xox`, `sk-ant-`, `AIza`, private keys) found one hit: the fake `ghp_` placeholder in the agent-flow mod's masking test (`adapters/claude/mods/agent-flow/hooks/log.unit.ts:115`). No `.pem`, `.key`, `.p12` or `.netrc` file was ever added |
+| Findings | One: the same fake `ghp_` placeholder at `adapters/claude/mods/agent-flow/hooks/log.unit.ts:115`, allowed in [`.gitleaksignore`](../.gitleaksignore) with a `#` reason above it. The rescan finds no leaks. Each accepted finding is an entry there; all are fake credentials built for masking tests |
 
 Run the local command again just before the switch and compare its findings with `.gitleaksignore`. A finding with no entry is unresolved: see the decision rule below.
 
