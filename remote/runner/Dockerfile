@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 # The runner image for remote subagents (remote/README.md): Claude Code, git, gh and python3 for the `node` user.
 # It holds no credentials and no one's setup: a run sends its tokens through stdin and installs its own setup when it
 # execs in. Built and published by .github/workflows/runner-image.yml; Renovate (renovate.json) bumps the pins below.
