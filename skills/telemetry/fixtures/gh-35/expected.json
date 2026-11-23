@@ -532,7 +532,7 @@
   "remote": {
    "id": "remote",
    "telemetryLabel": "build-epic-gh-35",
-   "sessionId": "1baf71d9-bfbc-492f-9612-f34bb9bddfbc",
+   "sessionId": "00000000-0000-4000-8000-000000000001",
    "time": {
     "sessionStart": "2026-11-05T19:53:25.707Z",
     "sessionEnd": "2026-11-06T00:31:49.842Z",
@@ -6238,7 +6238,7 @@
   "local": {
    "id": "local",
    "telemetryLabel": "build-epic-gh-35-local",
-   "sessionId": "8fc75271-16af-4ff1-950b-341c55ba7ce1",
+   "sessionId": "00000000-0000-4000-8000-000000000002",
    "time": {
     "sessionStart": "2026-11-06T11:19:12.700Z",
     "sessionEnd": "2026-11-06T18:09:55.339Z",
