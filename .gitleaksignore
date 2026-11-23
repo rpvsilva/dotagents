@@ -2,3 +2,6 @@
 4049433c5f43f8d391455e7487513d67e2f43c0d:adapters/claude/telemetry/test_extract.py:curl-auth-header:370
 4049433c5f43f8d391455e7487513d67e2f43c0d:adapters/claude/telemetry/test_extract.py:curl-auth-user:358
 
+# Fake token ("ghp_abcdefghijklmnopqrstuvwxyz123456") in the masking test of the agent-flow mod; the same line in two commits (a rebase copy).
+bf03ecec10c53a2d2e61e8d9add6ab2359479a10:adapters/claude/mods/agent-flow/hooks/log.unit.ts:generic-api-key:115
+aa20cf57c46df38bd7b0f0513096b203a37beb0f:adapters/claude/mods/agent-flow/hooks/log.unit.ts:generic-api-key:115
