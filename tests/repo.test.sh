@@ -423,6 +423,19 @@ while IFS= read -r f; do
   fail "$f: evals are dev tooling, not a part; no needs.json under evals/"
 done < <(find evals \( -name needs.json -o -name '*.needs.json' \) -print 2>/dev/null | sort)
 
+# tools/ is dev tooling like evals/: no part lists a file under tools/, and no needs.json makes one a part (fixtures are
+# sample data, skipped).
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  while read -r f; do
+    case "$f" in tools/*) fail "part '$p' ships $f; nothing under tools/ is a part" ;; esac
+  done < <(scripts/parts.sh files "$p" | tr -d '\r')
+done < <(printf '_shared\n%s\n' "$part_names")
+while IFS= read -r f; do
+  case "$f" in tools/*/fixtures/* | tools/*/fixture/*) continue ;; esac
+  fail "$f: tools are dev tooling, not a part; no needs.json under tools/"
+done < <(find tools \( -name needs.json -o -name '*.needs.json' \) -print 2>/dev/null | sort)
+
 # CI never runs evals: they bill a model per case, so they run only when asked (EVALS=1 tests/run.sh) on this machine.
 while IFS=: read -r f n _; do
   fail "$f:$n: CI never runs evals; no workflow names evals/ or EVALS"
