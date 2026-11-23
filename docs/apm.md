@@ -68,7 +68,7 @@ Status: not filed.
 >
 > What happens: A package's `../x` path dependencies fail to resolve: APM copies the package first, so the meta-package installs nothing until the paths are absolute.
 >
-> What is expected: A meta-package cannot depend on a sibling folder by relative path; or a documented way to express it.
+> What is expected: A meta-package lists sibling packages by relative path (`../x`) and APM resolves them from the package's original location, so one install pulls in every dependency; or a documented way to express a local dependency.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: agent-flow/claude, agent-flow/codex, agent-flow/cursor, epics/claude and more.
 
@@ -84,7 +84,7 @@ Status: not filed.
 >
 > What happens: The shared files package has no SKILL.md, so APM deploys nothing: `../_shared/` links and protocol scripts of every skill point nowhere.
 >
-> What is expected: A package with files but no primitive (no `SKILL.md`) deploys nothing, so support files such as `_shared` cannot be shipped; or a documented way to express it.
+> What is expected: A package of support files with no primitive installs those files next to the skills that link to them, so `../_shared/` links and protocol scripts resolve; or a documented way to ship plain files.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: agent-flow/claude, agent-flow/codex, agent-flow/cursor, epics/claude and more.
 
@@ -100,7 +100,7 @@ Status: not filed.
 >
 > What happens: The remote-agent command and its scripts are not installed: the remote-subagents skill has nothing to call.
 >
-> What is expected: No primitive for commands on PATH; or a documented way to express it.
+> What is expected: A package can put its commands on PATH (or in a tool's bin folder) when it installs, so a skill can call them; or a documented way to ship commands.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: remote/claude, remote/codex, remote/cursor.
 
@@ -116,7 +116,7 @@ Status: not filed.
 >
 > What happens: No hook script, wiring or hooks library lands (the generator has no hook package): the Group's hooks never run.
 >
-> What is expected: No hook primitive: scripts, wiring and the hooks library cannot be installed; or a documented way to express it.
+> What is expected: A package can ship hooks: its scripts, the per-tool wiring merged into the tool's config, and the hooks library, so a Group's hooks run after install; or a documented way to ship hooks.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: safety-hooks/claude, safety-hooks/codex, safety-hooks/cursor, small-tools/claude and more.
 
@@ -132,7 +132,7 @@ Status: not filed.
 >
 > What happens: The agent-flow mod is a Claude Code plugin: nothing lands, only the core skill.
 >
-> What is expected: No primitive for a Claude Code plugin; or a documented way to express it.
+> What is expected: A package can ship a Claude Code plugin, so a mod installs and loads in Claude Code like a skill; or a documented way to ship plugins.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: agent-flow/claude, agent-flow/codex, agent-flow/cursor.
 
@@ -148,7 +148,7 @@ Status: not filed.
 >
 > What happens: The MCP servers are not installed: no ${ENV_VAR} filling from `mcp/servers.json`.
 >
-> What is expected: No way to fill `${ENV_VAR}` credentials into `mcp/servers.json`; or a documented way to express it.
+> What is expected: A package can ship MCP servers whose `${ENV_VAR}` credentials are filled in from the user's environment or an untracked file at install, then installed for each tool; or a documented way to ship MCP servers.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: small-tools/claude, small-tools/codex, small-tools/cursor.
 
@@ -164,7 +164,7 @@ Status: not filed.
 >
 > What happens: Codex `.toml` wrappers are skipped as non-agent assets; Codex gets the Claude `.md` compiled to `.toml` instead.
 >
-> What is expected: Codex `.toml` agents are skipped as non-agent assets; or a documented way to express it.
+> What is expected: A package's Codex `.toml` agent files install as Codex agents, as shipped; or a documented way to ship tool-native agent files.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: epics/codex, pr-loop/codex, security/codex.
 
@@ -180,7 +180,7 @@ Status: not filed.
 >
 > What happens: Compiled Codex agents keep a Claude model alias, drop `isolation` and `disallowedTools`, and name the brief under `~/.claude/skills`.
 >
-> What is expected: The Claude-to-Codex agent compile keeps a Claude model alias and drops `isolation` and `disallowedTools`; the brief path is this repo's wrapper text; or a documented way to express it.
+> What is expected: A Claude agent compiled for Codex keeps what the agent means: a valid model for Codex, its isolation and tool limits where Codex has an equivalent (or a clear warning where it has none), and the brief path of the target tool; or a documented list of what the compile drops.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: epics/codex, pr-loop/codex, security/codex.
 
@@ -196,6 +196,6 @@ Status: not filed.
 >
 > What happens: Cursor agents are Claude's wrappers (`model: sonnet`, `isolation`, brief under `~/.claude/skills`), not the Cursor wrappers.
 >
-> What is expected: Cursor agents are compiled from the Claude wrappers, not the Cursor ones; or a documented way to express it.
+> What is expected: A Cursor agent installs from the package's Cursor wrapper when there is one, with its model, isolation and brief path for Cursor; or a documented way to pick the wrapper per tool.
 >
 > Reproduce: `tools/apm-study/run.sh <group> <claude|codex|cursor>` in the dotagents repo, in a throwaway `$HOME`. Affected cells: epics/cursor, pr-loop/cursor, security/cursor.

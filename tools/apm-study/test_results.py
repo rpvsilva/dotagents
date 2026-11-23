@@ -60,6 +60,19 @@ class DraftIssues(unittest.TestCase):
                 self.assertNotIn(match.group(1), seen, f"same sentence as {seen.get(match.group(1))}")
                 seen[match.group(1)] = name
 
+    def test_each_draft_expects_behaviour_not_the_breakage_again(self):
+        data = json.loads((HERE / "results.json").read_text())
+        described = {b["id"]: b["description"] for t in data["cells"].values() for c in t.values() for b in c["breakages"]}
+        seen = {}
+        for name, body in self.drafts().items():
+            with self.subTest(draft=name):
+                match = re.search(r"(?m)^> What is expected: (.+)$", body)
+                self.assertIsNotNone(match, "no What is expected line")
+                expected = match.group(1)
+                self.assertNotEqual(expected, described[name], "restates its breakage")
+                self.assertNotIn(expected, seen, f"same sentence as {seen.get(expected)}")
+                seen[expected] = name
+
 
 if __name__ == "__main__":
     unittest.main()
