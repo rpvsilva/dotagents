@@ -488,6 +488,16 @@ To see what the update changed, compare the same ref on both models: `evals/comp
 
 A baseline measures a whole build-epic run rather than one case: `evals/_baseline/402/` replays a fixed plan of the sandbox's epic #402 into a fresh integration branch and scores the result with hidden acceptance tests, the run's review findings, red merges and hand fixes. Its [README](../evals/_baseline/402/README.md) holds the replay commands and the calibration on the four earlier builds; `evals/_baseline/16/` is the second epic, and [RESULTS.md](../evals/_baseline/RESULTS.md) the recorded baseline. It bills a real build-epic run, so it runs only by hand.
 
+## Results page
+
+`evals/_results/page.py` writes a results page from the run folders and eval store given to it: cost per task, human round trips, PRs merged by the agent and eval pass rates, each with its date, model and Claude Code version. It calls no model:
+
+```bash
+python3 -I evals/_results/page.py --run <run folder> [--metrics <metrics.json>] [--run <run folder> ...] --evals-results <dir> --out <file>
+```
+
+No page is committed until the evals have a clean run on `main` (the test environment available) and real run data. Run it after a build-epic run completes, after a new eval baseline, and after a change to the telemetry, pricing or eval grading code that moves the figures. It is dev tooling, not a Part: no part ships it. Evals are never committed (`compare.py` refuses an in-repo report); a page is held to aggregates only, with no session id, repo name, path or login.
+
 ## Pilot
 
 The first run of the cases, to see whether evals are worth keeping (#378). The cases are the seven in this repo, built as [Eval cases](#eval-cases) says and run as [Run cases](#run-cases) says:

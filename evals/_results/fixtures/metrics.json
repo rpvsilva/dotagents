@@ -1,0 +1,50 @@
+{
+  "gaps": [],
+  "human_round_trips": 2,
+  "per_ticket": {
+    "01": {
+      "branch": "feat/planted-branch"
+    }
+  },
+  "prs": {
+    "count": 3,
+    "last_merged": "2026-11-05T10:00:00+00:00",
+    "list": [
+      {
+        "id": "01",
+        "merged_by": "app/planted-maintainer-bot",
+        "pr": 4242,
+        "state": "MERGED"
+      }
+    ],
+    "merged": 3,
+    "merged_by": {
+      "app/planted-maintainer-bot": 3
+    }
+  },
+  "remote": {
+    "by_role": {},
+    "claude_versions": {
+      "2.1.327": 2
+    },
+    "cost_usd": 1.5,
+    "killed": {},
+    "models": {
+      "claude-sonnet-5-5": 2
+    },
+    "runs": 2,
+    "runs_without_cost": 0
+  },
+  "repo": "someone/secret-sandbox",
+  "run": "gh-999-secret-run",
+  "schema": "build-epic-run-metrics/v1",
+  "tasks": {
+    "by_status": {
+      "done": 4
+    },
+    "count": 5
+  },
+  "tickets": {
+    "count": 2
+  }
+}
