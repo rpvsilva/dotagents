@@ -63,7 +63,7 @@ An agent-sandbox SandboxClaim on a warm pool, driven with `kubectl exec`; the ha
 A fresh container of the runner image on this machine for each run, driven with `docker exec`; the handle is the container, named after the run. It runs `sleep <REMOTE_HOURS*3600>` under `--rm`, so it removes itself after `REMOTE_HOURS` if `remote-agent` dies; otherwise `docker rm -f` removes it at the end, also on failure, Ctrl-C or `kill`. Like the cluster's pods, it carries the labels `sandbox.users.io/remote-agent-run=<run>` and, with `--name`, `sandbox.users.io/remote-agent-task=<task>`: `docker ps --filter label=sandbox.users.io/remote-agent-task` lists the named runs, and `docker logs -f <run>` follows one. Needs only Docker and the image. Settings, in `remote.env`:
 
 - `REMOTE_BACKEND=docker`.
-- `REMOTE_IMAGE`: the runner image, the `image` Setting's default, `ghcr.io/rpvsilva/agent-runner:main` (public, for `linux/amd64` and `linux/arm64`; see [The runner image](#the-runner-image)), unless you set your own (`remote.image`). Empty, the backend refuses with `REMOTE_IMAGE not set`.
+- `REMOTE_IMAGE`: the runner image, the `image` Setting's default, `ghcr.io/rpvsilva/agent-runner:main` (public: it pulls anonymously, with no `docker login`; for `linux/amd64` and `linux/arm64`; see [The runner image](#the-runner-image)), unless you set your own (`remote.image`). Empty, the backend refuses with `REMOTE_IMAGE not set`.
 - `REMOTE_PLATFORM`: passed to `docker run --platform` when set (e.g. `linux/amd64`); unset, Docker picks this machine's architecture.
 - `REMOTE_HOURS` (2) and `REMOTE_KEEP=1` (keep the container: `kept container <run>`; it still removes itself after `REMOTE_HOURS`).
 - `REMOTE_SANDBOX_MB` and `REMOTE_SANDBOX_CPUS` (`remote.sandbox_mb`, `remote.sandbox_cpus`): each run's share of the host, as `docker run --memory` (with `--memory-swap` the same: no swap past it) and `--cpus`. Unset, the host's memory and CPUs (`docker info`) over `REMOTE_MAX_SANDBOXES`, since other runs, and other people's, share it; `started container <run> (<image>; 4096 MB, 2 CPUs)` says what it got, and a share under 2048 MB adds a note. The sandbox caps its commands' memory under that limit.
@@ -87,7 +87,7 @@ In container mode the host needs:
 
 - **An SSH login** with a key or a password (see [Logging in](#logging-in)). `remote-agent check` tries it.
 - **Docker** the SSH user may use: in the `docker` group (`sudo usermod -aG docker <user>`, then log in again), or through passwordless sudo with `remote.ssh_sudo` set to `true`. Either way the user can act as root on the host. When plain `docker` is refused but `sudo -n docker` works, `remote-agent check` says so and gives both fixes; sudo that asks for a password does not work, since nothing may wait on a prompt.
-- **The image**: log in once on the host (`ssh -t <host> docker login ghcr.io`; with `remote.ssh_sudo`, `sudo docker login ghcr.io`, as root pulls) or build it there, and set `REMOTE_IMAGE` to its tag. Pick a `REMOTE_PLATFORM` or image that matches the host's architecture.
+- **The image**: the default image is public and pulls with no login. For a private image, log in once on the host (`ssh -t <host> docker login ghcr.io`; with `remote.ssh_sudo`, `sudo docker login ghcr.io`, as root pulls) or build it there, and set `REMOTE_IMAGE` to its tag. Pick a `REMOTE_PLATFORM` or image that matches the host's architecture.
 
 #### Logging in
 
@@ -148,6 +148,6 @@ On the cluster: internet egress only: Anthropic and package registries work, so 
 - **GitHub auth**: git uses `gh auth git-credential` for `https://github.com`, so exporting `GH_TOKEN` is enough for clone, push and `gh`.
 - **Idle**: the container runs `sleep infinity` under `tini` until a run execs in; removing it stops it at once.
 
-`.github/workflows/runner-image.yml` builds it on every PR that changes it, runs a smoke test (each tool answers, as user `node`), and on `main` publishes `ghcr.io/rpvsilva/agent-runner:main` and a dated tag, for `linux/amd64` and `linux/arm64`. Every Monday it rebuilds without cache on the same pins, for Debian's security fixes. Renovate (`renovate.json`) opens one PR a week bumping the pins: the node base image's digest and Claude Code, each at least 3 days old.
+`.github/workflows/runner-image.yml` builds it on every PR that changes it, runs a smoke test (each tool answers, as user `node`), and on `main` publishes `ghcr.io/rpvsilva/agent-runner:main` and a dated tag, for `linux/amd64` and `linux/arm64`. Every Monday it rebuilds without cache on the same pins, for Debian's security fixes. The package is public, so anyone can `docker pull` it without logging in. Renovate (`renovate.json`) opens one PR a week bumping the pins: the node base image's digest and Claude Code, each at least 3 days old.
 
 To build your own: `docker build -t agent-runner:dev remote/runner`, then `~/.agents/bin/settings set remote image agent-runner:dev --machine`.
