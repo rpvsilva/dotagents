@@ -1,6 +1,6 @@
 # 🧪 Evals
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
 An **eval** runs a skill on a fixed task and checks what it leaves behind. It tells you whether a change to a skill, a brief or a Setting default made the skill better or worse, measured on pass rate, cost, turns and time.
 

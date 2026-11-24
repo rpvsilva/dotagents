@@ -1,6 +1,6 @@
 # 🧭 APM study
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
 This page records whether [APM](https://github.com/microsoft/apm) (the Agent Package Manager) can replace `install.sh` as the way a stranger installs a Group. The study installed every public Group (all of `groups.json` but `personal`) with APM 0.36.1 at user scope, for Claude Code, Codex and Cursor, on 2026-11-20. The raw matrix is [`tools/apm-study/results.json`](../tools/apm-study/results.json); the tooling is in [`tools/apm-study/`](../tools/apm-study/) (dev tooling like `evals/`, run on the maintainer's machine only).
 

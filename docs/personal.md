@@ -1,6 +1,8 @@
 # 👤 Keep your own values out of a fork
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
+
+> **TL;DR** Personal values go in a Setting saved on your machine, in the `personal` group, or in files no install ships. Never in a default. A repo check makes sure of it.
 
 Anyone can install this repo, and anyone can fork it. This page shows how to keep your own values (instructions, guardrails, plugins, gate identity, cluster) out of a fork. The maintainer's values are the worked example: the table lists each one and how it stays out of a public install.
 
@@ -10,7 +12,7 @@ Each value gets one of three treatments:
 - **`personal` group**: the part ships only when the `personal` group is installed. A public install names its groups and leaves `personal` out.
 - **Repo only**: the file governs this repo. No install links or runs it.
 
-## The values
+## 📋 The values
 
 | Value | Where it lives | Treatment |
 |---|---|---|
@@ -33,11 +35,11 @@ Each value gets one of three treatments:
 | Merge script and its `agent-pr-gate` pin | [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) | Repo only: no install links it; `merge_command` runs it from the repo root |
 | The README and these docs | [`README.md`](../README.md), `docs/` | Repo only |
 
-## The repo check
+## 🔍 The repo check
 
 `tests/repo.test.sh` scans every file a part of a public group ships (every group but `personal`) and every core file, as `scripts/parts.sh files` lists them. It skips files under a `fixtures/` folder, `test_*` files and `*.test.*` files: they hold sample data. It fails on `rpvsilva` or `0xgui` anywhere in a line, and on the maintainer's first name as a whole word. `rpvsilva`, the image's owner, is allowed only in `remote/settings.json` and `remote/README.md`, where the image is the documented default.
 
-## Keep today's setup: the maintainer's example
+## 🏠 The maintainer's own setup, as an example
 
 On the maintainer's machine, three things keep everything as it was:
 

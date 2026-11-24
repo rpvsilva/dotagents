@@ -1,10 +1,12 @@
 # 💬 Agent communication
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
-**Decision:** subagents don't talk to each other. Every message goes through the orchestrator (hub-and-spoke). This page explains why. How the setup compares with Claude's self-hosted environments and Cowork is in [claude-features.md](claude-features.md).
+> **TL;DR** Subagents don't chat. Every message goes through the orchestrator, like spokes through a hub. It's a bit slower to coordinate, but every decision leaves a paper trail, runs can resume, and a misbehaving agent can't talk the others into anything.
 
-## How agents share work today
+This page explains the decision. How the setup compares with Claude's self-hosted environments and Cowork is in [claude-features.md](claude-features.md).
+
+## 📂 How agents share work today
 
 ```mermaid
 flowchart LR
@@ -24,9 +26,9 @@ flowchart LR
 - **The orchestrator passes things on.** A `follow-up` row of an output's `followups` becomes an acceptance criterion on a later task. A failed check or a merge conflict is sent back to the implementer. `plan-wrong` triggers a re-plan, which you approve.
 - **Remote subagents are cut off on purpose.** They get a snapshot plus attached files and send back only a patch and their output object, as their final message ([remote.md](remote.md)).
 
-## Why not let agents talk directly
+## 🤔 Why not let them talk?
 
-What it would give us:
+It's tempting. Here's what direct chat would give:
 
 | Advantage | What it means |
 |---|---|
@@ -36,7 +38,7 @@ What it would give us:
 | A thinner orchestrator | Small coordination skips the main session's context |
 | Better parallel work | Agents split or hand off work themselves |
 
-What it would cost:
+And here's the bill:
 
 | Cost | Why it matters here |
 |---|---|
@@ -50,9 +52,9 @@ What it would cost:
 | Less predictable runs | Who talks when depends on timing, so the same epic plays out differently |
 | Hidden dependencies | Tasks are planned to be independent; chat couples them, so one stuck agent stalls another |
 
-The costs hit what this setup is built on: traceability, resumable runs, the remote trust boundary and **portable first**. The gains are small, because the planner already splits tasks to be independent and `follow-up` and `plan-wrong` cover the main cases.
+**The verdict:** the costs hit what this setup is built on: traceability, resumable runs, the remote trust boundary and **portable first**. The gains are small, because the planner already splits tasks to be independent and `follow-up` and `plan-wrong` cover the main cases.
 
-## When to look at it again
+## 🔄 When to revisit
 
 When implementers often end as `plan-wrong` or `blocked` over questions a quick answer would have settled. The [telemetry](../skills/telemetry/SKILL.md) skill can show how often that happens.
 
