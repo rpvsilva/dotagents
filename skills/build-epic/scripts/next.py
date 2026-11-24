@@ -15,7 +15,10 @@ Prints one line per action, most urgent first, each `<action> <id> [details]  (<
   init run            (no `run.md`)                         setup.md
   rules run           (`decisions.md` lacks `merge_identity:` or `review_before_agent_merge:`)   setup.md
   plan A              (no `spec.md` or `areas.md`)          plan.md
-  explore <area>      (one per `## <area>` of `areas.md` with no note, up to the free slots)     plan.md
+  explore <area>      (one per `## <area>` of `areas.md` with no note and no prompt yet, up to the free slots;
+                       before `parallel:` is recorded the slots are the `max_parallel` Setting, else the
+                       machine's default)                                                          plan.md
+  wait explore-<area> explorer   (an area whose prompt is written and whose note is not)           plan.md
   plan B              (no `map.md` or no tasks)             plan.md
   plan revise         (`plan_check.py` finds problems)      plan.md
   setup run           (`decisions.md` lacks `test_command:`)                                       setup.md
@@ -108,7 +111,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import status  # noqa: E402
-from steplib import ci, core, corecmd, decisions, guard, identity, runfolder, taskwt  # noqa: E402
+from steplib import ci, core, corecmd, decisions, guard, identity, machine, runfolder, taskwt  # noqa: E402
 
 PLAN_CHECK = Path(__file__).resolve().parents[1] / "plan_check.py"
 DONE_LIKE = ("merged", "in-review", "claimed")
@@ -154,6 +157,21 @@ def areas_to_explore(run):
     return [s for s in slugs if not (run / "notes" / f"{s}.md").is_file()]
 
 
+def planning_slots(run, d):
+    """The slots before setup records `parallel:`: the recorded value (`--parallel N`, recorded at `rules run`),
+    else the `max_parallel` Setting a Level sets, else the machine's default (`steplib/machine.py`)."""
+    if d and d.get("parallel"):
+        return int(d.get("parallel"))
+    try:
+        repo = runfolder.run_info(run)["Repo"]
+        with open(os.devnull, "w", encoding="utf-8") as log:
+            if machine.max_parallel_level(repo, log) not in (None, "default"):
+                return max(1, int(machine.setting(repo, "max_parallel", log)))
+    except Exception:  # noqa: BLE001 - no repo or no settings tool: fall back to the machine
+        pass
+    return machine.parallel(*machine.probe())
+
+
 def setup_action(run, d, slots):
     """The one setup action still to do, as a list of lines, or [] once the plan is approved."""
     get = (lambda k: d.get(k)) if d else (lambda k: None)
@@ -168,7 +186,13 @@ def setup_action(run, d, slots):
     missing = areas_to_explore(run)
     if missing:
         stuck = [blocked_plan(run, f"explore-{a}") for a in missing]
-        return [s for s in stuck if s] or [f"explore {a}  (plan.md)" for a in missing[:slots]]
+        if any(stuck):
+            return [s for s in stuck if s]
+        flying = [a for a in missing if (run / "prompts" / f"explore-{a}.md").is_file()]
+        free = max(planning_slots(run, d) - len(flying), 0)
+        fresh = [a for a in missing if a not in flying][:free]
+        return ([f"explore {a}  (plan.md)" for a in fresh]
+                + [f"wait explore-{a} explorer  (plan.md)" for a in flying])
     if not (run / "map.md").is_file() or not list((run / "tasks").glob("*.md")):
         return [blocked_plan(run, "plan-B") or "plan B  (plan.md)"]
     check = subprocess.run([sys.executable, "-I", str(PLAN_CHECK), str(run)], capture_output=True, text=True)

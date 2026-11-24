@@ -8,7 +8,7 @@ An `epic-planner` (description `plan: A`), role `planner`: `pass=A`, `input=` th
 
 ## `explore <area>`
 
-One `epic-explorer` per line, all at once (description `explore: <area>`), role `explorer`: `areas=<run>/areas.md`, `area=<area>`, `spec=<run>/spec.md`, `note=<run>/notes/<area>.md`, `output=<run>/reports/explore-<area>.json`.
+One `epic-explorer` per line, all at once (description `explore: <area>`), role `explorer`: `areas=<run>/areas.md`, `area=<area>`, `spec=<run>/spec.md`, `note=<run>/notes/<area>.md`, `output=<run>/reports/explore-<area>.json`. `next.py` prints one line per area up to the free slots (before `setup run` records `parallel:`, the `max_parallel` Setting, else the machine's default); an area whose prompt is written and whose note is not shows as `wait explore-<area> explorer` and holds a slot. A resumed run whose explorer is gone: delete its `prompts/explore-<area>.md` and run `next.py` again.
 
 ## `plan B`
 
