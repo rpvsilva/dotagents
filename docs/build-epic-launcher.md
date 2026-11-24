@@ -1,8 +1,12 @@
-# build-epic launcher (Claude Code)
+# 🚀 build-epic launcher (Claude Code)
+
+[← Back to the docs](README.md)
+
+> **TL;DR** A long `build-epic` run pays for every tool definition on every turn. `~/.agents/bin/build-epic` starts Claude Code with only the tools the run uses and no MCP servers, which cuts the first request from about 27k tokens to about 9k.
 
 The build-epic orchestrator is the main Claude Code session. Before its first turn it carries a fixed base: the system prompt, every tool's definition (built-ins, MCP servers, claude.ai connectors), the skill listing and the CLAUDE.md files. It pays for that base on every turn of a long run. A skill cannot drop tools from a session already running, so `~/.agents/bin/build-epic` starts the session without what the orchestrator never calls, then runs `/build-epic`.
 
-## Start a run
+## ▶️ Start a run
 
 ```sh
 ~/.agents/bin/build-epic '#402' --into baseline-402 --parallel 3
@@ -24,7 +28,7 @@ claude "/build-epic <arguments>" --strict-mcp-config --mcp-config '{"mcpServers"
 
 The launcher is Claude-only (`adapters/claude/build-epic/launch.sh`). `install.sh` links it when `build-epic` is installed for Claude.
 
-## What a run calls
+## 📈 What a run actually calls
 
 Tool calls in the 16 saved orchestrator sessions of build-epic runs in the sandbox (Nov 2026), main session only:
 
@@ -42,7 +46,7 @@ Tool calls in the 16 saved orchestrator sessions of build-epic runs in the sandb
 
 Their subagents called `Bash`, `Read`, `Write`, `Edit`, `Monitor`, `TaskStop` and `ToolSearch`. No session called an MCP tool or `Skill`.
 
-## Measurements
+## 📏 Measurements
 
 Tokens of the first request (input, cache write and cache read) of `claude -p "reply ok"` from an empty folder, on 17 Nov 2026 with Claude Code 2.1.326, on this machine's config (2 MCP servers, 21 claude.ai connectors, 80 skills):
 

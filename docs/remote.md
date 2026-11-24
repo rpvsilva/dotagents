@@ -1,20 +1,113 @@
 # ☁️ Remote subagents
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
-A skill can run some of its subagents on another machine instead of your laptop: a Kubernetes cluster, Docker on this machine, or a VM or PC over SSH. The remote machine is **compute only**. It gets your setup and a snapshot of one worktree, runs Claude headless on one task, and sends back a patch. Your laptop keeps the code, the git history, GitHub access and the orchestrating session.
+> **TL;DR** Your laptop stays the boss. A remote machine borrows a copy of one worktree, lets Claude work on it, and hands back a patch. No GitHub credentials ever leave your laptop.
 
-Why use it: a skill like `build-epic` can run many implementers at once without overloading your laptop. Since the sandbox never touches GitHub, this works for any project, even ones the remote machine's owners can't access.
+Some skills, like `build-epic`, want to run lots of implementers at once. Your laptop's fans will tell you how that goes. Remote subagents move that work to other compute:
 
-Remote subagents never talk to each other ([agent-communication.md](agent-communication.md)). For how this differs from Claude Code's self-hosted environments, see [claude-features.md](claude-features.md).
+- ☸️ a **Kubernetes cluster**,
+- 🐳 **Docker** on this machine,
+- 🖥️ a **VM or spare PC** over SSH.
 
-This page is the overview. Every flag, file and backend detail is in [remote/README.md](../remote/README.md).
+The remote side is **compute only**. It gets your setup and a snapshot of one worktree, runs Claude headless on one task, and sends back a patch. The code, the git history, GitHub access and the session in charge all stay on your laptop. Because the sandbox never touches GitHub, this works for any project, even one the remote machine's owners can't access.
 
-For running eval cases on the same backend, see [evals.md](evals.md#remote).
+Good to know:
+- Remote subagents never talk to each other ([why](agent-communication.md)).
+- Wondering how this differs from Claude Code's self-hosted environments? See [claude-features.md](claude-features.md).
+- Eval cases can run on the same backend ([evals.md](evals.md#remote)).
+- This page is the friendly tour. Every flag, file and backend detail is in [remote/README.md](../remote/README.md).
 
-## When a subagent runs remotely
+## 🚀 Quick start
 
-Only **remote-capable** subagents can run remotely: ones that only change their own worktree. Each is declared once, in the `remote` list of the `needs.json` beside its brief, as [remote-subagents](../skills/remote-subagents/SKILL.md) says. Before each one starts, the skill runs `remote-agent ready` in the repo:
+Three commands, once per machine:
+
+```sh
+~/.agents/bin/remote-agent setup   # pick a backend, fill in its details, paste a token from `claude setup-token`
+~/.agents/bin/remote-agent check   # checks everything the backend needs, then a dry run (no API call, no cost)
+~/.agents/bin/remote-agent ready   # inside a repo: would skills send its subagents remote? If not, why not
+```
+
+When `check` prints `ok`, you're done. Skills now send remote-capable subagents to your backend on their own.
+
+`setup` saves the backend's Settings in `~/.config/dotagents/settings.json`. It saves the Secrets (the Claude token, an SSH password or key passphrase) in `~/.config/dotagents/remote.env`, readable only by you (mode 600). To change your mind later, ask the `configure` skill ("disable remote") or use `~/.agents/bin/settings` ([settings.md](settings.md)).
+
+> 💡 You need the `remote` group installed first: `./install.sh remote`.
+
+## 🎯 Pick your backend
+
+```mermaid
+flowchart LR
+  laptop["Laptop<br/>remote-agent"]
+  subgraph cluster["cluster"]
+    pool["Warm pool"] --> pod["Pod per run<br/>(SandboxClaim)"]
+  end
+  subgraph docker["docker"]
+    c1["Container per run<br/>on this machine"]
+  end
+  subgraph ssh["ssh"]
+    c2["Container per run<br/>on the host"]
+    bare["bare mode: a folder per run<br/>(weaker isolation)"]
+  end
+  laptop -- "kubectl exec" --> pod
+  laptop -- "docker exec" --> c1
+  laptop -- "ssh + docker" --> c2
+  laptop -. "ssh" .-> bare
+```
+
+| Backend | Each run gets | Pick it when |
+|---|---|---|
+| ☸️ `cluster` | A pod claimed from a warm pool | You have a cluster: fast starts, many runs at once |
+| 🐳 `docker` | A fresh container of the runner image, on this machine | You're trying it out, or want isolation without moving compute |
+| 🖥️ `ssh` | A fresh container on the host (default), or a bare folder | You have a spare machine with cores to lend |
+
+All three do the same five things (`acquire`, `put`, `run`, `get`, `release`). Packing, secret filtering, results and exit codes are identical. Only where the sandbox lives changes.
+
+### ☸️ What a cluster needs
+
+The repo ships no cluster manifests, so you set up the cluster side yourself. Here's the checklist.
+
+**On the cluster:**
+
+1. The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller, with its extension CRDs. `remote-agent` creates `SandboxClaim` objects (`extensions.agents.x-k8s.io/v1beta1`).
+2. A namespace for the sandboxes. The default is `agents`.
+3. A `SandboxTemplate` and a warm pool in that namespace. The template's pod needs:
+   - the runner image `ghcr.io/rpvsilva/agent-runner:main` (public, `amd64` and `arm64`), or your own with `sh`, GNU `tar`, `gzip`, `git`, `node` and `claude`;
+   - a writable `$HOME` (`/home/node` in the runner image, uid 1000);
+   - CPU and memory limits. On a cluster these set each run's size.
+4. *Recommended:* a NetworkPolicy that allows internet egress only (Anthropic and package registries) and blocks cluster services and the LAN. Nothing in this repo creates it.
+
+**On your laptop:**
+
+- `kubectl` on your `PATH`.
+- A kube context that can create `sandboxclaims` and `pods/exec` in the namespace. `check` tests both with `kubectl auth can-i`. A run also reads claims, sandboxes and pods, and deletes its claim.
+- A Claude token from `claude setup-token`.
+
+**Settings** (`setup` asks for them):
+
+| Setting | Default | What it is |
+|---|---|---|
+| `remote.context` | none, required | The kube context |
+| `remote.pool` | none, required | The warm pool to claim from |
+| `remote.namespace` | `agents` | Where claims are made |
+| `remote.claim_timeout` | 180 | Seconds to wait for a claimed pod to be ready |
+| `remote.max_sandboxes` | 4 | Set it to the warm pool's size. A claim on a full pool waits, then fails |
+
+Each pod carries the label `sandbox.users.io/remote-agent-run=<run>`, plus `sandbox.users.io/remote-agent-task=<task>` when the run has a name. So `kubectl get pods -L sandbox.users.io/remote-agent-task` tells runs apart, and `kubectl logs -f <pod>` follows one.
+
+### 🐳 What Docker needs
+
+A running Docker daemon and the runner image. That's it. `check` also tells you when the image's architecture differs from your machine's (it would run emulated, and slowly).
+
+### 🖥️ What SSH needs
+
+An SSH login to the host (a key or a password) and Docker on the host. In **bare mode**, the host needs `bash`, `git`, `jq`, `node` and `claude` instead.
+
+> ⚠️ Use bare mode only on a host you fully trust. There's no container: the run shares the OS user with that user's own setup.
+
+## 🤖 When does a subagent go remote?
+
+Only **remote-capable** subagents can: ones that change nothing but their own worktree. Each is declared once, in the `remote` list of the `needs.json` beside its brief ([remote-subagents](../skills/remote-subagents/SKILL.md) has the details). Before each one starts, the skill runs `remote-agent ready` and walks this tree:
 
 ```mermaid
 flowchart TD
@@ -32,9 +125,9 @@ flowchart TD
   slot --> remote["Run with remote-agent"]
 ```
 
-When remote runs are off, the skill says why once, then runs subagents locally as usual. A subagent no `remote` list names (a planner, anything that needs GitHub) always runs locally.
+Every "no" falls back gracefully. When remote is off, the skill says why once, then runs subagents locally as usual. A subagent no `remote` list names (a planner, anything that needs GitHub) always runs locally.
 
-## What one run does
+## 🔁 The life of one run
 
 ```mermaid
 sequenceDiagram
@@ -57,46 +150,34 @@ sequenceDiagram
   S->>S: commit the changes, push, open the PR
 ```
 
-1. **Pack.** `remote-agent` stages your setup: `CLAUDE.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones with the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
-2. **Acquire and send.** The backend gives a fresh sandbox. The setup and snapshot go in as tar streams, and the Claude token goes through stdin, never as an argument.
-3. **Run.** The sandbox reinstalls plugins and MCP servers, commits the snapshot as a base, and runs Claude on the brief. Each shell command Claude runs goes through `capped` under the sandbox's caps: a runaway test is killed, and Claude carries on. The memory cap is the sandbox's share of its machine: its container's memory limit less 1024 MB for Claude (2000 MB when it has no limit), lowered by `remote.cap_mb` when set; the time cap is `remote.cap_secs`. A test command's own `capped` with no flags gets the same caps (`CAPPED_MB`, `CAPPED_SECS`). Events stream back as they happen. The caps need `python3` and the packed `~/.agents/bin/capped` in the runner image, and `ps` where there is no `/proc` (on Linux, `capped` reads the process groups from `/proc`, so the cluster runner image, which has no `ps`, is capped). A sandbox lacking one runs uncapped and says so: `== capped: unavailable (missing: python3)` on stderr and `capped_off` in `result.json`.
-4. **Return.** The patch is applied to your worktree, uncommitted. The skill reviews and commits it like a local subagent's work.
-5. **Release.** The sandbox is removed on exit, Ctrl-C or `kill`. If the laptop dies first, it removes itself after `remote.hours` (2 by default).
+1. **📦 Pack.** `remote-agent` gathers your setup: `CLAUDE.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones by the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
+2. **🚚 Send.** The backend hands over a fresh sandbox. The setup and snapshot go in as tar streams. The Claude token goes through stdin, never as an argument.
+3. **🏃 Run.** The sandbox reinstalls plugins and MCP servers, commits the snapshot as a base, and runs Claude on the brief. Events stream back as they happen.
+4. **📬 Return.** The patch lands in your worktree, uncommitted. The skill reviews and commits it, just like a local subagent's work.
+5. **🧹 Release.** The sandbox is removed on exit, Ctrl-C or `kill`. If your laptop dies first, the sandbox removes itself after `remote.hours` (2 by default).
 
-Exit codes: `0` applied, `3` no changes, `4` the patch didn't apply because the worktree changed meanwhile (the patch is kept). A command the caps killed adds one stderr line, `[<task>] killed: memory|timeout <command>`, and changes no exit code. When the sandbox itself is lost (its container or pod gone with no kill line before), `result.json` says `lost: true`.
+### 🛡️ Runaway commands get capped
 
-## Backends
+Every shell command Claude runs in the sandbox goes through `capped`. A runaway test gets killed, and Claude carries on.
 
-All three backends do the same five operations (`acquire`, `put`, `run`, `get`, `release`), so packing, secret filtering, results and exit codes are identical. Only where the sandbox lives changes.
+- **Memory cap:** the sandbox's memory limit less 1024 MB for Claude (2000 MB when there's no limit). Lower it with `remote.cap_mb`.
+- **Time cap:** `remote.cap_secs` (300 seconds).
+- A test command that calls `capped` itself with no flags gets the same caps (`CAPPED_MB`, `CAPPED_SECS`).
+- A kill adds one stderr line, `[<task>] killed: memory|timeout <command>`, and doesn't change the exit code.
 
-```mermaid
-flowchart LR
-  laptop["Laptop<br/>remote-agent"]
-  subgraph cluster["cluster"]
-    pool["Warm pool"] --> pod["Pod per run<br/>(SandboxClaim)"]
-  end
-  subgraph docker["docker"]
-    c1["Container per run<br/>on this machine"]
-  end
-  subgraph ssh["ssh"]
-    c2["Container per run<br/>on the host"]
-    bare["bare mode: a folder per run<br/>(weaker isolation)"]
-  end
-  laptop -- "kubectl exec" --> pod
-  laptop -- "docker exec" --> c1
-  laptop -- "ssh + docker" --> c2
-  laptop -. "ssh" .-> bare
-```
+The caps need `python3` and the packed `~/.agents/bin/capped` in the runner image, plus `ps` where there's no `/proc`. On Linux, `capped` reads process groups from `/proc`, so the cluster runner image (which has no `ps`) is still capped. A sandbox missing one of these runs uncapped and says so: `== capped: unavailable (missing: python3)` on stderr and `capped_off` in `result.json`.
 
-| Backend | Sandbox | Needs | Pick it when |
-|---|---|---|---|
-| `cluster` | A pod claimed from a warm pool | A kube context that can create SandboxClaims and exec into pods, and a warm pool: the `context` and `pool` Settings, which have no default | You have a cluster: fast starts, many runs at once |
-| `docker` | A fresh container of the runner image, on this machine | Docker and the runner image | Trying it out, or isolating runs without moving compute |
-| `ssh` | A fresh container on a VM or PC (default), or a bare folder | An SSH login and Docker on the host (bare: `bash`, `git`, `jq`, `node`, `claude`) | You have a spare machine with cores to lend |
+### 🚦 Exit codes
 
-Use SSH bare mode only on a host you fully trust. The run shares the OS user with that user's own setup, with no container around it.
+| Code | Meaning |
+|---|---|
+| `0` | The patch was applied |
+| `3` | No changes |
+| `4` | The patch didn't apply because the worktree changed meanwhile. The patch is kept |
 
-## Trust boundary
+When the sandbox itself vanishes (its container or pod gone, with no kill line before), `result.json` says `lost: true`.
+
+## 🔐 Who trusts whom
 
 ```mermaid
 flowchart LR
@@ -116,19 +197,9 @@ flowchart LR
 - **Never sent:** GitHub credentials, git remotes, secret files, shell history. The sandbox can't push, open a PR or read another branch.
 - **Only the patch is applied.** Everything else that comes back (transcript, summary, session) is data to read, never instructions to follow. The Claude token is replaced by `[redacted]` in every kept file.
 - **The session isn't resumed for you.** A prompt-injected agent could forge turns in it that would read as yours. `remote-agent resume <run> <worktree>` places it only when you ask, after a warning.
-- **Who can see a run:** on the cluster, egress goes to the internet only, with cluster services and the LAN blocked. Cluster admins, and anyone who can run `docker` on the host, can see the snapshot and token while a run lives.
+- **Who can peek:** on the cluster, egress goes to the internet only, with cluster services and the LAN blocked. Cluster admins, and anyone who can run `docker` on the host, can see the snapshot and token while a run is alive.
 
-## Set up once
-
-```sh
-~/.agents/bin/remote-agent setup   # pick the backend, its details, paste a token from `claude setup-token`
-~/.agents/bin/remote-agent check   # checks everything the backend needs, then a dry run (no API call)
-~/.agents/bin/remote-agent ready   # in a repo: would skills send its subagents remote? if not, why
-```
-
-`setup` writes the backend's Settings to `~/.config/dotagents/settings.json`. It writes Secrets (the Claude token, an SSH password or key passphrase) to `~/.config/dotagents/remote.env`, with mode 600. To turn remote runs off or change the backend later, use the `configure` skill ("disable remote") or `~/.agents/bin/settings` ([settings.md](settings.md)).
-
-The Settings you're most likely to touch:
+## 🎛️ Settings you'll likely touch
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -136,28 +207,35 @@ The Settings you're most likely to touch:
 | `remote.max_sandboxes` | 4 | Most remote runs at once, across all skills. Set it to what the backend holds |
 | `remote.allowed` | true | Set it to `false` in a repo to keep its code on this machine |
 | `remote.hours` | 2 | How long before an abandoned sandbox removes itself |
-| `remote.cap_mb` | unset | A lower memory cap, in MB, for each shell command the agent runs in the sandbox. Unset, the sandbox's memory limit less 1024 MB for Claude (2000 MB with no limit) |
-| `remote.sandbox_mb`, `remote.sandbox_cpus` | unset | `docker` and `ssh` (container mode): each run's container memory (MB) and CPU limits, its share of a host others may use too. Unset, the host's over `remote.max_sandboxes`. On the cluster, the SandboxTemplate's pod limits set it |
-| `remote.cap_secs` | 300 | Time cap, in seconds, of each shell command the agent runs in the sandbox |
+| `remote.cap_mb` | unset | A lower memory cap, in MB, for each shell command in the sandbox |
+| `remote.cap_secs` | 300 | Time cap, in seconds, for each shell command in the sandbox |
+| `remote.sandbox_mb`, `remote.sandbox_cpus` | unset | `docker` and `ssh` (container mode): each run's memory (MB) and CPU limits, its share of a host others may use too. Unset: the host's total over `remote.max_sandboxes`. On a cluster, the SandboxTemplate's pod limits decide |
 
-All of them, with each backend's own Settings, are in [remote/settings.json](../remote/settings.json).
+The full list, with each backend's own Settings, is in [remote/settings.json](../remote/settings.json).
 
-## Watching a run
+## 👀 Watching a run
 
-Each run keeps a folder at `<common git dir>/remote-agent/<run>/` (`git rev-parse --path-format=absolute --git-common-dir`), outside the worktree. Every worktree of the repo shares it, so removing a linked worktree keeps its runs' records. Runs from before records moved there sit in `<common git dir>/worktrees/<name>/remote-agent/<run>/`: they are not moved and go with their worktree, though `remote-agent resume` still finds them while it is there.
+> 💡 In Claude Code, the `agent-flow` mod does this for you. Install it with `./install.sh claude remote agent-flow`, then open `/agent-flow`. It shows each run under the agent that started it, lists runs from other sessions in its Agents tab, and notifies you when one ends.
+
+By hand, each run keeps a folder at `<common git dir>/remote-agent/<run>/`. Find the common git dir with `git rev-parse --path-format=absolute --git-common-dir`. It sits outside the worktree, so removing a worktree keeps its runs' records. (Runs from before records moved there sit in `<common git dir>/worktrees/<name>/remote-agent/<run>/`. They aren't moved and go with their worktree, though `remote-agent resume` still finds them while it's there.)
 
 | File | Holds |
 |---|---|
-| `transcript.jsonl` | The agent's events as they arrive. Follow it with `tail -f` |
+| `transcript.jsonl` | The agent's events as they arrive. Follow along with `tail -f` |
 | `run.json` | State (`starting`, `running`, `done`, `failed`), timings, exit code |
 | `progress.log` | One line per step, the same as stderr |
-| `result.json` | What the run came to, written on every exit: exit code, `status`, the output's `status` (`report_status`, from the agent's JSON output, its final message), changed files, turns, tokens, cost, model, the sandbox's Claude Code version (`claude_version`), `complete`, the caps it set (`caps`), whether the caps were off (`capped_off`: what the sandbox lacked to run them), the caps' kills (`capped_kills`, `killed`) apart from a lost sandbox (`lost`). Read it, not stdout or stderr, when you need the outcome |
-| `capped.log` | Each command the caps killed in the sandbox |
-| `changes.patch`, `summary.md` | What came back: the patch, and the agent's final message, its JSON output object |
+| `result.json` | **The outcome. Read this, not stdout.** Exit code, `status`, the agent's own `report_status`, changed files, turns, tokens, cost, model, `claude_version`, `complete`, the `caps` set, `capped_off`, `capped_kills`, `killed` and `lost` |
+| `capped.log` | Each command the caps killed |
+| `changes.patch`, `summary.md` | What came back: the patch, and the agent's final message (its JSON output object) |
 | `session.jsonl` | Claude's session, for `remote-agent resume` |
 
-To read a run's outcome without its stdout or stderr, run `remote-agent result <name|run>` in the repo. It prints the `result.json` of that run id, or of the newest run started with `--name <name>` (a retry reuses the name; the latest start wins, preferring runs started from your own worktree). Each run has its own folder and `progress.log`, so this holds for runs started together, in a loop, or with stderr redirected. It exits 1 with one line when no run matches or the newest has not ended yet.
+Handy commands, run inside the repo:
 
-Records are never removed by a run. To clear old ones, run `remote-agent prune --older-than <Nd|Nh>` in the repo (`30d`, `12h`; at most 999999); add `--dry-run` to see what would go first. It removes every run folder, in the common git dir and the old per-worktree locations, whose `run.json` `ended` (else `started`, else the folder's last change) is older than that, printing one line per folder and then the count. A live run is always kept. A run marked running whose process is gone is stopped, and goes.
+```sh
+remote-agent result <name|run>               # print a run's result.json
+remote-agent prune --older-than 30d --dry-run  # see which old run folders would go
+remote-agent prune --older-than 30d          # then clear them
+```
 
-In Claude Code, the `agent-flow` mod (`/agent-flow`, install it with `./install.sh claude remote agent-flow`) shows each run this session started under the agent that started it, and lists the repo's runs of other sessions in its Agents tab, each with its state, timings and live log, how to resume it, and a notification when it ends.
+- **`result`** takes a run id, or a `--name` given at start. For a name, it picks the newest run with that name (a retry reuses the name), preferring runs started from your own worktree. It works for runs started together, in a loop, or with stderr redirected. It exits 1 with one line when nothing matches or the newest run hasn't ended.
+- **`prune`** takes `Nd` or `Nh` (at most 999999). It removes run folders, in both locations, whose `run.json` `ended` time (else `started`, else the folder's last change) is older than that, one line per folder, then the count. A live run is always kept. A run marked running whose process is gone is stopped, then removed. Runs never delete records on their own.
