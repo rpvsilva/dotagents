@@ -75,6 +75,7 @@ class NextTest(unittest.TestCase):
         self.assertEqual(self.next(), ["plan A"])
         write(run / "spec.md", "# Spec\n")
         write(run / "areas.md", "# Areas\n\n## store\nQuestion: x\n\n## cli\nQuestion: y\n")
+        self.decide("set", "parallel", "1")
         self.assertEqual(self.next(), ["explore store"])
         self.decide("set", "parallel", "3")
         self.assertEqual(self.next(), ["explore store", "explore cli"])
@@ -95,6 +96,41 @@ class NextTest(unittest.TestCase):
         self.assertEqual(self.next(), ["approve run"])
         self.decide("set", "approved", "yes")
         self.assertEqual(self.next(), ["start 01"])
+
+    def explore_ready(self, areas):
+        self.decide("set", "merge_identity", "app")
+        self.decide("set", "review_before_agent_merge", "no")
+        write(self.run_dir / "spec.md", "# Spec\n")
+        write(self.run_dir / "areas.md", "# Areas\n\n" + "".join(f"## {a}\nQuestion: q\n\n" for a in areas))
+
+    def next_on(self, machine, *args):
+        """`next.py` on a machine of `machine` (<cpus>,<gb>), with a HOME holding no settings tool."""
+        env = {**os.environ, "HOME": str(self.tmp / "home"), "BUILD_EPIC_MACHINE": machine,
+               "PATH": "/usr/bin:/bin"}
+        p = subprocess.run([sys.executable, "-I", str(NEXT), str(self.run_dir), *args], capture_output=True,
+                           text=True, env=env)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return [line.split("  (")[0] for line in p.stdout.splitlines()]
+
+    def test_explorers_start_together_before_parallel_is_recorded(self):
+        self.explore_ready(["a", "b", "c", "d"])
+        self.assertEqual(self.next_on("5,64"), ["explore a", "explore b", "explore c"])  # 5 cores: 3 slots
+
+    def test_an_explorer_in_flight_holds_a_slot_and_is_not_started_again(self):
+        self.explore_ready(["a", "b", "c", "d"])
+        for a in ("a", "b"):
+            write(self.run_dir / "prompts" / f"explore-{a}.md", "prompt")
+        write(self.run_dir / "notes" / "a.md", "x")
+        self.assertEqual(self.next_on("5,64"), ["explore c", "explore d", "wait explore-b explorer"])
+        write(self.run_dir / "prompts" / "explore-c.md", "prompt")
+        write(self.run_dir / "prompts" / "explore-d.md", "prompt")
+        self.assertEqual(self.next_on("5,64"),
+                         ["wait explore-b explorer", "wait explore-c explorer", "wait explore-d explorer"])
+
+    def test_a_recorded_parallel_beats_the_machine_for_explorers(self):
+        self.explore_ready(["a", "b", "c"])
+        self.decide("set", "parallel", "1")
+        self.assertEqual(self.next_on("16,64"), ["explore a"])
 
     def test_a_blocked_planner_goes_to_the_human(self):
         self.decide("set", "merge_identity", "app")
