@@ -1,6 +1,6 @@
 # 📌 Dependencies
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
 This page records which pins [Renovate](https://docs.renovatebot.com/) keeps current and which stay hand-bumped, and why. The config is [`renovate.json`](../renovate.json). Renovate opens one PR per group, once a week (before 6am on Monday, Lisbon time), and only for a release at least 3 days old. Nothing automerges.
 

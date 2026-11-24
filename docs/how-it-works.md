@@ -1,13 +1,19 @@
 # 🔧 How it works
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
-`install.sh` puts this repo into each tool's config folders in one of two ways:
+> **TL;DR** `install.sh` links this repo into each tool's config folders. Edit the repo, and every tool sees it at once. `uninstall.sh` undoes exactly what `install.sh` did, and nothing else.
 
-- **Link**: a symlink, used for files the tool only reads. Editing the repo changes the tool at once.
-- **Merge**: used for config files the tool or other programs also write to, such as `~/.claude/settings.json`. `install.sh` merges a JSON snippet into the file (with [`scripts/merge-json.sh`](../scripts/merge-json.sh)) and keeps what's already there. Re-run `install.sh` after changing a snippet.
+## 🔗 Two ways in: link or merge
 
-Before replacing a real file, `install.sh` moves it to `~/.dotagents-backup/<timestamp>/`. Running it twice changes nothing but re-creates the links.
+`install.sh` puts the repo into each tool in one of two ways:
+
+- **Link** (a symlink) for files the tool only reads. The repo *is* the config, so editing a skill changes the tool right away.
+- **Merge** for config files that the tool or other programs also write to, like `~/.claude/settings.json`. `install.sh` merges a JSON snippet into the file with [`scripts/merge-json.sh`](../scripts/merge-json.sh) and keeps everything already there. Change a snippet? Re-run `install.sh`.
+
+Nothing gets clobbered. Before replacing a real file, `install.sh` moves it to `~/.dotagents-backup/<timestamp>/`. Running it twice changes nothing but re-creating the links.
+
+## 🧩 Pick what to install
 
 ```sh
 ./install.sh                    # every tool, every group, the maintainer's `personal` example included
@@ -17,23 +23,41 @@ Before replacing a real file, `install.sh` moves it to `~/.dotagents-backup/<tim
 ./install.sh claude safety-hooks
 ```
 
-Words come in any order: one of `all`, `shared`, `claude`, `codex` or `cursor` picks the tools, and every other word is a **group** (`groups.json`) or a **part** (`scripts/parts.sh list`). An unknown word, or a second tool word, prints the usage and exits 1. A selection installs its parts, core, and the **closure**: every part they require, transitively (`scripts/parts.sh closure <words>`). Optional needs stay out. Installs add up: a later `install.sh epics` keeps what an earlier `install.sh remote` linked. A bare `./install.sh` installs every group, including the maintainer's `personal` example (global instructions, guardrails and plugins). The README quick start installs only the public groups, by naming them.
+How the words work:
+- Order doesn't matter.
+- **Tool words** (`all`, `shared`, `claude`, `codex`, `cursor`) pick the tools. One at most.
+- **Every other word** is a **group** (from `groups.json`) or a **part** (see `scripts/parts.sh list`).
+- An unknown word, or a second tool word, prints the usage and exits 1.
 
-## Shared: `~/.agents/`
+A selection brings along what it needs:
+- **Core** always comes (`_shared`, `configure`, the hooks library, `settings`, `capped`).
+- **Required needs** come too, all the way down. `scripts/parts.sh closure <words>` shows the full list.
+- **Optional needs** stay out unless you name them.
 
-Every tool target installs this first. It's the one tool-neutral place the others point at. A selection links only its own parts here; core (`_shared`, `configure`, the hooks library, `settings`, `capped`) always comes.
+Installs add up. A later `install.sh epics` keeps what an earlier `install.sh remote` linked.
+
+> 💡 A bare `./install.sh` also installs `personal`: the maintainer's own instructions, guardrails and plugins, kept as an example. The quick start in the main README names only the public groups, so it leaves `personal` out.
+
+## 🏠 Home base: `~/.agents/`
+
+Every tool target installs this first. It's the one tool-neutral place the others point at. A selection links only its own parts here, plus core.
 
 | Path | Points at | Used for |
 |---|---|---|
-| `~/.agents/skills/<skill>` | `skills/<skill>/` | Skills. Codex reads them here directly |
-| `~/.agents/hooks/<file>` | `scripts/hooks/<file>` | The one path every tool's hook config calls: a real folder of one link per file, `lib.sh` and `secret-patterns.txt` always and each installed hook's script, so its links show which hooks are installed. An older install's one link to the repo folder is replaced by per-file links to every hook, since the tools' configs may call any of them; a link to anywhere else is backed up. Every hook a tool's config calls is linked to this checkout's script, whatever installed it, and one this checkout lacks is named |
+| `~/.agents/skills/<skill>` | `skills/<skill>/` | Skills. Codex reads them right here |
+| `~/.agents/hooks/<file>` | `scripts/hooks/<file>` | The one path every tool's hook config calls (more below) |
 | `~/.agents/bin/settings` | `scripts/settings.sh` | Reading and writing Settings ([settings.md](settings.md)) |
-| `~/.agents/bin/remote-agent` | `scripts/remote-agent.sh` | Remote subagents ([remote/README.md](../remote/README.md)) |
-| `~/.agents/bin/build-epic` | `adapters/claude/build-epic/launch.sh` | Starting a build-epic run in Claude Code with only the tools it calls ([build-epic-launcher.md](build-epic-launcher.md)); linked when `build-epic` is installed for Claude |
+| `~/.agents/bin/remote-agent` | `scripts/remote-agent.sh` | Remote subagents ([remote.md](remote.md)) |
+| `~/.agents/bin/build-epic` | `adapters/claude/build-epic/launch.sh` | Starting a lean build-epic run in Claude Code ([build-epic-launcher.md](build-epic-launcher.md)). Linked when `build-epic` is installed for Claude |
 
-## Per tool
+About `~/.agents/hooks/`: it's a real folder holding one link per file. `lib.sh` and `secret-patterns.txt` are always there, plus each installed hook's script, so a glance at the folder shows which hooks you have.
+- An older install's single link to the whole repo folder is replaced by per-file links to every hook, since the tools' configs may call any of them.
+- A link pointing anywhere else is backed up first.
+- Every hook a tool's config calls gets linked to this checkout's script, whatever installed it. One this checkout lacks is named.
 
-**Adapters** are the tool-only pieces: subagent wrappers, hook wiring and rules. They live in `adapters/<tool>/`, and each adapter's README says exactly where its files go.
+## 🧰 Per tool
+
+**Adapters** hold the tool-only pieces: subagent wrappers, hook wiring and rules. They live in `adapters/<tool>/`, and each adapter's README says exactly where its files go.
 
 | What | Claude Code | Codex | Cursor |
 |---|---|---|---|
@@ -47,13 +71,15 @@ Every tool target installs this first. It's the one tool-neutral place the other
 
 Adapter details: [Claude Code](../adapters/claude/README.md), [Codex](../adapters/codex/README.md), [Cursor](../adapters/cursor/README.md).
 
-Notes:
+Things that might surprise you:
 - Codex and Cursor are skipped when `~/.codex` or `~/.cursor` doesn't exist.
-- Codex skips new or changed hooks until you trust them with `/hooks` in Codex.
+- Codex ignores new or changed hooks until you trust them with `/hooks` in Codex.
 - Claude plugins and MCP servers are skipped when `claude` isn't on `PATH`, or when `DOTAGENTS_SKIP_PLUGINS` is set.
 - MCP credentials come from `~/.config/dotagents/mcp.env` (`KEY=value` lines). A server whose variable is unset is skipped, and `install.sh` names it.
 
-## Uninstall
+<a id="uninstall"></a>
+
+## 🧹 Uninstall
 
 ```sh
 ./uninstall.sh --dry-run          # print what would change (`would ...` lines), change nothing
@@ -62,18 +88,29 @@ Notes:
 ./uninstall.sh --purge            # also delete ~/.config/dotagents (secrets, Settings), ~/.agents/telemetry and ~/.agents/runs
 ```
 
-It takes words in any order as `install.sh` does, but its tool words are `all`, `claude`, `codex` and `cursor`: `shared` is refused, since the shared `~/.agents/` links go only with `all`. A second tool word or an unknown word prints the usage and exits 1. It touches only what `install.sh` put there:
-- **Links**: removes every link pointing into this repo (or, for Claude skills, into `~/.agents/skills/`), stale ones included. Your own links and files stay. A file `install.sh` moved aside is copied back from `~/.dotagents-backup/`.
-- **Merged files**: removes the snippets' entries and any hook calling `~/.agents/hooks/`, and keeps the rest. Each file it edits is copied to `~/.dotagents-backup/<timestamp>-uninstall/` first.
-- **MCP servers and Claude plugins** listed in this repo are removed; their marketplaces stay.
-- A single tool keeps the shared `~/.agents/` links for the others. `~/.dotagents-backup/` is never deleted.
+> 💡 Start with `--dry-run`. It's free and it shows you everything first.
 
-With a selection, it removes the selected parts (a skill takes its subagents) minus the closure of every installed part outside the selection, and never core. It reads what is installed from the links in place: skill, subagent, mod and hook links (under an older install's one link to the hooks folder, every hook reachable through it), `~/.agents/bin/remote-agent`, and the `global` links; there is no record file. So after `install.sh pr-loop epics`, `uninstall.sh pr-loop` removes `address-review` and `renovate-prs` but keeps `review-pr`, `ship-pr`, `fix-pr` and their subagents, which `epics` requires; it names each part it keeps. It removes each part's own links one by one, Claude's skill links before the shared ones, so no link is left dangling. From merged files it removes only the removed hooks' snippets and the items calling their scripts; other hooks, settings and your own entries stay. `--purge` applies to a full uninstall only.
+Words work as they do for `install.sh`, except the tool words are `all`, `claude`, `codex` and `cursor`. `shared` is refused, since the shared `~/.agents/` links only go with `all`. `--purge` applies to a full uninstall only.
 
-Run it from the checkout the links point to: after moving the repo, links to the old path aren't recognised.
+It touches only what `install.sh` put there:
+- **Links:** removes every link into this repo (or, for Claude skills, into `~/.agents/skills/`), stale ones included. Your own links and files stay. A file `install.sh` moved aside is copied back from `~/.dotagents-backup/`.
+- **Merged files:** removes the snippets' entries and any hook calling `~/.agents/hooks/`, and keeps the rest. Each file is copied to `~/.dotagents-backup/<timestamp>-uninstall/` before it's edited.
+- **MCP servers and Claude plugins** listed in this repo are removed. Their marketplaces stay.
+- **One tool alone** keeps the shared `~/.agents/` links for the others.
+- `~/.dotagents-backup/` is never deleted.
 
-## Why skills and hooks are split this way
+### Removing one group
 
-- **A skill never names a tool.** It says "start one subagent per unit", not a specific tool call, and gives a fallback when a capability may be missing. That keeps one copy working everywhere.
-- **Hook logic is a plain script.** Each adapter only wires it up, so any tool with hooks reuses the same script.
-- **Knowledge about one repo stays in that repo**, in `.agents/<skill>-notes.md` (Lessons) and `.agents/settings.json` (Settings). Nothing about a specific project lives here.
+Uninstalling a selection is smart about shared needs. It removes the selected parts (a skill takes its subagents with it), minus anything another installed part still requires, and never core.
+
+Example: after `install.sh pr-loop epics`, running `uninstall.sh pr-loop` removes `address-review` and `renovate-prs`. It keeps `review-pr`, `ship-pr`, `fix-pr` and their subagents, because `epics` needs them, and it names each part it keeps.
+
+How it knows what's installed: there's no record file. It reads the links in place (skill, subagent, mod and hook links, `~/.agents/bin/remote-agent` and the `global` links). Under an older install's single hooks-folder link, every hook reachable through it counts. It removes each part's links one by one, Claude's skill links before the shared ones, so no link is left dangling. From merged files it removes only the removed hooks' snippets and the items calling their scripts. Other hooks, settings and your own entries stay.
+
+> ⚠️ Run it from the checkout the links point to. After moving the repo, links to the old path aren't recognised.
+
+## 🤔 Why it's split this way
+
+- **A skill never names a tool.** It says "start one subagent per unit", not a specific tool call, and gives a fallback when a capability may be missing. One copy works everywhere.
+- **Hook logic is a plain script.** Each adapter only wires it up, so every tool with hooks reuses the same script.
+- **What's known about a repo stays in that repo**, in `.agents/<skill>-notes.md` (Lessons) and `.agents/settings.json` (Settings). Nothing about a specific project lives here.

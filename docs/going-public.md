@@ -1,6 +1,6 @@
 # 🌍 Going public
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
 
 This page records the history scan and the decision to keep the git history, and lists the maintainer's steps to switch the repo to public, in order. Do the steps only after the [APM study](apm.md) decision is merged.
 

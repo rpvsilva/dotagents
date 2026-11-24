@@ -187,6 +187,8 @@ To change how a skill behaves (how many subagents run at once, which tracker hol
 
 ## 📚 Docs
 
+New here? Start at the [docs index](docs/README.md): it points you to the right page for what you want to do.
+
 | Page | Read it to learn |
 |---|---|
 | 🔧 [How it works](docs/how-it-works.md) | What `install.sh` links or merges where, for each tool, and how `uninstall.sh` undoes it |
@@ -220,7 +222,7 @@ scripts/hooks/      hook logic as plain scripts
 scripts/            install helpers, settings, remote-agent, merge-pr, capped (runs a test under memory and time caps)
 adapters/<tool>/    tool-only pieces: agent wrappers, hook wiring, rules
 remote/             remote subagents
-docs/               how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, APM study, dependencies, going public
+docs/               the docs index (docs/README.md): how it works, settings, hooks, remote subagents, agent communication, Claude features, build-epic launcher, evals, APM study, dependencies, going public
 tests/              the checks CI runs (tests/run.sh); tests/capped.test.sh covers capped
 evals/              eval cases per skill (evals/<skill>/<case>/) and their runner (evals/_runner/); dev tooling, never installed
 tools/              dev tooling such as the APM study (tools/apm-study/); never installed

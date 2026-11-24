@@ -1,16 +1,18 @@
 # ⚖️ Compared with Claude features
 
-[← Back to README](../README.md)
+[← Back to the docs](README.md)
+
+> **TL;DR** Self-hosted environments move *whole Claude sessions* into your network. Cowork is for knowledge work, not code. This setup sends *single subagent tasks* to spare compute and keeps GitHub off the remote side. Different jobs, no overlap worth switching for.
 
 Two Claude features look like this setup's [remote subagents](remote.md): Claude Code's **self-hosted environments** and **Claude Cowork**. They solve different problems, and neither replaces this setup.
 
-## In one line each
+## ⚡ In one line each
 
 - **This setup (`remote-agent`):** a local session sends some subagent tasks to other compute (a cluster, Docker or an SSH host) and gets a patch back.
 - **[Self-hosted environments](https://code.claude.com/docs/en/self-hosted-environments):** Claude Code's cloud sessions run on runners in your network instead of Anthropic's.
 - **[Claude Cowork](https://support.claude.com/en/articles/13345190-getting-started-with-cowork):** an agent mode for knowledge work (documents, browsing, apps), with no terminal needed, running on Anthropic's cloud.
 
-## Side by side
+## 🆚 Side by side
 
 | | [This setup](remote.md) | [Self-hosted environments](https://code.claude.com/docs/en/self-hosted-environments) | [Claude Cowork](https://support.claude.com/en/articles/13345190-getting-started-with-cowork) |
 |---|---|---|---|
@@ -25,7 +27,7 @@ Two Claude features look like this setup's [remote subagents](remote.md): Claude
 | Other tools | Yes, the skills are portable | Claude only | Claude only |
 | You maintain | The runner image and backend | The runner image, fleet and network | Nothing |
 
-## What this means
+## 💭 What it means for us
 
 **Self-hosted environments** change *where Claude's cloud sessions run*. They suit a team that starts sessions from the web or phone and needs them inside its network, close to internal services. It's not a drop-in for us:
 
@@ -43,7 +45,7 @@ It could become a fourth `remote-agent` backend (dispatched with `claude --envir
 - applies only a patch from the remote side, treating everything else as data;
 - works on any plan and in any tool, the **portable first** principle.
 
-## Sources
+## 📎 Sources
 
 Facts about the Claude features are from their docs as of November 2026 and may change:
 
