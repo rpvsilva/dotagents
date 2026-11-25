@@ -9,20 +9,24 @@
 # the limit when that is under 2048 MB); a number for remote.cap_mb only lowers it. With no limit to read, the number
 # is the cap, else 2000. The caps are also exported as CAPPED_MB and CAPPED_SECS, so a test command's own `capped`
 # with no flags runs under the same ones.
-# Stdin: a header of NAME=value lines up to an empty line, then the brief. The header holds REMOTE_HARNESS (claude or
-# codex, the agent CLI to run; claude when left out), REMOTE_BASE_URL (a model gateway, optional) and the one
-# credential the harness logs in with (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for claude,
-# CODEX_API_KEY for codex, GATEWAY_API_KEY for either with a gateway); any other name is refused. For claude the
-# gateway is ANTHROPIC_BASE_URL, and GATEWAY_API_KEY its bearer token (ANTHROPIC_AUTH_TOKEN); for codex, a model
-# provider in ~/.codex/config.toml reading the key from the credential's variable.
+# Stdin: a header of NAME=value lines up to an empty line, then the brief. The header holds REMOTE_HARNESS (claude,
+# codex or opencode, the agent CLI to run; claude when left out), REMOTE_BASE_URL (a model gateway, optional),
+# REMOTE_GATEWAY_API (the API it speaks, optional: anthropic, openai-responses or openai-chat) and the one credential
+# the harness logs in with (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for claude,
+# CODEX_API_KEY for codex, ANTHROPIC_API_KEY or OPENAI_API_KEY for opencode, GATEWAY_API_KEY for any with a gateway);
+# any other name is refused. For claude the gateway is ANTHROPIC_BASE_URL, and GATEWAY_API_KEY its bearer token
+# (ANTHROPIC_AUTH_TOKEN); for codex, a model provider in ~/.codex/config.toml reading the key from the credential's
+# variable; for opencode, a provider named remote in its global opencode.json, of the package for the gateway's API
+# (openai-chat when unset), holding the run's model (a gateway run under opencode needs one) as remote/<model>.
 # Installs the setup's plugins and MCP servers (claude), commits the snapshot as a base, runs the harness on the brief
-# with progress on stderr and its raw JSON events on stdout (Claude's stream-json, Codex's `exec --json`), and leaves
+# with progress on stderr and its raw JSON events on stdout (Claude's stream-json, Codex's `exec --json`, OpenCode's
+# `run --format json`), and leaves
 # ~/out/changes.patch (everything changed since the base), ~/out/summary.md (the final message), ~/out/stream.jsonl and
 # ~/out/session.jsonl (the harness's session, the credential redacted).
 # Under claude, each shell command it runs goes through ~/.agents/bin/capped (scripts/capped, sent with the setup)
 # under the caps, by way of CLAUDE_CODE_SHELL_PREFIX: a command over a cap is killed, and Claude sees why and carries
-# on. Codex has no such hook: its commands run uncapped, under the sandbox's own limits, logged as
-# `== capped: unavailable (missing: a shell prefix in codex)`. Each
+# on. Codex and OpenCode have no such hook: their commands run uncapped, under the sandbox's own limits, logged as
+# `== capped: unavailable (missing: a shell prefix in <harness>)`. Each
 # kill is a line `capped: killed: memory|timeout <command>` in ~/out/capped.log and, within a second, on stderr as
 # `== capped: killed: ...`, so remote-agent.sh has it even when the sandbox is lost after. Every line of the agent's text
 # and tool calls on stderr is indented, so a line starting `==` (or with no indent at all) is never Claude's. When a
@@ -205,10 +209,58 @@ run_codex() {
     "$HOME/out/stream.jsonl" | tr -d '\r')" != turn.completed ]; then failed=1; fi
 }
 
+# Runs OpenCode (`opencode run --format json`) on the brief: --standalone, so its private server takes the credential
+# from this environment (the shared background server would not), and --auto, approving every permission not denied
+# (the container is the sandbox). Progress as run_claude's: each text part held (its deltas, same part id, joined)
+# until the next part, each tool call one `  → ` line, an error event shown with what was held; the text held at the
+# end is the final report, dropped here. Logs `== opencode version <v>` first, for result.json. Sets session (the
+# session as `opencode session export` gives it, on one line, or empty), session_id (the events' sessionID) and failed
+# (non-empty when opencode exits non-zero, an error event came, or no step finished).
+run_opencode() {
+  local v
+  v="$(opencode --version </dev/null 2>/dev/null | head -1 | tr -d '\r')" || v=""
+  [[ ! "$v" =~ ^v?[0-9][0-9A-Za-z.+-]*$ ]] || echo "== opencode version ${v#v}" >&2
+  rm -f "$HOME/.opencode-rc"
+  { opencode run --standalone --auto --format json ${model:+-m "$model"} "$brief" </dev/null || echo "$?" >"$HOME/.opencode-rc"; } \
+    | tee "$HOME/out/stream.jsonl" /dev/fd/3 \
+    | scrub_secret="$secret" jq -rn --unbuffered "$redact_jq"'foreach ((inputs | objects), {type: "end"}) as $e ({held: null, hid: null, out: []};
+        if $e.type == "text" and ($e.part | type) == "object" then
+          ($e.part.text | if type == "string" then gsub("\n"; "\n  ") else "" end) as $t
+          | if $e.part.id != null and $e.part.id == .hid and .held != null then .out = [] | .held += $t
+            else .out = [.held | strings] | .hid = $e.part.id | .held = "  " + $t end
+        elif $e.type == "tool_use" and ($e.part | type) == "object" then
+          ($e.part.state.input? // {}) as $in
+          | .out = [.held | strings]
+              + ["  → \($e.part.tool // "tool") \(($in | objects | .command // .filePath // .pattern // .description // .url) // "" | tostring | gsub("\n"; " ") | .[0:120])"]
+          | .held = null | .hid = null
+        elif $e.type == "error" then
+          .out = [.held | strings] + ["  error: \($e.error.message? // $e.error.data.message? // $e.error // "" | tostring | gsub("\n"; " ") | .[0:300])"]
+          | .held = null | .hid = null
+        elif $e.type == "end" then .out = [] | .held = null
+        else .out = [] end;
+        .out[]) | redact' >&2
+  # The final report: the last text part, its deltas joined.
+  jq -rn 'reduce (inputs | objects | select(.type == "text") | .part | objects) as $p ([];
+      if $p.id != null and (last | .id?) == $p.id then .[-1].text += ($p.text | strings // "")
+      else . + [{id: $p.id, text: ($p.text | strings // "")}] end) | last | .text? // ""' \
+    "$HOME/out/stream.jsonl" >"$HOME/out/summary.md"
+  session_id="$(jq -r '.sessionID // empty | strings' "$HOME/out/stream.jsonl" 2>/dev/null | head -1 | tr -d '\r')" || session_id=""
+  session=""
+  if [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]] \
+    && opencode session export "$session_id" --standalone </dev/null 2>/dev/null | jq -c . >"$HOME/.opencode-session.jsonl" 2>/dev/null \
+    && [ -s "$HOME/.opencode-session.jsonl" ]; then
+    session="$HOME/.opencode-session.jsonl"
+  fi
+  failed=""
+  if [ -e "$HOME/.opencode-rc" ] || jq -e 'select(.type == "error")' "$HOME/out/stream.jsonl" >/dev/null 2>&1 \
+    || ! jq -e 'select(.type == "step_finish")' "$HOME/out/stream.jsonl" >/dev/null 2>&1; then failed=1; fi
+}
+
 # The whole run, left unindented; its stdout and stderr are kept apart, stderr copied to the log at the end.
 main() {
 harness=claude
 base_url=""
+gateway_api=""
 secret=""
 cred=""
 while IFS= read -r line; do
@@ -218,7 +270,8 @@ while IFS= read -r line; do
   case "$name" in
     REMOTE_HARNESS) harness="$value" ;;
     REMOTE_BASE_URL) base_url="$value" ;;
-    CLAUDE_CODE_OAUTH_TOKEN | ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN | CODEX_API_KEY | GATEWAY_API_KEY)
+    REMOTE_GATEWAY_API) gateway_api="$value" ;;
+    CLAUDE_CODE_OAUTH_TOKEN | ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN | CODEX_API_KEY | OPENAI_API_KEY | GATEWAY_API_KEY)
       [ -z "$cred" ] || { echo "== two credentials in the header" >&2; exit 1; }
       cred="$name"
       secret="$value"
@@ -228,10 +281,11 @@ while IFS= read -r line; do
 done
 brief="$(cat)"
 [ -z "$cred" ] || [ "$cred" != GATEWAY_API_KEY ] || [ -n "$base_url" ] || { echo "== GATEWAY_API_KEY without a gateway" >&2; exit 1; }
-case "$harness" in claude | codex) ;; *) echo "== unknown harness: ${harness:0:40}" >&2; exit 1 ;; esac
+case "$harness" in claude | codex | opencode) ;; *) echo "== unknown harness: ${harness:0:40}" >&2; exit 1 ;; esac
 case "$harness:$cred" in
   claude:GATEWAY_API_KEY) export ANTHROPIC_AUTH_TOKEN="$secret" ;;
-  claude:CLAUDE_CODE_OAUTH_TOKEN | claude:ANTHROPIC_API_KEY | claude:ANTHROPIC_AUTH_TOKEN | codex:CODEX_API_KEY | codex:GATEWAY_API_KEY)
+  claude:CLAUDE_CODE_OAUTH_TOKEN | claude:ANTHROPIC_API_KEY | claude:ANTHROPIC_AUTH_TOKEN | codex:CODEX_API_KEY | codex:GATEWAY_API_KEY \
+    | opencode:ANTHROPIC_API_KEY | opencode:OPENAI_API_KEY | opencode:GATEWAY_API_KEY)
     export "$cred=$secret" ;;
   *:) ;;
   *) echo "== $harness does not take $cred" >&2; exit 1 ;;
@@ -239,6 +293,18 @@ esac
 [ "$harness" != claude ] || [ -z "$base_url" ] || export ANTHROPIC_BASE_URL="$base_url"
 url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
 if [ -n "$base_url" ] && [[ ! "$base_url" =~ $url_re ]]; then echo "== bad base url" >&2; exit 1; fi
+# The package of OpenCode's gateway provider: the one that speaks the gateway's API.
+case "$harness:$gateway_api" in
+  opencode: | opencode:openai-chat) oc_package=@opencode/ai/providers/openai-compatible ;;
+  opencode:openai-responses) oc_package=@opencode/ai/providers/openai-compatible/responses ;;
+  opencode:anthropic) oc_package=@opencode/ai/providers/anthropic-compatible ;;
+  claude: | claude:anthropic | codex: | codex:openai-responses) oc_package="" ;;
+  *) echo "== $harness does not speak ${gateway_api:0:40}" >&2; exit 1 ;;
+esac
+if [ "$harness" = opencode ] && [ -n "$base_url" ] && [ -z "$model" ]; then
+  echo "== opencode through a gateway needs a model (remote.model or --model)" >&2
+  exit 1
+fi
 cd "$HOME"
 mkdir -p out
 
@@ -281,6 +347,22 @@ if [ "$harness" = codex ]; then
   fi
 fi
 
+# OpenCode's rules go in its global AGENTS.md too (outside ~/work); a gateway is a provider named remote in its global
+# config, its key read from the credential's variable and the run's model its one model, run as remote/<model>.
+if [ "$harness" = opencode ]; then
+  oc_config="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  mkdir -p "$oc_config"
+  printf '\n%s\n' "$rules" >>"$oc_config/AGENTS.md"
+  if [ -n "$base_url" ]; then
+    # shellcheck disable=SC2016 # jq's variables
+    jq -n --arg url "$base_url" --arg env "${cred:-GATEWAY_API_KEY}" --arg pkg "$oc_package" --arg m "$model" \
+      '{"$schema": "https://opencode.ai/config.json", model: ("remote/" + $m),
+        providers: {remote: {name: "remote gateway", env: [$env], package: $pkg, settings: {baseURL: $url},
+          models: {($m): {name: $m}}}}}' >"$oc_config/opencode.json"
+    model="remote/$model"
+  fi
+fi
+
 # The caps, once a probe through the prefix shows capped runs here.
 pick_cap_mb
 export CAPPED_MB="$cap_mb" CAPPED_SECS="$cap_secs"
@@ -288,8 +370,8 @@ export CAPPED_MB="$cap_mb" CAPPED_SECS="$cap_secs"
 prefix="$HOME/.agents/bin/capped-shell"
 mkdir -p "$HOME/.agents/bin"
 write_prefix "$prefix"
-if [ "$harness" = codex ]; then
-  echo "== capped: unavailable (missing: a shell prefix in codex): the memory and time caps are OFF, shell commands run uncapped" >&2
+if [ "$harness" != claude ]; then
+  echo "== capped: unavailable (missing: a shell prefix in $harness): the memory and time caps are OFF, shell commands run uncapped" >&2
 elif "$prefix" "true && eval true && pwd -P >| /dev/null" </dev/null >/dev/null 2>&1; then
   export CLAUDE_CODE_SHELL_PREFIX="$prefix"
   echo "== capped: shell prefix set (--mb $cap_mb --secs $cap_secs; sandbox limit: ${limit_mb:-none} MB)" >&2
@@ -309,7 +391,7 @@ follower=$!
 trap ': >"$stop_follow"; wait "$follower" || true' EXIT
 
 echo "== $harness${model:+ ($model)}" >&2
-if [ "$harness" = codex ]; then run_codex; else run_claude; fi
+case "$harness" in codex) run_codex ;; opencode) run_opencode ;; *) run_claude ;; esac
 : >"$stop_follow"
 wait "$follower" || true
 trap - EXIT

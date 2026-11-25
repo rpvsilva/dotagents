@@ -191,6 +191,25 @@ setup $'docker\n\n\noauth\n\n' || fail "back to oauth: exited non-zero: $(cat "$
 [ "$(value REMOTE_BASE_URL)" = unset ] && [ "$(value REMOTE_GATEWAY_API)" = unset ] || fail "back to oauth: the gateway was kept"
 [ "$(value REMOTE_CREDENTIAL)" = CLAUDE_CODE_OAUTH_TOKEN ] || fail "back to oauth: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
 [ "$(secret CLAUDE_CODE_OAUTH_TOKEN)" = keep-me ] || fail "back to oauth: the Claude token was not kept"
+# OpenCode: an OpenAI key (its own credential), then a gateway, whose API it asks for (openai-chat on enter, an
+# unknown one asked again); the other harnesses' credentials stay.
+setup $'docker\n\nopencode\nopenai\nsk-openai-1\n' || fail "opencode: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_HARNESS)" = opencode ] && [ "$(value REMOTE_CREDENTIAL)" = OPENAI_API_KEY ] && [ "$(value REMOTE_BASE_URL)" = unset ] \
+  || fail "opencode: not opencode on OPENAI_API_KEY: $(value REMOTE_HARNESS) $(value REMOTE_CREDENTIAL) $(value REMOTE_BASE_URL)"
+[ "$(secret OPENAI_API_KEY)" = sk-openai-1 ] || fail "opencode: the key not stored"
+[ "$(secret CLAUDE_CODE_OAUTH_TOKEN)" = keep-me ] && [ "$(secret CODEX_API_KEY)" = sk-codex-1 ] || fail "opencode: another harness's credential was dropped"
+grep -q "sk-openai-1" "$SANDBOX/out" "$SETTINGS" && fail "opencode: the key showed in the output or settings.json"
+setup $'docker\n\n\n\n\n' || fail "opencode again: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_CREDENTIAL)" = OPENAI_API_KEY ] || fail "opencode again: enter did not keep openai: $(value REMOTE_CREDENTIAL)"
+setup $'docker\n\nopencode\ngateway\nhttps://openrouter.ai/api/v1\n\n\n' || fail "opencode gateway: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_CREDENTIAL)" = GATEWAY_API_KEY ] && [ "$(value REMOTE_GATEWAY_API)" = openai-chat ] \
+  && [ "$(value REMOTE_BASE_URL)" = https://openrouter.ai/api/v1 ] && [ "$(secret GATEWAY_API_KEY)" = gw-secret ] \
+  || fail "opencode gateway: not the gateway on openai-chat: $(value REMOTE_CREDENTIAL) $(value REMOTE_GATEWAY_API) $(value REMOTE_BASE_URL)"
+setup $'docker\n\nopencode\ngateway\n\nmessages\nanthropic\n\n' || fail "opencode gateway api: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_GATEWAY_API)" = anthropic ] || fail "opencode gateway api: REMOTE_GATEWAY_API is $(value REMOTE_GATEWAY_API)"
+grep -q "one of: openai-chat openai-responses anthropic" "$SANDBOX/out" || fail "opencode gateway api: an unknown API not asked again: $(cat "$SANDBOX/out")"
+setup $'docker\n\nopencode\ngateway\n\n\n\n' || fail "opencode gateway api again: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_GATEWAY_API)" = anthropic ] || fail "opencode gateway api again: enter did not keep anthropic: $(value REMOTE_GATEWAY_API)"
 
 # A bad value in settings.json stops setup before it asks anything, naming the key; neither file changes.
 fresh

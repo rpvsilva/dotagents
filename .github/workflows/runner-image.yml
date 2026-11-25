@@ -53,7 +53,7 @@ jobs:
           docker run --rm "$LOCAL" bash -c '
             set -e
             [ "$(id -un)" = node ]
-            claude --version; codex --version; gh --version | head -1; git --version; jq --version; python3 --version
+            claude --version; codex --version; opencode --version; gh --version | head -1; git --version; jq --version; python3 --version
             python3 -m venv /tmp/v
             git config --global --get credential.https://github.com.helper'
       - name: log in to ghcr.io
