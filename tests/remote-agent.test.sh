@@ -27,6 +27,11 @@ printf 'global instructions\n' >"$H/src/AGENTS.md"
 ln -s "$H/src/AGENTS.md" "$H/.claude/CLAUDE.md"
 printf '#!/bin/sh\n' >"$H/.agents/hooks/guard.sh"
 printf '{"token":"x"}' >"$H/.claude/.credentials.json"
+mkdir -p "$H/.codex/agents"
+printf 'codex instructions\n' >"$H/.codex/AGENTS.md"
+printf 'name = "a"\n' >"$H/.codex/agents/a.toml"
+printf 'model = "x"\n' >"$H/.codex/config.toml"
+printf '{"OPENAI_API_KEY":"secret"}' >"$H/.codex/auth.json"
 printf 'history\n' >"$H/.claude/history.jsonl"
 printf 'transcript\n' >"$H/.claude/projects/p/s.jsonl"
 cat >"$H/.claude/settings.json" <<'EOF'
@@ -75,7 +80,8 @@ HOME="$H" "$REPO/scripts/remote-agent-pack.sh" "$P" 2>"$SANDBOX/pack.err" || fai
 if [ ! -f "$P/.claude/CLAUDE.md" ] || [ -L "$P/.claude/CLAUDE.md" ]; then fail "pack: CLAUDE.md not copied as a file"; fi
 [ -f "$P/.claude/skills/skill-a/SKILL.md" ] || fail "pack: linked skill not copied"
 [ -f "$P/.agents/hooks/guard.sh" ] || fail "pack: hook scripts not copied"
-for f in .claude/.credentials.json .claude/history.jsonl .claude/projects .claude/skills/skill-a/.env .claude.json; do
+[ "$(cat "$P/.codex/AGENTS.md" 2>/dev/null)" = "codex instructions" ] && [ -f "$P/.codex/agents/a.toml" ] || fail "pack: Codex's AGENTS.md or agents not copied"
+for f in .claude/.credentials.json .claude/history.jsonl .claude/projects .claude/skills/skill-a/.env .claude.json .codex/config.toml .codex/auth.json; do
   [ ! -e "$P/$f" ] || fail "pack: $f was copied"
 done
 s="$P/.claude/settings.json"
@@ -203,6 +209,8 @@ cat >"$SANDBOX/podbin/claude" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = -p ] || exit 0
 printf '%s\n' "\$@" >"$SANDBOX/claude-args"
+# The gateway and the credentials it was given: ANTHROPIC_BASE_URL, then which credential variables are set.
+{ echo "\${ANTHROPIC_BASE_URL:-none}"; env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CODEX_API_KEY)=' | tr -d = | sort | tr '\n' ' '; echo; } >"$SANDBOX/claude-env"
 printf '%s' "\${CLAUDE_CODE_SHELL_PREFIX:-}" >"$SANDBOX/prefix"
 printf '%s %s\n' "\${CAPPED_MB:-}" "\${CAPPED_SECS:-}" >"$SANDBOX/capped-env"
 [ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >>"\$HOME/out/capped.log"
@@ -333,8 +341,10 @@ if [ ! -f "$POD/work/tracked.txt" ] || [ ! -f "$POD/work/untracked.txt" ]; then 
 [ ! -e "$POD/work/.env" ] || fail "secret-looking file sent"
 grep -q "left out .env" "$SANDBOX/out" || fail "left-out secret not reported"
 if [ ! -f "$POD/.claude/skills/skill-a/SKILL.md" ] || [ -e "$POD/.claude/.credentials.json" ]; then fail "setup not sent, or credentials sent"; fi
-[ "$(sed -n 1p "$SANDBOX/stdin")" = "sk-claude-secret" ] || fail "stdin line 1 is not the Claude token"
-[ "$(sed -n '2,$p' "$SANDBOX/stdin")" = "add a hello file" ] || fail "brief does not follow the token"
+# Stdin: a header (the harness, then the one credential) up to an empty line, then the brief.
+[ "$(sed -n '/^$/q;p' "$SANDBOX/stdin")" = $'REMOTE_HARNESS=claude\nCLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret' ] \
+  || fail "the stdin header is not the harness and the Claude token: $(sed -n '/^$/q;p' "$SANDBOX/stdin")"
+[ "$(sed '1,/^$/d' "$SANDBOX/stdin")" = "add a hello file" ] || fail "brief does not follow the header"
 grep -q "sk-claude-secret" "$SANDBOX/calls" "$SANDBOX/claim.yaml" "$SANDBOX/out" && fail "the token leaked into kubectl arguments, the claim or the output"
 grep -q "gh[ps]_\|GH_TOKEN" "$SANDBOX/calls" "$SANDBOX/stdin" && fail "a GitHub token was sent"
 [ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "patch not applied to the worktree"
@@ -771,7 +781,7 @@ grep -qxF -- "my-model.1" "$SANDBOX/claude-args" || fail "--model: claude not ru
 grep -qxF -- "$want" "$SANDBOX/claude-args" && fail "--model: --agent's model used too: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
 grep -q "remote-agent-sandbox auto 300 my-model.1\$" "$SANDBOX/calls" || fail "--model: not the argument after the caps"
 rm -f "$W/hello.txt"
-for bad in "-x" "a b" "a/b" ""; do
+for bad in "-x" "a b" "a;b" "/a" ""; do
   code=0; run 0 "" --model "$bad" || code=$?
   [ "$code" = 1 ] || fail "--model '$bad': wanted exit 1, got $code: $(cat "$SANDBOX/out")"
   grep -q "^remote-agent: --model needs" "$SANDBOX/err" || fail "--model '$bad': no reason: $(cat "$SANDBOX/err")"
@@ -781,7 +791,7 @@ done
 run 0 "" --name home --home "$H2" || fail "--home: exited non-zero: $(cat "$SANDBOX/out")"
 [ -f "$POD/.claude/skills/only-here/SKILL.md" ] || fail "--home: the given home's skill not in the sandbox"
 [ ! -e "$POD/.claude/skills/skill-a" ] || fail "--home: a file of \$HOME reached the sandbox"
-[ "$(sed -n 1p "$SANDBOX/stdin")" = "sk-claude-secret" ] || fail "--home: stdin line 1 is not the Claude token"
+[ "$(sed -n 2p "$SANDBOX/stdin")" = "CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret" ] || fail "--home: stdin line 2 is not the Claude token"
 grep -rq --exclude-dir=projects "sk-claude-secret" "$POD/.claude" "$POD/.agents" && fail "--home: the token was shipped in the setup"
 grep -q "sk-claude-secret" "$SANDBOX/calls" && fail "--home: the token leaked into kubectl arguments"
 rm -f "$W/hello.txt"
@@ -1517,6 +1527,130 @@ code=0; prune --older-than 1d "$SANDBOX/nogit" || code=$?
 grep -q "not in a git worktree: $SANDBOX/nogit" "$SANDBOX/prune.err" || fail "prune outside a repo: not said: $(cat "$SANDBOX/prune.err")"
 (cd "$W" && "$REPO/scripts/remote-agent.sh" --help) | grep -q "prune --older-than" || fail "--help does not list prune"
 grep -q "remote-agent prune --older-than" "$REPO/scripts/remote-agent.sh" || fail "the header comment does not list prune"
+
+# --- Harnesses. A fake codex for the pod: it logs its arguments and which credentials it got, starts a session as
+# Codex does (~/.codex/sessions/.../rollout-<time>-<thread id>.jsonl, holding the key), and prints `exec --json`
+# events: a command, a file change, a progress message, the final message, then turn.completed. With
+# $SANDBOX/codex-limit, the account is over its usage limit: turn.failed says so, and it exits 1.
+cat >"$SANDBOX/podbin/codex" <<EOF
+#!/usr/bin/env bash
+[ "\$1" = exec ] || exit 0
+printf '%s\n' "\$@" >"$SANDBOX/codex-args"
+env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CODEX_API_KEY)=' | tr -d = | sort | tr '\n' ' ' >"$SANDBOX/codex-env"
+id=7c0d3c55-0000-4000-8000-00000000c0de
+echo "{\"type\":\"thread.started\",\"thread_id\":\"\$id\"}"
+echo '{"type":"turn.started"}'
+d="\$HOME/.codex/sessions/2026/11/25"
+mkdir -p "\$d"
+printf '{"type":"session_meta","payload":{"id":"%s","cli_version":"0.172.0"}}\n{"type":"turn_context","payload":{"model":"gpt-test"}}\n{"type":"response_item","payload":{"text":"key %s"}}\n' "\$id" "\$CODEX_API_KEY" >"\$d/rollout-2026-11-25T10-00-00-\$id.jsonl"
+if [ -e "$SANDBOX/codex-limit" ]; then
+  echo '{"type":"turn.failed","error":{"message":"You'"'"'ve hit your usage limit. Try again at 5:30 PM."}}'
+  exit 1
+fi
+EOF
+cat >>"$SANDBOX/podbin/codex" <<'EOF'
+echo '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"writing the hello file"}}'
+echo '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"bash -lc ls","exit_code":0,"status":"completed"}}'
+printf 'hello\n' >hello.txt
+echo '{"type":"item.completed","item":{"id":"i2","type":"file_change","changes":[{"path":"hello.txt","kind":"add"}],"status":"completed"}}'
+echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"i3\",\"type\":\"agent_message\",\"text\":\"env: CODEX_API_KEY=$CODEX_API_KEY\"}}"
+echo '{"type":"item.completed","item":{"id":"i4","type":"agent_message","text":"did the codex thing"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":30}}'
+EOF
+chmod +x "$SANDBOX/podbin/codex"
+# Sets remote.env to the Claude token and a Codex key, and the Settings to the cluster's plus those given.
+harness_config() {
+  remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool "$@"
+  printf 'CODEX_API_KEY=sk-codex-secret\nANTHROPIC_AUTH_TOKEN=sk-gateway-secret\n' >>"$SANDBOX/config/dotagents/remote.env"
+}
+
+# Codex: the header names it and sends only its key; remote.model is the model, the rules go in its AGENTS.md, its
+# progress and final message come back as Claude's do, and result.json reads its events and session.
+harness_config REMOTE_HARNESS=codex REMOTE_MODEL=gpt-5.5
+: >"$SANDBOX/real"
+run 0 "" --name codex1 --agent epic-implementer || fail "codex: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "codex: patch not applied: $(cat "$SANDBOX/out")"
+[ "$(sed -n '/^$/q;p' "$SANDBOX/stdin")" = $'REMOTE_HARNESS=codex\nCODEX_API_KEY=sk-codex-secret' ] \
+  || fail "codex: the stdin header is not the harness and its key: $(sed -n '/^$/q;p' "$SANDBOX/stdin" | sed 's/=sk-.*/=.../')"
+[ "$(cat "$SANDBOX/codex-env")" = "CODEX_API_KEY " ] || fail "codex: credentials given to codex: $(cat "$SANDBOX/codex-env")"
+if ! grep -qx -- "--json" "$SANDBOX/codex-args" || ! grep -qx -- "-m" "$SANDBOX/codex-args" || ! grep -qx "gpt-5.5" "$SANDBOX/codex-args" \
+  || [ "$(tail -1 "$SANDBOX/codex-args")" != "add a hello file" ] || [ "$(tail -2 "$SANDBOX/codex-args" | head -1)" != -- ]; then
+  fail "codex: not run as exec --json -m gpt-5.5 -- <brief>: $(tr '\n' ' ' <"$SANDBOX/codex-args")"
+fi
+grep -q "^You run unattended" "$POD/.codex/AGENTS.md" || fail "codex: the rules are not in its AGENTS.md"
+[ ! -e "$POD/.codex/config.toml" ] || fail "codex: a model provider written without a gateway: $(cat "$POD/.codex/config.toml")"
+[ "$(cat "$SANDBOX/report")" = "did the codex thing" ] || fail "codex: stdout is not the final message: $(cat "$SANDBOX/report")"
+grep -qx "\[codex1\] == codex (gpt-5.5)" "$SANDBOX/err" || fail "codex: the harness and model not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[codex1\]   writing the hello file" "$SANDBOX/err" || fail "codex: its progress text not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[codex1\]   → shell bash -lc ls" "$SANDBOX/err" || fail "codex: its command not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[codex1\]   → edit hello.txt" "$SANDBOX/err" || fail "codex: its file change not shown: $(cat "$SANDBOX/err")"
+grep -q "did the codex thing" "$SANDBOX/err" && fail "codex: the final message also on stderr"
+grep -q "== capped: unavailable (missing: a shell prefix in codex)" "$SANDBOX/err" || fail "codex: the caps not said to be off: $(cat "$SANDBOX/err")"
+k="$(kept)"
+grep -rl "sk-codex-secret" "$k" "$POD/main-stdout" && fail "codex: the key is in a kept file or the log: $(grep -r "sk-codex-secret" "$k" "$POD/main-stdout" | cut -c1-300)"
+grep -qF 'CODEX_API_KEY=[redacted]' "$k/transcript.jsonl" || fail "codex: the key not redacted in the transcript"
+grep -qF 'key [redacted]' "$k/session.jsonl" || fail "codex: the session not kept, or its key not redacted: $(cat "$k/session.jsonl" 2>/dev/null)"
+jq -e '.harness == "codex"' "$k/run.json" >/dev/null || fail "codex: run.json does not name the harness: $(cat "$k/run.json")"
+result_is "codex result" '.harness == "codex" and .model == "gpt-test" and .harness_version == "0.172.0" and .claude_version == null
+  and .num_turns == 1 and .usage.input_tokens == 120 and .total_cost_usd == null and .complete == true and .status == "done"
+  and .capped_off == "a shell prefix in codex" and .changed == ["hello.txt"]'
+grep -q "sk-codex-secret" "$k/result.json" && fail "codex: the key is in result.json"
+code=0; (cd "$W" && env HOME="$H" CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" resume "$(basename "$k")") 2>"$SANDBOX/err" || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "ran on codex" "$SANDBOX/err" || fail "codex resume: not refused: $code $(cat "$SANDBOX/err")"
+rm -f "$W/hello.txt"
+# A gateway for codex: a model provider in its config, reading the key from CODEX_API_KEY.
+harness_config REMOTE_HARNESS=codex REMOTE_BASE_URL=https://gw.example.com/v1
+run 0 "" --name codex2 || fail "codex gateway: exited non-zero: $(cat "$SANDBOX/out")"
+# shellcheck disable=SC2015 # fail only reports
+grep -qx 'base_url = "https://gw.example.com/v1"' "$POD/.codex/config.toml" && grep -qx 'env_key = "CODEX_API_KEY"' "$POD/.codex/config.toml" \
+  && grep -qx 'model_provider = "remote"' "$POD/.codex/config.toml" || fail "codex gateway: no model provider: $(cat "$POD/.codex/config.toml" 2>/dev/null)"
+grep -qx "REMOTE_BASE_URL=https://gw.example.com/v1" "$SANDBOX/stdin" || fail "codex gateway: the URL not in the header"
+grep -qx -- "-m" "$SANDBOX/codex-args" && fail "codex gateway: a model passed with none set: $(tr '\n' ' ' <"$SANDBOX/codex-args")"
+rm -f "$W/hello.txt"
+# Codex's usage limit: exit 5, as Claude's.
+: >"$SANDBOX/codex-limit"
+code=0; run 0 "" --name codex3 || code=$?
+[ "$code" = 5 ] || fail "codex limit: wanted exit 5, got $code: $(cat "$SANDBOX/out")"
+grep -q "^\[codex3\] usage limit: resets " "$SANDBOX/err" || fail "codex limit: not said: $(cat "$SANDBOX/err")"
+result_is "codex limit result" '.harness == "codex" and .complete == false and .status == "failed"'
+rm -f "$W/hello.txt" "$SANDBOX/codex-limit"
+
+# Claude through a gateway: ANTHROPIC_BASE_URL and the bearer token only; remote.models renames the agent's model.
+want="$(sed -n 's/^model: *//p' "$REPO/adapters/claude/agents/epic-implementer.md" | head -1)"
+harness_config REMOTE_BASE_URL=https://gw.example.com/anthropic REMOTE_CREDENTIAL=ANTHROPIC_AUTH_TOKEN \
+  REMOTE_MODELS="$want=anthropic/claude-x:1,other=y"
+run 0 "" --name gw --agent epic-implementer || fail "claude gateway: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$SANDBOX/claude-env")" = $'https://gw.example.com/anthropic\nANTHROPIC_AUTH_TOKEN ' ] \
+  || fail "claude gateway: not the URL and the bearer token alone: $(cat "$SANDBOX/claude-env")"
+grep -qxF "anthropic/claude-x:1" "$SANDBOX/claude-args" || fail "claude gateway: the model not renamed: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
+grep -q "sk-gateway-secret\|sk-claude-secret" "$SANDBOX/calls" "$SANDBOX/out" && fail "claude gateway: a credential leaked"
+grep -rl "sk-gateway-secret" "$(kept)" && fail "claude gateway: the token is in a kept file"
+result_is "claude gateway result" '.harness == "claude"'
+rm -f "$W/hello.txt" "$SANDBOX/real"
+# --model is not renamed; a gateway name with / and : passes.
+run 0 "$patch" --name gw2 --model "$want" || fail "claude gateway --model: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "remote-agent-sandbox auto 300 $want\$" "$SANDBOX/calls" || fail "claude gateway --model: renamed: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 100)"
+rm -f "$W/hello.txt"
+
+# A credential the harness does not take, a missing one, a bad URL or a bad models entry: refused before any call.
+for c in "REMOTE_HARNESS=codex REMOTE_CREDENTIAL=CLAUDE_CODE_OAUTH_TOKEN|not one codex logs in with" \
+  "REMOTE_CREDENTIAL=CODEX_API_KEY|not one claude logs in with" \
+  "REMOTE_CREDENTIAL=ANTHROPIC_API_KEY|set ANTHROPIC_API_KEY" \
+  "REMOTE_BASE_URL=gw.example.com|not an http or https URL" \
+  "REMOTE_MODELS=opus|remote.models entry is not name=model"; do
+  # shellcheck disable=SC2086 # the Settings, split
+  harness_config ${c%%|*}
+  code=0; run 0 "" || code=$?
+  [ "$code" = 1 ] || fail "refused '${c%%|*}': wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q "${c#*|}" "$SANDBOX/err" || fail "refused '${c%%|*}': no reason: $(cat "$SANDBOX/err")"
+  [ ! -e "$SANDBOX/calls" ] || fail "refused '${c%%|*}': kubectl was called"
+done
+harness_config REMOTE_HARNESS=codex
+sed -i.bak '/^CODEX_API_KEY=/d' "$SANDBOX/config/dotagents/remote.env"
+ready && fail "ready: yes with no Codex key"
+grep -q "no CODEX_API_KEY" "$SANDBOX/out" || fail "ready, no Codex key: $(cat "$SANDBOX/out")"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
 
 # Without a token nothing reaches the cluster.
 rm "$SANDBOX/config/dotagents/remote.env"

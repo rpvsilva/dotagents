@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sourced by remote-agent.sh, remote-agent-check.sh, remote-agent-setup.sh and remote-ssh-askpass.sh: loads the remote
-# setup. The Claude token and the SSH backend's password and key passphrase are Secrets, in remote.env (written by
-# `remote-agent setup`) or the environment; every other remote Setting comes from scripts/settings.sh (section remote),
+# setup. The harness's credential (remote.credential names it) and the SSH backend's password and key passphrase are
+# Secrets, in remote.env (written by `remote-agent setup`) or the environment; every other remote Setting comes from scripts/settings.sh (section remote),
 # exported as the REMOTE_* variables the backends read. Needs $REPO.
 
 REMOTE_SECRET_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents/remote.env"
@@ -17,14 +17,65 @@ if tar --no-xattrs -cf - -T /dev/null >/dev/null 2>&1; then remote_tar+=(--no-xa
 remote_var() { printf 'REMOTE_%s' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 remote_key() { printf '%s' "${1#REMOTE_}" | tr '[:upper:]' '[:lower:]'; }
 
-# Prints Secret $1 (CLAUDE_CODE_OAUTH_TOKEN, SSH_PASSWORD, SSH_KEY_PASSPHRASE): remote.env's when it sets one, else the
+# Prints Secret $1 (a credential, SSH_PASSWORD, SSH_KEY_PASSPHRASE): remote.env's when it sets one, else the
 # environment's; nothing when neither does.
 remote_secret() {
   # shellcheck disable=SC1090
   (set +u; [ ! -f "$REMOTE_SECRET_FILE" ] || . "$REMOTE_SECRET_FILE" >/dev/null 2>&1; printf '%s' "${!1-}")
 }
-# Prints the Claude token, as remote_secret.
-remote_token() { remote_secret CLAUDE_CODE_OAUTH_TOKEN; }
+
+# The harnesses (remote.harness): the agent CLI a run starts in the sandbox. Prints the credentials harness $1 logs in
+# with, its default first; fails for an unknown harness.
+remote_harness_credentials() {
+  case "$1" in
+    claude) echo "CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN" ;;
+    codex) echo "CODEX_API_KEY" ;;
+    *) return 1 ;;
+  esac
+}
+# A model name a run may pass to its harness: a gateway's names hold / and : (anthropic/claude-opus-5-5).
+remote_model_ok() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$ ]]; }
+
+# Sets harness to remote.harness (claude when unset) and credential to the Secret the run logs in with
+# (remote.credential, else the harness's default), and checks remote.base_url and remote.models; fails, with why set
+# to say so, on a value that does not fit. Run after remote_settings.
+remote_credential() {
+  local names url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+  harness="${REMOTE_HARNESS:-claude}"
+  names="$(remote_harness_credentials "$harness")" || { why="unknown remote.harness: $harness (known: claude codex)"; return 1; }
+  credential="${REMOTE_CREDENTIAL:-${names%% *}}"
+  if [[ " $names " != *" $credential "* ]]; then
+    why="remote.credential $credential is not one $harness logs in with (one of: $names)"
+    return 1
+  fi
+  if [ -n "${REMOTE_BASE_URL:-}" ] && [[ ! "$REMOTE_BASE_URL" =~ $url_re ]]; then
+    why="remote.base_url is not an http or https URL: $REMOTE_BASE_URL"
+    return 1
+  fi
+  # shellcheck disable=SC2034 # why: read by the caller
+  remote_model_map "" >/dev/null || { why="$(remote_model_map "" 2>&1 >/dev/null)"; return 1; }
+}
+# Prints the credential's value (see remote_credential; CLAUDE_CODE_OAUTH_TOKEN before it runs), as remote_secret.
+remote_token() { remote_secret "${credential:-CLAUDE_CODE_OAUTH_TOKEN}"; }
+
+# Prints model $1 as remote.models renames it (its name=model entries, joined by commas in REMOTE_MODELS), else as it
+# is; fails, naming the entry, on one that is not name=model with plain model names, or a name given twice.
+remote_model_map() {
+  local entries entry from to out="$1" seen=" "
+  IFS=, read -ra entries <<<"${REMOTE_MODELS:-}"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    from="${entry%%=*}"
+    to="${entry#*=}"
+    if [ "$from" = "$entry" ] || ! remote_model_ok "$from" || ! remote_model_ok "$to"; then
+      echo "remote-agent: remote.models entry is not name=model: $entry" >&2
+      return 1
+    fi
+    case "$seen" in *" $from "*) echo "remote-agent: remote.models names $from twice" >&2; return 1 ;; esac
+    seen="$seen$from "
+    [ "$from" != "$1" ] || out="$to"
+  done
+  printf '%s' "$out"
+}
 
 # Prints the REMOTE_* names remote.env still sets, space-separated: Settings from before settings.json, now ignored.
 remote_leftovers() {

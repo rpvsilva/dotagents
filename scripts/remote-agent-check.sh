@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Checks the remote-agent setup, run as `remote-agent check`: remote.env exists and holds a Claude token (never
-# printed) and no Settings left from before settings.json, a remote.backend is set, the backend's own requirements
-# (`<backend> check`: one line per missing thing), then a dry run: acquire a sandbox, put a one-file snapshot in
-# ~/work, run a trivial command that copies it to ~/out, finds claude and runs `node --version` and `claude --version`
-# (a binary present but broken, e.g. a missing shared library, fails here with its own error), get ~/out back,
-# compare, release. No Claude API call, so no tokens spent. The sandbox is released even when a step fails.
+# Checks the remote-agent setup, run as `remote-agent check`: remote.env exists and holds the harness's credential
+# (remote.harness and remote.credential: CLAUDE_CODE_OAUTH_TOKEN for claude by default; never printed), remote.base_url
+# and remote.models are well formed, no Settings are left from before settings.json, a remote.backend is set, the
+# backend's own requirements (`<backend> check`: one line per missing thing), then a dry run: acquire a sandbox, put a
+# one-file snapshot in ~/work, run a trivial command that copies it to ~/out, finds the harness's CLI (claude or
+# codex) and runs `node --version` and `<cli> --version` (a binary present but broken, e.g. a missing shared library,
+# fails here with its own error), get ~/out back, compare, release. No model call, so no tokens spent. The sandbox is released even when a step fails.
 # The dry run is skipped when a requirement is missing. Exit 0 only when everything passes; prints ok at the end.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=remote-settings.sh disable=SC1091
 . "$REPO/scripts/remote-settings.sh"
+# Set by remote_credential: the harness and the name of the credential it logs in with.
+harness=""
+credential=""
 
 say() { echo "remote-agent: $*" >&2; }
 
@@ -19,18 +23,25 @@ if [ ! -f "$REMOTE_SECRET_FILE" ]; then
   exit 1
 fi
 problems=0
+remote_settings "$PWD" || exit 1
+if ! remote_credential; then
+  echo "$why"
+  exit 1
+fi
 if [ -z "$(remote_token)" ]; then
-  echo "CLAUDE_CODE_OAUTH_TOKEN is not set in $REMOTE_SECRET_FILE (from \`claude setup-token\`)"
+  case "$credential" in
+    CLAUDE_CODE_OAUTH_TOKEN) echo "CLAUDE_CODE_OAUTH_TOKEN is not set in $REMOTE_SECRET_FILE (from \`claude setup-token\`)" ;;
+    *) echo "$credential is not set in $REMOTE_SECRET_FILE (remote.credential for $harness: run \`remote-agent setup\`)" ;;
+  esac
   problems=1
 fi
-# The dry run needs no token: keep it away from the backend.
-unset CLAUDE_CODE_OAUTH_TOKEN
+# The dry run needs no credential: keep it away from the backend.
+unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CODEX_API_KEY
 left="$(remote_leftovers)"
 if [ -n "$left" ]; then
   echo "$REMOTE_SECRET_FILE still sets $left, now ignored: run \`remote-agent setup\` to move them to settings.json"
   problems=1
 fi
-remote_settings "$PWD" || exit 1
 if [ -z "${REMOTE_BACKEND:-}" ]; then
   echo "no remote.backend set: run \`remote-agent setup\` (until then, skills run subagents on this machine)"
   exit 1
@@ -95,20 +106,21 @@ export COPYFILE_DISABLE=1
 "${remote_tar[@]}" -C "$tmp" -cf - ping | gzip | "$backend" put "$run" "$handle" work || step_failed "put"
 code=0
 # shellcheck disable=SC2016 # expanded in the sandbox
+# The harness's CLI is the argument after the script: claude or codex, a plain word.
 found="$("$backend" run "$run" "$handle" sh -c 'mkdir -p "$HOME/out" && cat "$HOME/work/ping" >"$HOME/out/ping" &&
-  { command -v claude || exit 3; } &&
+  { command -v "$1" || exit 3; } &&
   { v=$(node --version 2>&1) || { printf "%s\n" "$v"; exit 4; }; echo "node $v"; } &&
-  { v=$(claude --version 2>&1) || { printf "%s\n" "$v"; exit 5; }; echo "claude $v"; }' </dev/null)" || code=$?
+  { v=$("$1" --version 2>&1) || { printf "%s\n" "$v"; exit 5; }; echo "$1 $v"; }' remote-agent-check "$harness" </dev/null)" || code=$?
 # The last line of a failed tool's output: its error.
 why="$(printf '%s\n' "$found" | grep . | tail -1 || true)"
 case "$code" in
   0) ;;
-  3) step_failed "run: claude not found in the sandbox" ;;
+  3) step_failed "run: $harness not found in the sandbox" ;;
   4) step_failed "run: node does not run in the sandbox: ${why:-no output}" ;;
-  5) step_failed "run: claude does not run in the sandbox: ${why:-no output}" ;;
+  5) step_failed "run: $harness does not run in the sandbox: ${why:-no output}" ;;
   *) step_failed "run (exit $code)" ;;
 esac
-say "claude in the sandbox: $(printf '%s\n' "$found" | sed -n 1p) ($(printf '%s\n' "$found" | sed -n 's/^claude //p'))"
+say "$harness in the sandbox: $(printf '%s\n' "$found" | sed -n 1p) ($(printf '%s\n' "$found" | sed -n "s/^$harness //p"))"
 say "node in the sandbox: $(printf '%s\n' "$found" | sed -n 's/^node //p')"
 # Drained after extracting: bsdtar stops at the end-of-archive marker, and the sender's trailing padding would then
 # hit a closed pipe and fail the get (SIGPIPE) though the file came back whole.

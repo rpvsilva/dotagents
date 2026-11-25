@@ -10,7 +10,11 @@
 # usage (from the last result event of transcript.jsonl; duration_ms from run.json's started and ended without one);
 # model (the init event's, else the first of the result's modelUsage); claude_version (the init event's
 # claude_code_version: the sandbox's Claude Code); complete (true only on exit 0, 3 or 4 with a
-# result event that is not an error); caps ({mb, secs}: the caps the sandbox set, from its `== capped: shell prefix
+# result event that is not an error); harness (run.json's, claude for a run from before it was recorded);
+# harness_version (claude_version under claude; under codex, session.jsonl's session_meta cli_version). Under codex,
+# from its `exec --json` events instead: num_turns (the turn.completed events), usage (the last turn.completed's, the
+# thread's running total), model (session.jsonl's last turn_context model), complete (the last turn event is
+# turn.completed); total_cost_usd stays null, as Codex reports none. caps ({mb, secs}: the caps the sandbox set, from its `== capped: shell prefix
 # set (--mb N --secs N` line; null when it set none); capped_off (null, or what the sandbox lacked to run the caps: they were off and commands ran uncapped); capped_kills (each command the sandbox's caps killed, [{kind, cmd}], kind memory
 # or timeout and cmd null when the line names none: from progress.log's `== capped: killed: <kind> <cmd>` lines, which
 # came live, else from the `capped: killed:` lines of the capped.log that came back); killed (the last kill's kind,
@@ -129,10 +133,30 @@ if grep -qE '^(remote-agent: )?[Ee]rror[^:]*:.*(No such container|container not 
   gone=true
 fi
 
+harness="$(jq -r '.harness // "claude" | strings' "$keep/run.json" 2>/dev/null | tr -d '\r')" || harness=claude
+[ -n "$harness" ] || harness=claude
+
 # The transcript's last result event and init model, read one event at a time; a partial last line (a killed run) is
-# skipped.
+# skipped. Under codex: the turns, the last turn.completed's usage and the last turn event, as a result event of the
+# same shape (is_error unless that last event is turn.completed), with the model and version from session.jsonl.
 echo '{}' >"$tmp/events"
-if [ -f "$keep/transcript.jsonl" ]; then
+if [ -f "$keep/transcript.jsonl" ] && [ "$harness" = codex ]; then
+  jq -cRn 'reduce (inputs | fromjson? | objects) as $e ({turns: 0};
+      if $e.type == "turn.completed" then .turns += 1 | .last = $e.type
+        | (if ($e.usage | type) == "object" then .usage = $e.usage else . end)
+      elif $e.type == "turn.failed" or $e.type == "error" then .last = $e.type
+      else . end)
+    | if .last == null then {} else {result: {is_error: (.last != "turn.completed"),
+        num_turns: (if .turns > 0 then .turns else null end), usage: .usage}} end' "$keep/transcript.jsonl" 2>/dev/null \
+    | tr -d '\r' >"$tmp/events.new" && [ -s "$tmp/events.new" ] && mv "$tmp/events.new" "$tmp/events"
+  if [ -f "$keep/session.jsonl" ]; then
+    jq -cRn --slurpfile ev "$tmp/events" 'reduce (inputs | fromjson? | objects) as $e ($ev[0];
+        if $e.type == "turn_context" and ($e.payload.model? | type) == "string" then .model = $e.payload.model
+        elif $e.type == "session_meta" and ($e.payload.cli_version? | type) == "string" then .version = $e.payload.cli_version
+        else . end)' "$keep/session.jsonl" 2>/dev/null | tr -d '\r' >"$tmp/events.new" \
+      && [ -s "$tmp/events.new" ] && mv "$tmp/events.new" "$tmp/events"
+  fi
+elif [ -f "$keep/transcript.jsonl" ]; then
   jq -cRn 'reduce (inputs | fromjson? | objects) as $e ({};
       if $e.type == "result" then .result = $e
       elif $e.type == "system" and $e.subtype == "init" then
@@ -143,7 +167,7 @@ if [ -f "$keep/transcript.jsonl" ]; then
 fi
 
 # shellcheck disable=SC2016 # jq's variables
-jq -c --argjson rc "$rc" --argjson gone "$gone" --arg capoff "$capoff" --arg caps "$caps" --rawfile kills "$tmp/kills" --slurpfile changed "$tmp/changed" --argjson report "$report" \
+jq -c --argjson rc "$rc" --argjson gone "$gone" --arg harness "$harness" --arg capoff "$capoff" --arg caps "$caps" --rawfile kills "$tmp/kills" --slurpfile changed "$tmp/changed" --argjson report "$report" \
   --rawfile summary "$tmp/summary" --slurpfile ev "$tmp/events" '
   ($ev[0].result // null) as $r
   | [$kills | split("\n")[] | capture("^capped: killed: (?<kind>memory|timeout)( (?<cmd>.+))?$")
@@ -159,8 +183,10 @@ jq -c --argjson rc "$rc" --argjson gone "$gone" --arg capoff "$capoff" --arg cap
      duration_ms: ($r.duration_ms // (if (.started | type) == "number" and (.ended | type) == "number"
        then (.ended - .started) * 1000 else null end)),
      num_turns: ($r.num_turns // null), total_cost_usd: ($r.total_cost_usd // null), usage: ($r.usage // null),
+     harness: $harness,
      model: ($ev[0].model // ($r.modelUsage // {} | keys_unsorted | first) // null),
-     claude_version: ($ev[0].version // null),
+     harness_version: ($ev[0].version // null),
+     claude_version: (if $harness == "claude" then $ev[0].version // null else null end),
      complete: ($r != null and $r.is_error != true and ($rc == 0 or $rc == 3 or $rc == 4)),
      caps: (if $caps == "" then null else ($caps | split(" ") | map(tonumber) | {mb: .[0], secs: .[1]}) end),
      capped_off: (if $capoff == "" then null else $capoff end), capped_kills: $k, killed: ($k | last | .kind // null),

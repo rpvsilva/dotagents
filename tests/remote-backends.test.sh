@@ -59,8 +59,8 @@ grep -q "^run -d .*--label sandbox.users.io/remote-agent-run=$c " "$S/calls" \
   || fail "docker: container not labelled with its run: $(grep '^run' "$S/calls")"
 grep -q -- "remote-agent-task" "$S/calls" && fail "docker: task label though no --name"
 grep -q "^exec -i $c .*remote-agent-sandbox" "$S/calls" || fail "docker: sandbox script not run with exec -i"
-[ "$(sed -n 1p "$S/stdin")" = sk-claude-secret ] || fail "docker: stdin line 1 is not the Claude token"
-[ "$(sed -n '2,$p' "$S/stdin")" = "add a hello file" ] || fail "docker: brief does not follow the token"
+[ "$(sed -n '/^$/q;p' "$S/stdin")" = $'REMOTE_HARNESS=claude\nCLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret' ] || fail "docker: the stdin header is not the harness and the Claude token: $(sed -n '/^$/q;p' "$S/stdin")"
+[ "$(sed '1,/^$/d' "$S/stdin")" = "add a hello file" ] || fail "docker: brief does not follow the header"
 grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "docker: the token leaked into docker arguments or the output"
 gone "$c" || fail "docker: container $c not removed after success"
 rm -f "$W/hello.txt"
@@ -97,8 +97,8 @@ BRIEF="@$SANDBOX/brief.md" \
   || fail "docker settings: exited non-zero: $(cat "$SANDBOX/out")"
 grep -q "^run -d --rm .*--platform linux/arm64 local/runner:dev sleep 3600\$" "$S/calls" \
   || fail "docker settings: image, platform or hours not used: $(grep '^run' "$S/calls")"
-[ "$(sed -n '2,$p' "$S/stdin")" = "line one
-line two" ] || fail "docker @file: the brief is not the file's text: $(sed -n '2,$p' "$S/stdin")"
+[ "$(sed '1,/^$/d' "$S/stdin")" = "line one
+line two" ] || fail "docker @file: the brief is not the file's text: $(sed '1,/^$/d' "$S/stdin")"
 rm -f "$W/hello.txt"
 
 # remote.images: --agent runs the agent's own image; another agent, or no --agent, remote.image; an image set for the
@@ -130,7 +130,7 @@ grep -q "^run -d .*--label sandbox.users.io/remote-agent-task=09-review-fixes " 
 
 # A failed run keeps its exit code, applies nothing, and removes the container. The brief comes from stdin (-).
 code=0; BRIEF=- run 7 "$HELLO_PATCH" REMOTE_BACKEND=docker <<<"brief from stdin" || code=$?
-[ "$(sed -n '2,$p' "$S/stdin")" = "brief from stdin" ] || fail "docker -: the brief is not stdin: $(sed -n '2,$p' "$S/stdin")"
+[ "$(sed '1,/^$/d' "$S/stdin")" = "brief from stdin" ] || fail "docker -: the brief is not stdin: $(sed '1,/^$/d' "$S/stdin")"
 [ "$code" = 7 ] || fail "docker failed run: wanted exit 7, got $code"
 [ ! -e "$W/hello.txt" ] || fail "docker failed run: patch applied anyway"
 gone "$(container)" || fail "docker failed run: container not removed"
@@ -207,9 +207,9 @@ if [ "$got" != "$want" ]; then
   printf '%s' "$got" >"$SANDBOX/script.got"
   fail "ssh: the sandbox script did not survive the remote shell's quoting: $(wc -c <"$SANDBOX/script.want") bytes sent, $(wc -c <"$SANDBOX/script.got") back; $(cmp "$SANDBOX/script.want" "$SANDBOX/script.got" 2>&1 | head -2)"
 fi
-[ "$(sed -n 1p "$S/stdin")" = sk-claude-secret ] || fail "ssh: stdin line 1 is not the Claude token"
-[ "$(sed -n '2,$p' "$S/stdin")" = "don't add \$HOME or \`x\`;  add a hello file" ] \
-  || fail "ssh: brief changed on the way: $(sed -n '2,$p' "$S/stdin")"
+[ "$(sed -n 2p "$S/stdin")" = CLAUDE_CODE_OAUTH_TOKEN=sk-claude-secret ] || fail "ssh: stdin line 2 is not the Claude token"
+[ "$(sed '1,/^$/d' "$S/stdin")" = "don't add \$HOME or \`x\`;  add a hello file" ] \
+  || fail "ssh: brief changed on the way: $(sed '1,/^$/d' "$S/stdin")"
 grep -q "sk-claude-secret" "$S/calls" "$SANDBOX/out" && fail "ssh: the token leaked into ssh arguments or the output"
 [ ! -e "$S/scp" ] || fail "ssh: scp called: $(cat "$S/scp")"
 gone "$c" || fail "ssh: container $c not removed"
