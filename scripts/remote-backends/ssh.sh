@@ -7,7 +7,7 @@
 # docker command sent over ssh. Each run's container is named after it, so runs share the host; `--rm` and its
 # `sleep` remove it after REMOTE_HOURS if release never comes.
 # Bare mode runs directly on a trusted host as the SSH user (weaker isolation: no container, no network limits).
-# acquire checks the host has bash tar git jq node and the harness's CLI (claude, or codex or opencode as REMOTE_HARNESS names;
+# acquire checks the host has bash tar git jq node and the harness's CLI (claude, or codex, opencode or pi as REMOTE_HARNESS names;
 # naming each missing one, creating nothing), removes run
 # folders left by clients that died, and creates the run folder $REMOTE_SSH_DIR/<run> (mode 700), recording in its
 # .expires the host's clock + REMOTE_HOURS, and prints its absolute path as the handle. A folder goes once the host's
@@ -72,7 +72,7 @@ hours="${REMOTE_HOURS:-2}"
 root="${REMOTE_SSH_DIR:-.remote-agent/runs}"
 root="${root#\~/}"
 # The harness's CLI, a fixed word: it goes into a host command.
-case "${REMOTE_HARNESS:-claude}" in codex) cli=codex ;; opencode) cli=opencode ;; *) cli=claude ;; esac
+case "${REMOTE_HARNESS:-claude}" in codex | opencode | pi) cli="$REMOTE_HARNESS" ;; *) cli=claude ;; esac
 tools="bash tar git jq node $cli"
 # A host command naming each missing tool on its own line on stderr, failing when any is; acquire and check run it.
 # shellcheck disable=SC2016 # expanded on the host

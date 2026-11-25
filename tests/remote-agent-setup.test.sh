@@ -210,6 +210,13 @@ setup $'docker\n\nopencode\ngateway\n\nmessages\nanthropic\n\n' || fail "opencod
 grep -q "one of: openai-chat openai-responses anthropic" "$SANDBOX/out" || fail "opencode gateway api: an unknown API not asked again: $(cat "$SANDBOX/out")"
 setup $'docker\n\nopencode\ngateway\n\n\n\n' || fail "opencode gateway api again: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_GATEWAY_API)" = anthropic ] || fail "opencode gateway api again: enter did not keep anthropic: $(value REMOTE_GATEWAY_API)"
+# Pi logs in as OpenCode does: an Anthropic key, then the shared gateway with the API kept on enter.
+setup $'docker\n\npi\nanthropic\nsk-ant-1\n' || fail "pi: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_HARNESS)" = pi ] && [ "$(value REMOTE_CREDENTIAL)" = ANTHROPIC_API_KEY ] && [ "$(value REMOTE_BASE_URL)" = unset ] \
+  && [ "$(secret ANTHROPIC_API_KEY)" = sk-ant-1 ] || fail "pi: not pi on ANTHROPIC_API_KEY: $(value REMOTE_HARNESS) $(value REMOTE_CREDENTIAL)"
+setup $'docker\n\npi\ngateway\nhttps://openrouter.ai/api/v1\nopenai-chat\n\n' || fail "pi gateway: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_CREDENTIAL)" = GATEWAY_API_KEY ] && [ "$(value REMOTE_GATEWAY_API)" = openai-chat ] && [ "$(secret GATEWAY_API_KEY)" = gw-secret ] \
+  || fail "pi gateway: not the shared gateway on openai-chat: $(value REMOTE_CREDENTIAL) $(value REMOTE_GATEWAY_API)"
 
 # A bad value in settings.json stops setup before it asks anything, naming the key; neither file changes.
 fresh

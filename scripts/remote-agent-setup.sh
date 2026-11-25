@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Guided setup for scripts/remote-agent.sh, run as `remote-agent setup`: asks for the backend and its details (for SSH,
 # how to log in: a key, from the agent, ~/.ssh/config or a key file with an optional passphrase, or a password), then
-# for the harness (claude, codex or opencode) and how it logs in: for claude a subscription token (oauth, from `claude
-# setup-token`) or an API key (api_key); for codex an API key; for opencode an Anthropic or OpenAI key (anthropic,
-# openai); for any a gateway (LiteLLM, OpenRouter, ...: its URL and key, GATEWAY_API_KEY, shared by every harness; the
-# gateway_api Setting is the harness's own API, asked under opencode, which speaks several). Secrets are read without echo. The answers are remote Settings (harness, credential, base_url among
+# for the harness (claude, codex, opencode or pi) and how it logs in: for claude a subscription token (oauth, from `claude
+# setup-token`) or an API key (api_key); for codex an API key; for opencode and pi an Anthropic or OpenAI key
+# (anthropic, openai); for any a gateway (LiteLLM, OpenRouter, ...: its URL and key, GATEWAY_API_KEY, shared by every harness; the
+# gateway_api Setting is the harness's own API, asked under opencode and pi, which speak several). Secrets are read without echo. The answers are remote Settings (harness, credential, base_url among
 # them), written to the machine Level through scripts/settings.sh; the credential, the SSH password and the key
 # passphrase are Secrets, written to ~/.config/dotagents/remote.env readable only by the user (mode 600), through a
 # temp file in the same folder moved into place. An SSH login method not chosen drops the other's Secret; another
@@ -137,7 +137,7 @@ if [ "$backend" = docker ] || [ "$mode" = container ]; then
 fi
 
 # The harness and how it logs in: the login's default follows the credential (and gateway) already set.
-harness="$(ask "Harness (claude, codex, opencode)" "$(old harness)" claude codex opencode)"
+harness="$(ask "Harness (claude, codex, opencode, pi)" "$(old harness)" claude codex opencode pi)"
 answers+=("harness $harness")
 old_credential="$(old credential)"
 old_url="$(old base_url)"
@@ -148,7 +148,7 @@ fi
 if [ "$harness" = claude ]; then
   login="$(ask "Log in with (oauth: a Claude subscription, api_key, gateway)" "${old_login:-oauth}" oauth api_key gateway)"
   case "$login" in oauth) credential=CLAUDE_CODE_OAUTH_TOKEN ;; api_key) credential=ANTHROPIC_API_KEY ;; gateway) credential=GATEWAY_API_KEY ;; esac
-elif [ "$harness" = opencode ]; then
+elif [ "$harness" = opencode ] || [ "$harness" = pi ]; then
   case "$old_login:$old_credential" in gateway:*) ;; *:OPENAI_API_KEY) old_login=openai ;; *) old_login=anthropic ;; esac
   login="$(ask "Log in with (anthropic: an Anthropic API key, openai: an OpenAI API key, gateway)" "$old_login" anthropic openai gateway)"
   case "$login" in anthropic) credential=ANTHROPIC_API_KEY ;; openai) credential=OPENAI_API_KEY ;; gateway) credential=GATEWAY_API_KEY ;; esac

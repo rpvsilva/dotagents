@@ -3,8 +3,8 @@
 # (remote.harness and remote.credential: CLAUDE_CODE_OAUTH_TOKEN for claude by default; never printed), remote.base_url
 # and remote.models are well formed, no Settings are left from before settings.json, a remote.backend is set, the
 # backend's own requirements (`<backend> check`: one line per missing thing), then a dry run: acquire a sandbox, put a
-# one-file snapshot in ~/work, run a trivial command that copies it to ~/out, finds the harness's CLI (claude, codex or
-# opencode) and runs `node --version` and `<cli> --version` (a binary present but broken, e.g. a missing shared library,
+# one-file snapshot in ~/work, run a trivial command that copies it to ~/out, finds the harness's CLI (claude, codex,
+# opencode or pi) and runs `node --version` and `<cli> --version` (a binary present but broken, e.g. a missing shared library,
 # fails here with its own error), get ~/out back, compare, release. No model call, so no tokens spent. The sandbox is released even when a step fails.
 # The dry run is skipped when a requirement is missing. Exit 0 only when everything passes; prints ok at the end.
 set -euo pipefail
@@ -106,7 +106,7 @@ export COPYFILE_DISABLE=1
 "${remote_tar[@]}" -C "$tmp" -cf - ping | gzip | "$backend" put "$run" "$handle" work || step_failed "put"
 code=0
 # shellcheck disable=SC2016 # expanded in the sandbox
-# The harness's CLI is the argument after the script: claude, codex or opencode, a plain word.
+# The harness's CLI is the argument after the script: claude, codex, opencode or pi, a plain word.
 found="$("$backend" run "$run" "$handle" sh -c 'mkdir -p "$HOME/out" && cat "$HOME/work/ping" >"$HOME/out/ping" &&
   { command -v "$1" || exit 3; } &&
   { v=$(node --version 2>&1) || { printf "%s\n" "$v"; exit 4; }; echo "node $v"; } &&

@@ -10,22 +10,25 @@
 # is the cap, else 2000. The caps are also exported as CAPPED_MB and CAPPED_SECS, so a test command's own `capped`
 # with no flags runs under the same ones.
 # Stdin: a header of NAME=value lines up to an empty line, then the brief. The header holds REMOTE_HARNESS (claude,
-# codex or opencode, the agent CLI to run; claude when left out), REMOTE_BASE_URL (a model gateway, optional),
+# codex, opencode or pi, the agent CLI to run; claude when left out), REMOTE_BASE_URL (a model gateway, optional),
 # REMOTE_GATEWAY_API (the API it speaks, optional: anthropic, openai-responses or openai-chat) and the one credential
 # the harness logs in with (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for claude,
-# CODEX_API_KEY for codex, ANTHROPIC_API_KEY or OPENAI_API_KEY for opencode, GATEWAY_API_KEY for any with a gateway);
+# CODEX_API_KEY for codex, ANTHROPIC_API_KEY or OPENAI_API_KEY for opencode and pi, GATEWAY_API_KEY for any with a
+# gateway);
 # any other name is refused. For claude the gateway is ANTHROPIC_BASE_URL, and GATEWAY_API_KEY its bearer token
 # (ANTHROPIC_AUTH_TOKEN); for codex, a model provider in ~/.codex/config.toml reading the key from the credential's
 # variable; for opencode, a provider named remote in its global opencode.json, of the package for the gateway's API
-# (openai-chat when unset), holding the run's model (a gateway run under opencode needs one) as remote/<model>.
+# (openai-chat when unset), holding the run's model (a gateway run under opencode needs one) as remote/<model>; for pi,
+# the same provider in ~/.pi/agent/models.json (its api for the gateway's API, apiKey the credential's variable), run
+# with --provider remote.
 # Installs the setup's plugins and MCP servers (claude), commits the snapshot as a base, runs the harness on the brief
 # with progress on stderr and its raw JSON events on stdout (Claude's stream-json, Codex's `exec --json`, OpenCode's
-# `run --format json`), and leaves
+# `run --format json`, Pi's `--mode json`), and leaves
 # ~/out/changes.patch (everything changed since the base), ~/out/summary.md (the final message), ~/out/stream.jsonl and
 # ~/out/session.jsonl (the harness's session, the credential redacted).
 # Under claude, each shell command it runs goes through ~/.agents/bin/capped (scripts/capped, sent with the setup)
 # under the caps, by way of CLAUDE_CODE_SHELL_PREFIX: a command over a cap is killed, and Claude sees why and carries
-# on. Codex and OpenCode have no such hook: their commands run uncapped, under the sandbox's own limits, logged as
+# on. Codex, OpenCode and Pi have no such hook: their commands run uncapped, under the sandbox's own limits, logged as
 # `== capped: unavailable (missing: a shell prefix in <harness>)`. Each
 # kill is a line `capped: killed: memory|timeout <command>` in ~/out/capped.log and, within a second, on stderr as
 # `== capped: killed: ...`, so remote-agent.sh has it even when the sandbox is lost after. Every line of the agent's text
@@ -256,6 +259,53 @@ run_opencode() {
     || ! jq -e 'select(.type == "step_finish")' "$HOME/out/stream.jsonl" >/dev/null 2>&1; then failed=1; fi
 }
 
+# Runs Pi (`pi --mode json`) on the brief: --approve trusts the snapshot's own project files (AGENTS.md, .pi), as a
+# local run in the repo does, since JSON mode cannot ask; the rules through --append-system-prompt; its session in
+# ~/.pi-session, outside ~/work. Pi reads a prompt argument starting with @ as a file to attach, so such a brief is
+# passed with a leading space. Progress as run_claude's: each assistant message's text held until the next message or
+# tool call, each tool call one `  → ` line, an error stop shown with its text and errorMessage; the text held at the
+# end is the final report, dropped here. Logs `== pi version <v>` first, for result.json. Sets session (the session
+# file, or empty), session_id (the session header's id) and failed (non-empty when pi exits non-zero, the last
+# assistant message stopped on error or aborted, or none came).
+run_pi() {
+  local v prompt="$brief"
+  v="$(pi --version </dev/null 2>/dev/null | head -1 | tr -d '\r')" || v=""
+  v="${v##* }"
+  [[ ! "$v" =~ ^v?[0-9][0-9A-Za-z.+-]*$ ]] || echo "== pi version ${v#v}" >&2
+  [ "${prompt:0:1}" != @ ] || prompt=" $prompt"
+  { pi --mode json --approve --session-dir "$HOME/.pi-session" ${pi_provider:+--provider "$pi_provider"} ${model:+--model "$model"} \
+      --append-system-prompt "$rules" "$prompt" </dev/null || echo "$?" >"$HOME/.pi-rc"; } \
+    | tee "$HOME/out/stream.jsonl" /dev/fd/3 \
+    | scrub_secret="$secret" jq -rn --unbuffered "$redact_jq"'foreach ((inputs | objects), {type: "end"}) as $e ({held: null, out: []};
+        if $e.type == "message_end" and ($e.message | type) == "object" and $e.message.role == "assistant" then
+          ([$e.message.content | arrays | .[] | objects | select(.type == "text") | .text | strings] | join("\n")) as $t
+          | (if $t == "" then null else "  " + ($t | gsub("\n"; "\n  ")) end) as $h
+          | if $e.message.stopReason == "error" or $e.message.stopReason == "aborted" then
+              .out = [.held | strings] + [$h | strings]
+                + ["  error: \($e.message.errorMessage // $e.message.stopReason | tostring | gsub("\n"; " ") | .[0:300])"]
+              | .held = null
+            else .out = [.held | strings] | .held = $h end
+        elif $e.type == "tool_execution_start" then
+          .out = [.held | strings]
+            + ["  → \($e.toolName // "tool") \(($e.args | objects | .command // .path // .file_path // .pattern // .url) // "" | tostring | gsub("\n"; " ") | .[0:120])"]
+          | .held = null
+        elif $e.type == "end" then .out = [] | .held = null
+        else .out = [] end;
+        .out[]) | redact' >&2
+  # The final report: the last assistant message's text.
+  jq -rn '[inputs | objects | select(.type == "message_end" and .message.role? == "assistant") | .message] | last
+      | [.content? | arrays | .[] | objects | select(.type == "text") | .text | strings] | join("\n")' \
+    "$HOME/out/stream.jsonl" >"$HOME/out/summary.md"
+  session_id="$(jq -r 'select(.type == "session") | .id // empty | strings' "$HOME/out/stream.jsonl" 2>/dev/null | head -1 | tr -d '\r')" || session_id=""
+  session=""
+  if [[ "$session_id" =~ ^[A-Za-z0-9._-]+$ ]] && [ -d "$HOME/.pi-session" ]; then
+    session="$(find "$HOME/.pi-session" -type f -name "*$session_id*.jsonl" | head -1)"
+  fi
+  failed=""
+  if [ -e "$HOME/.pi-rc" ] || [ "$(jq -rn '[inputs | objects | select(.type == "message_end" and .message.role? == "assistant")
+      | .message.stopReason // "stop"] | last // "none"' "$HOME/out/stream.jsonl" 2>/dev/null | tr -d '\r')" != stop ]; then failed=1; fi
+}
+
 # The whole run, left unindented; its stdout and stderr are kept apart, stderr copied to the log at the end.
 main() {
 harness=claude
@@ -281,11 +331,12 @@ while IFS= read -r line; do
 done
 brief="$(cat)"
 [ -z "$cred" ] || [ "$cred" != GATEWAY_API_KEY ] || [ -n "$base_url" ] || { echo "== GATEWAY_API_KEY without a gateway" >&2; exit 1; }
-case "$harness" in claude | codex | opencode) ;; *) echo "== unknown harness: ${harness:0:40}" >&2; exit 1 ;; esac
+case "$harness" in claude | codex | opencode | pi) ;; *) echo "== unknown harness: ${harness:0:40}" >&2; exit 1 ;; esac
 case "$harness:$cred" in
   claude:GATEWAY_API_KEY) export ANTHROPIC_AUTH_TOKEN="$secret" ;;
   claude:CLAUDE_CODE_OAUTH_TOKEN | claude:ANTHROPIC_API_KEY | claude:ANTHROPIC_AUTH_TOKEN | codex:CODEX_API_KEY | codex:GATEWAY_API_KEY \
-    | opencode:ANTHROPIC_API_KEY | opencode:OPENAI_API_KEY | opencode:GATEWAY_API_KEY)
+    | opencode:ANTHROPIC_API_KEY | opencode:OPENAI_API_KEY | opencode:GATEWAY_API_KEY \
+    | pi:ANTHROPIC_API_KEY | pi:OPENAI_API_KEY | pi:GATEWAY_API_KEY)
     export "$cred=$secret" ;;
   *:) ;;
   *) echo "== $harness does not take $cred" >&2; exit 1 ;;
@@ -293,16 +344,19 @@ esac
 [ "$harness" != claude ] || [ -z "$base_url" ] || export ANTHROPIC_BASE_URL="$base_url"
 url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
 if [ -n "$base_url" ] && [[ ! "$base_url" =~ $url_re ]]; then echo "== bad base url" >&2; exit 1; fi
-# The package of OpenCode's gateway provider: the one that speaks the gateway's API.
+# The gateway's API as the harness names it: OpenCode's provider package, Pi's api.
 case "$harness:$gateway_api" in
-  opencode: | opencode:openai-chat) oc_package=@opencode/ai/providers/openai-compatible ;;
-  opencode:openai-responses) oc_package=@opencode/ai/providers/openai-compatible/responses ;;
-  opencode:anthropic) oc_package=@opencode/ai/providers/anthropic-compatible ;;
-  claude: | claude:anthropic | codex: | codex:openai-responses) oc_package="" ;;
+  opencode: | opencode:openai-chat) gw_api=@opencode/ai/providers/openai-compatible ;;
+  opencode:openai-responses) gw_api=@opencode/ai/providers/openai-compatible/responses ;;
+  opencode:anthropic) gw_api=@opencode/ai/providers/anthropic-compatible ;;
+  pi: | pi:openai-chat) gw_api=openai-completions ;;
+  pi:openai-responses) gw_api=openai-responses ;;
+  pi:anthropic) gw_api=anthropic-messages ;;
+  claude: | claude:anthropic | codex: | codex:openai-responses) gw_api="" ;;
   *) echo "== $harness does not speak ${gateway_api:0:40}" >&2; exit 1 ;;
 esac
-if [ "$harness" = opencode ] && [ -n "$base_url" ] && [ -z "$model" ]; then
-  echo "== opencode through a gateway needs a model (remote.model or --model)" >&2
+if { [ "$harness" = opencode ] || [ "$harness" = pi ]; } && [ -n "$base_url" ] && [ -z "$model" ]; then
+  echo "== $harness through a gateway needs a model (remote.model or --model)" >&2
   exit 1
 fi
 cd "$HOME"
@@ -355,12 +409,25 @@ if [ "$harness" = opencode ]; then
   printf '\n%s\n' "$rules" >>"$oc_config/AGENTS.md"
   if [ -n "$base_url" ]; then
     # shellcheck disable=SC2016 # jq's variables
-    jq -n --arg url "$base_url" --arg env "${cred:-GATEWAY_API_KEY}" --arg pkg "$oc_package" --arg m "$model" \
+    jq -n --arg url "$base_url" --arg env "${cred:-GATEWAY_API_KEY}" --arg pkg "$gw_api" --arg m "$model" \
       '{"$schema": "https://opencode.ai/config.json", model: ("remote/" + $m),
         providers: {remote: {name: "remote gateway", env: [$env], package: $pkg, settings: {baseURL: $url},
           models: {($m): {name: $m}}}}}' >"$oc_config/opencode.json"
     model="remote/$model"
   fi
+fi
+
+# Pi takes the rules as an argument; a gateway is a provider named remote in its models.json, its apiKey the
+# credential's variable ($NAME, which Pi reads from the environment) and the run's model its one model.
+pi_provider=""
+if [ "$harness" = pi ] && [ -n "$base_url" ]; then
+  pi_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+  mkdir -p "$pi_dir"
+  # shellcheck disable=SC2016 # jq's variables
+  jq -n --arg url "$base_url" --arg key "\$${cred:-GATEWAY_API_KEY}" --arg api "$gw_api" --arg m "$model" \
+    '{providers: {remote: {name: "remote gateway", baseUrl: $url, api: $api, apiKey: $key, models: [{id: $m}]}}}' \
+    >"$pi_dir/models.json"
+  pi_provider=remote
 fi
 
 # The caps, once a probe through the prefix shows capped runs here.
@@ -391,7 +458,7 @@ follower=$!
 trap ': >"$stop_follow"; wait "$follower" || true' EXIT
 
 echo "== $harness${model:+ ($model)}" >&2
-case "$harness" in codex) run_codex ;; opencode) run_opencode ;; *) run_claude ;; esac
+case "$harness" in codex) run_codex ;; opencode) run_opencode ;; pi) run_pi ;; *) run_claude ;; esac
 : >"$stop_follow"
 wait "$follower" || true
 trap - EXIT

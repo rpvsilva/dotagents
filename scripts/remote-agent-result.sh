@@ -11,14 +11,17 @@
 # model (the init event's, else the first of the result's modelUsage); claude_version (the init event's
 # claude_code_version: the sandbox's Claude Code); complete (true only on exit 0, 3 or 4 with a
 # result event that is not an error); harness (run.json's, claude for a run from before it was recorded);
-# harness_version (claude_version under claude; under codex, session.jsonl's session_meta cli_version; under opencode,
-# the sandbox's `== opencode version <v>` progress line). Under codex,
+# harness_version (claude_version under claude; under codex, session.jsonl's session_meta cli_version; under opencode
+# and pi, the sandbox's `== <harness> version <v>` progress line). Under codex,
 # from its `exec --json` events instead: num_turns (the turn.completed events), usage (the last turn.completed's, the
 # thread's running total), model (session.jsonl's last turn_context model), complete (the last turn event is
 # turn.completed); total_cost_usd stays null, as Codex reports none. Under opencode, from its `run --format json`
 # events: num_turns (the step_finish events), usage (their tokens summed: {input, output, reasoning, cache: {read,
 # write}}), total_cost_usd (their cost summed), model (the sandbox's `== opencode (<model>)` progress line), complete
-# (a step finished and no error event came). caps ({mb, secs}: the caps the sandbox set, from its `== capped: shell prefix
+# (a step finished and no error event came). Under pi, from its `--mode json` events: num_turns (the assistant
+# message_end events), usage (their usage summed: {input, output, cacheRead, cacheWrite, totalTokens}),
+# total_cost_usd (their usage.cost.total summed), model (the last one's model), complete (the last one's stopReason is
+# not error or aborted). caps ({mb, secs}: the caps the sandbox set, from its `== capped: shell prefix
 # set (--mb N --secs N` line; null when it set none); capped_off (null, or what the sandbox lacked to run the caps: they were off and commands ran uncapped); capped_kills (each command the sandbox's caps killed, [{kind, cmd}], kind memory
 # or timeout and cmd null when the line names none: from progress.log's `== capped: killed: <kind> <cmd>` lines, which
 # came live, else from the `capped: killed:` lines of the capped.log that came back); killed (the last kill's kind,
@@ -176,6 +179,19 @@ elif [ -f "$keep/transcript.jsonl" ] && [ "$harness" = opencode ]; then
        else {result: {is_error: (.error or .steps == 0), num_turns: (if .steps > 0 then .steps else null end),
          usage: .usage, total_cost_usd: .cost}} end)
     + (if $model == "" then {} else {model: $model} end) + (if $version == "" then {} else {version: $version} end)' \
+    "$keep/transcript.jsonl" 2>/dev/null | tr -d '\r' >"$tmp/events.new" && [ -s "$tmp/events.new" ] && mv "$tmp/events.new" "$tmp/events"
+elif [ -f "$keep/transcript.jsonl" ] && [ "$harness" = pi ]; then
+  jq -cRn --arg version "$(sed -nE 's/^== pi version ([0-9][0-9A-Za-z.+-]*)$/\1/p' "$tmp/progress" | head -1)" '
+    reduce (inputs | fromjson? | objects | select(.type == "message_end" and .message.role? == "assistant") | .message) as $m
+      ({turns: 0};
+      .turns += 1 | .stop = ($m.stopReason // "stop")
+      | (if ($m.model | type) == "string" then .model = $m.model else . end)
+      | ($m.usage | if type == "object" then . else {} end) as $u
+      | reduce ("input", "output", "cacheRead", "cacheWrite", "totalTokens") as $k (.; .usage[$k] += ($u[$k] | numbers // 0))
+      | (if ($u.cost.total? | type) == "number" then .cost += $u.cost.total else . end))
+    | (if .turns == 0 then {} else {result: {is_error: (.stop == "error" or .stop == "aborted"), num_turns: .turns,
+         usage: .usage, total_cost_usd: .cost}} end)
+    + (if .model == null then {} else {model: .model} end) + (if $version == "" then {} else {version: $version} end)' \
     "$keep/transcript.jsonl" 2>/dev/null | tr -d '\r' >"$tmp/events.new" && [ -s "$tmp/events.new" ] && mv "$tmp/events.new" "$tmp/events"
 elif [ -f "$keep/transcript.jsonl" ]; then
   jq -cRn 'reduce (inputs | fromjson? | objects) as $e ({};

@@ -2,7 +2,7 @@
 
 [← Back to the docs](README.md)
 
-> **TL;DR** Your laptop stays the boss. A remote machine borrows a copy of one worktree, lets an agent (Claude Code, Codex or OpenCode) work on it, and hands back a patch. No GitHub credentials ever leave your laptop.
+> **TL;DR** Your laptop stays the boss. A remote machine borrows a copy of one worktree, lets an agent (Claude Code, Codex, OpenCode or Pi) work on it, and hands back a patch. No GitHub credentials ever leave your laptop.
 
 Some skills, like `build-epic`, want to run lots of implementers at once. Your laptop's fans will tell you how that goes. Remote subagents move that work to other compute:
 
@@ -23,7 +23,7 @@ Good to know:
 Three commands, once per machine:
 
 ```sh
-~/.agents/bin/remote-agent setup   # pick a backend, a harness (claude, codex or opencode) and how it logs in, paste the credential
+~/.agents/bin/remote-agent setup   # pick a backend, a harness (claude, codex, opencode or pi) and how it logs in, paste the credential
 ~/.agents/bin/remote-agent check   # checks everything the backend needs, then a dry run (no API call, no cost)
 ~/.agents/bin/remote-agent ready   # inside a repo: would skills send its subagents remote? If not, why not
 ```
@@ -72,7 +72,7 @@ The repo ships no cluster manifests, so you set up the cluster side yourself. He
 1. The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller, with its extension CRDs. `remote-agent` creates `SandboxClaim` objects (`extensions.agents.x-k8s.io/v1beta1`).
 2. A namespace for the sandboxes. The default is `agents`.
 3. A `SandboxTemplate` and a warm pool in that namespace. The template's pod needs:
-   - the runner image `ghcr.io/rpvsilva/agent-runner:main` (public, `amd64` and `arm64`), or your own with `sh`, GNU `tar`, `gzip`, `git`, `node` and the harness's CLI (`claude`, `codex` or `opencode`);
+   - the runner image `ghcr.io/rpvsilva/agent-runner:main` (public, `amd64` and `arm64`), or your own with `sh`, GNU `tar`, `gzip`, `git`, `node` and the harness's CLI (`claude`, `codex`, `opencode` or `pi`);
    - a writable `$HOME` (`/home/node` in the runner image, uid 1000);
    - CPU and memory limits. On a cluster these set each run's size.
 4. *Recommended:* a NetworkPolicy that allows internet egress only (the model API or your gateway, and package registries) and blocks cluster services and the LAN. Nothing in this repo creates it.
@@ -111,38 +111,39 @@ Then run `remote-agent check`: it checks every listed image. [remote/README.md](
 
 ### 🖥️ What SSH needs
 
-An SSH login to the host (a key or a password) and Docker on the host. In **bare mode**, the host needs `bash`, `git`, `jq`, `node` and the harness's CLI (`claude`, `codex` or `opencode`) instead.
+An SSH login to the host (a key or a password) and Docker on the host. In **bare mode**, the host needs `bash`, `git`, `jq`, `node` and the harness's CLI (`claude`, `codex`, `opencode` or `pi`) instead.
 
 > ⚠️ Use bare mode only on a host you fully trust. There's no container: the run shares the OS user with that user's own setup.
 
 ## 🧠 Pick your harness and model
 
-The **harness** is the agent CLI the sandbox runs. The runner image ships all three, so switching is a Setting, not a new image.
+The **harness** is the agent CLI the sandbox runs. The runner image ships all four, so switching is a Setting, not a new image.
 
 | `remote.harness` | Logs in with (`remote.credential`) | Gateway (`remote.base_url`) speaks (`remote.gateway_api`) |
 |---|---|---|
 | `claude` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (default), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `GATEWAY_API_KEY` | `anthropic`, the Messages API. Set as `ANTHROPIC_BASE_URL` |
 | `codex` | `CODEX_API_KEY`, or `GATEWAY_API_KEY` | `openai-responses`, the Responses API. A model provider in Codex's config |
 | `opencode` | `ANTHROPIC_API_KEY` (default), `OPENAI_API_KEY`, or `GATEWAY_API_KEY` | `openai-chat` (Chat Completions, the default), `openai-responses` or `anthropic`. A provider in OpenCode's config |
+| `pi` | `ANTHROPIC_API_KEY` (default), `OPENAI_API_KEY`, or `GATEWAY_API_KEY` | the same three, `openai-chat` by default. A provider in Pi's `models.json` |
 
 `setup` asks for all of these and keeps the credential in `remote.env`. Only that one credential is sent to a run, and its value is redacted everywhere a run writes. Another harness's credential stays in `remote.env`, so `REMOTE_HARNESS=codex` works for a single run too.
 
-**Gateways.** A gateway is any endpoint that speaks one of those APIs. LiteLLM's proxy speaks all three, so one LiteLLM key (`GATEWAY_API_KEY`) serves every harness. OpenRouter speaks `anthropic` and `openai-chat`. `remote.gateway_api` says which API the URL speaks. `check` and every run refuse a harness that can't talk to it, rather than failing mid-run. A gateway that speaks only Chat Completions works with `opencode`. Through a gateway, OpenCode needs a model (`remote.model` or `--model`), named as the gateway names it.
+**Gateways.** A gateway is any endpoint that speaks one of those APIs. LiteLLM's proxy speaks all three APIs, so one LiteLLM key (`GATEWAY_API_KEY`) serves every harness. OpenRouter speaks `anthropic` and `openai-chat`. `remote.gateway_api` says which API the URL speaks. `check` and every run refuse a harness that can't talk to it, rather than failing mid-run. A gateway that speaks only Chat Completions works with `opencode` and `pi`. Through a gateway, both need a model (`remote.model` or `--model`), named as the gateway names it.
 
 ```sh
 ~/.agents/bin/remote-agent setup   # pick "gateway", paste the URL and its key
 ```
 
-**Which model.** `--model` wins. Otherwise the run uses the model the agent's wrapper sets for that harness (`model:` in `adapters/claude/agents/<agent>.md`, `model =` in `adapters/codex/agents/<agent>.toml`, `model:` in `adapters/opencode/agents/<agent>.md`), and then `remote.model`. OpenCode names models `provider/model` (`anthropic/claude-sonnet-5-5`), and no OpenCode wrapper ships yet, so under `opencode` set `remote.model`. A gateway often names models its own way, so `remote.models` renames them:
+**Which model.** `--model` wins. Otherwise the run uses the model the agent's wrapper sets for that harness (`model:` in `adapters/claude/agents/<agent>.md`, `model =` in `adapters/codex/agents/<agent>.toml`, `model:` in `adapters/<opencode|pi>/agents/<agent>.md`), and then `remote.model`. OpenCode and Pi name models `provider/model` (`anthropic/claude-sonnet-5-5`), and no wrapper for them ships yet, so under `opencode` or `pi` set `remote.model`. A gateway often names models its own way, so `remote.models` renames them:
 
 ```sh
 ~/.agents/bin/settings set remote models "opus=anthropic/claude-opus-5-5,sonnet=anthropic/claude-sonnet-5-5" --machine
 ```
 
-What Codex and OpenCode runs don't do yet:
-- **No per-command caps.** Neither has a shell-prefix hook, so their commands run under the sandbox's own limits only. `result.json` says so in `capped_off`.
+What Codex, OpenCode and Pi runs don't do yet:
+- **No per-command caps.** None has a shell-prefix hook, so their commands run under the sandbox's own limits only. `result.json` says so in `capped_off`.
 - **No resume.** The session comes back and is kept, but `remote-agent resume` refuses to place it.
-- **Your setup's plugins and MCP servers aren't installed.** Skills (`~/.agents/skills`), `~/.codex/AGENTS.md` and `~/.config/opencode/AGENTS.md` are still sent.
+- **Your setup's plugins and MCP servers aren't installed.** Skills (`~/.agents/skills`), `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md` and `~/.pi/agent/AGENTS.md` are still sent.
 
 ## 🤖 When does a subagent go remote?
 
@@ -189,7 +190,7 @@ sequenceDiagram
   S->>S: commit the changes, push, open the PR
 ```
 
-1. **📦 Pack.** `remote-agent` gathers your setup: `CLAUDE.md`, Codex's and OpenCode's `AGENTS.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones by the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
+1. **📦 Pack.** `remote-agent` gathers your setup: `CLAUDE.md`, Codex's, OpenCode's and Pi's `AGENTS.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones by the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
 2. **🚚 Send.** The backend hands over a fresh sandbox. The setup and snapshot go in as tar streams. The harness's credential goes through stdin, never as an argument.
 3. **🏃 Run.** The sandbox reinstalls plugins and MCP servers (for Claude), commits the snapshot as a base, and runs the harness on the brief. Events stream back as they happen.
 4. **📬 Return.** The patch lands in your worktree, uncommitted. The skill reviews and commits it, just like a local subagent's work.
@@ -197,7 +198,7 @@ sequenceDiagram
 
 ### 🛡️ Runaway commands get capped
 
-Every shell command Claude runs in the sandbox goes through `capped`. A runaway test gets killed, and Claude carries on. (Codex and OpenCode have no hook for this, so their commands run uncapped.)
+Every shell command Claude runs in the sandbox goes through `capped`. A runaway test gets killed, and Claude carries on. (Codex, OpenCode and Pi have no hook for this, so their commands run uncapped.)
 
 - **Memory cap:** the sandbox's memory limit less 1024 MB for Claude (2000 MB when there's no limit). Lower it with `remote.cap_mb`.
 - **Time cap:** `remote.cap_secs` (300 seconds).
@@ -244,7 +245,7 @@ flowchart LR
 | Setting | Default | Meaning |
 |---|---|---|
 | `remote.backend` | unset (off) | `cluster`, `docker` or `ssh` |
-| `remote.harness` | `claude` | The agent CLI a run starts: `claude`, `codex` or `opencode` |
+| `remote.harness` | `claude` | The agent CLI a run starts: `claude`, `codex`, `opencode` or `pi` |
 | `remote.credential` | the harness's first | Which Secret in `remote.env` a run logs in with |
 | `remote.base_url` | unset | A model gateway the harness calls instead of its vendor's API |
 | `remote.gateway_api` | the harness's own | The API the gateway speaks: `anthropic`, `openai-responses` or `openai-chat` |
