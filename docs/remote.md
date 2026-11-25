@@ -119,17 +119,22 @@ An SSH login to the host (a key or a password) and Docker on the host. In **bare
 
 The **harness** is the agent CLI the sandbox runs. The runner image ships both, so switching is a Setting, not a new image.
 
-| `remote.harness` | Logs in with (`remote.credential`) | Gateway (`remote.base_url`) |
+| `remote.harness` | Logs in with (`remote.credential`) | Gateway (`remote.base_url`) speaks (`remote.gateway_api`) |
 |---|---|---|
-| `claude` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (default), `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` for a gateway | Becomes `ANTHROPIC_BASE_URL`: any Anthropic-compatible endpoint |
-| `codex` | `CODEX_API_KEY` | Becomes a model provider in Codex's config, speaking the Responses API |
+| `claude` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (default), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `GATEWAY_API_KEY` | `anthropic`, the Messages API. Set as `ANTHROPIC_BASE_URL` |
+| `codex` | `CODEX_API_KEY`, or `GATEWAY_API_KEY` | `openai-responses`, the Responses API. A model provider in Codex's config |
 
-`setup` asks for all three and keeps the credential in `remote.env`. Only that one credential is sent to a run, and its value is redacted everywhere a run writes. Another harness's credential stays in `remote.env`, so `REMOTE_HARNESS=codex` works for a single run too.
+`setup` asks for all of these and keeps the credential in `remote.env`. Only that one credential is sent to a run, and its value is redacted everywhere a run writes. Another harness's credential stays in `remote.env`, so `REMOTE_HARNESS=codex` works for a single run too.
+
+**Gateways.** A gateway is any endpoint that speaks one of those APIs. LiteLLM's proxy speaks both, so one LiteLLM key (`GATEWAY_API_KEY`) serves both harnesses. OpenRouter speaks `anthropic`. `remote.gateway_api` says which API the URL speaks. `check` and every run refuse a harness that can't talk to it, rather than failing mid-run. A gateway that speaks only Chat Completions (`openai-chat`) isn't usable yet; it will be with OpenCode.
+
+```sh
+~/.agents/bin/remote-agent setup   # pick "gateway", paste the URL and its key
+```
 
 **Which model.** `--model` wins. Otherwise the run uses the model the agent's wrapper sets for that harness (`model:` in `adapters/claude/agents/<agent>.md`, `model =` in `adapters/codex/agents/<agent>.toml`), and then `remote.model`. A gateway often names models its own way, so `remote.models` renames them:
 
 ```sh
-~/.agents/bin/settings set remote base_url https://llm.example.com --machine
 ~/.agents/bin/settings set remote models "opus=anthropic/claude-opus-5-5,sonnet=anthropic/claude-sonnet-5-5" --machine
 ```
 
@@ -241,6 +246,7 @@ flowchart LR
 | `remote.harness` | `claude` | The agent CLI a run starts: `claude` or `codex` |
 | `remote.credential` | the harness's first | Which Secret in `remote.env` a run logs in with |
 | `remote.base_url` | unset | A model gateway the harness calls instead of its vendor's API |
+| `remote.gateway_api` | the harness's own | The API the gateway speaks: `anthropic` or `openai-responses` |
 | `remote.model`, `remote.models` | unset | The model when neither `--model` nor the agent's wrapper sets one; `name=model` renames for a gateway |
 | `remote.max_sandboxes` | 4 | Most remote runs at once, across all skills. Set it to what the backend holds |
 | `remote.allowed` | true | Set it to `false` in a repo to keep its code on this machine |

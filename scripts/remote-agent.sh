@@ -67,8 +67,9 @@
 # 1 in place of 3, 4 or 5, so those three always mean the above. The final message is printed once,
 # on stdout only, and only on exit 0, 3 or 4; stderr carries the progress lines, never the final message.
 # Settings: the credential remote.credential names (default: the harness's first, CLAUDE_CODE_OAUTH_TOKEN from `claude
-# setup-token` for claude, CODEX_API_KEY for codex) from ~/.config/dotagents/remote.env or the environment, the only
-# Secret sent; remote.base_url, a model gateway the harness calls instead of its vendor's API;
+# setup-token` for claude, CODEX_API_KEY for codex; GATEWAY_API_KEY for either with a gateway) from
+# ~/.config/dotagents/remote.env or the environment, the only Secret sent; remote.base_url, a model gateway the harness
+# calls instead of its vendor's API, and remote.gateway_api, the API it speaks (refused when the harness does not);
 # the remote Settings (remote/settings.json: backend, harness, hours, max_mb, keep, and the backend's own) from
 # scripts/settings.sh, each exported as its REMOTE_* variable, which also overrides it for one run (REMOTE_KEEP=1).
 # Refused before anything is staged when no backend is set or the worktree's repo sets remote.allowed to false.

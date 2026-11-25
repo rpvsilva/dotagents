@@ -45,14 +45,15 @@ The harness is the agent CLI the sandbox runs on the brief, `remote.harness`: `c
 | | `claude` | `codex` |
 |---|---|---|
 | Run | `claude -p <brief> --output-format stream-json`, the rules through `--append-system-prompt` | `codex exec --json --dangerously-bypass-approvals-and-sandbox -- <brief>`, the rules appended to `~/.codex/AGENTS.md` |
-| Credentials (`remote.credential`) | `CLAUDE_CODE_OAUTH_TOKEN` (default), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` | `CODEX_API_KEY` |
-| Gateway (`remote.base_url`) | exported as `ANTHROPIC_BASE_URL` | a `remote` model provider in `~/.codex/config.toml`: that `base_url`, `env_key = "CODEX_API_KEY"`, `wire_api = "responses"` |
+| Credentials (`remote.credential`) | `CLAUDE_CODE_OAUTH_TOKEN` (default), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `GATEWAY_API_KEY` (given to Claude as `ANTHROPIC_AUTH_TOKEN`) | `CODEX_API_KEY` (default), `GATEWAY_API_KEY` |
+| Gateway (`remote.base_url`) | exported as `ANTHROPIC_BASE_URL` | a `remote` model provider in `~/.codex/config.toml`: that `base_url`, `env_key` the credential's name, `wire_api = "responses"` |
+| Gateway API (`remote.gateway_api`) | `anthropic` | `openai-responses` |
 | Plugins and MCP servers | reinstalled from the packed setup | not installed |
 | Caps (`capped`) | on, through `CLAUDE_CODE_SHELL_PREFIX` | off: Codex has no shell-prefix hook; `capped_off` says `a shell prefix in codex` |
 | `result.json` | from the `result` and `init` events | turns and `usage` from `turn.completed`, `model` and `harness_version` from the session's `turn_context` and `session_meta`; no cost |
 | `remote-agent resume` | places the session | refused; the session is kept |
 
-`remote.credential` names the one Secret a run logs in with, from `remote.env` (else the environment); unset, it is the harness's default. A credential the harness does not take is refused before anything is sent. Only that one is sent, through stdin; its value is redacted in every kept file and in the progress lines the sandbox writes to its own log, wherever the agent echoes it. `remote.base_url` is a gateway, an `http` or `https` URL (no spaces or quotes), sent in the header and never as an argument.
+`remote.credential` names the one Secret a run logs in with, from `remote.env` (else the environment); unset, it is the harness's default. A credential the harness does not take is refused before anything is sent. Only that one is sent, through stdin; its value is redacted in every kept file and in the progress lines the sandbox writes to its own log, wherever the agent echoes it. `remote.base_url` is a gateway, an `http` or `https` URL (no spaces or quotes), sent in the header and never as an argument. `remote.gateway_api` names the API it speaks; set, it must be one the harness speaks, else the run (and `check`) is refused before anything is sent; unset, the harness's own is assumed. `GATEWAY_API_KEY` is a gateway's key for either harness, so one LiteLLM key serves both; it, and `remote.gateway_api`, need `remote.base_url`. `setup`'s `gateway` login writes `GATEWAY_API_KEY`, the URL and the harness's API. Extra headers a gateway may want are not sent yet.
 
 The model is `--model` as given, else the agent wrapper's for the harness, else `remote.model`, else the harness's default. `remote.models` (`name=model` entries, e.g. `opus=anthropic/claude-opus-5-5`) renames the wrapper's or `remote.model`'s model before the run, so wrappers keep the vendor's names while a gateway gets its own. A name may hold `/`, `:`, `@` and `+` for a gateway's naming.
 

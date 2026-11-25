@@ -210,7 +210,7 @@ cat >"$SANDBOX/podbin/claude" <<EOF
 [ "\$1" = -p ] || exit 0
 printf '%s\n' "\$@" >"$SANDBOX/claude-args"
 # The gateway and the credentials it was given: ANTHROPIC_BASE_URL, then which credential variables are set.
-{ echo "\${ANTHROPIC_BASE_URL:-none}"; env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CODEX_API_KEY)=' | tr -d = | sort | tr '\n' ' '; echo; } >"$SANDBOX/claude-env"
+{ echo "\${ANTHROPIC_BASE_URL:-none}"; env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CODEX_API_KEY|GATEWAY_API_KEY)=' | tr -d = | sort | tr '\n' ' '; echo; } >"$SANDBOX/claude-env"
 printf '%s' "\${CLAUDE_CODE_SHELL_PREFIX:-}" >"$SANDBOX/prefix"
 printf '%s %s\n' "\${CAPPED_MB:-}" "\${CAPPED_SECS:-}" >"$SANDBOX/capped-env"
 [ ! -e "$SANDBOX/killmsg" ] || cat "$SANDBOX/killmsg" >>"\$HOME/out/capped.log"
@@ -1536,7 +1536,7 @@ cat >"$SANDBOX/podbin/codex" <<EOF
 #!/usr/bin/env bash
 [ "\$1" = exec ] || exit 0
 printf '%s\n' "\$@" >"$SANDBOX/codex-args"
-env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CODEX_API_KEY)=' | tr -d = | sort | tr '\n' ' ' >"$SANDBOX/codex-env"
+env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CODEX_API_KEY|GATEWAY_API_KEY)=' | tr -d = | sort | tr '\n' ' ' >"$SANDBOX/codex-env"
 id=7c0d3c55-0000-4000-8000-00000000c0de
 echo "{\"type\":\"thread.started\",\"thread_id\":\"\$id\"}"
 echo '{"type":"turn.started"}'
@@ -1561,7 +1561,7 @@ chmod +x "$SANDBOX/podbin/codex"
 # Sets remote.env to the Claude token and a Codex key, and the Settings to the cluster's plus those given.
 harness_config() {
   remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool "$@"
-  printf 'CODEX_API_KEY=sk-codex-secret\nANTHROPIC_AUTH_TOKEN=sk-gateway-secret\n' >>"$SANDBOX/config/dotagents/remote.env"
+  printf 'CODEX_API_KEY=sk-codex-secret\nANTHROPIC_AUTH_TOKEN=sk-gateway-secret\nGATEWAY_API_KEY=sk-gwkey-secret\n' >>"$SANDBOX/config/dotagents/remote.env"
 }
 
 # Codex: the header names it and sends only its key; remote.model is the model, the rules go in its AGENTS.md, its
@@ -1608,6 +1608,13 @@ grep -qx 'base_url = "https://gw.example.com/v1"' "$POD/.codex/config.toml" && g
 grep -qx "REMOTE_BASE_URL=https://gw.example.com/v1" "$SANDBOX/stdin" || fail "codex gateway: the URL not in the header"
 grep -qx -- "-m" "$SANDBOX/codex-args" && fail "codex gateway: a model passed with none set: $(tr '\n' ' ' <"$SANDBOX/codex-args")"
 rm -f "$W/hello.txt"
+# The shared gateway key for codex: GATEWAY_API_KEY alone, the provider reading it.
+harness_config REMOTE_HARNESS=codex REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY REMOTE_GATEWAY_API=openai-responses
+run 0 "" --name codex4 || fail "codex gateway key: exited non-zero: $(cat "$SANDBOX/out")"
+grep -qx 'env_key = "GATEWAY_API_KEY"' "$POD/.codex/config.toml" || fail "codex gateway key: the provider does not read it: $(cat "$POD/.codex/config.toml" 2>/dev/null)"
+[ "$(cat "$SANDBOX/codex-env")" = "GATEWAY_API_KEY " ] || fail "codex gateway key: credentials given to codex: $(cat "$SANDBOX/codex-env")"
+grep -rl "sk-gwkey-secret" "$(kept)" && fail "codex gateway key: the key is in a kept file"
+rm -f "$W/hello.txt"
 # Codex's usage limit: exit 5, as Claude's.
 : >"$SANDBOX/codex-limit"
 code=0; run 0 "" --name codex3 || code=$?
@@ -1627,6 +1634,14 @@ grep -qxF "anthropic/claude-x:1" "$SANDBOX/claude-args" || fail "claude gateway:
 grep -q "sk-gateway-secret\|sk-claude-secret" "$SANDBOX/calls" "$SANDBOX/out" && fail "claude gateway: a credential leaked"
 grep -rl "sk-gateway-secret" "$(kept)" && fail "claude gateway: the token is in a kept file"
 result_is "claude gateway result" '.harness == "claude"'
+rm -f "$W/hello.txt"
+# The shared gateway key for claude: given to Claude as its bearer token, ANTHROPIC_AUTH_TOKEN.
+harness_config REMOTE_BASE_URL=https://gw.example.com/anthropic REMOTE_CREDENTIAL=GATEWAY_API_KEY REMOTE_GATEWAY_API=anthropic
+run 0 "" --name gw3 || fail "claude gateway key: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$SANDBOX/claude-env")" = $'https://gw.example.com/anthropic\nANTHROPIC_AUTH_TOKEN ' ] \
+  || fail "claude gateway key: not the URL and the key as ANTHROPIC_AUTH_TOKEN alone: $(cat "$SANDBOX/claude-env")"
+grep -qx "GATEWAY_API_KEY=sk-gwkey-secret" "$SANDBOX/stdin" || fail "claude gateway key: not sent in the header"
+grep -rl "sk-gwkey-secret" "$(kept)" && fail "claude gateway key: the key is in a kept file"
 rm -f "$W/hello.txt" "$SANDBOX/real"
 # --model is not renamed; a gateway name with / and : passes.
 run 0 "$patch" --name gw2 --model "$want" || fail "claude gateway --model: exited non-zero: $(cat "$SANDBOX/out")"
@@ -1638,7 +1653,11 @@ for c in "REMOTE_HARNESS=codex REMOTE_CREDENTIAL=CLAUDE_CODE_OAUTH_TOKEN|not one
   "REMOTE_CREDENTIAL=CODEX_API_KEY|not one claude logs in with" \
   "REMOTE_CREDENTIAL=ANTHROPIC_API_KEY|set ANTHROPIC_API_KEY" \
   "REMOTE_BASE_URL=gw.example.com|not an http or https URL" \
-  "REMOTE_MODELS=opus|remote.models entry is not name=model"; do
+  "REMOTE_MODELS=opus|remote.models entry is not name=model" \
+  "REMOTE_CREDENTIAL=GATEWAY_API_KEY|GATEWAY_API_KEY needs remote.base_url" \
+  "REMOTE_GATEWAY_API=anthropic|remote.gateway_api needs remote.base_url" \
+  "REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=openai-responses|openai-responses, which claude does not speak" \
+  "REMOTE_HARNESS=codex REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=anthropic|anthropic, which codex does not speak"; do
   # shellcheck disable=SC2086 # the Settings, split
   harness_config ${c%%|*}
   code=0; run 0 "" || code=$?

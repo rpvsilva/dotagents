@@ -28,8 +28,16 @@ remote_secret() {
 # with, its default first; fails for an unknown harness.
 remote_harness_credentials() {
   case "$1" in
-    claude) echo "CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN" ;;
-    codex) echo "CODEX_API_KEY" ;;
+    claude) echo "CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN GATEWAY_API_KEY" ;;
+    codex) echo "CODEX_API_KEY GATEWAY_API_KEY" ;;
+    *) return 1 ;;
+  esac
+}
+# Prints the gateway APIs harness $1 speaks, its own first.
+remote_harness_apis() {
+  case "$1" in
+    claude) echo "anthropic" ;;
+    codex) echo "openai-responses" ;;
     *) return 1 ;;
   esac
 }
@@ -37,8 +45,9 @@ remote_harness_credentials() {
 remote_model_ok() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$ ]]; }
 
 # Sets harness to remote.harness (claude when unset) and credential to the Secret the run logs in with
-# (remote.credential, else the harness's default), and checks remote.base_url and remote.models; fails, with why set
-# to say so, on a value that does not fit. Run after remote_settings.
+# (remote.credential, else the harness's default), and checks remote.base_url, remote.gateway_api (one the harness
+# speaks; GATEWAY_API_KEY and gateway_api need a base_url) and remote.models; fails, with why set to say so, on a value
+# that does not fit. Run after remote_settings.
 remote_credential() {
   local names url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
   harness="${REMOTE_HARNESS:-claude}"
@@ -51,6 +60,18 @@ remote_credential() {
   if [ -n "${REMOTE_BASE_URL:-}" ] && [[ ! "$REMOTE_BASE_URL" =~ $url_re ]]; then
     why="remote.base_url is not an http or https URL: $REMOTE_BASE_URL"
     return 1
+  fi
+  if [ -z "${REMOTE_BASE_URL:-}" ] && [ "$credential" = GATEWAY_API_KEY ]; then
+    why="remote.credential GATEWAY_API_KEY needs remote.base_url, the gateway"
+    return 1
+  fi
+  if [ -n "${REMOTE_GATEWAY_API:-}" ]; then
+    [ -n "${REMOTE_BASE_URL:-}" ] || { why="remote.gateway_api needs remote.base_url, the gateway"; return 1; }
+    names="$(remote_harness_apis "$harness")"
+    if [[ " $names " != *" $REMOTE_GATEWAY_API "* ]]; then
+      why="remote.gateway_api is $REMOTE_GATEWAY_API, which $harness does not speak (it speaks: $names)"
+      return 1
+    fi
   fi
   # shellcheck disable=SC2034 # why: read by the caller
   remote_model_map "" >/dev/null || { why="$(remote_model_map "" 2>&1 >/dev/null)"; return 1; }
