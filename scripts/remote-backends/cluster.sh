@@ -124,7 +124,13 @@ YAML
     fi
     missing=0
     for what in sandboxclaims.extensions.agents.x-k8s.io pods/exec; do
-      if [ "$(kc auth can-i create "$what" 2>/dev/null || true)" != yes ]; then
+      # A subresource is asked with --subresource: `can-i create pods/exec` asks about a pod named exec.
+      case "$what" in
+        */*) ask="${what%%/*} --subresource=${what#*/}" ;;
+        *) ask="$what" ;;
+      esac
+      # shellcheck disable=SC2086 # $ask is one resource and an optional flag, no spaces inside either
+      if [ "$(kc auth can-i create $ask 2>/dev/null || true)" != yes ]; then
         echo "no permission to create ${what%%.*} in namespace $namespace (context $context)"
         missing=1
       fi
