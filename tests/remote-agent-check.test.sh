@@ -138,6 +138,25 @@ code=0; check || code=$?
 grep -q "image $IMAGE" "$SANDBOX/out" || fail "image not pullable: image not named: $(out)"
 rm -f "$S/image-missing" "$S/no-pull"
 
+# remote.images: each agent's image is checked too, pulled when missing and named when it cannot be; a bad entry is
+# named, with no dry run.
+config REMOTE_BACKEND=docker REMOTE_IMAGES="epic-implementer=local/runner-py:1"
+check || fail "agent image: exited non-zero: $(out)"
+grep -q "^image inspect .*local/runner-py:1" "$S/calls" || fail "agent image: not checked: $(cat "$S/calls")"
+grep -q "epic-implementer's image local/runner-py:1" "$SANDBOX/out" || fail "agent image: not named: $(out)"
+: >"$S/image-missing"
+: >"$S/no-pull"
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "agent image not pullable: exited 0"
+grep -q "image local/runner-py:1" "$SANDBOX/out" || fail "agent image not pullable: not named: $(out)"
+rm -f "$S/image-missing" "$S/no-pull"
+config REMOTE_BACKEND=docker REMOTE_IMAGES="epic-implementer"
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "bad images entry: exited 0"
+grep -q "remote.images entry is not agent=value: epic-implementer" "$SANDBOX/out" || fail "bad images entry: not named: $(out)"
+grep -q "^run -d" "$S/calls" && fail "bad images entry: the dry run ran anyway"
+config REMOTE_BACKEND=docker
+
 # An image of another architecture: a note, but still a pass.
 echo arm64 >"$S/image-arch"
 check || fail "arch: exited non-zero: $(out)"

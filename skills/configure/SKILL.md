@@ -1,6 +1,6 @@
 ---
 name: configure
-description: Show or change the Settings skills and scripts read (how many subagents run at once, the tracker, labels, where remote subagents run, ...), for one run, this repo or this machine. Use when the human asks to configure a skill, turns a behaviour on or off, even mid-run ("disable remote", "use 2 agents in this repo"), or says what a skill should do from now on.
+description: Show or change the Settings skills and scripts read (how many subagents run at once, the tracker, labels, where remote subagents run and on which image, ...), for one run, this repo or this machine. Use when the human asks to configure a skill, turns a behaviour on or off, even mid-run ("disable remote", "use 2 agents in this repo"), or says what a skill should do from now on.
 ---
 
 Show and change **Settings**: named values with a default that skills and scripts act on. Each skill declares the Settings it reads, with their kind, default and meaning; a key no skill declares does not exist. Settings are not **Lessons** (free text in a repo's notes files, owned by [remember](../remember/SKILL.md)) and never **Secrets** (tokens and other credentials).
@@ -26,10 +26,11 @@ Input: nothing, to show the Settings; or a change, exact (`<section> <key> <valu
    - Remote off has three scopes: `--local` (one run), `remote.allowed false` (this repo, repo Level), or `remote.backend` unset (every repo, machine Level). A bare "disable remote" names none of them: ask which.
    - A key no skill declares: say so, name the declared keys that come closest, and ask. Never invent a key.
    - A Secret (the Claude token, MCP credentials, the GitHub App's credentials): never ask for it or read its file. Point to the command that owns it: `~/.agents/bin/remote-agent setup` for the token, `~/.config/dotagents/mcp.env` and `~/.config/dotagents/github-app.env` (see the dotagents README) for the rest. The human edits those themselves.
+   - A subagent's own image ("run epic-implementer remotely on image X") is one `<agent>=<value>` entry: in `remote.images` on the `docker` and `ssh` backends, in `remote.pools` on `cluster` (its image is its warm pool's: ask which pool is built on X). Edit the list one entry at a time, since `set` writes the whole list: read it with `settings get remote <images|pools>`, replace or add that agent's entry, and set the result with every other entry as it was. "Back to the default image" drops the entry. In step 3, flag an entry that changes nothing: the agent is in no skill's `needs.json` `remote` list (it always runs on this machine), or `remote.backend` is unset (remote runs are off until `remote-agent setup`).
    - Remote subagents set up from scratch: suggest the human run `~/.agents/bin/remote-agent setup` in their terminal instead (it asks for the token), then `remote-agent check`.
    - Each leftover notes line from step 1 that the human wants kept becomes a repo-Level change, plus removing that line from the notes file.
 
-   Done when every change has a declared key, a value and a Level.
+   Done when every change has a declared key, a value and a Level, and each per-agent list holds every entry it held before plus the one change.
 
 3. **Confirm.** Show each change as `<section>.<key>: <old value> (<old Level>) → <new value> (<Level>)`, and each notes line to remove. Wait for the human's yes; on an edit, redo step 2. Done when they approve, or drop it.
 

@@ -737,6 +737,34 @@ rm -f "$W/hello.txt"
 run 0 "" --name nomodel || fail "no agent: exited non-zero: $(cat "$SANDBOX/out")"
 grep -qx -- "--model" "$SANDBOX/claude-args" && fail "no agent: claude run with a model: $(tr '\n' ' ' <"$SANDBOX/claude-args")"
 rm -f "$W/hello.txt"
+# remote.pools: --agent claims from the agent's own warm pool; another agent, or no --agent, from remote.pool; a pool
+# set for the one run (REMOTE_POOL) wins over the agent's. A bad entry is refused before any backend call.
+pool_of() { sed -n '/warmPoolRef/,/name:/ s/^    name: //p' "$SANDBOX/claim.yaml"; }
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool \
+  REMOTE_POOLS="epic-implementer=impl-pool,pr-reviewer=review-pool"
+run 0 "" --name pool1 --agent epic-implementer || fail "agent pool: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(pool_of)" = impl-pool ] || fail "agent pool: claimed from $(pool_of), not impl-pool"
+rm -f "$W/hello.txt"
+run 0 "" --name pool2 --agent pr-reviewer || fail "agent pool 2: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(pool_of)" = review-pool ] || fail "agent pool 2: claimed from $(pool_of), not review-pool"
+rm -f "$W/hello.txt"
+run 0 "" --name pool3 --agent test-tuner || fail "unlisted agent pool: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(pool_of)" = test-pool ] || fail "unlisted agent pool: claimed from $(pool_of), not remote.pool"
+rm -f "$W/hello.txt"
+run 0 "" --name pool4 || fail "no agent pool: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(pool_of)" = test-pool ] || fail "no agent pool: claimed from $(pool_of), not remote.pool"
+rm -f "$W/hello.txt"
+REMOTE_POOL=one-pool run 0 "" --name pool5 --agent epic-implementer || fail "run pool: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(pool_of)" = one-pool ] || fail "run pool: claimed from $(pool_of), not the one set for the run"
+for bad in "epic-implementer" "epic-implementer=" "Epic=x" "epic-implementer=a,epic-implementer=b"; do
+  remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool REMOTE_POOLS="$bad"
+  code=0; run 0 "" --agent epic-implementer || code=$?
+  [ "$code" = 1 ] || fail "pools '$bad': wanted exit 1, got $code: $(cat "$SANDBOX/out")"
+  grep -q "^remote-agent: remote.pools " "$SANDBOX/err" || fail "pools '$bad': no reason: $(cat "$SANDBOX/err")"
+  [ ! -e "$SANDBOX/calls" ] || fail "pools '$bad': kubectl was called: $(cat "$SANDBOX/calls")"
+done
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
+rm -f "$W/hello.txt"
 # --model runs that model, and wins over --agent's; a bad name is refused before any backend call.
 run 0 "" --name model2 --agent epic-implementer --model my-model.1 || fail "--model: exited non-zero: $(cat "$SANDBOX/out")"
 grep -qxF -- "my-model.1" "$SANDBOX/claude-args" || fail "--model: claude not run with it: $(tr '\n' ' ' <"$SANDBOX/claude-args")"

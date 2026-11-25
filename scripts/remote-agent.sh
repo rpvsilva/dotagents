@@ -8,7 +8,9 @@
 # whose text starts with -, which claude would read as an option). --agent names the subagent whose brief this is:
 # the run uses the model its Claude wrapper (adapters/claude/agents/<agent>.md) sets in its `model:` line, as a local
 # run of it does; an agent with no wrapper is refused, and without --agent the sandbox's default model runs. --model
-# NAME runs that model instead (it wins over --agent's). --home DIR ships the setup found under DIR (its .claude and
+# NAME runs that model instead (it wins over --agent's). --agent also picks the agent's own runner image
+# (remote.images) or warm pool (remote.pools) over remote.image and remote.pool, unless REMOTE_IMAGE or REMOTE_POOL
+# is set for the one run. --home DIR ships the setup found under DIR (its .claude and
 # .agents pieces and .claude.json) in place of $HOME's; Settings, the token and the backend's client stay the real ones.
 #        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
 #        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
@@ -220,7 +222,8 @@ usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--home DIR
        remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]
 Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
 from stdin. --agent runs the model the agent's Claude wrapper sets, as a local run does. --model NAME runs that
-model instead, and wins over --agent's. --home DIR ships the setup under DIR in place of $HOME's. Exit 0 applied, 3 no
+model instead, and wins over --agent's. --agent also runs the agent's own image or pool (remote.images,
+remote.pools) when one is set. --home DIR ships the setup under DIR in place of $HOME's. Exit 0 applied, 3 no
 changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
 EOF
 }
@@ -242,6 +245,7 @@ agent_model() {
 }
 attach=()
 name=""
+agent=""
 model=""
 model_flag=""
 setup_home="$HOME"
@@ -259,6 +263,7 @@ while [ $# -gt 0 ]; do
     --agent)
       [ $# -ge 2 ] || usage
       model="$(agent_model "$2")" || exit 1
+      agent="$2"
       ;;
     --home)
       [ $# -ge 2 ] || usage
@@ -292,7 +297,10 @@ case "$brief" in -*) echo "remote-agent: the brief starts with \"-\", which clau
 root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
 claude_token="$(remote_token)"
 [ -n "$claude_token" ] || { echo "remote-agent: set CLAUDE_CODE_OAUTH_TOKEN (in $REMOTE_SECRET_FILE): run \`remote-agent setup\`" >&2; exit 1; }
+run_image="${REMOTE_IMAGE:-}"
+run_pool="${REMOTE_POOL:-}"
 remote_settings "$root" || exit 1
+remote_agent_settings "$agent" "$run_image" "$run_pool" || exit 1
 why="$(remote_blocker "$root")" || exit 1
 [ -z "$why" ] || { echo "remote-agent: $why" >&2; exit 1; }
 leftovers="$(remote_leftovers)"
