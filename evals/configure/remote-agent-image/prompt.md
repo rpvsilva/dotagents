@@ -1,0 +1,1 @@
+I want to run the epic-implementer agent remotely with the image ghcr.io/example/runner-py:1. I approve the change, so apply it without asking me again, and leave this repo uncommitted: no commit, no branch, no PR.

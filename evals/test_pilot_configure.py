@@ -18,7 +18,7 @@ import home  # noqa: E402
 from testlib import EvalSandbox  # noqa: E402
 
 SETTINGS = REPO / "scripts" / "settings.sh"
-NAMES = ("build-epic-only", "machine-three-agents", "repo-two-agents", "unknown-setting")
+NAMES = ("build-epic-only", "machine-three-agents", "remote-agent-image", "repo-two-agents", "unknown-setting")
 
 
 class PilotConfigure(EvalSandbox):
@@ -68,7 +68,7 @@ class PilotConfigure(EvalSandbox):
             self.assertIn(n, failed)
         self.assertTrue(failed)
 
-    def test_the_four_cases_exist_and_are_well_formed(self):
+    def test_the_cases_exist_and_are_well_formed(self):
         self.assertEqual(sorted(p.name for p in CASES.iterdir() if p.is_dir()), list(NAMES))
         self.assertEqual(cases.check(HERE), [])
         for name in NAMES:
@@ -112,6 +112,19 @@ class PilotConfigure(EvalSandbox):
                                                     edit="README.md")), ["no-repo-file"])
         self.assertEqual(self.failed(self.end_state("machine-three-agents", "shared max_parallel 3 --machine",
                                                     edit="README.md", commit=True)), ["no-repo-file"])
+
+    def test_remote_agent_image_passes_on_the_agents_machine_entry_only(self):
+        image = "epic-implementer=ghcr.io/example/runner-py:1"
+        self.assertPasses(self.end_state("remote-agent-image", f"remote images {image} --machine"))
+        self.assertFails(self.end_state("remote-agent-image"), "machine-agent-image")
+        self.assertFails(self.end_state("remote-agent-image", "remote image ghcr.io/example/runner-py:1 --machine"),
+                         "machine-agent-image")
+        self.assertFails(self.end_state("remote-agent-image", f"remote images {image} --machine",
+                                        "remote image ghcr.io/example/runner-py:1 --machine"), "machine-agent-image")
+        self.assertFails(self.end_state("remote-agent-image", "remote images pr-reviewer=ghcr.io/example/runner-py:1 --machine"),
+                         "machine-agent-image")
+        self.assertEqual(self.failed(self.end_state("remote-agent-image", f"remote images {image} --machine",
+                                                    edit="README.md")), ["no-repo-file"])
 
     def test_build_epic_only_passes_when_only_build_epic_changes_at_repo_level(self):
         self.assertPasses(self.end_state("build-epic-only", "build-epic max_parallel 1 --repo"))

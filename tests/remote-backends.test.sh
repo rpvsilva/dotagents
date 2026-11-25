@@ -29,7 +29,8 @@ make_worktree "$W"
 CC="$SANDBOX/claude-config"
 
 # Runs remote-agent.sh in $W with the remote Settings given (REMOTE_<KEY>=<value>, see remote_config) after the fake
-# run's exit code $1 and patch $2; with none given, the config stays as it is. With NAME set, as --name NAME.
+# run's exit code $1 and patch $2; with none given, the config stays as it is. With NAME set, as --name NAME; with
+# AGENT set, as --agent AGENT.
 run() {
   echo "$1" >"$S/code"
   printf '%s' "$2" >"$S/patch"
@@ -37,7 +38,7 @@ run() {
   [ $# -eq 0 ] || remote_config "$SANDBOX/config" "$@" || return 1
   rm -rf "$S/calls" "$S/stdin"
   (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
-    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" ${NAME:+--name "$NAME"} "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
+    CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" ${NAME:+--name "$NAME"} ${AGENT:+--agent "$AGENT"} "${BRIEF:-add a hello file}") >"$SANDBOX/out" 2>&1
 }
 # The container a run used: the name given to `docker run`.
 container() { sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" 2>/dev/null | head -1 || true; }
@@ -99,6 +100,26 @@ grep -q "^run -d --rm .*--platform linux/arm64 local/runner:dev sleep 3600\$" "$
 [ "$(sed -n '2,$p' "$S/stdin")" = "line one
 line two" ] || fail "docker @file: the brief is not the file's text: $(sed -n '2,$p' "$S/stdin")"
 rm -f "$W/hello.txt"
+
+# remote.images: --agent runs the agent's own image; another agent, or no --agent, remote.image; an image set for the
+# one run (REMOTE_IMAGE) wins over the agent's.
+image_of() { sed -n 's/^run -d .* \([^ ]*\) sleep [0-9]*$/\1/p' "$S/calls" | head -1; }
+remote_config "$SANDBOX/config" REMOTE_BACKEND=docker REMOTE_IMAGE=local/runner:dev \
+  REMOTE_IMAGES="epic-implementer=local/runner-py:1,pr-reviewer=local/runner-slim:1"
+AGENT=epic-implementer run 0 "$HELLO_PATCH" || fail "docker agent image: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(image_of)" = local/runner-py:1 ] || fail "docker agent image: ran $(image_of), not local/runner-py:1"
+grep -q "started container .*(local/runner-py:1" "$SANDBOX/out" || fail "docker agent image: not shown: $(cat "$SANDBOX/out")"
+rm -f "$W/hello.txt"
+AGENT=test-tuner run 0 "$HELLO_PATCH" || fail "docker unlisted agent image: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(image_of)" = local/runner:dev ] || fail "docker unlisted agent image: ran $(image_of), not remote.image"
+rm -f "$W/hello.txt"
+run 0 "$HELLO_PATCH" || fail "docker no agent image: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(image_of)" = local/runner:dev ] || fail "docker no agent image: ran $(image_of), not remote.image"
+rm -f "$W/hello.txt"
+REMOTE_IMAGE=local/one:1 AGENT=epic-implementer run 0 "$HELLO_PATCH" || fail "docker run image: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(image_of)" = local/one:1 ] || fail "docker run image: ran $(image_of), not the one set for the run"
+rm -f "$W/hello.txt"
+remote_config "$SANDBOX/config" REMOTE_BACKEND=docker
 
 # No changes: exit 3. --name labels the container with the task, under the cluster's key.
 code=0; NAME="09-Review fixes" run 0 "" REMOTE_BACKEND=docker || code=$?

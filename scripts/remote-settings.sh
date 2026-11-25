@@ -39,6 +39,38 @@ remote_settings() {
   eval "$lines"
 }
 
+# Prints the value per-agent list $2 (the agent=value entries of REMOTE_IMAGES or REMOTE_POOLS, joined by commas)
+# holds for agent $1, or nothing when it names none or $1 is empty; fails, naming Setting $3, on an entry that is not
+# agent=value or an agent named twice. Every entry is checked, not only $1's, so a typo shows on any run.
+remote_agent_value() {
+  local entries entry agent value found="" seen=" "
+  IFS=, read -ra entries <<<"$2"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    if ! [[ "$entry" =~ ^([a-z0-9-]+)=([^[:space:]=]+)$ ]]; then
+      echo "remote-agent: $3 entry is not agent=value: $entry" >&2
+      return 1
+    fi
+    agent="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$seen" in *" $agent "*) echo "remote-agent: $3 names $agent twice" >&2; return 1 ;; esac
+    seen="$seen$agent "
+    [ "$agent" != "$1" ] || found="$value"
+  done
+  printf '%s' "$found"
+}
+
+# Points the run at agent $1's own image (remote.images) and pool (remote.pools), over remote.image and remote.pool.
+# $2 and $3 are REMOTE_IMAGE and REMOTE_POOL as the environment set them before remote_settings: a value set for the
+# one run wins over the agent's. Run after remote_settings; fails, saying why, on a bad entry.
+remote_agent_settings() {
+  local image pool
+  image="$(remote_agent_value "$1" "${REMOTE_IMAGES:-}" remote.images)" || return 1
+  pool="$(remote_agent_value "$1" "${REMOTE_POOLS:-}" remote.pools)" || return 1
+  if [ -n "$image" ] && [ -z "$2" ]; then export REMOTE_IMAGE="$image"; fi
+  if [ -n "$pool" ] && [ -z "$3" ]; then export REMOTE_POOL="$pool"; fi
+  return 0
+}
+
 # Prints why the repo at $1 may not send subagents to a backend, or nothing when it may. Run after remote_settings.
 remote_blocker() {
   local allowed left
