@@ -214,7 +214,7 @@ cat >"$SANDBOX/bin/kubectl" <<EOF
 echo "\$*" >>"$S/calls"
 case "\$*" in
   "config get-contexts -o name") cat "$S/contexts" ;;
-  *"auth can-i create pods/exec"*) cat "$S/can-exec"; [ "\$(cat "$S/can-exec")" = yes ] ;;
+  *"auth can-i create pods --subresource=exec"*) cat "$S/can-exec"; [ "\$(cat "$S/can-exec")" = yes ] ;;
   *"auth can-i create sandboxclaims"*) echo yes ;;
   *) echo "stub kubectl: unexpected \$*" >&2; exit 1 ;;
 esac
