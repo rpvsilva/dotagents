@@ -32,6 +32,11 @@ printf 'codex instructions\n' >"$H/.codex/AGENTS.md"
 printf 'name = "a"\n' >"$H/.codex/agents/a.toml"
 printf 'model = "x"\n' >"$H/.codex/config.toml"
 printf '{"OPENAI_API_KEY":"secret"}' >"$H/.codex/auth.json"
+mkdir -p "$H/.config/opencode/agents" "$H/.config/opencode/commands"
+printf 'opencode instructions\n' >"$H/.config/opencode/AGENTS.md"
+printf -- '---\nmodel: anthropic/claude-sonnet-5-5\n---\nreview\n' >"$H/.config/opencode/agents/a.md"
+printf 'do it\n' >"$H/.config/opencode/commands/c.md"
+printf '{"providers":{"x":{"settings":{"apiKey":"secret"}}}}' >"$H/.config/opencode/opencode.json"
 printf 'history\n' >"$H/.claude/history.jsonl"
 printf 'transcript\n' >"$H/.claude/projects/p/s.jsonl"
 cat >"$H/.claude/settings.json" <<'EOF'
@@ -81,7 +86,10 @@ if [ ! -f "$P/.claude/CLAUDE.md" ] || [ -L "$P/.claude/CLAUDE.md" ]; then fail "
 [ -f "$P/.claude/skills/skill-a/SKILL.md" ] || fail "pack: linked skill not copied"
 [ -f "$P/.agents/hooks/guard.sh" ] || fail "pack: hook scripts not copied"
 [ "$(cat "$P/.codex/AGENTS.md" 2>/dev/null)" = "codex instructions" ] && [ -f "$P/.codex/agents/a.toml" ] || fail "pack: Codex's AGENTS.md or agents not copied"
-for f in .claude/.credentials.json .claude/history.jsonl .claude/projects .claude/skills/skill-a/.env .claude.json .codex/config.toml .codex/auth.json; do
+[ "$(cat "$P/.config/opencode/AGENTS.md" 2>/dev/null)" = "opencode instructions" ] && [ -f "$P/.config/opencode/agents/a.md" ] \
+  && [ -f "$P/.config/opencode/commands/c.md" ] || fail "pack: OpenCode's AGENTS.md, agents or commands not copied"
+for f in .claude/.credentials.json .claude/history.jsonl .claude/projects .claude/skills/skill-a/.env .claude.json .codex/config.toml .codex/auth.json \
+  .config/opencode/opencode.json; do
   [ ! -e "$P/$f" ] || fail "pack: $f was copied"
 done
 s="$P/.claude/settings.json"
@@ -168,8 +176,8 @@ case " \$* " in
     if [ -e "$SANDBOX/real" ]; then
       while [ "\$1" != "-c" ]; do shift; done
       [ ! -e "$SANDBOX/nocapped" ] || rm -f "\$pod/.agents/bin/capped"
-      # A pod does not get this machine's CLAUDE_CONFIG_DIR.
-      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR HOME="\$pod" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/\$pod/main-stdout}" "\${@:3}"
+      # A pod does not get this machine's CLAUDE_CONFIG_DIR, nor its XDG folders.
+      tee "$SANDBOX/stdin" | env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME -u XDG_DATA_HOME HOME="\$pod" PATH="$SANDBOX/podbin:\$PATH" bash -c "\${2//\/proc\/1\/fd\/1/\$pod/main-stdout}" "\${@:3}"
       exit
     fi
     cat >"$SANDBOX/stdin"
@@ -1558,10 +1566,10 @@ echo '{"type":"item.completed","item":{"id":"i4","type":"agent_message","text":"
 echo '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":30}}'
 EOF
 chmod +x "$SANDBOX/podbin/codex"
-# Sets remote.env to the Claude token and a Codex key, and the Settings to the cluster's plus those given.
+# Sets remote.env to the Claude token, a Codex key, gateway keys and an OpenAI key, and the Settings to the cluster's plus those given.
 harness_config() {
   remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool "$@"
-  printf 'CODEX_API_KEY=sk-codex-secret\nANTHROPIC_AUTH_TOKEN=sk-gateway-secret\nGATEWAY_API_KEY=sk-gwkey-secret\n' >>"$SANDBOX/config/dotagents/remote.env"
+  printf 'CODEX_API_KEY=sk-codex-secret\nANTHROPIC_AUTH_TOKEN=sk-gateway-secret\nGATEWAY_API_KEY=sk-gwkey-secret\nOPENAI_API_KEY=sk-openai-secret\n' >>"$SANDBOX/config/dotagents/remote.env"
 }
 
 # Codex: the header names it and sends only its key; remote.model is the model, the rules go in its AGENTS.md, its
@@ -1648,6 +1656,129 @@ run 0 "$patch" --name gw2 --model "$want" || fail "claude gateway --model: exite
 grep -q "remote-agent-sandbox auto 300 $want\$" "$SANDBOX/calls" || fail "claude gateway --model: renamed: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 100)"
 rm -f "$W/hello.txt"
 
+# OpenCode: a fake opencode for the pod. `--version` prints its version; `session export <id>` prints the session as
+# JSON (holding the key); `run` logs its arguments, which credentials it got and the config it found, then prints
+# `run --format json` events: a text in two deltas, a shell call, a file write, the key echoed, the final message,
+# each step closed by step_finish with tokens and cost. With $SANDBOX/opencode-limit, an error event says the account
+# is over its usage limit, and it exits 1.
+cat >"$SANDBOX/podbin/opencode" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  --version) echo 2.3.2; exit 0 ;;
+  session) [ "\$2" = export ] || exit 1
+    printf '{\n  "info": {"id": "%s"},\n  "messages": [{"text": "key %s"}]\n}\n' "\$3" "\${ANTHROPIC_API_KEY:-\$GATEWAY_API_KEY}"; exit 0 ;;
+  run) ;;
+  *) exit 1 ;;
+esac
+printf '%s\n' "\$@" >"$SANDBOX/opencode-args"
+env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CODEX_API_KEY|OPENAI_API_KEY|GATEWAY_API_KEY)=' | tr -d = | sort | tr '\n' ' ' >"$SANDBOX/opencode-env"
+rm -f "$SANDBOX/opencode-config"
+[ ! -f "\$HOME/.config/opencode/opencode.json" ] || cp "\$HOME/.config/opencode/opencode.json" "$SANDBOX/opencode-config"
+s=ses_7c0d3c55abc
+echo "{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"\$s\",\"part\":{\"id\":\"p0\",\"type\":\"step-start\"}}"
+if [ -e "$SANDBOX/opencode-limit" ]; then
+  echo "{\"type\":\"error\",\"timestamp\":2,\"sessionID\":\"\$s\",\"error\":{\"type\":\"api\",\"message\":\"You've hit your usage limit. Try again at 5:30 PM.\"}}"
+  exit 1
+fi
+echo "{\"type\":\"text\",\"timestamp\":2,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t1\",\"messageID\":\"m1\",\"type\":\"text\",\"text\":\"writing the\"}}"
+echo "{\"type\":\"text\",\"timestamp\":3,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t1\",\"messageID\":\"m1\",\"type\":\"text\",\"text\":\" hello file\"}}"
+echo "{\"type\":\"tool_use\",\"timestamp\":4,\"sessionID\":\"\$s\",\"part\":{\"type\":\"tool\",\"tool\":\"bash\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"ls -la\"}}}}"
+printf 'hello\n' >hello.txt
+echo "{\"type\":\"tool_use\",\"timestamp\":5,\"sessionID\":\"\$s\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"hello.txt\"}}}}"
+echo "{\"type\":\"step_finish\",\"timestamp\":6,\"sessionID\":\"\$s\",\"part\":{\"type\":\"step-finish\",\"cost\":0.25,\"tokens\":{\"input\":100,\"output\":20,\"reasoning\":5,\"cache\":{\"read\":10,\"write\":1}}}}"
+echo "{\"type\":\"text\",\"timestamp\":7,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t2\",\"messageID\":\"m2\",\"type\":\"text\",\"text\":\"env: KEY=\${ANTHROPIC_API_KEY:-\$GATEWAY_API_KEY}\"}}"
+echo "{\"type\":\"text\",\"timestamp\":8,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t3\",\"messageID\":\"m2\",\"type\":\"text\",\"text\":\"did the opencode thing\"}}"
+echo "{\"type\":\"step_finish\",\"timestamp\":9,\"sessionID\":\"\$s\",\"part\":{\"type\":\"step-finish\",\"cost\":0.5,\"tokens\":{\"input\":50,\"output\":10,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}"
+EOF
+chmod +x "$SANDBOX/podbin/opencode"
+
+# OpenCode on an Anthropic key: the header names it and sends only that key; remote.model (provider/model) is passed
+# with -m; --agent with only a Claude wrapper runs on it; the rules go in its global AGENTS.md; no provider is written
+# without a gateway; result.json reads its events.
+harness_config REMOTE_HARNESS=opencode REMOTE_MODEL=anthropic/claude-sonnet-5-5
+echo "ANTHROPIC_API_KEY=sk-anthropic-secret" >>"$SANDBOX/config/dotagents/remote.env"
+: >"$SANDBOX/real"
+run 0 "" --name oc1 --agent epic-implementer || fail "opencode: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "opencode: patch not applied: $(cat "$SANDBOX/out")"
+[ "$(sed -n '/^$/q;p' "$SANDBOX/stdin")" = $'REMOTE_HARNESS=opencode\nANTHROPIC_API_KEY=sk-anthropic-secret' ] \
+  || fail "opencode: the stdin header is not the harness and its key: $(sed -n '/^$/q;p' "$SANDBOX/stdin" | sed 's/=sk-.*/=.../')"
+[ "$(cat "$SANDBOX/opencode-env")" = "ANTHROPIC_API_KEY " ] || fail "opencode: credentials given to opencode: $(cat "$SANDBOX/opencode-env")"
+for a in run --standalone --auto --format json -m anthropic/claude-sonnet-5-5; do
+  grep -qx -- "$a" "$SANDBOX/opencode-args" || fail "opencode: no $a in its arguments: $(tr '\n' ' ' <"$SANDBOX/opencode-args")"
+done
+[ "$(tail -1 "$SANDBOX/opencode-args")" = "add a hello file" ] || fail "opencode: the brief is not its last argument: $(tr '\n' ' ' <"$SANDBOX/opencode-args")"
+grep -q "^You run unattended" "$POD/.config/opencode/AGENTS.md" || fail "opencode: the rules are not in its AGENTS.md"
+[ ! -e "$SANDBOX/opencode-config" ] || fail "opencode: a provider written without a gateway: $(cat "$SANDBOX/opencode-config")"
+[ "$(cat "$SANDBOX/report")" = "did the opencode thing" ] || fail "opencode: stdout is not the final message: $(cat "$SANDBOX/report")"
+grep -qx "\[oc1\] == opencode (anthropic/claude-sonnet-5-5)" "$SANDBOX/err" || fail "opencode: the harness and model not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[oc1\]   writing the hello file" "$SANDBOX/err" || fail "opencode: its text deltas not shown joined: $(cat "$SANDBOX/err")"
+grep -qx "\[oc1\]   → bash ls -la" "$SANDBOX/err" || fail "opencode: its shell call not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[oc1\]   → write hello.txt" "$SANDBOX/err" || fail "opencode: its file write not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[oc1\]   env: KEY=\[redacted\]" "$SANDBOX/err" || fail "opencode: the echoed key not shown redacted: $(cat "$SANDBOX/err")"
+grep -q "did the opencode thing" "$SANDBOX/err" && fail "opencode: the final message also on stderr"
+grep -q "== capped: unavailable (missing: a shell prefix in opencode)" "$SANDBOX/err" || fail "opencode: the caps not said to be off: $(cat "$SANDBOX/err")"
+k="$(kept)"
+grep -rl "sk-anthropic-secret" "$k" "$POD/main-stdout" && fail "opencode: the key is in a kept file or the log: $(grep -r "sk-anthropic-secret" "$k" "$POD/main-stdout" | cut -c1-300)"
+grep -qF 'KEY=[redacted]' "$k/transcript.jsonl" || fail "opencode: the key not redacted in the transcript"
+# shellcheck disable=SC2015 # fail only reports
+[ "$(wc -l <"$k/session.jsonl" | tr -d ' ')" = 1 ] && grep -qF 'key [redacted]' "$k/session.jsonl" \
+  && jq -e '.info.id == "ses_7c0d3c55abc"' "$k/session.jsonl" >/dev/null \
+  || fail "opencode: the session not kept on one line, or its key not redacted: $(cat "$k/session.jsonl" 2>/dev/null)"
+result_is "opencode result" '.harness == "opencode" and .model == "anthropic/claude-sonnet-5-5" and .harness_version == "2.3.2"
+  and .claude_version == null and .num_turns == 2 and .total_cost_usd == 0.75 and .complete == true
+  and .usage == {input: 150, output: 30, reasoning: 5, cache: {read: 10, write: 1}}
+  and .capped_off == "a shell prefix in opencode" and .changed == ["hello.txt"]'
+rm -f "$W/hello.txt"
+code=0; (cd "$W" && env HOME="$H" CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" resume "$(basename "$k")") 2>"$SANDBOX/err" || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "ran on opencode" "$SANDBOX/err" || fail "opencode resume: not refused: $code $(cat "$SANDBOX/err")"
+
+# An agent with no wrapper at all is refused under opencode too, before any call.
+code=0; run 0 "" --agent no-such-agent || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "no agent no-such-agent" "$SANDBOX/err" || fail "opencode: an unknown agent not refused: $code $(cat "$SANDBOX/err")"
+
+# A gateway for opencode: a provider named remote in its config, of the Chat Completions package by default, reading
+# GATEWAY_API_KEY, the model its one model and run as remote/<model>.
+harness_config REMOTE_HARNESS=opencode REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY REMOTE_MODEL=qwen3-coder
+run 0 "" --name oc2 || fail "opencode gateway: exited non-zero: $(cat "$SANDBOX/out")"
+rm -f "$W/hello.txt"
+jq -e '.model == "remote/qwen3-coder" and .providers.remote.package == "@opencode/ai/providers/openai-compatible"
+  and .providers.remote.settings.baseURL == "https://gw.example.com/v1" and .providers.remote.env == ["GATEWAY_API_KEY"]
+  and (.providers.remote.models | keys) == ["qwen3-coder"]' "$SANDBOX/opencode-config" >/dev/null \
+  || fail "opencode gateway: not the provider wanted: $(cat "$SANDBOX/opencode-config" 2>/dev/null)"
+grep -q "sk-gwkey-secret" "$SANDBOX/opencode-config" && fail "opencode gateway: the key is in its config"
+grep -qx -- "remote/qwen3-coder" "$SANDBOX/opencode-args" || fail "opencode gateway: not run on remote/<model>: $(tr '\n' ' ' <"$SANDBOX/opencode-args")"
+[ "$(cat "$SANDBOX/opencode-env")" = "GATEWAY_API_KEY " ] || fail "opencode gateway: credentials given to opencode: $(cat "$SANDBOX/opencode-env")"
+grep -q "^REMOTE_GATEWAY_API=" "$SANDBOX/stdin" && fail "opencode gateway: an API sent with none set"
+grep -rl "sk-gwkey-secret" "$(kept)" && fail "opencode gateway: the key is in a kept file"
+# The API it speaks picks the provider's package, and goes in the header.
+for c in "anthropic|@opencode/ai/providers/anthropic-compatible" "openai-responses|@opencode/ai/providers/openai-compatible/responses"; do
+  harness_config REMOTE_HARNESS=opencode REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY \
+    REMOTE_MODEL=qwen3-coder REMOTE_GATEWAY_API="${c%%|*}"
+  run 0 "" || fail "opencode gateway ${c%%|*}: exited non-zero: $(cat "$SANDBOX/out")"
+  rm -f "$W/hello.txt"
+  grep -qx "REMOTE_GATEWAY_API=${c%%|*}" "$SANDBOX/stdin" || fail "opencode gateway ${c%%|*}: the API not in the header"
+  jq -e --arg p "${c#*|}" '.providers.remote.package == $p' "$SANDBOX/opencode-config" >/dev/null \
+    || fail "opencode gateway ${c%%|*}: not package ${c#*|}: $(cat "$SANDBOX/opencode-config" 2>/dev/null)"
+done
+# Through a gateway OpenCode needs a model: refused before any call.
+harness_config REMOTE_HARNESS=opencode REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY
+code=0; run 0 "" || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "opencode through a gateway needs a model" "$SANDBOX/err" && [ ! -e "$SANDBOX/calls" ] \
+  || fail "opencode gateway, no model: not refused before any call: $code $(cat "$SANDBOX/err")"
+
+# OpenCode's error event on the usage limit: exit 5, as Claude's and Codex's.
+harness_config REMOTE_HARNESS=opencode REMOTE_CREDENTIAL=OPENAI_API_KEY
+: >"$SANDBOX/opencode-limit"
+code=0; run 0 "" --name oc3 || code=$?
+[ "$code" = 5 ] || fail "opencode limit: wanted exit 5, got $code: $(cat "$SANDBOX/out")"
+grep -q "^\[oc3\] usage limit: resets " "$SANDBOX/err" || fail "opencode limit: not said: $(cat "$SANDBOX/err")"
+[ "$(cat "$SANDBOX/opencode-env")" = "OPENAI_API_KEY " ] || fail "opencode limit: credentials given to opencode: $(cat "$SANDBOX/opencode-env")"
+result_is "opencode limit result" '.harness == "opencode" and .complete == false and .status == "failed" and .num_turns == null'
+rm -f "$W/hello.txt" "$SANDBOX/opencode-limit" "$SANDBOX/real"
+
 # A credential the harness does not take, a missing one, a bad URL or a bad models entry: refused before any call.
 for c in "REMOTE_HARNESS=codex REMOTE_CREDENTIAL=CLAUDE_CODE_OAUTH_TOKEN|not one codex logs in with" \
   "REMOTE_CREDENTIAL=CODEX_API_KEY|not one claude logs in with" \
@@ -1657,7 +1788,10 @@ for c in "REMOTE_HARNESS=codex REMOTE_CREDENTIAL=CLAUDE_CODE_OAUTH_TOKEN|not one
   "REMOTE_CREDENTIAL=GATEWAY_API_KEY|GATEWAY_API_KEY needs remote.base_url" \
   "REMOTE_GATEWAY_API=anthropic|remote.gateway_api needs remote.base_url" \
   "REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=openai-responses|openai-responses, which claude does not speak" \
-  "REMOTE_HARNESS=codex REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=anthropic|anthropic, which codex does not speak"; do
+  "REMOTE_HARNESS=codex REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=anthropic|anthropic, which codex does not speak" \
+  "REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=openai-chat|openai-chat, which claude does not speak" \
+  "REMOTE_HARNESS=opencode REMOTE_CREDENTIAL=CODEX_API_KEY|not one opencode logs in with" \
+  "REMOTE_HARNESS=opencode|set ANTHROPIC_API_KEY"; do
   # shellcheck disable=SC2086 # the Settings, split
   harness_config ${c%%|*}
   code=0; run 0 "" || code=$?

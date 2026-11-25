@@ -2,7 +2,9 @@
 # Stages the parts of this machine's agent setup a remote sandbox needs into <dir>, laid out like $HOME.
 # Usage: scripts/remote-agent-pack.sh <dir> [home]   (home: where the setup is read from, default $HOME)
 # Copies, following links: ~/.claude/{CLAUDE.md,skills,agents,commands,rules}, ~/.codex/{AGENTS.md,agents,prompts}
-# (Codex's own pieces, for a run on the codex harness; never its config.toml or auth.json) and ~/.agents/{skills,hooks}, and
+# (Codex's own pieces, for a run on the codex harness; never its config.toml or auth.json),
+# ~/.config/opencode/{AGENTS.md,agents,commands} (OpenCode's, for the opencode harness; never its opencode.json(c),
+# which may hold keys) and ~/.agents/{skills,hooks}, and
 # this repo's scripts/capped as ~/.agents/bin/capped, which the sandbox runs the agent's shell commands under.
 # A ~/.claude/skills/<name> that is the same folder as ~/.agents/skills/<name> is staged as a relative link to that
 # copy; ~/.claude/skills/synced (the account's claude.ai skills) and Python caches (__pycache__, *.pyc) are left out:
@@ -18,12 +20,12 @@ set -euo pipefail
 
 out="${1:?usage: $0 <dir> [home]}"
 home="${2:-$HOME}"
-mkdir -p "$out/.claude" "$out/.codex" "$out/.agents"
+mkdir -p "$out/.claude" "$out/.codex" "$out/.config/opencode" "$out/.agents"
 note() { echo "remote-agent-pack: $*" >&2; }
 
 real() { (cd -P "$1" 2>/dev/null && pwd); }
 for p in .claude/CLAUDE.md .claude/agents .claude/commands .claude/rules .codex/AGENTS.md .codex/agents .codex/prompts \
-  .agents/skills .agents/hooks; do
+  .config/opencode/AGENTS.md .config/opencode/agents .config/opencode/commands .agents/skills .agents/hooks; do
   [ -e "$home/$p" ] || continue
   cp -RL "$home/$p" "$out/$p" 2>/dev/null || note "some of ~/$p could not be copied (broken links?)"
 done

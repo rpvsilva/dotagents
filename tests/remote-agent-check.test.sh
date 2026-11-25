@@ -194,6 +194,25 @@ config REMOTE_BACKEND=docker REMOTE_HARNESS=codex REMOTE_CREDENTIAL=ANTHROPIC_AP
 code=0; check || code=$?
 # shellcheck disable=SC2015 # fail only reports
 [ "$code" = 1 ] && grep -q "not one codex logs in with" "$SANDBOX/out" || fail "codex wrong credential: $code $(out)"
+# OpenCode: its default credential is ANTHROPIC_API_KEY, and the dry run probes opencode.
+config REMOTE_BACKEND=docker REMOTE_HARNESS=opencode
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "opencode no key: exited 0"
+grep -q "ANTHROPIC_API_KEY is not set" "$SANDBOX/out" || fail "opencode no key: not said: $(out)"
+echo "ANTHROPIC_API_KEY=sk-anthropic-secret" >>"$SANDBOX/config/dotagents/remote.env"
+printf '#!/bin/sh\necho "opencode $*" >>"%s/opencode-called"\necho "2.3.2"\n' "$S" >"$CB/opencode"
+chmod +x "$CB/opencode"
+rm -f "$S/claude-called"
+check || fail "opencode: exited non-zero: $(out)"
+grep -q "opencode in the sandbox: .*opencode (2.3.2)" "$SANDBOX/out" || fail "opencode: version not shown: $(out)"
+[ ! -e "$S/claude-called" ] || fail "opencode: claude was called: $(cat "$S/claude-called")"
+grep -q "sk-anthropic-secret" "$SANDBOX/out" "$S/calls" && fail "opencode: the key showed"
+rm -f "$CB/opencode"
+config REMOTE_BACKEND=docker REMOTE_HARNESS=opencode REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=openai-chat \
+  REMOTE_CREDENTIAL=GATEWAY_API_KEY
+echo "GATEWAY_API_KEY=sk-gw" >>"$SANDBOX/config/dotagents/remote.env"
+code=0; check || code=$?
+grep -q "remote.gateway_api\|remote.credential\|remote.base_url" "$SANDBOX/out" && fail "opencode gateway: a valid gateway refused: $(out)"
 config REMOTE_BACKEND=docker REMOTE_BASE_URL=nope
 code=0; check || code=$?
 # shellcheck disable=SC2015 # fail only reports
