@@ -208,6 +208,16 @@ grep -q "opencode in the sandbox: .*opencode (2.3.2)" "$SANDBOX/out" || fail "op
 [ ! -e "$S/claude-called" ] || fail "opencode: claude was called: $(cat "$S/claude-called")"
 grep -q "sk-anthropic-secret" "$SANDBOX/out" "$S/calls" && fail "opencode: the key showed"
 rm -f "$CB/opencode"
+# Pi: the dry run probes pi.
+config REMOTE_BACKEND=docker REMOTE_HARNESS=pi
+echo "ANTHROPIC_API_KEY=sk-anthropic-secret" >>"$SANDBOX/config/dotagents/remote.env"
+printf '#!/bin/sh\necho "pi $*" >>"%s/pi-called"\necho "1.6.0"\n' "$S" >"$CB/pi"
+chmod +x "$CB/pi"
+rm -f "$S/claude-called"
+check || fail "pi: exited non-zero: $(out)"
+grep -q "pi in the sandbox: .*pi (1.6.0)" "$SANDBOX/out" || fail "pi: version not shown: $(out)"
+[ ! -e "$S/claude-called" ] || fail "pi: claude was called: $(cat "$S/claude-called")"
+rm -f "$CB/pi"
 config REMOTE_BACKEND=docker REMOTE_HARNESS=opencode REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=openai-chat \
   REMOTE_CREDENTIAL=GATEWAY_API_KEY
 echo "GATEWAY_API_KEY=sk-gw" >>"$SANDBOX/config/dotagents/remote.env"

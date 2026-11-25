@@ -37,6 +37,14 @@ printf 'opencode instructions\n' >"$H/.config/opencode/AGENTS.md"
 printf -- '---\nmodel: anthropic/claude-sonnet-5-5\n---\nreview\n' >"$H/.config/opencode/agents/a.md"
 printf 'do it\n' >"$H/.config/opencode/commands/c.md"
 printf '{"providers":{"x":{"settings":{"apiKey":"secret"}}}}' >"$H/.config/opencode/opencode.json"
+mkdir -p "$H/.pi/agent/skills/s" "$H/.pi/agent/prompts" "$H/.pi/agent/extensions"
+printf 'pi instructions\n' >"$H/.pi/agent/AGENTS.md"
+printf -- '---\nname: s\n---\n' >"$H/.pi/agent/skills/s/SKILL.md"
+printf 'do it\n' >"$H/.pi/agent/prompts/p.md"
+printf '{"anthropic":{"key":"secret"}}' >"$H/.pi/agent/auth.json"
+printf '{"providers":{}}' >"$H/.pi/agent/models.json"
+printf '{}' >"$H/.pi/agent/settings.json"
+printf 'export default 1\n' >"$H/.pi/agent/extensions/e.ts"
 printf 'history\n' >"$H/.claude/history.jsonl"
 printf 'transcript\n' >"$H/.claude/projects/p/s.jsonl"
 cat >"$H/.claude/settings.json" <<'EOF'
@@ -88,8 +96,11 @@ if [ ! -f "$P/.claude/CLAUDE.md" ] || [ -L "$P/.claude/CLAUDE.md" ]; then fail "
 [ "$(cat "$P/.codex/AGENTS.md" 2>/dev/null)" = "codex instructions" ] && [ -f "$P/.codex/agents/a.toml" ] || fail "pack: Codex's AGENTS.md or agents not copied"
 [ "$(cat "$P/.config/opencode/AGENTS.md" 2>/dev/null)" = "opencode instructions" ] && [ -f "$P/.config/opencode/agents/a.md" ] \
   && [ -f "$P/.config/opencode/commands/c.md" ] || fail "pack: OpenCode's AGENTS.md, agents or commands not copied"
+# shellcheck disable=SC2015 # fail only reports
+[ "$(cat "$P/.pi/agent/AGENTS.md" 2>/dev/null)" = "pi instructions" ] && [ -f "$P/.pi/agent/skills/s/SKILL.md" ] \
+  && [ -f "$P/.pi/agent/prompts/p.md" ] || fail "pack: Pi's AGENTS.md, skills or prompts not copied"
 for f in .claude/.credentials.json .claude/history.jsonl .claude/projects .claude/skills/skill-a/.env .claude.json .codex/config.toml .codex/auth.json \
-  .config/opencode/opencode.json; do
+  .config/opencode/opencode.json .pi/agent/auth.json .pi/agent/models.json .pi/agent/settings.json .pi/agent/extensions; do
   [ ! -e "$P/$f" ] || fail "pack: $f was copied"
 done
 s="$P/.claude/settings.json"
@@ -1779,6 +1790,130 @@ grep -q "^\[oc3\] usage limit: resets " "$SANDBOX/err" || fail "opencode limit: 
 result_is "opencode limit result" '.harness == "opencode" and .complete == false and .status == "failed" and .num_turns == null'
 rm -f "$W/hello.txt" "$SANDBOX/opencode-limit" "$SANDBOX/real"
 
+# Pi: a fake pi for the pod. `--version` prints its version; a run logs its arguments, which credentials it got and the
+# models.json it found, writes its session file under --session-dir (holding the key), and prints `--mode json`
+# events: the session header, three assistant messages (text, a tool call each but the last, usage with cost), the
+# tool executions, the key echoed in the second; the last message is the final report. With $SANDBOX/pi-limit, the
+# first message stops on an error saying the account is over its usage limit, and it exits 1.
+cat >"$SANDBOX/podbin/pi" <<EOF
+#!/usr/bin/env bash
+[ "\$1" != --version ] || { echo 1.6.0; exit 0; }
+printf '%s\n' "\$@" >"$SANDBOX/pi-args"
+env | grep -oE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CODEX_API_KEY|OPENAI_API_KEY|GATEWAY_API_KEY)=' | tr -d = | sort | tr '\n' ' ' >"$SANDBOX/pi-env"
+rm -f "$SANDBOX/pi-models"
+[ ! -f "\$HOME/.pi/agent/models.json" ] || cp "\$HOME/.pi/agent/models.json" "$SANDBOX/pi-models"
+dir=""
+while [ \$# -gt 0 ]; do [ "\$1" != --session-dir ] || dir="\$2"; shift; done
+key="\${ANTHROPIC_API_KEY:-\${OPENAI_API_KEY:-\$GATEWAY_API_KEY}}"
+id=0b5e7a11-0000-4000-8000-0000000000p1
+mkdir -p "\$dir/--home-work--"
+printf '{"type":"session","id":"%s"}\n{"type":"message","text":"key %s"}\n' "\$id" "\$key" >"\$dir/--home-work--/2026-11-25T10-00-00-000Z_\$id.jsonl"
+echo "{\"type\":\"session\",\"version\":3,\"id\":\"\$id\",\"cwd\":\"\$PWD\"}"
+echo '{"type":"agent_start"}'
+if [ -e "$SANDBOX/pi-limit" ]; then
+  echo '{"type":"message_end","message":{"role":"assistant","content":[],"model":"claude-sonnet-5-5","stopReason":"error","errorMessage":"You'"'"'ve hit your usage limit. Try again at 5:30 PM.","usage":{"input":0,"output":0}}}'
+  echo '{"type":"agent_end"}'
+  exit 1
+fi
+EOF
+cat >>"$SANDBOX/podbin/pi" <<'EOF'
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"writing the hello file"},{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"ls -la"}}],"model":"claude-sonnet-5-5","stopReason":"toolUse","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":1,"totalTokens":131,"cost":{"total":0.25}}}}'
+echo '{"type":"tool_execution_start","toolCallId":"c1","toolName":"bash","args":{"command":"ls -la"}}'
+echo '{"type":"tool_execution_end","toolCallId":"c1","toolName":"bash","isError":false}'
+printf 'hello\n' >hello.txt
+echo "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"env: KEY=$key\"},{\"type\":\"toolCall\",\"id\":\"c2\",\"name\":\"write\",\"arguments\":{\"path\":\"hello.txt\"}}],\"model\":\"claude-sonnet-5-5\",\"stopReason\":\"toolUse\",\"usage\":{\"input\":50,\"output\":10,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":60,\"cost\":{\"total\":0.5}}}}"
+echo '{"type":"tool_execution_start","toolCallId":"c2","toolName":"write","args":{"path":"hello.txt"}}'
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"did the pi thing"}],"model":"claude-sonnet-5-5","stopReason":"stop","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15,"cost":{"total":0.25}}}}'
+echo '{"type":"agent_end"}'
+EOF
+chmod +x "$SANDBOX/podbin/pi"
+
+# Pi on an Anthropic key: the header names it and sends only that key; remote.model is passed with --model and no
+# --provider; the rules go through --append-system-prompt; no models.json is written without a gateway; result.json
+# reads its events.
+harness_config REMOTE_HARNESS=pi REMOTE_MODEL=anthropic/claude-sonnet-5-5
+echo "ANTHROPIC_API_KEY=sk-anthropic-secret" >>"$SANDBOX/config/dotagents/remote.env"
+: >"$SANDBOX/real"
+run 0 "" --name pi1 --agent epic-implementer || fail "pi: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(cat "$W/hello.txt" 2>/dev/null)" = "hello" ] || fail "pi: patch not applied: $(cat "$SANDBOX/out")"
+[ "$(sed -n '/^$/q;p' "$SANDBOX/stdin")" = $'REMOTE_HARNESS=pi\nANTHROPIC_API_KEY=sk-anthropic-secret' ] \
+  || fail "pi: the stdin header is not the harness and its key: $(sed -n '/^$/q;p' "$SANDBOX/stdin" | sed 's/=sk-.*/=.../')"
+[ "$(cat "$SANDBOX/pi-env")" = "ANTHROPIC_API_KEY " ] || fail "pi: credentials given to pi: $(cat "$SANDBOX/pi-env")"
+for a in --mode json --approve --session-dir --model anthropic/claude-sonnet-5-5 --append-system-prompt; do
+  grep -qx -- "$a" "$SANDBOX/pi-args" || fail "pi: no $a in its arguments: $(tr '\n' ' ' <"$SANDBOX/pi-args")"
+done
+grep -qx -- --provider "$SANDBOX/pi-args" && fail "pi: --provider passed without a gateway"
+grep -q "^You run unattended" "$SANDBOX/pi-args" || fail "pi: the rules not passed: $(tr '\n' ' ' <"$SANDBOX/pi-args")"
+[ "$(tail -1 "$SANDBOX/pi-args")" = "add a hello file" ] || fail "pi: the brief is not its last argument: $(tr '\n' ' ' <"$SANDBOX/pi-args")"
+[ ! -e "$SANDBOX/pi-models" ] || fail "pi: a models.json written without a gateway: $(cat "$SANDBOX/pi-models")"
+[ "$(cat "$SANDBOX/report")" = "did the pi thing" ] || fail "pi: stdout is not the final message: $(cat "$SANDBOX/report")"
+grep -qx "\[pi1\] == pi (anthropic/claude-sonnet-5-5)" "$SANDBOX/err" || fail "pi: the harness and model not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[pi1\]   writing the hello file" "$SANDBOX/err" || fail "pi: its text not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[pi1\]   → bash ls -la" "$SANDBOX/err" || fail "pi: its shell call not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[pi1\]   → write hello.txt" "$SANDBOX/err" || fail "pi: its file write not shown: $(cat "$SANDBOX/err")"
+grep -qx "\[pi1\]   env: KEY=\[redacted\]" "$SANDBOX/err" || fail "pi: the echoed key not shown redacted: $(cat "$SANDBOX/err")"
+grep -q "did the pi thing" "$SANDBOX/err" && fail "pi: the final message also on stderr"
+grep -q "== capped: unavailable (missing: a shell prefix in pi)" "$SANDBOX/err" || fail "pi: the caps not said to be off: $(cat "$SANDBOX/err")"
+k="$(kept)"
+grep -rl "sk-anthropic-secret" "$k" "$POD/main-stdout" && fail "pi: the key is in a kept file or the log: $(grep -r "sk-anthropic-secret" "$k" "$POD/main-stdout" | cut -c1-300)"
+grep -qF 'KEY=[redacted]' "$k/transcript.jsonl" || fail "pi: the key not redacted in the transcript"
+grep -qF 'key [redacted]' "$k/session.jsonl" || fail "pi: the session not kept, or its key not redacted: $(cat "$k/session.jsonl" 2>/dev/null)"
+result_is "pi result" '.harness == "pi" and .model == "claude-sonnet-5-5" and .harness_version == "1.6.0"
+  and .claude_version == null and .num_turns == 3 and .total_cost_usd == 1 and .complete == true
+  and .usage == {input: 160, output: 35, cacheRead: 10, cacheWrite: 1, totalTokens: 206}
+  and .capped_off == "a shell prefix in pi" and .changed == ["hello.txt"]'
+rm -f "$W/hello.txt"
+code=0; (cd "$W" && env HOME="$H" CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" resume "$(basename "$k")") 2>"$SANDBOX/err" || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "ran on pi" "$SANDBOX/err" || fail "pi resume: not refused: $code $(cat "$SANDBOX/err")"
+
+# A brief starting with @ (from stdin or a brief file), which Pi would read as a file to attach, goes with a leading
+# space.
+rm -rf "$POD"
+(cd "$W" && echo "@notes add a hello file" | env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
+  CLAUDE_CONFIG_DIR="$CC" "$REPO/scripts/remote-agent.sh" -) >"$SANDBOX/out" 2>&1 || fail "pi @brief: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(tail -1 "$SANDBOX/pi-args")" = " @notes add a hello file" ] || fail "pi @brief: not passed with a leading space: $(tail -1 "$SANDBOX/pi-args")"
+rm -f "$W/hello.txt"
+
+# A gateway for pi: a provider named remote in its models.json, openai-completions by default, its apiKey the
+# credential's variable (never its value), the model its one model, run with --provider remote.
+harness_config REMOTE_HARNESS=pi REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY REMOTE_MODEL=qwen3-coder
+run 0 "" --name pi2 || fail "pi gateway: exited non-zero: $(cat "$SANDBOX/out")"
+rm -f "$W/hello.txt"
+jq -e '.providers.remote | .baseUrl == "https://gw.example.com/v1" and .api == "openai-completions"
+  and .apiKey == "$GATEWAY_API_KEY" and .models == [{id: "qwen3-coder"}]' "$SANDBOX/pi-models" >/dev/null \
+  || fail "pi gateway: not the provider wanted: $(cat "$SANDBOX/pi-models" 2>/dev/null)"
+grep -q "sk-gwkey-secret" "$SANDBOX/pi-models" && fail "pi gateway: the key is in its models.json"
+# shellcheck disable=SC2015 # fail only reports
+grep -qx -- --provider "$SANDBOX/pi-args" && grep -qx remote "$SANDBOX/pi-args" && grep -qx qwen3-coder "$SANDBOX/pi-args" \
+  || fail "pi gateway: not run with --provider remote --model qwen3-coder: $(tr '\n' ' ' <"$SANDBOX/pi-args")"
+[ "$(cat "$SANDBOX/pi-env")" = "GATEWAY_API_KEY " ] || fail "pi gateway: credentials given to pi: $(cat "$SANDBOX/pi-env")"
+grep -rl "sk-gwkey-secret" "$(kept)" && fail "pi gateway: the key is in a kept file"
+for c in "anthropic|anthropic-messages" "openai-responses|openai-responses"; do
+  harness_config REMOTE_HARNESS=pi REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY \
+    REMOTE_MODEL=qwen3-coder REMOTE_GATEWAY_API="${c%%|*}"
+  run 0 "" || fail "pi gateway ${c%%|*}: exited non-zero: $(cat "$SANDBOX/out")"
+  rm -f "$W/hello.txt"
+  jq -e --arg a "${c#*|}" '.providers.remote.api == $a' "$SANDBOX/pi-models" >/dev/null \
+    || fail "pi gateway ${c%%|*}: not api ${c#*|}: $(cat "$SANDBOX/pi-models" 2>/dev/null)"
+done
+harness_config REMOTE_HARNESS=pi REMOTE_BASE_URL=https://gw.example.com/v1 REMOTE_CREDENTIAL=GATEWAY_API_KEY
+code=0; run 0 "" || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "pi through a gateway needs a model" "$SANDBOX/err" && [ ! -e "$SANDBOX/calls" ] \
+  || fail "pi gateway, no model: not refused before any call: $code $(cat "$SANDBOX/err")"
+
+# Pi's error stop on the usage limit: exit 5.
+harness_config REMOTE_HARNESS=pi REMOTE_CREDENTIAL=OPENAI_API_KEY
+: >"$SANDBOX/pi-limit"
+code=0; run 0 "" --name pi3 || code=$?
+[ "$code" = 5 ] || fail "pi limit: wanted exit 5, got $code: $(cat "$SANDBOX/out")"
+grep -q "^\[pi3\] usage limit: resets " "$SANDBOX/err" || fail "pi limit: not said: $(cat "$SANDBOX/err")"
+grep -q "^\[pi3\]   error: You've hit your usage limit" "$SANDBOX/err" || fail "pi limit: the error not shown: $(cat "$SANDBOX/err")"
+[ "$(cat "$SANDBOX/pi-env")" = "OPENAI_API_KEY " ] || fail "pi limit: credentials given to pi: $(cat "$SANDBOX/pi-env")"
+result_is "pi limit result" '.harness == "pi" and .complete == false and .status == "failed" and .num_turns == 1'
+rm -f "$W/hello.txt" "$SANDBOX/pi-limit" "$SANDBOX/real"
+
 # A credential the harness does not take, a missing one, a bad URL or a bad models entry: refused before any call.
 for c in "REMOTE_HARNESS=codex REMOTE_CREDENTIAL=CLAUDE_CODE_OAUTH_TOKEN|not one codex logs in with" \
   "REMOTE_CREDENTIAL=CODEX_API_KEY|not one claude logs in with" \
@@ -1791,7 +1926,8 @@ for c in "REMOTE_HARNESS=codex REMOTE_CREDENTIAL=CLAUDE_CODE_OAUTH_TOKEN|not one
   "REMOTE_HARNESS=codex REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=anthropic|anthropic, which codex does not speak" \
   "REMOTE_BASE_URL=https://gw.example.com REMOTE_GATEWAY_API=openai-chat|openai-chat, which claude does not speak" \
   "REMOTE_HARNESS=opencode REMOTE_CREDENTIAL=CODEX_API_KEY|not one opencode logs in with" \
-  "REMOTE_HARNESS=opencode|set ANTHROPIC_API_KEY"; do
+  "REMOTE_HARNESS=opencode|set ANTHROPIC_API_KEY" \
+  "REMOTE_HARNESS=pi REMOTE_CREDENTIAL=CODEX_API_KEY|not one pi logs in with"; do
   # shellcheck disable=SC2086 # the Settings, split
   harness_config ${c%%|*}
   code=0; run 0 "" || code=$?

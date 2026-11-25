@@ -6,10 +6,10 @@
 # the current one; - reads the brief from stdin; -h or --help prints this usage on stdout and exits 0; any other
 # argument starting with -- before the brief is refused with the usage, exit 1, and so is a brief, however given,
 # whose text starts with -, which the harness's CLI would read as an option). The harness (remote.harness: claude,
-# codex or opencode) is the agent CLI the sandbox runs. --agent names the subagent whose brief this is: the run uses the model
+# codex, opencode or pi) is the agent CLI the sandbox runs. --agent names the subagent whose brief this is: the run uses the model
 # its wrapper for the harness sets (adapters/claude/agents/<agent>.md's `model:` line, adapters/codex/agents/<agent>.toml's
-# `model =` line, adapters/opencode/agents/<agent>.md's `model:` line), as a local run of it does; an agent with no
-# wrapper for claude or codex is refused, and under opencode one with only a Claude wrapper runs on remote.model. --model NAME runs
+# `model =` line, adapters/<opencode|pi>/agents/<agent>.md's `model:` line), as a local run of it does; an agent with no
+# wrapper for claude or codex is refused, and under opencode or pi one with only a Claude wrapper runs on remote.model. --model NAME runs
 # that model instead (it wins over --agent's); with neither, remote.model, else the harness's default. remote.models
 # renames the model the wrapper or remote.model gives (opus=anthropic/claude-opus-5-5), for a gateway's names. --agent also picks the agent's own runner image
 # (remote.images) or warm pool (remote.pools) over remote.image and remote.pool, unless REMOTE_IMAGE or REMOTE_POOL
@@ -46,11 +46,11 @@
 # SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
 # and the agent's full stream in <common git dir>/remote-agent/<run>/ (shared by every worktree of the repo, so it stays
 # when a linked worktree is removed; <run> is never one another run took), plus transcript.jsonl: the harness's raw
-# JSON events (Claude's stream-json, Codex's `exec --json`, OpenCode's `run --format json`), written as they arrive, its path printed before the sandbox
+# JSON events (Claude's stream-json, Codex's `exec --json`, OpenCode's `run --format json`, Pi's `--mode json`), written as they arrive, its path printed before the sandbox
 # is claimed, and session.jsonl: the harness's session. The credential's value is redacted in every kept file. The
 # session is not placed for /resume at the end: the sandbox wrote it, so it may hold forged user turns. `remote-agent
 # resume <run>` places a Claude run's session under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/ in the worktree's project
-# folder, its cwd the worktree, after a warning saying so; a Codex or OpenCode run's is kept only. Beside the transcript, for any reader:
+# folder, its cwd the worktree, after a warning saying so; a Codex, OpenCode or Pi run's is kept only. Beside the transcript, for any reader:
 # run.json (run, name, worktree, started, harness, pid, pid_start, state, exit_code, ended, claim_s, send_s (send_setup_s and
 # send_work_s, the setup's and the snapshot's part of it; setup_kb, the gzipped setup's size), first_event_s, caller;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
@@ -68,7 +68,7 @@
 # 1 in place of 3, 4 or 5, so those three always mean the above. The final message is printed once,
 # on stdout only, and only on exit 0, 3 or 4; stderr carries the progress lines, never the final message.
 # Settings: the credential remote.credential names (default: the harness's first, CLAUDE_CODE_OAUTH_TOKEN from `claude
-# setup-token` for claude, CODEX_API_KEY for codex, ANTHROPIC_API_KEY for opencode; GATEWAY_API_KEY for any with a gateway) from
+# setup-token` for claude, CODEX_API_KEY for codex, ANTHROPIC_API_KEY for opencode and pi; GATEWAY_API_KEY for any with a gateway) from
 # ~/.config/dotagents/remote.env or the environment, the only Secret sent; remote.base_url, a model gateway the harness
 # calls instead of its vendor's API, and remote.gateway_api, the API it speaks (refused when the harness does not);
 # the remote Settings (remote/settings.json: backend, harness, hours, max_mb, keep, and the backend's own) from
@@ -153,7 +153,7 @@ resume() {
   fi
   [ -s "$keep/session.jsonl" ] || { echo "remote-agent: no session kept in $keep" >&2; exit 1; }
   ran_on="$(jq -r '.harness // "claude"' "$keep/run.json" 2>/dev/null | tr -d '\r')" || ran_on=claude
-  if [ "$ran_on" = codex ] || [ "$ran_on" = opencode ]; then
+  if [ "$ran_on" != claude ]; then
     echo "remote-agent: $run ran on $ran_on: its session is kept in $keep/session.jsonl, not placed for resume" >&2
     exit 1
   fi
@@ -247,15 +247,15 @@ usage() { usage_text >&2; exit 1; }
 
 # The model subagent $1 runs on locally under harness $2: its Claude wrapper's frontmatter `model:` line
 # (adapters/claude/agents/<agent>.md), its Codex wrapper's top-level `model =` line
-# (adapters/codex/agents/<agent>.toml), or its OpenCode wrapper's frontmatter `model:` line
-# (adapters/opencode/agents/<agent>.md, a provider/model name), so a remote run of it gets the same model. Empty when
-# the wrapper sets none or says `inherit`, and under opencode when the agent has only a Claude wrapper (no OpenCode one
-# ships yet, and a Claude wrapper's opus is no OpenCode model); fails on an agent with no wrapper for the harness (for
-# opencode: neither wrapper) or a model that is not a plain name.
+# (adapters/codex/agents/<agent>.toml), or its OpenCode or Pi wrapper's frontmatter `model:` line
+# (adapters/<opencode|pi>/agents/<agent>.md, a provider/model name), so a remote run of it gets the same model. Empty
+# when the wrapper sets none or says `inherit`, and under opencode or pi when the agent has only a Claude wrapper (no
+# such wrapper ships yet, and a Claude wrapper's opus is no provider/model name); fails on an agent with no wrapper for
+# the harness (for opencode and pi: neither wrapper) or a model that is not a plain name.
 agent_model() {
   local file m=""
-  if [ "$2" = opencode ]; then
-    file="$REPO/adapters/opencode/agents/$1.md"
+  if [ "$2" = opencode ] || [ "$2" = pi ]; then
+    file="$REPO/adapters/$2/agents/$1.md"
     if [ -f "$file" ]; then
       m="$(awk 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
         NR > 1 && /^model:/ { sub(/^model:[ \t]*/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$file")"
@@ -348,9 +348,9 @@ else
     remote_model_ok "$model" || { echo "remote-agent: remote.model is not a model name: $model" >&2; exit 1; }
   fi
 fi
-# OpenCode's gateway provider lists the run's model: without one there is nothing to run it on.
-if [ "$harness" = opencode ] && [ -n "${REMOTE_BASE_URL:-}" ] && [ -z "$model" ]; then
-  echo "remote-agent: opencode through a gateway needs a model (remote.model or --model)" >&2
+# OpenCode's and Pi's gateway provider lists the run's model: without one there is nothing to run it on.
+if { [ "$harness" = opencode ] || [ "$harness" = pi ]; } && [ -n "${REMOTE_BASE_URL:-}" ] && [ -z "$model" ]; then
+  echo "remote-agent: $harness through a gateway needs a model (remote.model or --model)" >&2
   exit 1
 fi
 why="$(remote_blocker "$root")" || exit 1
@@ -493,14 +493,17 @@ transcript_to() {
 
 # Prints when the account's usage limit resets (the harness's words after "resets", a "|<epoch>" as a UTC time, else
 # unknown) when transcript $1 shows the run stopped on it: Claude's error result or API-error assistant message, or
-# Codex's turn.failed or error event, or OpenCode's error event, whose text says the limit was hit; prints nothing otherwise. Ordinary
+# Codex's turn.failed or error event, OpenCode's error event, or Pi's assistant message_end that stopped on an error,
+# whose text says the limit was hit; prints nothing otherwise. Ordinary
 # assistant text never counts.
 usage_limit() {
   # shellcheck disable=SC2016 # a literal $ in jq's regex
   jq -rRn '[inputs | fromjson? | objects
       | select((.type == "result" and .is_error == true) or (.type == "assistant" and .error != null)
-          or .type == "turn.failed" or .type == "error")
+          or .type == "turn.failed" or .type == "error"
+          or (.type == "message_end" and .message.role? == "assistant" and .message.stopReason? == "error"))
       | (if .type == "turn.failed" or .type == "error" then (.error.message? // .message)
+         elif .type == "message_end" then .message.errorMessage
          else (.result // ([.message.content[]? | select(.type == "text") | .text] | join(" "))) end) | strings
       | select(test("hit your (usage )?limit|usage limit|limit reached"; "i"))] | last // empty
     | if test("\\|[0-9]{9,}") then (capture("\\|(?<e>[0-9]{9,})").e | tonumber | strftime("%Y-%m-%d %H:%M UTC"))
@@ -642,7 +645,7 @@ fi
 if [ "$status" -ne 0 ]; then
   say "the sandbox run failed (exit $status); what it left is in $keep"
   # The account's usage limit: the harness's error event (Claude's error result or API-error assistant message, Codex's
-  # turn.failed or error, OpenCode's error) says so.
+  # turn.failed or error, OpenCode's error, Pi's error stop) says so.
   when="$(usage_limit "$keep/transcript.jsonl")" || true
   if [ -n "$when" ]; then echo "usage limit: resets $when" | progress; exit 5; fi
   # 3, 4 and 5 are this script's own answers (no changes, stale patch, usage limit).

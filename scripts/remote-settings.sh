@@ -30,7 +30,7 @@ remote_harness_credentials() {
   case "$1" in
     claude) echo "CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN GATEWAY_API_KEY" ;;
     codex) echo "CODEX_API_KEY GATEWAY_API_KEY" ;;
-    opencode) echo "ANTHROPIC_API_KEY OPENAI_API_KEY GATEWAY_API_KEY" ;;
+    opencode | pi) echo "ANTHROPIC_API_KEY OPENAI_API_KEY GATEWAY_API_KEY" ;;
     *) return 1 ;;
   esac
 }
@@ -39,7 +39,7 @@ remote_harness_apis() {
   case "$1" in
     claude) echo "anthropic" ;;
     codex) echo "openai-responses" ;;
-    opencode) echo "openai-chat openai-responses anthropic" ;;
+    opencode | pi) echo "openai-chat openai-responses anthropic" ;;
     *) return 1 ;;
   esac
 }
@@ -53,7 +53,7 @@ remote_model_ok() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$ ]]; }
 remote_credential() {
   local names url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
   harness="${REMOTE_HARNESS:-claude}"
-  names="$(remote_harness_credentials "$harness")" || { why="unknown remote.harness: $harness (known: claude codex opencode)"; return 1; }
+  names="$(remote_harness_credentials "$harness")" || { why="unknown remote.harness: $harness (known: claude codex opencode pi)"; return 1; }
   credential="${REMOTE_CREDENTIAL:-${names%% *}}"
   if [[ " $names " != *" $credential "* ]]; then
     why="remote.credential $credential is not one $harness logs in with (one of: $names)"
