@@ -504,7 +504,7 @@ The first run of the cases, to see whether evals are worth keeping (#378). The c
 
 | Skill | Cases |
 |---|---|
-| `configure` | `build-epic-only`, `machine-three-agents`, `repo-two-agents`, `unknown-setting` |
+| `configure` | `build-epic-only`, `machine-three-agents`, `remote-agent-image`, `repo-two-agents`, `unknown-setting` |
 | `build-epic` (planning only, epic given as a file, no GitHub) | `pass-a-remove`, `pass-a-rename`, `pass-b-top` |
 
 ### The run

@@ -968,7 +968,7 @@ status="$(git -C "$EVAL_WORK" status --porcelain --untracked-files=all)"
             if (d / "case.json").is_file():
                 named[f"{d.parent.name}/{d.name}"] = run.remote_needs(case_loader.load(d))
         configure = {k for k, v in named.items() if k.startswith("configure/")}
-        self.assertEqual(len(configure), 4)
+        self.assertEqual(len(configure), 5)
         for k in configure:
             self.assertIn("EVAL_HOME", named[k], k)
         build = {k: v for k, v in named.items() if k.startswith("build-epic/")}

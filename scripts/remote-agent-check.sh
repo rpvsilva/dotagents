@@ -50,6 +50,23 @@ while IFS= read -r v; do export "${v?}"; done < <(compgen -v REMOTE_)
 
 say "checking the $backend_name backend"
 "$backend" check || problems=1
+# Each agent's own image (remote.images; the docker backend and ssh in container mode), checked as the backend checks
+# its default one. Each agent's own pool (remote.pools; the cluster backend) is checked for its form only, as the
+# backend's check does not look at the pool either.
+remote_agent_value "" "${REMOTE_POOLS:-}" remote.pools >/dev/null || problems=1
+if remote_agent_value "" "${REMOTE_IMAGES:-}" remote.images >/dev/null; then
+  case "$backend_name:${REMOTE_SSH_MODE:-container}" in
+    docker:* | ssh:container)
+      IFS=, read -ra entries <<<"${REMOTE_IMAGES:-}"
+      for entry in ${entries[@]+"${entries[@]}"}; do
+        say "checking ${entry%%=*}'s image ${entry#*=} (remote.images)"
+        REMOTE_IMAGE="${entry#*=}" "$backend" check || problems=1
+      done
+      ;;
+  esac
+else
+  problems=1
+fi
 if [ "$problems" -ne 0 ]; then
   echo "dry run skipped: fix the above first"
   exit 1
