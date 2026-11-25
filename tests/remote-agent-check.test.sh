@@ -245,6 +245,10 @@ case "\$*" in
   "config get-contexts -o name") cat "$S/contexts" ;;
   *"auth can-i create pods --subresource=exec"*) cat "$S/can-exec"; [ "\$(cat "$S/can-exec")" = yes ] ;;
   *"auth can-i create sandboxclaims"*) echo yes ;;
+  *"get sandboxwarmpool "*)
+    [ ! -e "$S/no-pool" ] || { echo 'Error from server (NotFound): sandboxwarmpools.extensions.agents.x-k8s.io "test-pool" not found' >&2; exit 1; }
+    [ ! -e "$S/pool-forbidden" ] || { echo 'Error from server (Forbidden): cannot get sandboxwarmpools' >&2; exit 1; }
+    echo sandboxwarmpool.extensions.agents.x-k8s.io/test-pool ;;
   *) echo "stub kubectl: unexpected \$*" >&2; exit 1 ;;
 esac
 EOF
@@ -259,6 +263,21 @@ grep -q "sandboxclaims" "$SANDBOX/out" && fail "cluster can-i: named a permissio
 grep -q -- "--context test-ctx -n agents auth can-i create sandboxclaims" "$S/calls" \
   || fail "cluster can-i: sandboxclaims permission not asked in the namespace: $(cat "$S/calls")"
 grep -q "apply" "$S/calls" && fail "cluster can-i: the dry run ran anyway"
+grep -q "warm pool" "$SANDBOX/out" && fail "cluster can-i: a pool that exists named missing: $(out)"
+# A warm pool not in the namespace is named before any claim; one the user may not read is no finding.
+echo yes >"$S/can-exec"
+: >"$S/no-pool"
+code=0; check || code=$?
+rm -f "$S/no-pool"
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" != 0 ] && grep -q "warm pool test-pool not found in namespace agents (context test-ctx)" "$SANDBOX/out" \
+  || fail "cluster no pool: not named: $code $(out)"
+grep -q "apply" "$S/calls" && fail "cluster no pool: the dry run ran anyway"
+: >"$S/pool-forbidden"
+code=0; check || code=$?
+rm -f "$S/pool-forbidden"
+grep -q "warm pool" "$SANDBOX/out" && fail "cluster pool forbidden: named missing: $(out)"
+echo no >"$S/can-exec"
 config REMOTE_BACKEND=cluster REMOTE_CONTEXT=missing-ctx REMOTE_POOL=test-pool
 code=0; check || code=$?
 [ "$code" != 0 ] || fail "cluster context: exited 0"

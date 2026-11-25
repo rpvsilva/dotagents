@@ -1667,7 +1667,8 @@ run 0 "$patch" --name gw2 --model "$want" || fail "claude gateway --model: exite
 grep -q "remote-agent-sandbox auto 300 $want\$" "$SANDBOX/calls" || fail "claude gateway --model: renamed: $(grep remote-agent-sandbox "$SANDBOX/calls" | tail -c 100)"
 rm -f "$W/hello.txt"
 
-# OpenCode: a fake opencode for the pod. `--version` prints its version; `session export <id>` prints the session as
+# OpenCode: a fake opencode for the pod, as the real 2.3.2 prints: `--version` prints its version with more around it;
+# a write's input names its file as path; `session export <id>` prints the session as
 # JSON (holding the key); `run` logs its arguments, which credentials it got and the config it found, then prints
 # `run --format json` events: a text in two deltas, a shell call, a file write, the key echoed, the final message,
 # each step closed by step_finish with tokens and cost. With $SANDBOX/opencode-limit, an error event says the account
@@ -1675,7 +1676,7 @@ rm -f "$W/hello.txt"
 cat >"$SANDBOX/podbin/opencode" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
-  --version) echo 2.3.2; exit 0 ;;
+  --version) echo "opencode 2.3.2 (linux-arm64)"; exit 0 ;;
   session) [ "\$2" = export ] || exit 1
     printf '{\n  "info": {"id": "%s"},\n  "messages": [{"text": "key %s"}]\n}\n' "\$3" "\${ANTHROPIC_API_KEY:-\$GATEWAY_API_KEY}"; exit 0 ;;
   run) ;;
@@ -1695,7 +1696,7 @@ echo "{\"type\":\"text\",\"timestamp\":2,\"sessionID\":\"\$s\",\"part\":{\"id\":
 echo "{\"type\":\"text\",\"timestamp\":3,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t1\",\"messageID\":\"m1\",\"type\":\"text\",\"text\":\" hello file\"}}"
 echo "{\"type\":\"tool_use\",\"timestamp\":4,\"sessionID\":\"\$s\",\"part\":{\"type\":\"tool\",\"tool\":\"bash\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"ls -la\"}}}}"
 printf 'hello\n' >hello.txt
-echo "{\"type\":\"tool_use\",\"timestamp\":5,\"sessionID\":\"\$s\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"hello.txt\"}}}}"
+echo "{\"type\":\"tool_use\",\"timestamp\":5,\"sessionID\":\"\$s\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":{\"status\":\"completed\",\"input\":{\"path\":\"hello.txt\",\"content\":\"hello\"}}}}"
 echo "{\"type\":\"step_finish\",\"timestamp\":6,\"sessionID\":\"\$s\",\"part\":{\"type\":\"step-finish\",\"cost\":0.25,\"tokens\":{\"input\":100,\"output\":20,\"reasoning\":5,\"cache\":{\"read\":10,\"write\":1}}}}"
 echo "{\"type\":\"text\",\"timestamp\":7,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t2\",\"messageID\":\"m2\",\"type\":\"text\",\"text\":\"env: KEY=\${ANTHROPIC_API_KEY:-\$GATEWAY_API_KEY}\"}}"
 echo "{\"type\":\"text\",\"timestamp\":8,\"sessionID\":\"\$s\",\"part\":{\"id\":\"t3\",\"messageID\":\"m2\",\"type\":\"text\",\"text\":\"did the opencode thing\"}}"

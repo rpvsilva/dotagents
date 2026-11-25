@@ -216,13 +216,14 @@ run_codex() {
 # from this environment (the shared background server would not), and --auto, approving every permission not denied
 # (the container is the sandbox). Progress as run_claude's: each text part held (its deltas, same part id, joined)
 # until the next part, each tool call one `  → ` line, an error event shown with what was held; the text held at the
-# end is the final report, dropped here. Logs `== opencode version <v>` first, for result.json. Sets session (the
+# end is the final report, dropped here. Logs `== opencode version <v>` first (the first x.y.z `opencode --version`
+# prints), for result.json. Sets session (the
 # session as `opencode session export` gives it, on one line, or empty), session_id (the events' sessionID) and failed
 # (non-empty when opencode exits non-zero, an error event came, or no step finished).
 run_opencode() {
   local v
-  v="$(opencode --version </dev/null 2>/dev/null | head -1 | tr -d '\r')" || v=""
-  [[ ! "$v" =~ ^v?[0-9][0-9A-Za-z.+-]*$ ]] || echo "== opencode version ${v#v}" >&2
+  v="$(opencode --version </dev/null 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' | head -1)" || v=""
+  [ -z "$v" ] || echo "== opencode version $v" >&2
   rm -f "$HOME/.opencode-rc"
   { opencode run --standalone --auto --format json ${model:+-m "$model"} "$brief" </dev/null || echo "$?" >"$HOME/.opencode-rc"; } \
     | tee "$HOME/out/stream.jsonl" /dev/fd/3 \
@@ -234,7 +235,7 @@ run_opencode() {
         elif $e.type == "tool_use" and ($e.part | type) == "object" then
           ($e.part.state.input? // {}) as $in
           | .out = [.held | strings]
-              + ["  → \($e.part.tool // "tool") \(($in | objects | .command // .filePath // .pattern // .description // .url) // "" | tostring | gsub("\n"; " ") | .[0:120])"]
+              + ["  → \($e.part.tool // "tool") \(($in | objects | .command // .filePath // .path // .pattern // .description // .url) // "" | tostring | gsub("\n"; " ") | .[0:120])"]
           | .held = null | .hid = null
         elif $e.type == "error" then
           .out = [.held | strings] + ["  error: \($e.error.message? // $e.error.data.message? // $e.error // "" | tostring | gsub("\n"; " ") | .[0:300])"]
@@ -269,9 +270,8 @@ run_opencode() {
 # assistant message stopped on error or aborted, or none came).
 run_pi() {
   local v prompt="$brief"
-  v="$(pi --version </dev/null 2>/dev/null | head -1 | tr -d '\r')" || v=""
-  v="${v##* }"
-  [[ ! "$v" =~ ^v?[0-9][0-9A-Za-z.+-]*$ ]] || echo "== pi version ${v#v}" >&2
+  v="$(pi --version </dev/null 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' | head -1)" || v=""
+  [ -z "$v" ] || echo "== pi version $v" >&2
   [ "${prompt:0:1}" != @ ] || prompt=" $prompt"
   { pi --mode json --approve --session-dir "$HOME/.pi-session" ${pi_provider:+--provider "$pi_provider"} ${model:+--model "$model"} \
       --append-system-prompt "$rules" "$prompt" </dev/null || echo "$?" >"$HOME/.pi-rc"; } \

@@ -6,7 +6,8 @@
 # put extracts the gzipped tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release deletes the claim (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # check names, one line each, what is missing: kubectl, the context, permission to create sandboxclaims and pods/exec
-# in the namespace.
+# in the namespace, and the warm pool (REMOTE_POOL) there: a claim on a pool that does not exist fails with
+# WarmPoolNotFound only once a run starts. Another error reading the pool (no permission to get it) is no finding.
 # ping asks the cluster for its version, giving up after 5 seconds (`remote-agent ready`): exit 0 when it answers, else
 # one line on stdout with kubectl's error (e.g. Unable to connect to the server: ... no route to host) and exit 1.
 # Settings: REMOTE_CONTEXT (kube context) and REMOTE_POOL (warm pool), both required: every op but release refuses
@@ -135,6 +136,11 @@ YAML
         missing=1
       fi
     done
+    if err="$(kc get sandboxwarmpool "$pool" -o name 2>&1 >/dev/null)"; then :
+    elif printf '%s' "$err" | grep -q 'NotFound\|not found'; then
+      echo "warm pool $pool not found in namespace $namespace (context $context): set remote.pool (or remote.namespace) to one that exists"
+      missing=1
+    fi
     exit "$missing"
     ;;
   ping)
