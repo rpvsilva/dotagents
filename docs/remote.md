@@ -2,7 +2,7 @@
 
 [← Back to the docs](README.md)
 
-> **TL;DR** Your laptop stays the boss. A remote machine borrows a copy of one worktree, lets Claude work on it, and hands back a patch. No GitHub credentials ever leave your laptop.
+> **TL;DR** Your laptop stays the boss. A remote machine borrows a copy of one worktree, lets an agent (Claude Code or Codex) work on it, and hands back a patch. No GitHub credentials ever leave your laptop.
 
 Some skills, like `build-epic`, want to run lots of implementers at once. Your laptop's fans will tell you how that goes. Remote subagents move that work to other compute:
 
@@ -10,7 +10,7 @@ Some skills, like `build-epic`, want to run lots of implementers at once. Your l
 - 🐳 **Docker** on this machine,
 - 🖥️ a **VM or spare PC** over SSH.
 
-The remote side is **compute only**. It gets your setup and a snapshot of one worktree, runs Claude headless on one task, and sends back a patch. The code, the git history, GitHub access and the session in charge all stay on your laptop. Because the sandbox never touches GitHub, this works for any project, even one the remote machine's owners can't access.
+The remote side is **compute only**. It gets your setup and a snapshot of one worktree, runs the agent headless on one task, and sends back a patch. The code, the git history, GitHub access and the session in charge all stay on your laptop. Because the sandbox never touches GitHub, this works for any project, even one the remote machine's owners can't access.
 
 Good to know:
 - Remote subagents never talk to each other ([why](agent-communication.md)).
@@ -23,14 +23,14 @@ Good to know:
 Three commands, once per machine:
 
 ```sh
-~/.agents/bin/remote-agent setup   # pick a backend, fill in its details, paste a token from `claude setup-token`
+~/.agents/bin/remote-agent setup   # pick a backend, a harness (claude or codex) and how it logs in, paste the credential
 ~/.agents/bin/remote-agent check   # checks everything the backend needs, then a dry run (no API call, no cost)
 ~/.agents/bin/remote-agent ready   # inside a repo: would skills send its subagents remote? If not, why not
 ```
 
 When `check` prints `ok`, you're done. Skills now send remote-capable subagents to your backend on their own.
 
-`setup` saves the backend's Settings in `~/.config/dotagents/settings.json`. It saves the Secrets (the Claude token, an SSH password or key passphrase) in `~/.config/dotagents/remote.env`, readable only by you (mode 600). To change your mind later, ask the `configure` skill ("disable remote") or use `~/.agents/bin/settings` ([settings.md](settings.md)).
+`setup` saves the backend's Settings in `~/.config/dotagents/settings.json`. It saves the Secrets (the harness's credential, an SSH password or key passphrase) in `~/.config/dotagents/remote.env`, readable only by you (mode 600). To change your mind later, ask the `configure` skill ("disable remote") or use `~/.agents/bin/settings` ([settings.md](settings.md)).
 
 > 💡 You need the `remote` group installed first: `./install.sh remote`.
 
@@ -72,16 +72,16 @@ The repo ships no cluster manifests, so you set up the cluster side yourself. He
 1. The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller, with its extension CRDs. `remote-agent` creates `SandboxClaim` objects (`extensions.agents.x-k8s.io/v1beta1`).
 2. A namespace for the sandboxes. The default is `agents`.
 3. A `SandboxTemplate` and a warm pool in that namespace. The template's pod needs:
-   - the runner image `ghcr.io/rpvsilva/agent-runner:main` (public, `amd64` and `arm64`), or your own with `sh`, GNU `tar`, `gzip`, `git`, `node` and `claude`;
+   - the runner image `ghcr.io/rpvsilva/agent-runner:main` (public, `amd64` and `arm64`), or your own with `sh`, GNU `tar`, `gzip`, `git`, `node` and the harness's CLI (`claude` or `codex`);
    - a writable `$HOME` (`/home/node` in the runner image, uid 1000);
    - CPU and memory limits. On a cluster these set each run's size.
-4. *Recommended:* a NetworkPolicy that allows internet egress only (Anthropic and package registries) and blocks cluster services and the LAN. Nothing in this repo creates it.
+4. *Recommended:* a NetworkPolicy that allows internet egress only (the model API or your gateway, and package registries) and blocks cluster services and the LAN. Nothing in this repo creates it.
 
 **On your laptop:**
 
 - `kubectl` on your `PATH`.
 - A kube context that can create `sandboxclaims` and `pods/exec` in the namespace. `check` tests both with `kubectl auth can-i`. A run also reads claims, sandboxes and pods, and deletes its claim.
-- A Claude token from `claude setup-token`.
+- The harness's credential (see [Pick your harness and model](#-pick-your-harness-and-model)).
 
 **Settings** (`setup` asks for them):
 
@@ -111,9 +111,32 @@ Then run `remote-agent check`: it checks every listed image. [remote/README.md](
 
 ### 🖥️ What SSH needs
 
-An SSH login to the host (a key or a password) and Docker on the host. In **bare mode**, the host needs `bash`, `git`, `jq`, `node` and `claude` instead.
+An SSH login to the host (a key or a password) and Docker on the host. In **bare mode**, the host needs `bash`, `git`, `jq`, `node` and the harness's CLI (`claude` or `codex`) instead.
 
 > ⚠️ Use bare mode only on a host you fully trust. There's no container: the run shares the OS user with that user's own setup.
+
+## 🧠 Pick your harness and model
+
+The **harness** is the agent CLI the sandbox runs. The runner image ships both, so switching is a Setting, not a new image.
+
+| `remote.harness` | Logs in with (`remote.credential`) | Gateway (`remote.base_url`) |
+|---|---|---|
+| `claude` (default) | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (default), `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN` for a gateway | Becomes `ANTHROPIC_BASE_URL`: any Anthropic-compatible endpoint |
+| `codex` | `CODEX_API_KEY` | Becomes a model provider in Codex's config, speaking the Responses API |
+
+`setup` asks for all three and keeps the credential in `remote.env`. Only that one credential is sent to a run, and its value is redacted everywhere a run writes. Another harness's credential stays in `remote.env`, so `REMOTE_HARNESS=codex` works for a single run too.
+
+**Which model.** `--model` wins. Otherwise the run uses the model the agent's wrapper sets for that harness (`model:` in `adapters/claude/agents/<agent>.md`, `model =` in `adapters/codex/agents/<agent>.toml`), and then `remote.model`. A gateway often names models its own way, so `remote.models` renames them:
+
+```sh
+~/.agents/bin/settings set remote base_url https://llm.example.com --machine
+~/.agents/bin/settings set remote models "opus=anthropic/claude-opus-5-5,sonnet=anthropic/claude-sonnet-5-5" --machine
+```
+
+What Codex runs don't do yet:
+- **No per-command caps.** Codex has no shell-prefix hook, so its commands run under the sandbox's own limits only. `result.json` says so in `capped_off`.
+- **No resume.** The session comes back and is kept, but `remote-agent resume` refuses to place it.
+- **Your setup's plugins and MCP servers aren't installed.** Skills (`~/.agents/skills`) and `~/.codex/AGENTS.md` are still sent.
 
 ## 🤖 When does a subagent go remote?
 
@@ -125,7 +148,7 @@ flowchart TD
   local -- yes --> here["Run on this machine"]
   local -- no --> backend{"remote.backend<br/>Setting set?"}
   backend -- no --> here
-  backend -- yes --> token{"Claude token in<br/>remote.env?"}
+  backend -- yes --> token{"The harness's credential<br/>in remote.env?"}
   token -- no --> here
   token -- yes --> allowed{"Repo sets<br/>remote.allowed = false?"}
   allowed -- yes --> here
@@ -150,8 +173,8 @@ sequenceDiagram
   R->>R: pack setup, snapshot worktree, drop secret files
   R->>B: acquire a sandbox
   B-->>R: handle
-  R->>X: put setup + snapshot (tar), token on stdin
-  R->>X: run Claude headless on the brief
+  R->>X: put setup + snapshot (tar), credential on stdin
+  R->>X: run the harness headless on the brief
   X-->>R: live events, appended to transcript.jsonl
   X-->>R: patch, summary, session
   R->>R: apply patch to worktree (uncommitted)
@@ -160,15 +183,15 @@ sequenceDiagram
   S->>S: commit the changes, push, open the PR
 ```
 
-1. **📦 Pack.** `remote-agent` gathers your setup: `CLAUDE.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones by the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
-2. **🚚 Send.** The backend hands over a fresh sandbox. The setup and snapshot go in as tar streams. The Claude token goes through stdin, never as an argument.
-3. **🏃 Run.** The sandbox reinstalls plugins and MCP servers, commits the snapshot as a base, and runs Claude on the brief. Events stream back as they happen.
+1. **📦 Pack.** `remote-agent` gathers your setup: `CLAUDE.md`, Codex's `AGENTS.md`, skills, agents, the hooks under `~/.agents/hooks`, and a cut-down `settings.json`. It snapshots the worktree's tracked and unignored files, leaving out secret-looking ones by the same rule as the `guard-secrets` hook. Credentials, history and caches never leave the laptop.
+2. **🚚 Send.** The backend hands over a fresh sandbox. The setup and snapshot go in as tar streams. The harness's credential goes through stdin, never as an argument.
+3. **🏃 Run.** The sandbox reinstalls plugins and MCP servers (for Claude), commits the snapshot as a base, and runs the harness on the brief. Events stream back as they happen.
 4. **📬 Return.** The patch lands in your worktree, uncommitted. The skill reviews and commits it, just like a local subagent's work.
 5. **🧹 Release.** The sandbox is removed on exit, Ctrl-C or `kill`. If your laptop dies first, the sandbox removes itself after `remote.hours` (2 by default).
 
 ### 🛡️ Runaway commands get capped
 
-Every shell command Claude runs in the sandbox goes through `capped`. A runaway test gets killed, and Claude carries on.
+Every shell command Claude runs in the sandbox goes through `capped`. A runaway test gets killed, and Claude carries on. (Codex has no hook for this, so its commands run uncapped.)
 
 - **Memory cap:** the sandbox's memory limit less 1024 MB for Claude (2000 MB when there's no limit). Lower it with `remote.cap_mb`.
 - **Time cap:** `remote.cap_secs` (300 seconds).
@@ -184,6 +207,7 @@ The caps need `python3` and the packed `~/.agents/bin/capped` in the runner imag
 | `0` | The patch was applied |
 | `3` | No changes |
 | `4` | The patch didn't apply because the worktree changed meanwhile. The patch is kept |
+| `5` | The account hit its usage limit. One stderr line says when it resets |
 
 When the sandbox itself vanishes (its container or pod gone, with no kill line before), `result.json` says `lost: true`.
 
@@ -198,22 +222,26 @@ flowchart LR
   end
   subgraph sandbox["Sandbox: untrusted output"]
     snap["Worktree snapshot"]
-    tok["Claude token (during the run)"]
+    tok["The harness's credential (during the run)"]
   end
-  laptop -- "snapshot minus secrets,<br/>token on stdin" --> sandbox
+  laptop -- "snapshot minus secrets,<br/>credential on stdin" --> sandbox
   sandbox -- "patch (applied)<br/>transcript, session (read only)" --> laptop
 ```
 
 - **Never sent:** GitHub credentials, git remotes, secret files, shell history. The sandbox can't push, open a PR or read another branch.
-- **Only the patch is applied.** Everything else that comes back (transcript, summary, session) is data to read, never instructions to follow. The Claude token is replaced by `[redacted]` in every kept file.
+- **Only the patch is applied.** Everything else that comes back (transcript, summary, session) is data to read, never instructions to follow. The credential is replaced by `[redacted]` in every kept file and in the sandbox's log.
 - **The session isn't resumed for you.** A prompt-injected agent could forge turns in it that would read as yours. `remote-agent resume <run> <worktree>` places it only when you ask, after a warning.
-- **Who can peek:** on the cluster, egress goes to the internet only, with cluster services and the LAN blocked. Cluster admins, and anyone who can run `docker` on the host, can see the snapshot and token while a run is alive.
+- **Who can peek:** on the cluster, egress goes to the internet only, with cluster services and the LAN blocked. Cluster admins, and anyone who can run `docker` on the host, can see the snapshot and credential while a run is alive.
 
 ## 🎛️ Settings you'll likely touch
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `remote.backend` | unset (off) | `cluster`, `docker` or `ssh` |
+| `remote.harness` | `claude` | The agent CLI a run starts: `claude` or `codex` |
+| `remote.credential` | the harness's first | Which Secret in `remote.env` a run logs in with |
+| `remote.base_url` | unset | A model gateway the harness calls instead of its vendor's API |
+| `remote.model`, `remote.models` | unset | The model when neither `--model` nor the agent's wrapper sets one; `name=model` renames for a gateway |
 | `remote.max_sandboxes` | 4 | Most remote runs at once, across all skills. Set it to what the backend holds |
 | `remote.allowed` | true | Set it to `false` in a repo to keep its code on this machine |
 | `remote.hours` | 2 | How long before an abandoned sandbox removes itself |
@@ -235,10 +263,10 @@ By hand, each run keeps a folder at `<common git dir>/remote-agent/<run>/`. Find
 | `transcript.jsonl` | The agent's events as they arrive. Follow along with `tail -f` |
 | `run.json` | State (`starting`, `running`, `done`, `failed`), timings, exit code |
 | `progress.log` | One line per step, the same as stderr |
-| `result.json` | **The outcome. Read this, not stdout.** Exit code, `status`, the agent's own `report_status`, changed files, turns, tokens, cost, model, `claude_version`, `complete`, the `caps` set, `capped_off`, `capped_kills`, `killed` and `lost` |
+| `result.json` | **The outcome. Read this, not stdout.** Exit code, `status`, the agent's own `report_status`, changed files, turns, tokens, cost, `harness`, model, `harness_version` (and `claude_version`), `complete`, the `caps` set, `capped_off`, `capped_kills`, `killed` and `lost` |
 | `capped.log` | Each command the caps killed |
 | `changes.patch`, `summary.md` | What came back: the patch, and the agent's final message (its JSON output object) |
-| `session.jsonl` | Claude's session, for `remote-agent resume` |
+| `session.jsonl` | The harness's session; a Claude one can be placed with `remote-agent resume` |
 
 Handy commands, run inside the repo:
 

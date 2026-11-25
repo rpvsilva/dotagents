@@ -7,7 +7,8 @@
 # docker command sent over ssh. Each run's container is named after it, so runs share the host; `--rm` and its
 # `sleep` remove it after REMOTE_HOURS if release never comes.
 # Bare mode runs directly on a trusted host as the SSH user (weaker isolation: no container, no network limits).
-# acquire checks the host has bash tar git jq node claude (naming each missing one, creating nothing), removes run
+# acquire checks the host has bash tar git jq node and the harness's CLI (claude, or codex with REMOTE_HARNESS=codex;
+# naming each missing one, creating nothing), removes run
 # folders left by clients that died, and creates the run folder $REMOTE_SSH_DIR/<run> (mode 700), recording in its
 # .expires the host's clock + REMOTE_HOURS, and prints its absolute path as the handle. A folder goes once the host's
 # clock is past its .expires and its .heartbeat (touched every 60 s while run's command lives) is missing or older
@@ -70,7 +71,9 @@ hours="${REMOTE_HOURS:-2}"
 # Relative to the SSH user's home, where the remote shell starts; ~/ means the same.
 root="${REMOTE_SSH_DIR:-.remote-agent/runs}"
 root="${root#\~/}"
-tools="bash tar git jq node claude"
+# The harness's CLI, a fixed word: it goes into a host command.
+case "${REMOTE_HARNESS:-claude}" in codex) cli=codex ;; *) cli=claude ;; esac
+tools="bash tar git jq node $cli"
 # A host command naming each missing tool on its own line on stderr, failing when any is; acquire and check run it.
 # shellcheck disable=SC2016 # expanded on the host
 tool_check='missing=0
@@ -162,11 +165,12 @@ if [ -n \"\$e\" ]; then rm -f $x && echo \"\$e\" >$x; fi"
   run)
     home="$3"
     shift 3
-    # Claude Code reads CLAUDE_CONFIG_DIR before HOME: set it, so a value from the host user's profile is not used.
+    # Claude Code reads CLAUDE_CONFIG_DIR, and Codex CODEX_HOME, before HOME: set them, so a value from the host user's
+    # profile is not used.
     # REMOTE_AGENT_LOG: the sandbox log is progress.log here, never the host's /proc/1/fd/1 (writable as root, or on
     # a host that is itself a container, where it is another process's stdout).
     argv="$(sq_argv env "HOME=$home" "XDG_CONFIG_HOME=$home/.config" "XDG_DATA_HOME=$home/.local/share" \
-      "XDG_CACHE_HOME=$home/.cache" "CLAUDE_CONFIG_DIR=$home/.claude" "REMOTE_AGENT_LOG=$home/progress.log" "$@")"
+      "XDG_CACHE_HOME=$home/.cache" "CLAUDE_CONFIG_DIR=$home/.claude" "CODEX_HOME=$home/.codex" "REMOTE_AGENT_LOG=$home/progress.log" "$@")"
     # Killing the ssh client does not stop the command on the host, so release kills it by the line each run adds to
     # .pid: "<pid> group" when the command leads its own process group (started under setsid, from a child shell so
     # setsid needs no fork; else when the login shell already leads one), "<pid>" when it does not.

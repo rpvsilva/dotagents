@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Guided setup for scripts/remote-agent.sh, run as `remote-agent setup`: asks for the backend and its details (for SSH,
 # how to log in: a key, from the agent, ~/.ssh/config or a key file with an optional passphrase, or a password), then
-# for a Claude token (from `claude setup-token`). Secrets are read without echo. The answers are remote Settings,
-# written to the machine Level through scripts/settings.sh; the token, the SSH password and the key passphrase are
-# Secrets, written to ~/.config/dotagents/remote.env readable only by the user (mode 600), through a temp file in the
-# same folder moved into place. A login method not chosen drops the other's Secret.
+# for the harness (claude or codex) and how it logs in: for claude a subscription token (oauth, from `claude
+# setup-token`), an API key (api_key) or a gateway (its URL and bearer token); for codex an API key or a gateway (its
+# URL and key). Secrets are read without echo. The answers are remote Settings (harness, credential, base_url among
+# them), written to the machine Level through scripts/settings.sh; the credential, the SSH password and the key
+# passphrase are Secrets, written to ~/.config/dotagents/remote.env readable only by the user (mode 600), through a
+# temp file in the same folder moved into place. An SSH login method not chosen drops the other's Secret; another
+# harness's credential stays, so switching back keeps it.
 # Enter takes the default shown: the machine Level's value, else one left in remote.env from before settings.json,
 # else the Declaration's default (for the kube context, the current one first); for a Secret, it keeps the one
 # already in remote.env (for the key passphrase, none when there is none; `none` drops one). Of the Settings it asks about, those the chosen backend does not use are unset; the others
@@ -17,9 +20,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 FILE="$CONFIG/remote.env"
 # The Settings this script asks about; the ones the chosen backend does not use are unset.
-ASKED="backend context namespace pool ssh_host ssh_key ssh_mode image"
-# The Secrets it writes to remote.env; the lines it keeps there are the others.
-SECRETS="CLAUDE_CODE_OAUTH_TOKEN SSH_PASSWORD SSH_KEY_PASSPHRASE"
+ASKED="backend context namespace pool ssh_host ssh_key ssh_mode image harness credential base_url"
+# The Secrets it may write to remote.env; it rewrites the SSH ones and the chosen credential, and keeps every other line.
+SECRETS="CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CODEX_API_KEY SSH_PASSWORD SSH_KEY_PASSPHRASE"
 
 tmp=""
 trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
@@ -90,7 +93,7 @@ old() {
   printf '%s' "$v"
 }
 
-echo "Sets up remote subagents (the remote Settings in $CONFIG/settings.json, the token in $FILE)." >&2
+echo "Sets up remote subagents (the remote Settings in $CONFIG/settings.json, the credential in $FILE)." >&2
 # A bad value already in settings.json stops here, before anything is asked or written.
 settings check >/dev/null || exit 1
 # Answers, as "<setting> <value>" lines.
@@ -132,8 +135,42 @@ if [ "$backend" = docker ] || [ "$mode" = container ]; then
   answers+=("image $image")
 fi
 
-echo "Get a Claude token: run \`claude setup-token\` in another terminal, then paste it here (it does not show)." >&2
-token="$(ask_secret "Claude token" "$(legacy CLAUDE_CODE_OAUTH_TOKEN)")"
+# The harness and how it logs in: the login's default follows the credential (and gateway) already set.
+harness="$(ask "Harness (claude, codex)" "$(old harness)" claude codex)"
+answers+=("harness $harness")
+old_credential="$(old credential)"
+old_url="$(old base_url)"
+if [ -n "$old_url" ]; then old_login=gateway
+else
+  case "$old_credential" in ANTHROPIC_API_KEY | CODEX_API_KEY) old_login=api_key ;; ANTHROPIC_AUTH_TOKEN) old_login=gateway ;; *) old_login="" ;; esac
+fi
+if [ "$harness" = claude ]; then
+  login="$(ask "Log in with (oauth: a Claude subscription, api_key, gateway)" "${old_login:-oauth}" oauth api_key gateway)"
+  case "$login" in oauth) credential=CLAUDE_CODE_OAUTH_TOKEN ;; api_key) credential=ANTHROPIC_API_KEY ;; gateway) credential=ANTHROPIC_AUTH_TOKEN ;; esac
+else
+  [ "$old_login" != oauth ] || old_login=""
+  login="$(ask "Log in with (api_key, gateway)" "${old_login:-api_key}" api_key gateway)"
+  credential=CODEX_API_KEY
+fi
+answers+=("credential $credential")
+if [ "$login" = gateway ]; then
+  url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+  while :; do
+    url="$(ask "Gateway URL (http or https; for claude, what ANTHROPIC_BASE_URL takes)" "$old_url")"
+    [[ ! "$url" =~ $url_re ]] || break
+    echo "  not an http or https URL" >&2
+    old_url=""
+  done
+  answers+=("base_url $url")
+fi
+case "$credential" in
+  CLAUDE_CODE_OAUTH_TOKEN)
+    echo "Get a Claude token: run \`claude setup-token\` in another terminal, then paste it here (it does not show)." >&2
+    token="$(ask_secret "Claude token" "$(legacy CLAUDE_CODE_OAUTH_TOKEN)")" ;;
+  ANTHROPIC_API_KEY) token="$(ask_secret "Anthropic API key" "$(legacy ANTHROPIC_API_KEY)")" ;;
+  ANTHROPIC_AUTH_TOKEN) token="$(ask_secret "Gateway token (sent as a bearer token)" "$(legacy ANTHROPIC_AUTH_TOKEN)")" ;;
+  CODEX_API_KEY) token="$(ask_secret "${login/api_key/OpenAI} key (CODEX_API_KEY)" "$(legacy CODEX_API_KEY)")" ;;
+esac
 
 # Every answer is in: from here on, write. First the Settings left in remote.env that it does not ask about.
 for name in $(remote_leftovers); do
@@ -158,12 +195,12 @@ umask 077
 tmp="$(mktemp "$CONFIG/.remote.env.XXXXXX")"
 {
   printf '# Written by remote-agent setup: the Secrets only; the remote Settings are in settings.json.\n'
-  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(sq "$token")"
+  printf '%s=%s\n' "$credential" "$(sq "$token")"
   [ -z "$password" ] || printf 'SSH_PASSWORD=%s\n' "$(sq "$password")"
   [ -z "$passphrase" ] || printf 'SSH_KEY_PASSPHRASE=%s\n' "$(sq "$passphrase")"
   if [ -f "$FILE" ]; then
-    # Keep the lines that are neither a Secret it writes nor a Setting.
-    grep -Ev "^[[:space:]]*(export[[:space:]]+)?(REMOTE_[A-Za-z0-9_]+|${SECRETS// /|})=|^# Written by remote-agent setup" "$FILE" || true
+    # Keep the lines that are neither a Secret it writes nor a Setting: another credential stays.
+    grep -Ev "^[[:space:]]*(export[[:space:]]+)?(REMOTE_[A-Za-z0-9_]+|SSH_PASSWORD|SSH_KEY_PASSPHRASE|$credential)=|^# Written by remote-agent setup" "$FILE" || true
   fi
 } >"$tmp"
 chmod 600 "$tmp"

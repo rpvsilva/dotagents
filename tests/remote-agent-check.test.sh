@@ -85,7 +85,7 @@ config REMOTE_BACKEND=docker
 check || fail "docker: exited non-zero: $(out)"
 c="$(sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" | head -1)"
 info="$(at '^info')" acquire="$(at "^run -d ")" put="$(at "^exec -i $c sh -c mkdir .*work.* tar -x")"
-runs="$(at "^exec -i $c sh -c .*ping.*command -v claude")" get="$(at "^exec $c sh -c tar -cf .*out")"
+runs="$(at "^exec -i $c sh -c .*ping.*command -v .* remote-agent-check claude$")" get="$(at "^exec $c sh -c tar -cf .*out")"
 release="$(at "^rm -f $c\$")"
 if [ "$info" -le 0 ] || [ "$info" -ge "$acquire" ]; then fail "docker: docker info not checked before the dry run: $(cat "$S/calls")"; fi
 if ! { [ "$acquire" -gt 0 ] && [ "$acquire" -lt "$put" ] && [ "$put" -lt "$runs" ] && [ "$runs" -lt "$get" ] && [ "$get" -lt "$release" ]; }; then
@@ -170,6 +170,35 @@ grep -q "claude" "$SANDBOX/out" || fail "no claude: claude not named: $(out)"
 c="$(sed -n 's/^run .*--name \([^ ]*\) .*/\1/p' "$S/calls" | head -1)"
 grep -q "^rm -f $c\$" "$S/calls" || fail "no claude: sandbox not released: $(cat "$S/calls")"
 grep -q "^exec $c sh -c tar -cf" "$S/calls" && fail "no claude: went on to get after a failed run"
+
+# Codex: its key is what remote.env must hold, and the dry run probes codex, not claude; a credential it does not take
+# is refused before anything else.
+config REMOTE_BACKEND=docker REMOTE_HARNESS=codex
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "codex no key: exited 0"
+grep -q "CODEX_API_KEY is not set" "$SANDBOX/out" || fail "codex no key: not said: $(out)"
+grep -q "^run -d " "$S/calls" 2>/dev/null && fail "codex no key: a dry run started"
+echo "CODEX_API_KEY=sk-codex-secret" >>"$SANDBOX/config/dotagents/remote.env"
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "codex missing: exited 0"
+grep -q "dry run failed at run: codex not found in the sandbox" "$SANDBOX/out" || fail "codex missing: not named: $(out)"
+printf '#!/bin/sh\necho "codex $*" >>"%s/codex-called"\necho "codex-cli 9.9.9"\n' "$S" >"$CB/codex"
+chmod +x "$CB/codex"
+rm -f "$S/claude-called"
+check || fail "codex: exited non-zero: $(out)"
+grep -q "codex in the sandbox: .*codex (codex-cli 9.9.9)" "$SANDBOX/out" || fail "codex: version not shown: $(out)"
+[ ! -e "$S/claude-called" ] || fail "codex: claude was called: $(cat "$S/claude-called")"
+grep -q "sk-codex-secret" "$SANDBOX/out" "$S/calls" && fail "codex: the key showed"
+rm -f "$CB/codex"
+config REMOTE_BACKEND=docker REMOTE_HARNESS=codex REMOTE_CREDENTIAL=ANTHROPIC_API_KEY
+code=0; check || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "not one codex logs in with" "$SANDBOX/out" || fail "codex wrong credential: $code $(out)"
+config REMOTE_BACKEND=docker REMOTE_BASE_URL=nope
+code=0; check || code=$?
+# shellcheck disable=SC2015 # fail only reports
+[ "$code" = 1 ] && grep -q "remote.base_url is not an http or https URL" "$SANDBOX/out" || fail "bad base url: $code $(out)"
+config REMOTE_BACKEND=docker
 
 # What comes back differs from what was sent: named, and the sandbox is still released.
 : >"$S/corrupt"

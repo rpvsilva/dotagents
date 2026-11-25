@@ -74,7 +74,7 @@ check_written() {
 
 # Docker: the image, its default shown and taken on enter.
 fresh
-setup $'docker\n\n'"$TOKEN"$'\n' || fail "docker: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'docker\n\n\n\n'"$TOKEN"$'\n' || fail "docker: exited non-zero: $(cat "$SANDBOX/out")"
 check_written docker "$TOKEN"
 [ "$(value REMOTE_BACKEND)" = docker ] || fail "docker: REMOTE_BACKEND is $(value REMOTE_BACKEND)"
 [ "$(value REMOTE_IMAGE)" = "$IMAGE" ] || fail "docker: default image not written"
@@ -86,7 +86,7 @@ grep -q "claude setup-token" "$SANDBOX/out" || fail "docker: does not say to run
 fresh
 printf 'CLAUDE_CODE_OAUTH_TOKEN=old-token\nREMOTE_HOURS=5\nREMOTE_SSH_HOST=old@box\nexport REMOTE_KEEP=1\nOTHER=kept\n' >"$SANDBOX/seed"
 mkdir -p "$CFG" && cp "$SANDBOX/seed" "$FILE"
-setup $'ssh\n\n\n\nbare\n\n' || fail "ssh bare: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\n\n\nbare\n\n\n\n' || fail "ssh bare: exited non-zero: $(cat "$SANDBOX/out")"
 check_written "ssh bare" old-token
 [ "$(value REMOTE_BACKEND)" = ssh ] || fail "ssh bare: REMOTE_BACKEND is $(value REMOTE_BACKEND)"
 [ "$(value REMOTE_SSH_HOST)" = old@box ] || fail "ssh bare: REMOTE_SSH_HOST is $(value REMOTE_SSH_HOST), not the old one"
@@ -97,14 +97,14 @@ check_written "ssh bare" old-token
 grep -qx "OTHER=kept" "$FILE" || fail "ssh bare: a line that is not a Setting was lost: $(cat "$FILE")"
 
 # Switching backend drops the old backend's Settings; enter keeps the token and the Settings it does not ask about.
-setup $'docker\n\n\n' || fail "switch: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'docker\n\n\n\n\n' || fail "switch: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_SSH_HOST)" = unset ] || fail "switch: the ssh host was kept"
 [ "$(value REMOTE_HOURS)" = 5 ] || fail "switch: hours, not asked about, was lost"
 [ "$(value CLAUDE_CODE_OAUTH_TOKEN)" = old-token ] || fail "switch: the token changed"
 
 # SSH, container mode: an empty host and an unknown mode are asked again; the image is asked.
 fresh
-setup $'ssh\n\nme@box\n\n\nweird\ncontainer\nmy/image:1\n'"$TOKEN"$'\n' || fail "ssh container: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\nme@box\n\n\nweird\ncontainer\nmy/image:1\n\n\n'"$TOKEN"$'\n' || fail "ssh container: exited non-zero: $(cat "$SANDBOX/out")"
 check_written "ssh container" "$TOKEN"
 [ "$(value REMOTE_SSH_HOST)" = me@box ] || fail "ssh container: REMOTE_SSH_HOST is $(value REMOTE_SSH_HOST)"
 [ "$(value REMOTE_SSH_MODE)" = container ] || fail "ssh container: REMOTE_SSH_MODE is $(value REMOTE_SSH_MODE)"
@@ -113,24 +113,24 @@ check_written "ssh container" "$TOKEN"
 
 # SSH logins. A password: an empty one asked again, read like the token, kept in remote.env only.
 fresh
-setup $'ssh\nme@box\npassword\n\npw-1\nbare\n'"$TOKEN"$'\n' || fail "ssh password: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\nme@box\npassword\n\npw-1\nbare\n\n\n'"$TOKEN"$'\n' || fail "ssh password: exited non-zero: $(cat "$SANDBOX/out")"
 check_written "ssh password" "$TOKEN"
 [ "$(secret SSH_PASSWORD)" = pw-1 ] || fail "ssh password: not stored: $(secret SSH_PASSWORD)"
 grep -q "pw-1" "$SANDBOX/out" && fail "ssh password: the password showed in the output"
 grep -q "pw-1" "$SETTINGS" && fail "ssh password: the password reached settings.json"
 [ "$(value REMOTE_SSH_KEY)" = unset ] || fail "ssh password: a key file was written"
 # Enter on every question keeps it all, password login included.
-setup $'ssh\n\n\n\n\n\n' || fail "ssh password again: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\n\n\n\n\n\n\n' || fail "ssh password again: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(secret SSH_PASSWORD)" = pw-1 ] || fail "ssh password again: not kept: $(secret SSH_PASSWORD)"
 # A key file with a passphrase: the password goes.
-setup $'ssh\n\nkey\n~/.ssh/box\nphrase-1\n\n\n' || fail "ssh key: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\nkey\n~/.ssh/box\nphrase-1\n\n\n\n\n' || fail "ssh key: exited non-zero: $(cat "$SANDBOX/out")"
 # shellcheck disable=SC2088 # stored as typed
 [ "$(value REMOTE_SSH_KEY)" = "~/.ssh/box" ] || fail "ssh key: key file is $(value REMOTE_SSH_KEY)"
 [ "$(secret SSH_KEY_PASSPHRASE)" = phrase-1 ] || fail "ssh key: passphrase not stored"
 grep -q "phrase-1" "$SANDBOX/out" && fail "ssh key: the passphrase showed in the output"
 [ "$(secret SSH_PASSWORD)" = unset ] || fail "ssh key: the password was kept"
 # The ssh agent: no key file, no passphrase.
-setup $'ssh\n\n\nagent\n\n\n' || fail "ssh agent: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'ssh\n\n\nagent\n\n\n\n\n' || fail "ssh agent: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_SSH_KEY)" = unset ] || fail "ssh agent: key file kept: $(value REMOTE_SSH_KEY)"
 [ "$(secret SSH_KEY_PASSPHRASE)" = unset ] || fail "ssh agent: passphrase kept"
 check_written "ssh agent" "$TOKEN"
@@ -139,7 +139,7 @@ check_written "ssh agent" "$TOKEN"
 # again; a token with quotes survives.
 fresh
 odd="sk-it's \$x \"y\""
-setup $'\n\nmy-ns\n\nmy-pool\n'"$odd"$'\n' || fail "cluster: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'\n\nmy-ns\n\nmy-pool\n\n\n'"$odd"$'\n' || fail "cluster: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(grep -o "Warm pool[^:]*:" "$SANDBOX/out" | sort -u)" = "Warm pool:" ] || fail "cluster: the pool prompt offers a default: $(cat "$SANDBOX/out")"
 [ "$(grep -o "Warm pool:" "$SANDBOX/out" | wc -l | tr -d ' ')" = 2 ] || fail "cluster: an empty pool was not asked again: $(cat "$SANDBOX/out")"
 check_written cluster "$odd"
@@ -151,11 +151,39 @@ check_written cluster "$odd"
 
 # Re-running keeps the saved kube context over the current one (enter through every question).
 XDG_CONFIG_HOME="$SANDBOX/config" "$REPO/scripts/settings.sh" --dir "$SANDBOX" set remote context saved-ctx --machine
-setup $'\n\n\n\n\n' || fail "cluster re-run: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'\n\n\n\n\n\n\n' || fail "cluster re-run: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_CONTEXT)" = saved-ctx ] || fail "cluster re-run: REMOTE_CONTEXT is $(value REMOTE_CONTEXT), not the saved one"
 [ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster re-run: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
 [ "$(value REMOTE_POOL)" = my-pool ] || fail "cluster re-run: REMOTE_POOL is $(value REMOTE_POOL), not the saved one"
 [ "$(value CLAUDE_CODE_OAUTH_TOKEN)" = "$odd" ] || fail "cluster re-run: the token with quotes did not survive"
+
+# Harnesses and logins. Codex with an API key: the harness and credential Settings, the key in remote.env, no gateway;
+# the Claude token already there stays, so switching back keeps it.
+fresh
+mkdir -p "$CFG" && printf 'CLAUDE_CODE_OAUTH_TOKEN=keep-me\n' >"$FILE"
+setup $'docker\n\ncodex\n\nsk-codex-1\n' || fail "codex: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_HARNESS)" = codex ] || fail "codex: REMOTE_HARNESS is $(value REMOTE_HARNESS)"
+[ "$(value REMOTE_CREDENTIAL)" = CODEX_API_KEY ] || fail "codex: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
+[ "$(value REMOTE_BASE_URL)" = unset ] || fail "codex: a base URL was written"
+[ "$(secret CODEX_API_KEY)" = sk-codex-1 ] || fail "codex: the key not stored: $(secret CODEX_API_KEY)"
+[ "$(secret CLAUDE_CODE_OAUTH_TOKEN)" = keep-me ] || fail "codex: the Claude token was dropped"
+grep -q "sk-codex-1" "$SANDBOX/out" "$SETTINGS" && fail "codex: the key showed in the output or settings.json"
+# A gateway for claude: a bad URL asked again; the bearer token is ANTHROPIC_AUTH_TOKEN.
+setup $'docker\n\nclaude\ngateway\nnot a url\nhttps://gw.example.com/anthropic\ngw-secret\n' || fail "gateway: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_HARNESS)" = claude ] || fail "gateway: REMOTE_HARNESS is $(value REMOTE_HARNESS)"
+[ "$(value REMOTE_CREDENTIAL)" = ANTHROPIC_AUTH_TOKEN ] || fail "gateway: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
+[ "$(value REMOTE_BASE_URL)" = https://gw.example.com/anthropic ] || fail "gateway: REMOTE_BASE_URL is $(value REMOTE_BASE_URL)"
+grep -q "not an http or https URL" "$SANDBOX/out" || fail "gateway: a bad URL was not asked again: $(cat "$SANDBOX/out")"
+[ "$(secret ANTHROPIC_AUTH_TOKEN)" = gw-secret ] || fail "gateway: the token not stored"
+[ "$(secret CODEX_API_KEY)" = sk-codex-1 ] || fail "gateway: the Codex key was dropped"
+# Enter through it all keeps the gateway; then oauth drops the URL and takes the kept Claude token on enter.
+setup $'docker\n\n\n\n\n\n' || fail "gateway again: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_BASE_URL)" = https://gw.example.com/anthropic ] || fail "gateway again: the URL was not kept"
+[ "$(value REMOTE_CREDENTIAL)" = ANTHROPIC_AUTH_TOKEN ] || fail "gateway again: the credential changed to $(value REMOTE_CREDENTIAL)"
+setup $'docker\n\n\noauth\n\n' || fail "back to oauth: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_BASE_URL)" = unset ] || fail "back to oauth: the gateway URL was kept"
+[ "$(value REMOTE_CREDENTIAL)" = CLAUDE_CODE_OAUTH_TOKEN ] || fail "back to oauth: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
+[ "$(secret CLAUDE_CODE_OAUTH_TOKEN)" = keep-me ] || fail "back to oauth: the Claude token was not kept"
 
 # A bad value in settings.json stops setup before it asks anything, naming the key; neither file changes.
 fresh
@@ -169,7 +197,7 @@ cmp -s "$SANDBOX/bad.json" "$SETTINGS" && cmp -s "$SANDBOX/seed" "$FILE" || fail
 
 # An unknown backend is asked again.
 fresh
-setup $'nope\ndocker\n\n'"$TOKEN"$'\n' || fail "unknown backend: exited non-zero: $(cat "$SANDBOX/out")"
+setup $'nope\ndocker\n\n\n\n'"$TOKEN"$'\n' || fail "unknown backend: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_BACKEND)" = docker ] || fail "unknown backend: not asked again"
 
 # EOF midway (before any token, or with no token to keep) writes neither file, or leaves the existing ones untouched.

@@ -5,15 +5,17 @@
 # Usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--home DIR] [--model NAME] [--] <brief | @brief-file | -> [worktree]   (default worktree:
 # the current one; - reads the brief from stdin; -h or --help prints this usage on stdout and exits 0; any other
 # argument starting with -- before the brief is refused with the usage, exit 1, and so is a brief, however given,
-# whose text starts with -, which claude would read as an option). --agent names the subagent whose brief this is:
-# the run uses the model its Claude wrapper (adapters/claude/agents/<agent>.md) sets in its `model:` line, as a local
-# run of it does; an agent with no wrapper is refused, and without --agent the sandbox's default model runs. --model
-# NAME runs that model instead (it wins over --agent's). --agent also picks the agent's own runner image
+# whose text starts with -, which the harness's CLI would read as an option). The harness (remote.harness: claude or
+# codex) is the agent CLI the sandbox runs. --agent names the subagent whose brief this is: the run uses the model
+# its wrapper for the harness sets (adapters/claude/agents/<agent>.md's `model:` line, adapters/codex/agents/<agent>.toml's
+# `model =` line), as a local run of it does; an agent with no wrapper for the harness is refused. --model NAME runs
+# that model instead (it wins over --agent's); with neither, remote.model, else the harness's default. remote.models
+# renames the model the wrapper or remote.model gives (opus=anthropic/claude-opus-5-5), for a gateway's names. --agent also picks the agent's own runner image
 # (remote.images) or warm pool (remote.pools) over remote.image and remote.pool, unless REMOTE_IMAGE or REMOTE_POOL
 # is set for the one run. --home DIR ships the setup found under DIR (its .claude and
 # .agents pieces and .claude.json) in place of $HOME's; Settings, the token and the backend's client stay the real ones.
-#        remote-agent setup   (asks for the backend, its Settings and the Claude token: remote-agent-setup.sh)
-#        remote-agent check   (checks the backend's needs, then a dry run with no Claude call: remote-agent-check.sh)
+#        remote-agent setup   (asks for the backend, its Settings, the harness and its credential: remote-agent-setup.sh)
+#        remote-agent check   (checks the backend's needs, then a dry run with no model call: remote-agent-check.sh)
 #        remote-agent resume <run> [worktree]   (places a run's kept session for /resume in the worktree: see below)
 #        remote-agent result <name|run> [dir]   (prints the result.json of run <run>, or of the newest run named
 #                                                <name> by --name, of the repo at dir, default the current one; one
@@ -21,7 +23,7 @@
 #        remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]   (removes the run records of the repo at dir older
 #                                                than N days or hours, never a live run: remote-agent-prune.sh)
 #        remote-agent ready [dir]   (whether skills may send the subagents of the repo at dir, default the current
-#                                    one, to the backend: checks the Settings and the token, then probes the backend
+#                                    one, to the backend: checks the Settings and the credential, then probes the backend
 #                                    (`<backend> ping`, at most a few seconds: kubectl version, docker info, an ssh
 #                                    login); prints the backend on stdout and exits 0, else one line on stdout saying
 #                                    why not, e.g. "cluster backend not reachable: <the connection error>", and exits 1)
@@ -31,43 +33,46 @@
 # turned into a label value (lowercase, [a-z0-9-], at most 63 characters): the backend labels the sandbox with it
 # (cluster: sandbox.users.io/remote-agent-task) and every progress line on stderr starts with [NAME] ([<run>] without it).
 # Steps: stage the setup (scripts/remote-agent-pack.sh); list the worktree's tracked and unignored files, minus
-# secret-looking ones; acquire a sandbox from the backend; put both in and the Claude token through stdin;
+# secret-looking ones; acquire a sandbox from the backend; put both in, and the credential through stdin;
 # run scripts/remote-agent-sandbox.sh there, with the caps (remote.cap_mb, remote.cap_secs) as its arguments, so each
 # shell command of the agent runs under scripts/capped; get the patch back and apply it with `git apply`, uncommitted.
 # The sandbox is released on exit, also on INT or TERM, once the run's processes here (the backend's client among
 # them) are stopped; the backend's time limit (REMOTE_HOURS) removes it anyway if this script dies first (SSH bare
 # mode: the first acquire 10 minutes past it kills the run and removes its folder).
-# Prints Claude's progress on stderr and its final message (the summary: under the agent protocol, the agent's output
+# Prints the agent's progress on stderr and its final message (the summary: under the agent protocol, the agent's output
 # object, as JSON) on stdout. The progress also goes to the sandbox's own log (its
 # main process's stdout, so `kubectl logs` shows it; ~/progress.log in the sandbox when there is none, and always in
 # SSH bare mode), with how long the claim, the send and the first agent event took. Keeps the patch, the summary
-# and Claude's full stream in <common git dir>/remote-agent/<run>/ (shared by every worktree of the repo, so it stays
-# when a linked worktree is removed; <run> is never one another run took), plus transcript.jsonl: Claude's raw stream-json events,
-# written as they arrive, its path printed before the sandbox is claimed, and session.jsonl: Claude's session. The
-# token's value is redacted in every kept file. The session is not placed for /resume at the end: the sandbox wrote it,
-# so it may hold forged user turns. `remote-agent resume <run>` places it under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/
-# in the worktree's project folder, its cwd the worktree, after a warning saying so. Beside the transcript, for any reader:
-# run.json (run, name, worktree, started, pid, pid_start, state, exit_code, ended, claim_s, send_s (send_setup_s and
+# and the agent's full stream in <common git dir>/remote-agent/<run>/ (shared by every worktree of the repo, so it stays
+# when a linked worktree is removed; <run> is never one another run took), plus transcript.jsonl: the harness's raw
+# JSON events (Claude's stream-json, Codex's `exec --json`), written as they arrive, its path printed before the sandbox
+# is claimed, and session.jsonl: the harness's session. The credential's value is redacted in every kept file. The
+# session is not placed for /resume at the end: the sandbox wrote it, so it may hold forged user turns. `remote-agent
+# resume <run>` places a Claude run's session under ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/ in the worktree's project
+# folder, its cwd the worktree, after a warning saying so; a Codex run's is kept only. Beside the transcript, for any reader:
+# run.json (run, name, worktree, started, harness, pid, pid_start, state, exit_code, ended, claim_s, send_s (send_setup_s and
 # send_work_s, the setup's and the snapshot's part of it; setup_kb, the gzipped setup's size), first_event_s, caller;
 # state starting, running, then done on exit 0 or 3, else failed; rewritten atomically) and progress.log (every
 # progress line, untagged), from the moment the folder is made; on every exit, result.json (scripts/remote-agent-result.sh:
-# exit_code, status, report_status, changed, report_path, duration_ms, num_turns, total_cost_usd, usage,
-# model, claude_version, complete, caps, capped_off, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the token's value
+# exit_code, status, report_status, changed, report_path, duration_ms, num_turns, total_cost_usd, usage, harness,
+# model, harness_version, claude_version, complete, caps, capped_off, capped_kills, killed, lost; unknowns null), through a temporary file and `mv`, the credential's value
 # redacted; and capped.log, the sandbox's own list of the commands its caps killed.
 # Each command the caps killed prints one line on stderr, whatever the exit: [<task>] killed: memory|timeout <command>
-# (from progress.log's `== capped: killed:` lines, which the sandbox sends as they happen and Claude's text, indented
+# (from progress.log's `== capped: killed:` lines, which the sandbox sends as they happen and the agent's text, indented
 # there, cannot pass for; else from capped.log). A kill
 # changes no exit code; result.json's lost tells a sandbox that vanished with no kill line before it.
-# Exit 3 when Claude changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5 when
-# the run failed because the Claude account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
-# <time> (<time> as Claude gave it, e.g. 5:30pm (UTC), or unknown). Any other failed run exits with the sandbox's code,
+# Exit 3 when the agent changed nothing; exit 4 when the patch does not apply (it is kept for a manual look); exit 5
+# when the run failed because the account hit its usage limit, with one line on stderr: [<task>] usage limit: resets
+# <time> (<time> as the harness gave it, e.g. 5:30pm (UTC), or unknown). Any other failed run exits with the sandbox's code,
 # 1 in place of 3, 4 or 5, so those three always mean the above. The final message is printed once,
 # on stdout only, and only on exit 0, 3 or 4; stderr carries the progress lines, never the final message.
-# Settings: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) from ~/.config/dotagents/remote.env or the environment;
-# the remote Settings (remote/settings.json: backend, hours, max_mb, keep, and the backend's own) from
+# Settings: the credential remote.credential names (default: the harness's first, CLAUDE_CODE_OAUTH_TOKEN from `claude
+# setup-token` for claude, CODEX_API_KEY for codex) from ~/.config/dotagents/remote.env or the environment, the only
+# Secret sent; remote.base_url, a model gateway the harness calls instead of its vendor's API;
+# the remote Settings (remote/settings.json: backend, harness, hours, max_mb, keep, and the backend's own) from
 # scripts/settings.sh, each exported as its REMOTE_* variable, which also overrides it for one run (REMOTE_KEEP=1).
 # Refused before anything is staged when no backend is set or the worktree's repo sets remote.allowed to false.
-# Every REMOTE_* variable is exported to the backend; the Claude token is not. REMOTE_* lines left in remote.env from
+# Every REMOTE_* variable is exported to the backend; the credential is not. REMOTE_* lines left in remote.env from
 # before settings.json are ignored, with a line saying so.
 set -euo pipefail
 
@@ -145,6 +150,10 @@ resume() {
     done
   fi
   [ -s "$keep/session.jsonl" ] || { echo "remote-agent: no session kept in $keep" >&2; exit 1; }
+  if [ "$(jq -r '.harness // "claude"' "$keep/run.json" 2>/dev/null | tr -d '\r')" = codex ]; then
+    echo "remote-agent: $run ran on codex: its session is kept in $keep/session.jsonl, not placed for resume" >&2
+    exit 1
+  fi
   id="$(jq -rn 'first(inputs | .sessionId? // empty)' "$keep/session.jsonl" 2>/dev/null | tr -d '\r')" || true
   [[ "$id" =~ ^[A-Za-z0-9-]+$ ]] || { echo "remote-agent: no session id in $keep/session.jsonl" >&2; exit 1; }
   real="$(cd "$root" && pwd -P)"
@@ -180,6 +189,9 @@ esac
 . "$REPO/scripts/hooks/lib.sh"
 # shellcheck source=remote-settings.sh disable=SC1091
 . "$REPO/scripts/remote-settings.sh"
+# Set by remote_credential: the harness and the name of the credential it logs in with.
+harness=""
+credential=""
 
 # Sets backend to the script of REMOTE_BACKEND and exports every REMOTE_* variable, which the backend reads its
 # Settings from; fails for an unknown backend, with why set to say so.
@@ -203,7 +215,8 @@ if [ "${1:-}" = ready ]; then
   remote_settings "$dir" || exit 1
   why="$(remote_blocker "$dir")" || exit 1
   [ -z "$why" ] || { echo "$why"; exit 1; }
-  [ -n "$(remote_token)" ] || { echo "no CLAUDE_CODE_OAUTH_TOKEN in $REMOTE_SECRET_FILE: run \`remote-agent setup\`"; exit 1; }
+  remote_credential || { echo "$why"; exit 1; }
+  [ -n "$(remote_token)" ] || { echo "no $credential in $REMOTE_SECRET_FILE: run \`remote-agent setup\`"; exit 1; }
   backend_script || { echo "$why"; exit 1; }
   # The backend's cheap probe: its one line of error, e.g. the cluster's connection error.
   if ! why="$("$backend" ping </dev/null 2>/dev/null)"; then
@@ -221,26 +234,33 @@ usage: remote-agent [--attach PATH]... [--name NAME] [--agent AGENT] [--home DIR
        remote-agent setup | check | ready [dir] | resume <run> [worktree] | result <name|run> [dir]
        remote-agent prune --older-than <Nd|Nh> [--dry-run] [dir]
 Runs one subagent task on the remote backend and applies its patch to the worktree, uncommitted. - reads the brief
-from stdin. --agent runs the model the agent's Claude wrapper sets, as a local run does. --model NAME runs that
-model instead, and wins over --agent's. --agent also runs the agent's own image or pool (remote.images,
+from stdin. --agent runs the model the agent's wrapper for the harness (remote.harness) sets, as a local run does.
+--model NAME runs that model instead, and wins over --agent's. --agent also runs the agent's own image or pool (remote.images,
 remote.pools) when one is set. --home DIR ships the setup under DIR in place of $HOME's. Exit 0 applied, 3 no
-changes, 4 the patch does not apply, 5 the Claude account hit its usage limit.
+changes, 4 the patch does not apply, 5 the account hit its usage limit.
 EOF
 }
 usage() { usage_text >&2; exit 1; }
 
-# The model a subagent runs on locally: the `model:` line of its Claude wrapper's frontmatter, so a remote run of it
-# gets the same model. Empty when the wrapper sets none or says `inherit`; fails on an unknown agent or a model that
-# is not a plain name.
+# The model subagent $1 runs on locally under harness $2: its Claude wrapper's frontmatter `model:` line
+# (adapters/claude/agents/<agent>.md), or its Codex wrapper's top-level `model =` line
+# (adapters/codex/agents/<agent>.toml), so a remote run of it gets the same model. Empty when the wrapper sets none or
+# says `inherit`; fails on an agent with no wrapper for the harness or a model that is not a plain name.
 agent_model() {
   local file m
-  case "$1" in *[!a-z0-9-]* | "" | -*) echo "remote-agent: --agent needs an agent name ([a-z0-9-]): $1" >&2; return 1 ;; esac
-  file="$REPO/adapters/claude/agents/$1.md"
-  [ -f "$file" ] || { echo "remote-agent: no agent $1 (no $file)" >&2; return 1; }
-  m="$(awk 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
-    NR > 1 && /^model:/ { sub(/^model:[ \t]*/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$file")"
+  if [ "$2" = codex ]; then
+    file="$REPO/adapters/codex/agents/$1.toml"
+    [ -f "$file" ] || { echo "remote-agent: no agent $1 for codex (no $file)" >&2; return 1; }
+    m="$(awk '/^\[/ { exit } /^model[ \t]*=/ { sub(/^model[ \t]*=[ \t]*/, ""); sub(/[ \t\r]+$/, "")
+      gsub(/^"|"$/, ""); print; exit }' "$file")"
+  else
+    file="$REPO/adapters/claude/agents/$1.md"
+    [ -f "$file" ] || { echo "remote-agent: no agent $1 (no $file)" >&2; return 1; }
+    m="$(awk 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
+      NR > 1 && /^model:/ { sub(/^model:[ \t]*/, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$file")"
+  fi
   [ "$m" != inherit ] || m=""
-  case "$m" in *[!A-Za-z0-9._-]* | -*) echo "remote-agent: agent $1 has a bad model: $m" >&2; return 1 ;; esac
+  [ -z "$m" ] || remote_model_ok "$m" || { echo "remote-agent: agent $1 has a bad model: $m" >&2; return 1; }
   printf '%s' "$m"
 }
 attach=()
@@ -262,7 +282,7 @@ while [ $# -gt 0 ]; do
       ;;
     --agent)
       [ $# -ge 2 ] || usage
-      model="$(agent_model "$2")" || exit 1
+      case "$2" in *[!a-z0-9-]* | "" | -*) echo "remote-agent: --agent needs an agent name ([a-z0-9-]): $2" >&2; exit 1 ;; esac
       agent="$2"
       ;;
     --home)
@@ -272,7 +292,7 @@ while [ $# -gt 0 ]; do
       ;;
     --model)
       [ $# -ge 2 ] || usage
-      case "$2" in *[!A-Za-z0-9._-]* | "" | -*) echo "remote-agent: --model needs a model name ([A-Za-z0-9._-]): $2" >&2; exit 1 ;; esac
+      remote_model_ok "$2" || { echo "remote-agent: --model needs a model name ([A-Za-z0-9._:/@+-], not starting with one of ._:/@+-): $2" >&2; exit 1; }
       model_flag="$2"
       ;;
     -h | --help) usage_text; exit 0 ;;
@@ -283,7 +303,6 @@ while [ $# -gt 0 ]; do
   esac
   shift 2
 done
-[ -z "$model_flag" ] || model="$model_flag"
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then usage; fi
 case "$1" in
   -) brief="$(cat)" ;;
@@ -292,15 +311,28 @@ case "$1" in
 esac
 [ -n "$brief" ] || { echo "remote-agent: empty brief" >&2; exit 1; }
 # The sandbox runs `claude -p "$brief"`, which would read a leading "-" as its own option (`--help` prints Claude's
-# usage and the run fails): refuse it here, before anything reaches the sandbox.
+# usage and the run fails): refuse it here, before anything reaches the sandbox, whatever the harness.
 case "$brief" in -*) echo "remote-agent: the brief starts with \"-\", which claude would read as an option: ${brief%%$'\n'*}" >&2; exit 1 ;; esac
 root="$(git -C "${2:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || { echo "remote-agent: not in a git worktree: ${2:-$PWD}" >&2; exit 1; }
-claude_token="$(remote_token)"
-[ -n "$claude_token" ] || { echo "remote-agent: set CLAUDE_CODE_OAUTH_TOKEN (in $REMOTE_SECRET_FILE): run \`remote-agent setup\`" >&2; exit 1; }
 run_image="${REMOTE_IMAGE:-}"
 run_pool="${REMOTE_POOL:-}"
 remote_settings "$root" || exit 1
 remote_agent_settings "$agent" "$run_image" "$run_pool" || exit 1
+remote_credential || { echo "remote-agent: $why" >&2; exit 1; }
+# The one Secret the run logs in with; every kept file has its value redacted.
+secret="$(remote_token)"
+[ -n "$secret" ] || { echo "remote-agent: set $credential (in $REMOTE_SECRET_FILE): run \`remote-agent setup\`" >&2; exit 1; }
+# The model: --model, else the agent's wrapper's, else remote.model; the last two renamed by remote.models.
+if [ -n "$model_flag" ]; then
+  model="$model_flag"
+else
+  if [ -n "$agent" ]; then model="$(agent_model "$agent" "$harness")" || exit 1; fi
+  [ -n "$model" ] || model="${REMOTE_MODEL:-}"
+  if [ -n "$model" ]; then
+    model="$(remote_model_map "$model")" || exit 1
+    remote_model_ok "$model" || { echo "remote-agent: remote.model is not a model name: $model" >&2; exit 1; }
+  fi
+fi
 why="$(remote_blocker "$root")" || exit 1
 [ -z "$why" ] || { echo "remote-agent: $why" >&2; exit 1; }
 leftovers="$(remote_leftovers)"
@@ -330,7 +362,7 @@ tag="[${name:-$run}]"
 
 # Rewrites run.json through jq filter $1 (jq options after it), by way of run.json.<run_json_tmp> and `mv`, so a
 # reader never sees a partial file. One temporary file per writer: the run's own subshell writes first_event_s.
-# Never fails the run, and holds only the fields below: never the brief or the token.
+# Never fails the run, and holds only the fields below: never the brief or the credential.
 run_json_tmp=tmp
 run_json() {
   local f="$keep/run.json" tmp="$keep/run.json.$run_json_tmp" filter="$1"
@@ -364,22 +396,22 @@ caller_session="$(caller_id "${CLAUDE_CODE_SESSION_ID:-}")"
 caller_pid="$(caller_id "${CLAUDE_PID:-}")"
 case "$caller_pid" in *[!0-9]* | ???????????*) caller_pid="" ;; esac # digits, at most 10: a JSON number
 # shellcheck disable=SC2016 # jq's variables
-run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, pid: $pid,
+run_json '{run: $run, name: (if $name == "" then null else $name end), worktree: $w, started: $started, harness: $h, pid: $pid,
   pid_start: (if $ps == "" then null else $ps end), state: "starting", exit_code: null, ended: null, claim_s: null,
   send_s: null, first_event_s: null,
   caller: {session: (if $cs == "" then null else $cs end), claude_pid: (if $cp == "" then null else ($cp | tonumber) end)}}' \
   --arg run "$run" --arg name "$run_name" \
-  --argjson w "$worktree_json" --argjson started "$started" --argjson pid "$$" \
+  --argjson w "$worktree_json" --argjson started "$started" --argjson pid "$$" --arg h "$harness" \
   --arg ps "$pid_start" --arg cs "$caller_session" --arg cp "$caller_pid"
 
-# Progress: each line on stdin goes to stderr behind the tag, to $keep/progress.log untagged with the token's value
+# Progress: each line on stdin goes to stderr behind the tag, to $keep/progress.log untagged with the credential's value
 # redacted, and, without --no-log, to $stage/log, which send_log copies to the sandbox's log. The sandbox logs its own
 # run's lines itself.
 progress() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     printf '%s %s\n' "$tag" "$line" >&2
-    { printf '%s\n' "${line//"$claude_token"/[redacted]}" >>"$keep/progress.log"; } 2>/dev/null || true
+    { printf '%s\n' "${line//"$secret"/[redacted]}" >>"$keep/progress.log"; } 2>/dev/null || true
     [ "${1:-}" = --no-log ] || printf '%s\n' "$line" >>"$stage/log"
   done
 }
@@ -401,7 +433,7 @@ send_log() {
   : >"$stage/log"
 }
 
-# awk's redact(s): s with the Claude token's value (scrub_token in the environment, never argv) replaced by [redacted].
+# awk's redact(s): s with the credential's value (scrub_token in the environment, never argv) replaced by [redacted].
 redact_awk='function redact(s,  out, i) {
   out = ""
   while (ENVIRON["scrub_token"] != "" && (i = index(s, ENVIRON["scrub_token"])) > 0) {
@@ -409,19 +441,19 @@ redact_awk='function redact(s,  out, i) {
   }
   return out s
 }'
-# Writes file $1 to $2 with the token's value redacted.
+# Writes file $1 to $2 with the credential's value redacted.
 scrub() {
-  scrub_token="$claude_token" awk "$redact_awk"'
+  scrub_token="$secret" awk "$redact_awk"'
     { print redact($0) }' "$1" >"$2"
 }
-# Appends the JSON lines on stdin to file $1 as they come, each flushed, the token's value redacted; anything else
+# Appends the JSON lines on stdin to file $1 as they come, each flushed, the credential's value redacted; anything else
 # (an ssh banner, a kubectl warning) is dropped. awk marks the first event on its stderr, which becomes the
 # first-event time (t0: just before the run).
 transcript_to() {
   # mawk (Debian's awk) reads a pipe in blocks unless told otherwise.
   local live=()
   case "$(awk -W version </dev/null 2>&1)" in *mawk*) live=(-W interactive) ;; esac
-  scrub_token="$claude_token" awk ${live[@]+"${live[@]}"} "$redact_awk"'
+  scrub_token="$secret" awk ${live[@]+"${live[@]}"} "$redact_awk"'
     /^\{/ {
       print redact($0); fflush()
       if (!seen++) { print "first" >"/dev/stderr"; fflush("/dev/stderr") }
@@ -439,14 +471,17 @@ transcript_to() {
   done
 }
 
-# Prints when the account's usage limit resets (Claude's words after "resets", a "|<epoch>" as a UTC time, else
-# unknown) when transcript $1 shows the run stopped on it: an error result or an API-error assistant message whose
-# text says the limit was hit; prints nothing otherwise. Ordinary assistant text never counts.
+# Prints when the account's usage limit resets (the harness's words after "resets", a "|<epoch>" as a UTC time, else
+# unknown) when transcript $1 shows the run stopped on it: Claude's error result or API-error assistant message, or
+# Codex's turn.failed or error event, whose text says the limit was hit; prints nothing otherwise. Ordinary
+# assistant text never counts.
 usage_limit() {
   # shellcheck disable=SC2016 # a literal $ in jq's regex
   jq -rRn '[inputs | fromjson? | objects
-      | select((.type == "result" and .is_error == true) or (.type == "assistant" and .error != null))
-      | (.result // ([.message.content[]? | select(.type == "text") | .text] | join(" "))) | strings
+      | select((.type == "result" and .is_error == true) or (.type == "assistant" and .error != null)
+          or .type == "turn.failed" or .type == "error")
+      | (if .type == "turn.failed" or .type == "error" then (.error.message? // .message)
+         else (.result // ([.message.content[]? | select(.type == "text") | .text] | join(" "))) end) | strings
       | select(test("hit your (usage )?limit|usage limit|limit reached"; "i"))] | last // empty
     | if test("\\|[0-9]{9,}") then (capture("\\|(?<e>[0-9]{9,})").e | tonumber | strftime("%Y-%m-%d %H:%M UTC"))
       elif test("resets"; "i") then (capture("(?i)resets (at )?(?<t>[^\\n]*)").t | sub("[\\s.]+$"; ""))
@@ -469,9 +504,9 @@ cleanup() {
   run_json '.state = $state | .exit_code = $rc | .ended = $ended' --arg state "$state" --argjson rc "$rc" \
     --argjson ended "$(date +%s)"
   rm -f "$keep/run.json.tmp" "$keep/run.json.first"
-  # What the run came to, from the files above, the token's value redacted; never fails the run.
+  # What the run came to, from the files above, the credential's value redacted; never fails the run.
   { "$REPO/scripts/remote-agent-result.sh" "$keep" "$rc" \
-      | scrub_token="$claude_token" awk "$redact_awk"' { print redact($0) }' >"$keep/result.json.tmp" \
+      | scrub_token="$secret" awk "$redact_awk"' { print redact($0) }' >"$keep/result.json.tmp" \
       && mv "$keep/result.json.tmp" "$keep/result.json"; } 2>/dev/null \
     || { rm -f "$keep/result.json.tmp"; say "could not write $keep/result.json" || true; }
   rm -rf "$stage"
@@ -538,13 +573,17 @@ send_log
 
 # In the background, so INT or TERM reach the traps at once rather than when the run ends; with job control on, in
 # a process group of its own (numbered $runner), so cleanup stops the backend's client (ssh, docker, kubectl) with it.
-# The run's stdout is Claude's raw events: transcript_to keeps them, and says when the first one comes.
+# The run's stdout is the harness's raw events: transcript_to keeps them, and says when the first one comes.
+# Stdin: a header of NAME=value lines (the harness, the gateway, the credential) up to an empty line, then the brief.
 status=0
 run_json '.state = "running"'
 t0=$SECONDS
 set -m
 (
-  { printf '%s\n' "$claude_token"; printf '%s' "$brief"; } \
+  { printf 'REMOTE_HARNESS=%s\n' "$harness"
+    [ -z "${REMOTE_BASE_URL:-}" ] || printf 'REMOTE_BASE_URL=%s\n' "$REMOTE_BASE_URL"
+    printf '%s=%s\n\n' "$credential" "$secret"
+    printf '%s' "$brief"; } \
     | with_progress --no-log "$backend" run "$run" "$handle" bash -c "$(cat "$REPO/scripts/remote-agent-sandbox.sh")" remote-agent-sandbox \
       "${REMOTE_CAP_MB:-auto}" "${REMOTE_CAP_SECS:-300}" ${model:+"$model"} \
     | transcript_to "$keep/transcript.jsonl"
@@ -562,7 +601,7 @@ mkdir -p "$stage/out"
 with_progress "$backend" get "$run" "$handle" out | { tar -xf - -C "$stage/out" 2>/dev/null; cat >/dev/null; } || true
 for f in changes.patch stream.jsonl session.jsonl summary.md capped.log; do
   if [ -L "$stage/out/$f" ] || [ ! -f "$stage/out/$f" ]; then continue; fi
-  # The sandbox redacts the token itself; a sandbox that did not, or a run that failed before it could, is caught here.
+  # The sandbox redacts the credential itself; a sandbox that did not, or a run that failed before it could, is caught here.
   if [ "$f" = changes.patch ]; then cp "$stage/out/$f" "$keep/$f"; else scrub "$stage/out/$f" "$keep/$f"; fi
 done
 # Each command the caps killed in the sandbox: its `== capped: killed:` lines in progress.log, which came live, so a
@@ -581,7 +620,8 @@ else
 fi
 if [ "$status" -ne 0 ]; then
   say "the sandbox run failed (exit $status); what it left is in $keep"
-  # The account's usage limit: Claude's error result (or the API error it shows as an assistant message) says so.
+  # The account's usage limit: the harness's error event (Claude's error result or API-error assistant message, Codex's
+  # turn.failed or error) says so.
   when="$(usage_limit "$keep/transcript.jsonl")" || true
   if [ -n "$when" ]; then echo "usage limit: resets $when" | progress; exit 5; fi
   # 3, 4 and 5 are this script's own answers (no changes, stale patch, usage limit).
