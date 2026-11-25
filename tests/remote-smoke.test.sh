@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Opt-in smoke test: one tiny real Claude run through scripts/remote-agent.sh on each backend, against the real
-# sandbox, with this machine's token, remote Settings and setup. Proves the patch, the transcript and the session come back, the
-# session places for /resume, no kept file or output holds the token, and the sandbox is gone afterwards.
+# Opt-in smoke test: one tiny real run through scripts/remote-agent.sh on each backend, on the harness remote.harness
+# (or REMOTE_HARNESS) names, against the real sandbox, with this machine's credential, remote Settings and setup. First
+# `remote-agent check`, whose dry run finds the harness's CLI in a real sandbox, so a runner image without it fails
+# there, named. Proves the patch, the transcript, result.json (complete, on that harness) and the session come back, no
+# kept file or output holds the credential, and the sandbox is gone afterwards. Under claude, also that the session
+# places for /resume and the caps kill a command past them; the other harnesses have no shell prefix (result.json's
+# capped_off says so) and no resume. On any failure the temporary folder, with every run folder, is kept and named.
 # Off unless REMOTE_SMOKE is set, so tests/run.sh and CI stay green without it:
 #   REMOTE_SMOKE=1 (or all)        every backend whose own check passes; the others are skipped, with why
 #   REMOTE_SMOKE="docker ssh"      just these (spaces or commas); one whose check fails is a failure
-# Spends a few Claude tokens per backend. Each run uses this machine's token (remote.env or the environment) and its
+# Spends a few model tokens per backend. Each run uses this machine's credential (remote.env or the environment) and its
 # remote Settings (scripts/settings.sh), with REMOTE_BACKEND set to the backend under test and REMOTE_HOURS=1.
 set -euo pipefail
 
@@ -26,17 +30,27 @@ case "$REMOTE_SMOKE" in
 esac
 
 SANDBOX="$(mktemp -d)"
-trap 'rm -rf "$SANDBOX"' EXIT
 fails=0
+# Kept on a failure: each run folder there holds its progress.log, transcript and result.json.
+trap 'if [ "$fails" -eq 0 ]; then rm -rf "$SANDBOX"; else echo "remote-smoke.test.sh: kept for a look: $SANDBOX"; fi' EXIT
 fail() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
 # shellcheck source=../scripts/remote-settings.sh disable=SC1091
 . "$REPO/scripts/remote-settings.sh"
-token="$(remote_token)"
-if [ -z "$token" ]; then
-  echo "FAIL: no CLAUDE_CODE_OAUTH_TOKEN in $REMOTE_SECRET_FILE or the environment (remote-agent setup)"
+# The harness and its credential, as a run here picks them (remote_credential sets both).
+harness=""
+credential=""
+remote_settings "$REPO" || exit 1
+if ! remote_credential; then
+  echo "FAIL: $why"
   exit 1
 fi
+token="$(remote_token)"
+if [ -z "$token" ]; then
+  echo "FAIL: no $credential in $REMOTE_SECRET_FILE or the environment (remote-agent setup)"
+  exit 1
+fi
+echo "== harness: $harness (credential $credential)"
 # True when a file under $1 (a file or folder) holds the token; the token goes to grep through a pipe, never argv.
 holds_token() { printf '%s\n' "$token" | grep -rqF -f - "$1"; }
 
@@ -137,18 +151,27 @@ for b in ${wanted[@]+"${wanted[@]}"}; do
     fi
     continue
   fi
+  echo "== $b: check (a dry run: the sandbox has $harness)"
+  if ! why="$(cd "$W" && REMOTE_BACKEND="$b" REMOTE_HOURS=1 "$REPO/scripts/remote-agent.sh" check 2>&1)"; then
+    fail "$b: remote-agent check failed: $(printf '%s\n' "$why" | grep -v '^ok$' | tail -5)"
+    continue
+  fi
   echo "== $b: real run"
   ran=$((ran + 1))
 
-  echo "== $b: cap run (a 100 s sleep under a 5 s cap)"
-  cap_case
+  if [ "$harness" = claude ]; then
+    echo "== $b: cap run (a 100 s sleep under a 5 s cap)"
+    cap_case
+  else
+    echo "== $b: cap run skipped: $harness has no shell prefix, so the caps are off"
+  fi
 
   out="$SANDBOX/$b/out"
   code=0
   (cd "$W" && REMOTE_BACKEND="$b" REMOTE_HOURS=1 "$REPO/scripts/remote-agent.sh" --name "smoke-$b" \
     "Create a file named smoke.txt in the current folder whose only content is the line: smoke ok. Do nothing else.") \
     >"$out" 2>&1 || code=$?
-  [ "$code" -eq 0 ] || fail "$b: remote-agent exited $code: $(tail -5 "$out")"
+  [ "$code" -eq 0 ] || fail "$b: remote-agent exited $code: $(grep -v 'remote-agent-pack:' "$out" | tail -12)"
 
   grep -qx "smoke ok" "$W/smoke.txt" 2>/dev/null || fail "$b: smoke.txt not applied with 'smoke ok'"
   [ -z "$(git -C "$W" log --oneline -1 -- smoke.txt)" ] || fail "$b: patch committed"
@@ -161,14 +184,19 @@ for b in ${wanted[@]+"${wanted[@]}"}; do
   grep -q "smoke.txt" "$keep/changes.patch" 2>/dev/null || fail "$b: changes.patch missing or without smoke.txt"
   [ -s "$keep/transcript.jsonl" ] || fail "$b: transcript.jsonl empty"
   jq -e . "$keep/transcript.jsonl" >/dev/null 2>&1 || fail "$b: transcript.jsonl is not JSON lines"
-  jq -e 'select(.type == "result")' "$keep/transcript.jsonl" >/dev/null 2>&1 || fail "$b: transcript has no result event"
+  jq -e --arg h "$harness" '.complete == true and .harness == $h' "$keep/result.json" >/dev/null 2>&1 \
+    || fail "$b: result.json is not a complete $harness run: $(jq -c '{harness, complete, status, exit_code}' "$keep/result.json" 2>&1)"
+  if [ "$harness" != claude ]; then
+    jq -e --arg p "a shell prefix in $harness" '.capped_off == $p' "$keep/result.json" >/dev/null 2>&1 \
+      || fail "$b: result.json does not say the caps were off: $(jq -c '.capped_off' "$keep/result.json" 2>&1)"
+  fi
   [ -s "$keep/session.jsonl" ] || fail "$b: no session came back"
   holds_token "$keep" && fail "$b: the token is in a kept file: $(printf '%s\n' "$token" | grep -rlF -f - "$keep")"
   holds_token "$out" && fail "$b: the token is in remote-agent's output"
 
   # The session places for /resume in the worktree, its cwd the worktree.
   cc="$SANDBOX/$b/claude-config"
-  if [ -s "$keep/session.jsonl" ]; then
+  if [ "$harness" = claude ] && [ -s "$keep/session.jsonl" ]; then
     (cd "$W" && CLAUDE_CONFIG_DIR="$cc" "$REPO/scripts/remote-agent.sh" resume "$runs") >"$out.resume" 2>&1 \
       || fail "$b: remote-agent resume failed: $(tail -3 "$out.resume")"
     placed="$(find "$cc/projects" -name '*.jsonl' 2>/dev/null | head -1)"
