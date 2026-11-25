@@ -2,8 +2,8 @@
 # Guided setup for scripts/remote-agent.sh, run as `remote-agent setup`: asks for the backend and its details (for SSH,
 # how to log in: a key, from the agent, ~/.ssh/config or a key file with an optional passphrase, or a password), then
 # for the harness (claude or codex) and how it logs in: for claude a subscription token (oauth, from `claude
-# setup-token`), an API key (api_key) or a gateway (its URL and bearer token); for codex an API key or a gateway (its
-# URL and key). Secrets are read without echo. The answers are remote Settings (harness, credential, base_url among
+# setup-token`) or an API key (api_key); for codex an API key; for either a gateway (LiteLLM, OpenRouter, ...: its URL
+# and key, GATEWAY_API_KEY, shared by both harnesses; the gateway_api Setting is the harness's own API). Secrets are read without echo. The answers are remote Settings (harness, credential, base_url among
 # them), written to the machine Level through scripts/settings.sh; the credential, the SSH password and the key
 # passphrase are Secrets, written to ~/.config/dotagents/remote.env readable only by the user (mode 600), through a
 # temp file in the same folder moved into place. An SSH login method not chosen drops the other's Secret; another
@@ -20,9 +20,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/dotagents"
 FILE="$CONFIG/remote.env"
 # The Settings this script asks about; the ones the chosen backend does not use are unset.
-ASKED="backend context namespace pool ssh_host ssh_key ssh_mode image harness credential base_url"
+ASKED="backend context namespace pool ssh_host ssh_key ssh_mode image harness credential base_url gateway_api"
 # The Secrets it may write to remote.env; it rewrites the SSH ones and the chosen credential, and keeps every other line.
-SECRETS="CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CODEX_API_KEY SSH_PASSWORD SSH_KEY_PASSPHRASE"
+SECRETS="CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CODEX_API_KEY GATEWAY_API_KEY SSH_PASSWORD SSH_KEY_PASSPHRASE"
 
 tmp=""
 trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
@@ -142,34 +142,35 @@ old_credential="$(old credential)"
 old_url="$(old base_url)"
 if [ -n "$old_url" ]; then old_login=gateway
 else
-  case "$old_credential" in ANTHROPIC_API_KEY | CODEX_API_KEY) old_login=api_key ;; ANTHROPIC_AUTH_TOKEN) old_login=gateway ;; *) old_login="" ;; esac
+  case "$old_credential" in ANTHROPIC_API_KEY | CODEX_API_KEY) old_login=api_key ;; ANTHROPIC_AUTH_TOKEN | GATEWAY_API_KEY) old_login=gateway ;; *) old_login="" ;; esac
 fi
 if [ "$harness" = claude ]; then
   login="$(ask "Log in with (oauth: a Claude subscription, api_key, gateway)" "${old_login:-oauth}" oauth api_key gateway)"
-  case "$login" in oauth) credential=CLAUDE_CODE_OAUTH_TOKEN ;; api_key) credential=ANTHROPIC_API_KEY ;; gateway) credential=ANTHROPIC_AUTH_TOKEN ;; esac
+  case "$login" in oauth) credential=CLAUDE_CODE_OAUTH_TOKEN ;; api_key) credential=ANTHROPIC_API_KEY ;; gateway) credential=GATEWAY_API_KEY ;; esac
 else
   [ "$old_login" != oauth ] || old_login=""
   login="$(ask "Log in with (api_key, gateway)" "${old_login:-api_key}" api_key gateway)"
   credential=CODEX_API_KEY
+  [ "$login" != gateway ] || credential=GATEWAY_API_KEY
 fi
 answers+=("credential $credential")
 if [ "$login" = gateway ]; then
   url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
   while :; do
-    url="$(ask "Gateway URL (http or https; for claude, what ANTHROPIC_BASE_URL takes)" "$old_url")"
+    url="$(ask "Gateway URL (http or https; it must speak $(remote_harness_apis "$harness"), e.g. LiteLLM or OpenRouter)" "$old_url")"
     [[ ! "$url" =~ $url_re ]] || break
     echo "  not an http or https URL" >&2
     old_url=""
   done
-  answers+=("base_url $url")
+  answers+=("base_url $url" "gateway_api $(remote_harness_apis "$harness")")
 fi
 case "$credential" in
   CLAUDE_CODE_OAUTH_TOKEN)
     echo "Get a Claude token: run \`claude setup-token\` in another terminal, then paste it here (it does not show)." >&2
     token="$(ask_secret "Claude token" "$(legacy CLAUDE_CODE_OAUTH_TOKEN)")" ;;
   ANTHROPIC_API_KEY) token="$(ask_secret "Anthropic API key" "$(legacy ANTHROPIC_API_KEY)")" ;;
-  ANTHROPIC_AUTH_TOKEN) token="$(ask_secret "Gateway token (sent as a bearer token)" "$(legacy ANTHROPIC_AUTH_TOKEN)")" ;;
-  CODEX_API_KEY) token="$(ask_secret "${login/api_key/OpenAI} key (CODEX_API_KEY)" "$(legacy CODEX_API_KEY)")" ;;
+  GATEWAY_API_KEY) token="$(ask_secret "Gateway key (GATEWAY_API_KEY)" "$(legacy GATEWAY_API_KEY)")" ;;
+  CODEX_API_KEY) token="$(ask_secret "OpenAI key (CODEX_API_KEY)" "$(legacy CODEX_API_KEY)")" ;;
 esac
 
 # Every answer is in: from here on, write. First the Settings left in remote.env that it does not ask about.

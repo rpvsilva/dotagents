@@ -36,7 +36,7 @@ if [ -z "$(remote_token)" ]; then
   problems=1
 fi
 # The dry run needs no credential: keep it away from the backend.
-unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CODEX_API_KEY
+unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CODEX_API_KEY GATEWAY_API_KEY
 left="$(remote_leftovers)"
 if [ -n "$left" ]; then
   echo "$REMOTE_SECRET_FILE still sets $left, now ignored: run \`remote-agent setup\` to move them to settings.json"

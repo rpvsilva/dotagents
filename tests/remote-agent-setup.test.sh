@@ -168,20 +168,27 @@ setup $'docker\n\ncodex\n\nsk-codex-1\n' || fail "codex: exited non-zero: $(cat 
 [ "$(secret CODEX_API_KEY)" = sk-codex-1 ] || fail "codex: the key not stored: $(secret CODEX_API_KEY)"
 [ "$(secret CLAUDE_CODE_OAUTH_TOKEN)" = keep-me ] || fail "codex: the Claude token was dropped"
 grep -q "sk-codex-1" "$SANDBOX/out" "$SETTINGS" && fail "codex: the key showed in the output or settings.json"
-# A gateway for claude: a bad URL asked again; the bearer token is ANTHROPIC_AUTH_TOKEN.
+# A gateway for claude: a bad URL asked again; its key is GATEWAY_API_KEY, its API claude's own (anthropic).
 setup $'docker\n\nclaude\ngateway\nnot a url\nhttps://gw.example.com/anthropic\ngw-secret\n' || fail "gateway: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_HARNESS)" = claude ] || fail "gateway: REMOTE_HARNESS is $(value REMOTE_HARNESS)"
-[ "$(value REMOTE_CREDENTIAL)" = ANTHROPIC_AUTH_TOKEN ] || fail "gateway: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
+[ "$(value REMOTE_CREDENTIAL)" = GATEWAY_API_KEY ] || fail "gateway: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
+[ "$(value REMOTE_GATEWAY_API)" = anthropic ] || fail "gateway: REMOTE_GATEWAY_API is $(value REMOTE_GATEWAY_API)"
 [ "$(value REMOTE_BASE_URL)" = https://gw.example.com/anthropic ] || fail "gateway: REMOTE_BASE_URL is $(value REMOTE_BASE_URL)"
 grep -q "not an http or https URL" "$SANDBOX/out" || fail "gateway: a bad URL was not asked again: $(cat "$SANDBOX/out")"
-[ "$(secret ANTHROPIC_AUTH_TOKEN)" = gw-secret ] || fail "gateway: the token not stored"
+[ "$(secret GATEWAY_API_KEY)" = gw-secret ] || fail "gateway: the key not stored"
 [ "$(secret CODEX_API_KEY)" = sk-codex-1 ] || fail "gateway: the Codex key was dropped"
 # Enter through it all keeps the gateway; then oauth drops the URL and takes the kept Claude token on enter.
 setup $'docker\n\n\n\n\n\n' || fail "gateway again: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_BASE_URL)" = https://gw.example.com/anthropic ] || fail "gateway again: the URL was not kept"
-[ "$(value REMOTE_CREDENTIAL)" = ANTHROPIC_AUTH_TOKEN ] || fail "gateway again: the credential changed to $(value REMOTE_CREDENTIAL)"
+[ "$(value REMOTE_CREDENTIAL)" = GATEWAY_API_KEY ] || fail "gateway again: the credential changed to $(value REMOTE_CREDENTIAL)"
+# The same gateway for codex: enter keeps the URL and the shared key; the API becomes codex's own.
+setup $'docker\n\ncodex\n\n\n\n' || fail "codex gateway: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_CREDENTIAL)" = GATEWAY_API_KEY ] && [ "$(value REMOTE_GATEWAY_API)" = openai-responses ] \
+  && [ "$(value REMOTE_BASE_URL)" = https://gw.example.com/anthropic ] && [ "$(secret GATEWAY_API_KEY)" = gw-secret ] \
+  || fail "codex gateway: not the shared gateway with codex's API: $(value REMOTE_CREDENTIAL) $(value REMOTE_GATEWAY_API) $(value REMOTE_BASE_URL)"
+setup $'docker\n\nclaude\n\n\n\n' || fail "claude gateway again: exited non-zero: $(cat "$SANDBOX/out")"
 setup $'docker\n\n\noauth\n\n' || fail "back to oauth: exited non-zero: $(cat "$SANDBOX/out")"
-[ "$(value REMOTE_BASE_URL)" = unset ] || fail "back to oauth: the gateway URL was kept"
+[ "$(value REMOTE_BASE_URL)" = unset ] && [ "$(value REMOTE_GATEWAY_API)" = unset ] || fail "back to oauth: the gateway was kept"
 [ "$(value REMOTE_CREDENTIAL)" = CLAUDE_CODE_OAUTH_TOKEN ] || fail "back to oauth: REMOTE_CREDENTIAL is $(value REMOTE_CREDENTIAL)"
 [ "$(secret CLAUDE_CODE_OAUTH_TOKEN)" = keep-me ] || fail "back to oauth: the Claude token was not kept"
 

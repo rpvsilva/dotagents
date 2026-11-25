@@ -12,8 +12,9 @@
 # Stdin: a header of NAME=value lines up to an empty line, then the brief. The header holds REMOTE_HARNESS (claude or
 # codex, the agent CLI to run; claude when left out), REMOTE_BASE_URL (a model gateway, optional) and the one
 # credential the harness logs in with (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for claude,
-# CODEX_API_KEY for codex); any other name is refused. For claude the gateway is ANTHROPIC_BASE_URL; for codex, a
-# model provider in ~/.codex/config.toml reading CODEX_API_KEY.
+# CODEX_API_KEY for codex, GATEWAY_API_KEY for either with a gateway); any other name is refused. For claude the
+# gateway is ANTHROPIC_BASE_URL, and GATEWAY_API_KEY its bearer token (ANTHROPIC_AUTH_TOKEN); for codex, a model
+# provider in ~/.codex/config.toml reading the key from the credential's variable.
 # Installs the setup's plugins and MCP servers (claude), commits the snapshot as a base, runs the harness on the brief
 # with progress on stderr and its raw JSON events on stdout (Claude's stream-json, Codex's `exec --json`), and leaves
 # ~/out/changes.patch (everything changed since the base), ~/out/summary.md (the final message), ~/out/stream.jsonl and
@@ -209,6 +210,7 @@ main() {
 harness=claude
 base_url=""
 secret=""
+cred=""
 while IFS= read -r line; do
   [ -n "$line" ] || break
   name="${line%%=*}"
@@ -216,19 +218,25 @@ while IFS= read -r line; do
   case "$name" in
     REMOTE_HARNESS) harness="$value" ;;
     REMOTE_BASE_URL) base_url="$value" ;;
-    CLAUDE_CODE_OAUTH_TOKEN | ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN | CODEX_API_KEY)
+    CLAUDE_CODE_OAUTH_TOKEN | ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN | CODEX_API_KEY | GATEWAY_API_KEY)
+      [ -z "$cred" ] || { echo "== two credentials in the header" >&2; exit 1; }
+      cred="$name"
       secret="$value"
-      export "$name=$value"
       ;;
     *) echo "== bad header line: ${name:0:40}" >&2; exit 1 ;;
   esac
 done
 brief="$(cat)"
-case "$harness" in
-  claude) [ -z "$base_url" ] || export ANTHROPIC_BASE_URL="$base_url" ;;
-  codex) [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ] || { echo "== codex takes CODEX_API_KEY only" >&2; exit 1; } ;;
-  *) echo "== unknown harness: ${harness:0:40}" >&2; exit 1 ;;
+[ -z "$cred" ] || [ "$cred" != GATEWAY_API_KEY ] || [ -n "$base_url" ] || { echo "== GATEWAY_API_KEY without a gateway" >&2; exit 1; }
+case "$harness" in claude | codex) ;; *) echo "== unknown harness: ${harness:0:40}" >&2; exit 1 ;; esac
+case "$harness:$cred" in
+  claude:GATEWAY_API_KEY) export ANTHROPIC_AUTH_TOKEN="$secret" ;;
+  claude:CLAUDE_CODE_OAUTH_TOKEN | claude:ANTHROPIC_API_KEY | claude:ANTHROPIC_AUTH_TOKEN | codex:CODEX_API_KEY | codex:GATEWAY_API_KEY)
+    export "$cred=$secret" ;;
+  *:) ;;
+  *) echo "== $harness does not take $cred" >&2; exit 1 ;;
 esac
+[ "$harness" != claude ] || [ -z "$base_url" ] || export ANTHROPIC_BASE_URL="$base_url"
 url_re='^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
 if [ -n "$base_url" ] && [[ ! "$base_url" =~ $url_re ]]; then echo "== bad base url" >&2; exit 1; fi
 cd "$HOME"
@@ -262,14 +270,14 @@ rules="You run unattended as a remote subagent, in $HOME/work: a snapshot of the
 remote and no GitHub access. Do the task in that folder. Leave your changes in the files (committing is optional); \
 they go back to the user as a patch. Do not push or open PRs."
 # Codex has no flag for extra instructions: they go in its global AGENTS.md (outside ~/work, so not in the patch), and
-# a gateway is a model provider of its config, which reads the key from CODEX_API_KEY. The URL was checked above, so
-# it holds no quote or backslash.
+# a gateway is a model provider of its config, which reads the key from the credential's variable. The URL was checked
+# above, so it holds no quote or backslash.
 if [ "$harness" = codex ]; then
   mkdir -p "$HOME/.codex"
   printf '\n%s\n' "$rules" >>"$HOME/.codex/AGENTS.md"
   if [ -n "$base_url" ]; then
-    printf 'model_provider = "remote"\n\n[model_providers.remote]\nname = "remote gateway"\nbase_url = "%s"\nenv_key = "CODEX_API_KEY"\nwire_api = "responses"\n' \
-      "$base_url" >"$HOME/.codex/config.toml"
+    printf 'model_provider = "remote"\n\n[model_providers.remote]\nname = "remote gateway"\nbase_url = "%s"\nenv_key = "%s"\nwire_api = "responses"\n' \
+      "$base_url" "${cred:-CODEX_API_KEY}" >"$HOME/.codex/config.toml"
   fi
 fi
 
