@@ -99,6 +99,16 @@ Each pod carries the label `sandbox.users.io/remote-agent-run=<run>`, plus `sand
 
 A running Docker daemon and the runner image. That's it. `check` also tells you when the image's architecture differs from your machine's (it would run emulated, and slowly).
 
+### 🧩 One image per subagent
+
+A subagent can run on its own image: `epic-implementer` on one with your language's toolchain, `pr-reviewer` on a slimmer one. Build each `FROM` the default runner image, then tell [configure](../skills/configure/SKILL.md) "run epic-implementer remotely with image X", or set it yourself:
+
+```sh
+~/.agents/bin/settings set remote images "epic-implementer=ghcr.io/you/runner-py:1" --machine
+```
+
+Then run `remote-agent check`: it checks every listed image. [remote/README.md](../remote/README.md#one-image-per-subagent) has the details, including the cluster's per-agent pools.
+
 ### 🖥️ What SSH needs
 
 An SSH login to the host (a key or a password) and Docker on the host. In **bare mode**, the host needs `bash`, `git`, `jq`, `node` and `claude` instead.
@@ -209,6 +219,7 @@ flowchart LR
 | `remote.hours` | 2 | How long before an abandoned sandbox removes itself |
 | `remote.cap_mb` | unset | A lower memory cap, in MB, for each shell command in the sandbox |
 | `remote.cap_secs` | 300 | Time cap, in seconds, for each shell command in the sandbox |
+| `remote.images` | none | `docker` and `ssh` (container mode): a runner image per subagent, as `agent=image` entries. Unlisted agents use `remote.image`. On a cluster, `remote.pools` gives an agent its own warm pool instead |
 | `remote.sandbox_mb`, `remote.sandbox_cpus` | unset | `docker` and `ssh` (container mode): each run's memory (MB) and CPU limits, its share of a host others may use too. Unset: the host's total over `remote.max_sandboxes`. On a cluster, the SandboxTemplate's pod limits decide |
 
 The full list, with each backend's own Settings, is in [remote/settings.json](../remote/settings.json).
