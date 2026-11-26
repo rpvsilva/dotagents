@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/rpvsilva/dotagents/compare/v1.0.0...v1.1.0) (2026-11-26)
+
+
+### Features
+
+* **remote:** find the cluster's warm pool, so setup no longer asks for it ([#609](https://github.com/rpvsilva/dotagents/issues/609)) ([d6a5cec](https://github.com/rpvsilva/dotagents/commit/d6a5cecba409bb7f6ee076172b394e43621afe5b))
+
 ## 1.0.0 (2026-11-26)
 
 
