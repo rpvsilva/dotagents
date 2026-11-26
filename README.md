@@ -171,7 +171,7 @@ That installs every public group for every tool and leaves out `personal`. A bar
 - `./uninstall.sh <group>` removes that group, keeping core and anything another installed group still requires.
 
 - Everything is symlinked, so editing the repo updates every tool at once.
-- Re-run `install.sh` after adding a skill or moving the repo. Running it twice is safe.
+- Re-run `install.sh` after adding a skill, moving the repo or a `git pull`: a pull brings new links and tools (such as gum) that only `install.sh` sets up. Running it twice is safe.
 - On a terminal, `install.sh` and `uninstall.sh` show a live view: a spinner and progress bar per tool, then a summary. `DOTAGENTS_PLAIN=1` prints every line instead.
 - Anything it replaces is moved to `~/.dotagents-backup/` first.
 - Codex and Cursor are skipped when `~/.codex` or `~/.cursor` doesn't exist.

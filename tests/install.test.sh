@@ -419,6 +419,29 @@ grep -q "^usage: .*<group>" "$SANDBOX/badsel.out" || fail "install.sh with an un
 grep -q "^usage: " "$SANDBOX/twotools.out" || fail "install.sh with two tool words did not print the usage: $(cat "$SANDBOX/twotools.out")"
 [ ! -s "$SANDBOX/twotools.links" ] || fail "install.sh with two tool words linked something"
 
+# gum, for `remote-agent setup`: installed with brew when the remote part is in and gum is not on PATH; without brew,
+# one line says so; with DOTAGENTS_SKIP_PLUGINS, never. PATH holds no real gum, and the stub brew logs its arguments.
+nogum=""
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do [ -x "$d/gum" ] || nogum+="${nogum:+:}$d"; done
+mkdir -p "$SANDBOX/brewbin"
+printf '#!/bin/sh\necho "$*" >>"%s/brew.log"\n' "$SANDBOX" >"$SANDBOX/brewbin/brew"
+chmod +x "$SANDBOX/brewbin/brew"
+gum_run() { HOME="$1" PATH="$2" DOTAGENTS_PLAIN=1 "$REPO/install.sh" shared remote "${@:3}" 2>&1; }
+out="$(gum_run "$SANDBOX/gum1" "$SANDBOX/brewbin:$nogum")"
+[ "$(cat "$SANDBOX/brew.log" 2>/dev/null)" = "install gum" ] || fail "install.sh remote without gum did not run brew install gum"
+grep -q "gum: installed with brew" <<<"$out" || fail "install.sh did not report gum installed: $out"
+rm -f "$SANDBOX/brew.log"
+out="$(HOME="$SANDBOX/gum2" PATH="$SANDBOX/brewbin:$nogum" DOTAGENTS_PLAIN=1 "$REPO/install.sh" shared core 2>&1)"
+[ ! -e "$SANDBOX/brew.log" ] || fail "install.sh core installed gum"
+out="$(HOME="$SANDBOX/gum3" PATH="$SANDBOX/brewbin:$nogum" DOTAGENTS_PLAIN=1 DOTAGENTS_SKIP_PLUGINS=1 "$REPO/install.sh" shared remote 2>&1)"
+[ ! -e "$SANDBOX/brew.log" ] || fail "install.sh with DOTAGENTS_SKIP_PLUGINS installed gum"
+grep -q "gum: skipped (DOTAGENTS_SKIP_PLUGINS)" <<<"$out" || fail "install.sh did not say gum was skipped: $out"
+nobrew=""
+for d in "${dirs[@]}"; do [ -x "$d/gum" ] || [ -x "$d/brew" ] || nobrew+="${nobrew:+:}$d"; done
+out="$(gum_run "$SANDBOX/gum4" "$nobrew")"
+grep -q "gum: not on PATH and no brew, skipped" <<<"$out" || fail "install.sh without brew did not say so: $out"
+
 # Unknown target exits non-zero.
 [ ! -e "$SANDBOX/bad-exited-0" ] || fail "unknown target exited 0"
 
