@@ -51,7 +51,7 @@ The version comes from the [Conventional Commits](https://www.conventionalcommit
 | `feat:` | Minor: `1.2.0` to `1.3.0` | `feat(skills): add renovate-prs` |
 | `fix:`, `perf:` | Patch: `1.2.0` to `1.2.1` | `fix(remote): retry a claim` |
 | `!` after the type, or a `BREAKING CHANGE:` footer | Major: `1.2.0` to `2.0.0` | `feat(install)!: drop the shared tool word` |
-| `docs:`, `chore:`, `ci:`, `test:`, `refactor:` | None, and left out of the changelog | `docs: fix a link` |
+| `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `build:`, `style:` | Patch, like `fix:`: every type is listed in the changelog, under its own section | `docs: fix a link` |
 
 The highest bump wins: a release holding one `feat:` and three `fix:` commits is a minor release.
 
