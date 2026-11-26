@@ -307,6 +307,7 @@ for pools in one none several forbidden; do
   if [ -z "$want" ]; then
     grep -q "warm pool" "$SANDBOX/out" && fail "cluster auto pool $pools: named: $(out)"
   else
+    # shellcheck disable=SC2015 # fail only reports
     [ "$code" != 0 ] && grep -qF "$want" "$SANDBOX/out" || fail "cluster auto pool $pools: not named: $code $(out)"
   fi
 done
