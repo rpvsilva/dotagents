@@ -19,7 +19,7 @@ Each value gets one of three treatments:
 | Merge gate for build-epic PRs (`scripts/merge-pr.sh {pr}`) | `build-epic.merge_command`, declared in [`skills/build-epic/settings.json`](../skills/build-epic/settings.json) | Setting, default unset: plain `gh pr merge`, refused only in a repo with a `.review-gate.yml`. The maintainer's repo sets it in `.agents/settings.json` |
 | GitHub App identity for build-epic (`scripts/gh-app-token.sh`) | `build-epic.identity_command`, same file | Setting, default unset: the current `gh` login. The maintainer's repo sets it in `.agents/settings.json` |
 | Cluster kube context | `remote.context`, declared in [`remote/settings.json`](../remote/settings.json) | Setting, default unset: the cluster backend stops with a "not set" error until you save one |
-| Cluster warm pool | `remote.pool`, same file | Setting, default unset, as `context` |
+| Cluster warm pool | `remote.pool`, same file | Setting, default unset: each claim takes the namespace's only warm pool |
 | Runner image (`ghcr.io/rpvsilva/agent-runner:main`) | `remote.image`, same file, and [`remote/README.md`](../remote/README.md) | Setting whose default stays, documented as the default. The image is public and built from [`remote/runner/Dockerfile`](../remote/runner/Dockerfile); to use your own, build it and save it with `settings set remote image <image> --machine` |
 | The maintainer's global instructions | [`global/AGENTS.md`](../global/AGENTS.md), linked as `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` | `personal` group (part `global`) |
 | Claude guardrail: no `gh pr review`, no `gh auth token` | [`adapters/claude/settings/agent-identity.json`](../adapters/claude/settings/agent-identity.json) | `personal` group (part `global`) |
@@ -44,11 +44,10 @@ Each value gets one of three treatments:
 On the maintainer's machine, three things keep everything as it was:
 
 1. Install everything: a full `./install.sh`, with no group named, includes `personal`.
-2. Save the cluster once, at the machine Level, since `context` and `pool` no longer default to it:
+2. Save the cluster once, at the machine Level, since `context` no longer defaults to it (the pool needs nothing while `claude-runner` is the namespace's only warm pool):
 
    ```sh
    ~/.agents/bin/settings set remote context <your-kube-context> --machine
-   ~/.agents/bin/settings set remote pool claude-runner --machine
    ```
 
 3. Nothing to do for build-epic: the maintainer's repo's `.agents/settings.json` keeps `merge_command` (`scripts/merge-pr.sh {pr}`) and `identity_command` (`scripts/gh-app-token.sh`).

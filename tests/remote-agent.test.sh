@@ -180,6 +180,7 @@ case " \$* " in
   *" --request-timeout=5s version "*)
     # The probe of \`remote-agent ready\`: with \$SANDBOX/unreachable, as kubectl when the cluster has no route.
     [ ! -e "$SANDBOX/unreachable" ] || { echo "Client Version: v1.31.0"; echo "Unable to connect to the server: dial tcp 10.0.0.1:6443: connect: no route to host" >&2; exit 1; } ;;
+  *" get sandboxwarmpools "*) cat "$SANDBOX/pools" 2>/dev/null || true ;;
   *" get sandboxclaim "*conditions*) cat "$SANDBOX/conditions" 2>/dev/null || cat "$SANDBOX/state" ;;
   *" get sandboxclaim "*) printf 'test-pool-abc' ;;
   *" get sandbox "*) printf '' ;;
@@ -976,21 +977,34 @@ code=0; ready || code=$?
   || fail "ready, unreachable: not one line naming the backend and the error: $(cat "$SANDBOX/out")"
 rm -f "$SANDBOX/unreachable" "$SANDBOX/calls"
 
-# The cluster backend has no default kube context or warm pool: unset, ready and a run say which one, and nothing
-# reaches kubectl.
-for missing in CONTEXT POOL; do
-  if [ "$missing" = CONTEXT ]; then remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_POOL=test-pool
-  else remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx; fi
-  code=0; ready || code=$?
-  [ "$code" = 1 ] || fail "ready, no $missing: wanted exit 1, got $code"
-  grep -q "REMOTE_${missing} not set" "$SANDBOX/out" || fail "ready, no $missing: not named: $(cat "$SANDBOX/out")"
+# The cluster backend has no default kube context: unset, ready and a run say so, and nothing reaches kubectl.
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_POOL=test-pool
+code=0; ready || code=$?
+[ "$code" = 1 ] || fail "ready, no CONTEXT: wanted exit 1, got $code"
+grep -q "REMOTE_CONTEXT not set" "$SANDBOX/out" || fail "ready, no CONTEXT: not named: $(cat "$SANDBOX/out")"
+code=0; run 0 "$patch" || code=$?
+[ "$code" = 1 ] || fail "run, no CONTEXT: wanted exit 1, got $code"
+grep -q "REMOTE_CONTEXT not set" "$SANDBOX/out" || fail "run, no CONTEXT: not named: $(cat "$SANDBOX/out")"
+[ ! -e "$SANDBOX/calls" ] || fail "no CONTEXT: kubectl was called: $(cat "$SANDBOX/calls")"
+# No warm pool set: ready needs none, and a run claims from the namespace's only pool; with none or several there it
+# names them and claims nothing.
+remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx
+ready || fail "ready, no pool: exited non-zero: $(cat "$SANDBOX/out")"
+echo only-pool >"$SANDBOX/pools"
+run 0 "$patch" --name autopool || fail "run, one pool: exited non-zero: $(cat "$SANDBOX/out")"
+grep -qx "    name: only-pool" "$SANDBOX/claim.yaml" || fail "run, one pool: not claimed from it: $(cat "$SANDBOX/claim.yaml")"
+rm -f "$W/hello.txt"
+for pools in "" $'pool-a\npool-b'; do
+  printf '%s' "$pools" >"$SANDBOX/pools"
+  rm -f "$SANDBOX/calls"
   code=0; run 0 "$patch" || code=$?
-  [ "$code" = 1 ] || fail "run, no $missing: wanted exit 1, got $code"
-  grep -q "REMOTE_${missing} not set" "$SANDBOX/out" || fail "run, no $missing: not named: $(cat "$SANDBOX/out")"
-  [ ! -e "$SANDBOX/calls" ] || fail "no $missing: kubectl was called: $(cat "$SANDBOX/calls")"
+  [ "$code" = 1 ] || fail "run, pools '$pools': wanted exit 1, got $code"
+  if [ -z "$pools" ]; then want="no warm pool in namespace agents"; else want="several warm pools in namespace agents (context test-ctx): pool-a pool-b"; fi
+  grep -qF "$want" "$SANDBOX/out" || fail "run, pools '$pools': not named: $(cat "$SANDBOX/out")"
+  grep -q " apply " "$SANDBOX/calls" && fail "run, pools '$pools': claimed anyway"
 done
+rm -f "$SANDBOX/pools" "$SANDBOX/calls"
 remote_config "$SANDBOX/config" REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx REMOTE_POOL=test-pool
-
 # --help prints the usage on stdout and exits 0; an unknown --option is refused; neither starts a run.
 code=0; (cd "$W" && env -u CLAUDE_CODE_OAUTH_TOKEN HOME="$H" PATH="$SANDBOX/bin:$PATH" XDG_CONFIG_HOME="$SANDBOX/config" \
   "$REPO/scripts/remote-agent.sh" --help) >"$SANDBOX/report" 2>"$SANDBOX/err" || code=$?

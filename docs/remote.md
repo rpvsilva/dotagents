@@ -71,7 +71,7 @@ The repo ships no cluster manifests, so you set up the cluster side yourself. He
 
 1. The [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller, with its extension CRDs. `remote-agent` creates `SandboxClaim` objects (`extensions.agents.x-k8s.io/v1beta1`).
 2. A namespace for the sandboxes. The default is `agents`.
-3. A `SandboxTemplate` and a warm pool in that namespace. The template's pod needs:
+3. A `SandboxTemplate` and a warm pool in that namespace. With one pool there, you never name it. The template's pod needs:
    - the runner image `ghcr.io/rpvsilva/agent-runner:main` (public, `amd64` and `arm64`), or your own with `sh`, GNU `tar`, `gzip`, `git`, `node` and the harness's CLI (`claude`, `codex`, `opencode` or `pi`);
    - a writable `$HOME` (`/home/node` in the runner image, uid 1000);
    - CPU and memory limits. On a cluster these set each run's size.
@@ -88,7 +88,7 @@ The repo ships no cluster manifests, so you set up the cluster side yourself. He
 | Setting | Default | What it is |
 |---|---|---|
 | `remote.context` | none, required | The kube context |
-| `remote.pool` | none, required | The warm pool to claim from |
+| `remote.pool` | none: the namespace's only warm pool | The warm pool to claim from. Leave it unset with one pool in the namespace; `setup` asks only when there are several |
 | `remote.namespace` | `agents` | Where claims are made |
 | `remote.claim_timeout` | 180 | Seconds to wait for a claimed pod to be ready |
 | `remote.max_sandboxes` | 4 | Set it to the warm pool's size. A claim on a full pool waits, then fails |

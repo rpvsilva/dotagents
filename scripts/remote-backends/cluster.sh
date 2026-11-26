@@ -6,12 +6,14 @@
 # put extracts the gzipped tar on stdin under the sandbox's $HOME/<dir>; get writes a tar of $HOME/<dir> on stdout.
 # release deletes the claim (safe when acquire failed halfway), or says it kept it under REMOTE_KEEP.
 # check names, one line each, what is missing: kubectl, the context, permission to create sandboxclaims and pods/exec
-# in the namespace, and the warm pool (REMOTE_POOL) there: a claim on a pool that does not exist fails with
-# WarmPoolNotFound only once a run starts. Another error reading the pool (no permission to get it) is no finding.
+# in the namespace, and the warm pool there: REMOTE_POOL when set (a claim on a pool that does not exist fails with
+# WarmPoolNotFound only once a run starts; another error reading it, no permission to get it, is no finding), else
+# one pool the namespace holds alone (none, several, or a list it may not read, is named).
 # ping asks the cluster for its version, giving up after 5 seconds (`remote-agent ready`): exit 0 when it answers, else
 # one line on stdout with kubectl's error (e.g. Unable to connect to the server: ... no route to host) and exit 1.
-# Settings: REMOTE_CONTEXT (kube context) and REMOTE_POOL (warm pool), both required: every op but release refuses
-# without them; REMOTE_NAMESPACE (agents), REMOTE_HOURS (2), REMOTE_KEEP, REMOTE_CLAIM_TIMEOUT (seconds acquire waits
+# Settings: REMOTE_CONTEXT (kube context), required: every op but release refuses without it; REMOTE_POOL (warm pool),
+# unset by default: acquire then claims from the namespace's only warm pool, and refuses, naming them, when it holds
+# none or several; REMOTE_NAMESPACE (agents), REMOTE_HOURS (2), REMOTE_KEEP, REMOTE_CLAIM_TIMEOUT (seconds acquire waits
 # for the claim to be Ready, 180);
 # REMOTE_TASK (set by remote-agent.sh from --name, a valid label value).
 # The claim and its pod are labelled sandbox.users.io/remote-agent-run=<run> and, with REMOTE_TASK,
@@ -36,16 +38,35 @@ untar='tar -x --no-same-owner --warning=no-unknown-keyword -f -'
 op="${1:-}"
 problem=""
 [ -n "$context" ] || problem="REMOTE_CONTEXT not set: the kube context (remote.context; \`remote-agent setup\`)"
-[ -n "$problem" ] || [ -n "$pool" ] || problem="REMOTE_POOL not set: the warm pool (remote.pool; \`remote-agent setup\`)"
 if [ -n "$problem" ]; then
   # acquire already said it; release has nothing to remove.
   [ "$op" = release ] && exit 0
   if [ "$op" = check ] || [ "$op" = ping ]; then echo "$problem"; else say "$problem"; fi
   exit 1
 fi
+# find_pool prints the pool to claim from: REMOTE_POOL, else the namespace's only warm pool. Else it prints why not
+# and fails.
+find_pool() {
+  local names count
+  [ -z "$pool" ] || { printf '%s\n' "$pool"; return 0; }
+  if ! names="$(kc get sandboxwarmpools -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>&1)"; then
+    echo "no remote.pool set, and the warm pools in namespace $namespace (context $context) could not be listed: $(printf '%s\n' "$names" | grep . | tail -1 || true)"
+    return 1
+  fi
+  names="$(printf '%s\n' "$names" | grep . || true)"
+  count="$(printf '%s\n' "$names" | grep -c . || true)"
+  case "$count" in
+    1) printf '%s\n' "$names" ;;
+    0) echo "no warm pool in namespace $namespace (context $context): create one, or set remote.namespace to the one holding it"; return 1 ;;
+    *) echo "several warm pools in namespace $namespace (context $context): $(printf '%s\n' "$names" | paste -sd ' ' -); pick one with remote.pool (\`remote-agent setup\`)"; return 1 ;;
+  esac
+}
+
 case "$op" in
   acquire)
     claim="$2"
+    if ! found="$(find_pool)"; then say "$found"; exit 1; fi
+    pool="$found"
     labels="sandbox.users.io/remote-agent-run: $claim"
     [ -z "${REMOTE_TASK:-}" ] || labels="$labels, sandbox.users.io/remote-agent-task: $REMOTE_TASK"
     end=$(( $(date +%s) + hours * 3600 ))
@@ -136,7 +157,9 @@ YAML
         missing=1
       fi
     done
-    if err="$(kc get sandboxwarmpool "$pool" -o name 2>&1 >/dev/null)"; then :
+    if [ -z "$pool" ]; then
+      if ! found="$(find_pool)"; then echo "$found"; missing=1; fi
+    elif err="$(kc get sandboxwarmpool "$pool" -o name 2>&1 >/dev/null)"; then :
     elif printf '%s' "$err" | grep -q 'NotFound\|not found'; then
       echo "warm pool $pool not found in namespace $namespace (context $context): set remote.pool (or remote.namespace) to one that exists"
       missing=1
