@@ -506,6 +506,10 @@ grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION 2>/dev/null && [ "$(wc -l <VERSION | 
   fail "VERSION: not a single x.y.z line"
 jq -e '.packages["."]["version-file"] == "VERSION"' release-please-config.json >/dev/null 2>&1 ||
   fail "release-please-config.json: does not parse, or its \".\" package's version-file is not VERSION"
+# A changelog covers every commit since the last tag, or the whole history before the first: nothing cuts it short.
+if jq -e '[.. | objects | keys[]] | any(. == "bootstrap-sha" or . == "last-release-sha")' release-please-config.json >/dev/null 2>&1; then
+  fail "release-please-config.json: sets bootstrap-sha or last-release-sha, which cuts the changelog short of the last tag"
+fi
 if ! manifest_version="$(jq -r '.["."] // empty' .release-please-manifest.json 2>/dev/null)"; then
   fail ".release-please-manifest.json: does not parse as JSON"
 elif [ -n "$manifest_version" ] && [ "$manifest_version" != "$(cat VERSION 2>/dev/null)" ]; then

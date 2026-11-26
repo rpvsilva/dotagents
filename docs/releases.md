@@ -64,7 +64,7 @@ The highest bump wins: a release holding one `feat:` and three `fix:` commits is
 
 The release PR is an ordinary medium-tier PR: CI runs on it and `scripts/merge-pr.sh <number>` merges it. Merge it when the changes in it are worth releasing; until then, it waits and grows.
 
-Its configuration is [`release-please-config.json`](../release-please-config.json). `bootstrap-sha` there is where the first release's changelog starts; release-please ignores it after the first release.
+Its configuration is [`release-please-config.json`](../release-please-config.json). A release's changelog holds every commit since the last release's tag, or since the first commit when there is none: the config sets no `bootstrap-sha` or `last-release-sha`, which would cut that range short, and its `commit-search-depth` (5000) reaches the whole history.
 
 ### Maintainer setup
 
