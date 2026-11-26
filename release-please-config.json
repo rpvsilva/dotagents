@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "bootstrap-sha": "1891433bbfe10c970e77546a2318e1a7fe2dac3c",
+  "commit-search-depth": 5000,
   "packages": {
     ".": {
       "release-type": "simple",
@@ -14,11 +14,13 @@
         { "type": "fix", "section": "Bug fixes" },
         { "type": "perf", "section": "Performance" },
         { "type": "revert", "section": "Reverts" },
-        { "type": "docs", "section": "Documentation", "hidden": true },
-        { "type": "refactor", "section": "Refactors", "hidden": true },
-        { "type": "test", "section": "Tests", "hidden": true },
-        { "type": "ci", "section": "CI", "hidden": true },
-        { "type": "chore", "section": "Chores", "hidden": true }
+        { "type": "docs", "section": "Documentation" },
+        { "type": "refactor", "section": "Refactors" },
+        { "type": "test", "section": "Tests" },
+        { "type": "ci", "section": "CI" },
+        { "type": "build", "section": "Build" },
+        { "type": "style", "section": "Style" },
+        { "type": "chore", "section": "Chores" }
       ],
       "pull-request-footer": "## Testing\n\nrelease-please wrote this PR from the commits since the last tag; it changes only VERSION, .release-please-manifest.json and CHANGELOG.md. CI runs the `lint`, `test` and `secrets` jobs on it, and `scripts/merge-pr.sh` waits for them.\n\n## Risk\n\nLow: no code changes. Merging it tags the release, creates the GitHub release and publishes the runner image under the version (`.github/workflows/release.yml`).\n\n## How to revert\n\nBefore merging: close the PR; the next push to main reopens it. After merging: delete the GitHub release and its tag, then revert the merge commit. Published image tags stay until deleted from the package."
     }
