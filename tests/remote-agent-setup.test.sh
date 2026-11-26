@@ -249,5 +249,37 @@ code=0; setup $'docker\n' || code=$?
 cmp -s "$SANDBOX/seed" "$FILE" || fail "EOF with existing files: remote.env changed"
 cmp -s "$SANDBOX/seed.json" "$SETTINGS" || fail "EOF with existing files: settings.json changed"
 
+# On a terminal without gum (an install from before install.sh installed it), setup offers `brew install gum`: yes
+# runs it, no (or enter) does not, and either way the plain questions follow. `script` gives it a terminal; the
+# answer comes late, so it reaches the question rather than the terminal's start. Skipped without `script`.
+tty_setup() {
+  local nogum="" d dirs cmd
+  IFS=: read -ra dirs <<<"$PATH"
+  for d in "${dirs[@]}"; do [ -x "$d/gum" ] || nogum+="${nogum:+:}$d"; done
+  cmd=(env -i HOME="$SANDBOX/tty" PATH="$SANDBOX/brewbin:$nogum" XDG_CONFIG_HOME="$SANDBOX/tty/config" TERM=dumb
+    "$REPO/scripts/remote-agent.sh" setup)
+  if script --version 2>/dev/null | grep -q util-linux; then
+    (sleep 2; printf '%s\n' "$1"; sleep 2) | script -qec "$(printf '%q ' "${cmd[@]}")" /dev/null
+  else
+    (sleep 2; printf '%s\n' "$1"; sleep 2) | script -q /dev/null "${cmd[@]}"
+  fi >"$SANDBOX/tty.out" 2>&1 || true
+}
+if command -v script >/dev/null 2>&1; then
+  mkdir -p "$SANDBOX/brewbin" "$SANDBOX/tty"
+  printf '#!/bin/sh\necho "$*" >>"%s/brew.log"\n' "$SANDBOX" >"$SANDBOX/brewbin/brew"
+  chmod +x "$SANDBOX/brewbin/brew"
+  tty_setup y
+  [ "$(cat "$SANDBOX/brew.log" 2>/dev/null)" = "install gum" ] || fail "yes to the gum offer did not run brew install gum: $(cat "$SANDBOX/tty.out")"
+  grep -q "Backend (cluster, docker, ssh)" "$SANDBOX/tty.out" || fail "after the gum offer, no plain question: $(cat "$SANDBOX/tty.out")"
+  rm -f "$SANDBOX/brew.log"
+  tty_setup n
+  [ ! -e "$SANDBOX/brew.log" ] || fail "no to the gum offer ran brew"
+  grep -q "Install gum for menus?" "$SANDBOX/tty.out" || fail "no gum offer on a terminal: $(cat "$SANDBOX/tty.out")"
+else
+  echo "remote-agent-setup.test.sh: the gum offer skipped (no script)"
+fi
+# Without a terminal (every case above), no offer.
+grep -q "Install gum" "$SANDBOX/out" && fail "the gum offer showed without a terminal" || true
+
 [ "$fails" -eq 0 ] || { echo "remote-agent-setup.test.sh: $fails failure(s)"; exit 1; }
 echo "remote-agent-setup.test.sh: ok"
