@@ -17,11 +17,15 @@ TOKEN="sk-claude-setup-secret"
 CFG="$SANDBOX/config/dotagents"
 FILE="$CFG/remote.env"
 
-# A stub kubectl whose current context is my-ctx.
+# A stub kubectl whose current context is my-ctx, and whose namespace holds the warm pools in $SANDBOX/pools, one per
+# line (none without the file).
 mkdir -p "$SANDBOX/bin"
-cat >"$SANDBOX/bin/kubectl" <<'EOF'
+cat >"$SANDBOX/bin/kubectl" <<EOF
 #!/bin/sh
-[ "$*" = "config current-context" ] && echo my-ctx
+case "\$*" in
+  "config current-context") echo my-ctx ;;
+  *" get sandboxwarmpools "*) echo "\$*" >"$SANDBOX/pools-asked"; cat "$SANDBOX/pools" 2>/dev/null || true ;;
+esac
 EOF
 chmod +x "$SANDBOX/bin/kubectl"
 
@@ -135,27 +139,39 @@ setup $'ssh\n\n\nagent\n\n\n\n\n' || fail "ssh agent: exited non-zero: $(cat "$S
 [ "$(secret SSH_KEY_PASSPHRASE)" = unset ] || fail "ssh agent: passphrase kept"
 check_written "ssh agent" "$TOKEN"
 
-# Cluster: the current kube context by default, then namespace and pool; the pool has no default, so enter asks
-# again; a token with quotes survives.
+# Cluster: the current kube context by default, then the namespace; with one warm pool in it, the pool is never
+# asked and stays unset (each claim takes the only one); a token with quotes survives.
 fresh
+echo only-pool >"$SANDBOX/pools"
 odd="sk-it's \$x \"y\""
-setup $'\n\nmy-ns\n\nmy-pool\n\n\n'"$odd"$'\n' || fail "cluster: exited non-zero: $(cat "$SANDBOX/out")"
-[ "$(grep -o "Warm pool[^:]*:" "$SANDBOX/out" | sort -u)" = "Warm pool:" ] || fail "cluster: the pool prompt offers a default: $(cat "$SANDBOX/out")"
-[ "$(grep -o "Warm pool:" "$SANDBOX/out" | wc -l | tr -d ' ')" = 2 ] || fail "cluster: an empty pool was not asked again: $(cat "$SANDBOX/out")"
+setup $'\n\nmy-ns\n\n\n'"$odd"$'\n' || fail "cluster: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "Warm pool" "$SANDBOX/out" && fail "cluster: the pool was asked with one pool: $(cat "$SANDBOX/out")"
+grep -q -- "--context my-ctx -n my-ns get sandboxwarmpools" "$SANDBOX/pools-asked" \
+  || fail "cluster: pools not listed in the chosen context and namespace: $(cat "$SANDBOX/pools-asked" 2>/dev/null)"
 check_written cluster "$odd"
 [ "$(value REMOTE_BACKEND)" = cluster ] || fail "cluster: REMOTE_BACKEND is $(value REMOTE_BACKEND)"
 [ "$(value REMOTE_CONTEXT)" = my-ctx ] || fail "cluster: REMOTE_CONTEXT is $(value REMOTE_CONTEXT), not the current context"
 [ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
-[ "$(value REMOTE_POOL)" = my-pool ] || fail "cluster: REMOTE_POOL is $(value REMOTE_POOL)"
+[ "$(value REMOTE_POOL)" = unset ] || fail "cluster: REMOTE_POOL is $(value REMOTE_POOL), with one pool"
 [ "$(value REMOTE_IMAGE)" = unset ] || fail "cluster: an image was written"
 
-# Re-running keeps the saved kube context over the current one (enter through every question).
+# Several pools: a choice among them, asked again until it is one; a saved one is the default on a re-run, and the
+# saved kube context wins over the current one (enter through every question).
+printf 'pool-a\npool-b\n' >"$SANDBOX/pools"
+setup $'\n\n\nnope\npool-b\n\n\n\n' || fail "cluster pools: exited non-zero: $(cat "$SANDBOX/out")"
+grep -q "one of: pool-a pool-b" "$SANDBOX/out" || fail "cluster pools: an unknown pool was taken: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_POOL)" = pool-b ] || fail "cluster pools: REMOTE_POOL is $(value REMOTE_POOL)"
 XDG_CONFIG_HOME="$SANDBOX/config" "$REPO/scripts/settings.sh" --dir "$SANDBOX" set remote context saved-ctx --machine
 setup $'\n\n\n\n\n\n\n' || fail "cluster re-run: exited non-zero: $(cat "$SANDBOX/out")"
 [ "$(value REMOTE_CONTEXT)" = saved-ctx ] || fail "cluster re-run: REMOTE_CONTEXT is $(value REMOTE_CONTEXT), not the saved one"
 [ "$(value REMOTE_NAMESPACE)" = my-ns ] || fail "cluster re-run: REMOTE_NAMESPACE is $(value REMOTE_NAMESPACE)"
-[ "$(value REMOTE_POOL)" = my-pool ] || fail "cluster re-run: REMOTE_POOL is $(value REMOTE_POOL), not the saved one"
+[ "$(value REMOTE_POOL)" = pool-b ] || fail "cluster re-run: REMOTE_POOL is $(value REMOTE_POOL), not the saved one"
 [ "$(value CLAUDE_CODE_OAUTH_TOKEN)" = "$odd" ] || fail "cluster re-run: the token with quotes did not survive"
+# Back to one pool: the saved pool is dropped, so claims follow the namespace.
+echo only-pool >"$SANDBOX/pools"
+setup $'\n\n\n\n\n\n' || fail "cluster one again: exited non-zero: $(cat "$SANDBOX/out")"
+[ "$(value REMOTE_POOL)" = unset ] || fail "cluster one again: REMOTE_POOL kept as $(value REMOTE_POOL)"
+rm -f "$SANDBOX/pools"
 
 # Harnesses and logins. Codex with an API key: the harness and credential Settings, the key in remote.env, no gateway;
 # the Claude token already there stays, so switching back keeps it.

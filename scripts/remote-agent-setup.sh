@@ -158,8 +158,18 @@ case "$backend" in
   cluster)
     context="$(ask "Kube context" "$(old context "$(kubectl config current-context 2>/dev/null || true)")")"
     namespace="$(ask "Namespace" "$(old namespace)")"
-    pool="$(ask "Warm pool" "$(old pool)")"
-    answers+=("context $context" "namespace $namespace" "pool $pool")
+    answers+=("context $context" "namespace $namespace")
+    # The warm pool is asked only when the namespace holds several: with one, none, or a list kubectl cannot read,
+    # remote.pool stays unset and each claim takes the namespace's only pool (scripts/remote-backends/cluster.sh).
+    pools="$(kubectl --context "$context" -n "$namespace" get sandboxwarmpools \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep . || true)"
+    if [ "$(printf '%s\n' "$pools" | grep -c . || true)" -gt 1 ]; then
+      old_pool="$(old pool)"
+      printf '%s\n' "$pools" | grep -qxF "$old_pool" || old_pool=""
+      # shellcheck disable=SC2046 # the pool names, one word each
+      pool="$(ask "Warm pool (the namespace holds several)" "$old_pool" $(printf '%s\n' "$pools"))"
+      answers+=("pool $pool")
+    fi
     ;;
   ssh)
     host="$(ask "SSH host (user@host or a ~/.ssh/config alias)" "$(old ssh_host)")"

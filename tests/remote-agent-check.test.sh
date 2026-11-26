@@ -249,6 +249,9 @@ case "\$*" in
     [ ! -e "$S/no-pool" ] || { echo 'Error from server (NotFound): sandboxwarmpools.extensions.agents.x-k8s.io "test-pool" not found' >&2; exit 1; }
     [ ! -e "$S/pool-forbidden" ] || { echo 'Error from server (Forbidden): cannot get sandboxwarmpools' >&2; exit 1; }
     echo sandboxwarmpool.extensions.agents.x-k8s.io/test-pool ;;
+  *"get sandboxwarmpools "*)
+    [ ! -e "$S/pool-forbidden" ] || { echo 'Error from server (Forbidden): cannot list sandboxwarmpools' >&2; exit 1; }
+    cat "$S/pools" 2>/dev/null || true ;;
   *) echo "stub kubectl: unexpected \$*" >&2; exit 1 ;;
 esac
 EOF
@@ -283,15 +286,32 @@ code=0; check || code=$?
 [ "$code" != 0 ] || fail "cluster context: exited 0"
 grep -q "context missing-ctx not found" "$SANDBOX/out" || fail "cluster context: context not named as missing: $(out)"
 grep -q "auth can-i" "$S/calls" && fail "cluster context: asked for permissions in a missing context"
-# No default kube context or warm pool: an unset one is named, and kubectl is never asked.
-for missing in CONTEXT POOL; do
-  if [ "$missing" = CONTEXT ]; then config REMOTE_BACKEND=cluster REMOTE_POOL=test-pool
-  else config REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx; fi
+# No default kube context: unset, it is named, and kubectl is never asked.
+config REMOTE_BACKEND=cluster REMOTE_POOL=test-pool
+code=0; check || code=$?
+[ "$code" != 0 ] || fail "cluster no CONTEXT: exited 0"
+grep -q "REMOTE_CONTEXT not set" "$SANDBOX/out" || fail "cluster no CONTEXT: not named: $(out)"
+[ ! -e "$S/calls" ] || fail "cluster no CONTEXT: kubectl was called: $(cat "$S/calls")"
+# No warm pool set: the namespace's only pool is no finding; none, several, or a list it may not read, is named.
+config REMOTE_BACKEND=cluster REMOTE_CONTEXT=test-ctx
+printf 'test-ctx\n' >"$S/contexts"
+for pools in one none several forbidden; do
+  rm -f "$S/pools" "$S/pool-forbidden"
+  case "$pools" in
+    one) want="" ; echo test-pool >"$S/pools" ;;
+    none) want="no warm pool in namespace agents" ;;
+    several) want="several warm pools in namespace agents (context test-ctx): pool-a pool-b"; printf 'pool-a\npool-b\n' >"$S/pools" ;;
+    forbidden) want="could not be listed: Error from server (Forbidden)"; : >"$S/pool-forbidden" ;;
+  esac
   code=0; check || code=$?
-  [ "$code" != 0 ] || fail "cluster no $missing: exited 0"
-  grep -q "REMOTE_${missing} not set" "$SANDBOX/out" || fail "cluster no $missing: not named: $(out)"
-  [ ! -e "$S/calls" ] || fail "cluster no $missing: kubectl was called: $(cat "$S/calls")"
+  if [ -z "$want" ]; then
+    grep -q "warm pool" "$SANDBOX/out" && fail "cluster auto pool $pools: named: $(out)"
+  else
+    # shellcheck disable=SC2015 # fail only reports
+    [ "$code" != 0 ] && grep -qF "$want" "$SANDBOX/out" || fail "cluster auto pool $pools: not named: $code $(out)"
+  fi
 done
+rm -f "$S/pools" "$S/pool-forbidden"
 no_token cluster
 
 # --- no token file, no backend, no token, settings left in remote.env, unknown backend.
