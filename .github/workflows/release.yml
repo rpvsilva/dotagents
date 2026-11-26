@@ -1,0 +1,52 @@
+name: release
+
+# Cuts releases from Conventional Commits (docs/releases.md). On every push to main, release-please keeps one open
+# release PR, `chore(main): release x.y.z`: it holds the next version, worked out from the commits since the last tag
+# (feat: minor, fix: patch, `!` or BREAKING CHANGE: major), in VERSION, .release-please-manifest.json and
+# CHANGELOG.md. Merging that PR, through scripts/merge-pr.sh like any other, tags v<x.y.z>, creates the GitHub release
+# with that changelog section, then publishes the runner image under the version (runner-image.yml).
+# It runs as the maintainer's agent App, not GITHUB_TOKEN: a PR opened with GITHUB_TOKEN starts no CI, and main's
+# ruleset needs CI to pass. Set the App ID as the repository variable DOTAGENTS_APP_ID and its private key as the
+# secret DOTAGENTS_APP_PRIVATE_KEY; without the variable (a fork) the job is skipped.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One at a time, never cancelled: a cancelled run could tag a release and skip its image.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: vars.DOTAGENTS_APP_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.DOTAGENTS_APP_ID }}
+          private-key: ${{ secrets.DOTAGENTS_APP_PRIVATE_KEY }}
+      # Reads release-please-config.json and .release-please-manifest.json from main.
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+  image:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/runner-image.yml
+    with:
+      version: ${{ needs.release-please.outputs.version }}

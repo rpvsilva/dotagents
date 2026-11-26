@@ -161,7 +161,7 @@ git clone https://github.com/rpvsilva/dotagents.git && cd dotagents
 ./install.sh remote pr-loop epics security safety-hooks agent-flow small-tools
 ```
 
-That installs every public group for every tool and leaves out `personal`. A bare `./install.sh` installs everything, including the maintainer's `personal` example (their global instructions, guardrails and plugins).
+That installs every public group for every tool and leaves out `personal`. To install a release instead of the latest `main`, clone its tag (`git clone --branch v1.2.0 --depth 1 ...`); `./install.sh --version` prints the version you run. See [Releases](docs/releases.md). A bare `./install.sh` installs everything, including the maintainer's `personal` example (their global instructions, guardrails and plugins).
 
 `install.sh [tool] [<group>|<part>...]` and `uninstall.sh [--dry-run] [--purge] [tool] [<group>|<part>...]` take their words in any order: at most one tool word and any groups or parts (`scripts/parts.sh list`). `install.sh` takes the tool words `all`, `shared`, `claude`, `codex` and `cursor`; `uninstall.sh` takes `all`, `claude`, `codex` and `cursor`, not `shared` (the shared `~/.agents` links go only with `all`). A second tool word or an unknown word prints the usage and exits 1.
 
@@ -200,6 +200,7 @@ New here? Start at the [docs index](docs/README.md): it points you to the right 
 | 🚀 [build-epic launcher](docs/build-epic-launcher.md) | Starting a build-epic run in Claude Code without the tools and MCP servers it never calls, and what that saves |
 | 🧪 [Evals](docs/evals.md) | Checking whether a skill change made it better or worse: the case format, running cases locally or on the remote backend, grading and comparing them, when they run, and the pilot |
 | 🧭 [APM study](docs/apm.md) | Whether APM can install the Groups instead of `install.sh`: the Group by tool matrix, each breakage and who fixes it, and the decision |
+| 🏷️ [Releases](docs/releases.md) | Installing a specific version, how a commit sets the next version, the runner image tags, and how the maintainer cuts a release |
 | 📌 [Dependencies](docs/dependencies.md) | Which pins Renovate keeps current and which stay hand-bumped, and the tier each Renovate PR lands in |
 | 🌍 [Going public](docs/going-public.md) | The history scan, the decision to keep the history, and the maintainer's steps to switch the repo to public, in order |
 | 👤 [Personal values](docs/personal.md) | Every personal value, and what a public install leaves out: the maintainer's instructions, guardrails, plugins, gate, App identity and cluster |

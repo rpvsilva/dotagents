@@ -27,6 +27,13 @@ body:
     validations:
       required: true
   - type: input
+    id: version
+    attributes:
+      label: dotagents version
+      description: What `./install.sh --version` prints in your clone, e.g. dotagents 1.2.0.
+    validations:
+      required: true
+  - type: input
     id: tool
     attributes:
       label: Tool and version

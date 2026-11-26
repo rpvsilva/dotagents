@@ -419,6 +419,25 @@ grep -q "^usage: .*<group>" "$SANDBOX/badsel.out" || fail "install.sh with an un
 grep -q "^usage: " "$SANDBOX/twotools.out" || fail "install.sh with two tool words did not print the usage: $(cat "$SANDBOX/twotools.out")"
 [ ! -s "$SANDBOX/twotools.links" ] || fail "install.sh with two tool words linked something"
 
+# --version: VERSION on its release tag, +<short sha> past it or untagged, VERSION alone without git; nothing linked.
+vrepo="$SANDBOX/version-repo"
+mkdir -p "$vrepo" "$SANDBOX/version-home"
+cp "$REPO/install.sh" "$vrepo/"
+echo 1.2.3 >"$vrepo/VERSION"
+version() { HOME="$SANDBOX/version-home" "$vrepo/install.sh" --version; }
+[ "$(version)" = "dotagents 1.2.3" ] || fail "install.sh --version without git: $(version)"
+g() { git -C "$vrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false "$@" >/dev/null; }
+g init -q && g add -A && g commit -qm one
+sha="$(git -C "$vrepo" rev-parse HEAD)"
+[ "$(version)" = "dotagents 1.2.3+${sha:0:7}" ] || fail "install.sh --version untagged: $(version)"
+g tag v1.2.3
+[ "$(version)" = "dotagents 1.2.3" ] || fail "install.sh --version on its tag: $(version)"
+g commit -q --allow-empty -m two
+sha="$(git -C "$vrepo" rev-parse HEAD)"
+[ "$(version)" = "dotagents 1.2.3+${sha:0:7}" ] || fail "install.sh --version past its tag: $(version)"
+if HOME="$SANDBOX/version-home" "$vrepo/install.sh" --version claude >/dev/null 2>&1; then fail "install.sh --version claude exited 0"; fi
+[ -z "$(find "$SANDBOX/version-home" -mindepth 1)" ] || fail "install.sh --version wrote to HOME"
+
 # gum, for `remote-agent setup` (scripts/remote-gum.sh): installed with brew when the remote part is in, gum is
 # missing and brew is on PATH; without brew, the pinned release downloaded to ~/.agents/bin/gum, checked against its
 # sha256; with DOTAGENTS_SKIP_PLUGINS, never. PATH holds no real gum or brew; the stub brew logs its arguments and puts

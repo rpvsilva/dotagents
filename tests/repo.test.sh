@@ -500,6 +500,18 @@ printf 'jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n      - uses
 [ "$(unpinned_uses "$bad_wf" | wc -l | tr -d ' ')" = 1 ] || fail "Renovate check: a tag-pinned action is not reported (or a docker:// ref is)"
 rm -rf "$(dirname "$bad_wf")"
 
+# Releases (docs/releases.md): VERSION is one x.y.z line, the release-please files parse, the config keeps the
+# root package's version in VERSION, and once a release exists the manifest's version is VERSION's.
+grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION 2>/dev/null && [ "$(wc -l <VERSION | tr -d ' ')" = 1 ] ||
+  fail "VERSION: not a single x.y.z line"
+jq -e '.packages["."]["version-file"] == "VERSION"' release-please-config.json >/dev/null 2>&1 ||
+  fail "release-please-config.json: does not parse, or its \".\" package's version-file is not VERSION"
+if ! manifest_version="$(jq -r '.["."] // empty' .release-please-manifest.json 2>/dev/null)"; then
+  fail ".release-please-manifest.json: does not parse as JSON"
+elif [ -n "$manifest_version" ] && [ "$manifest_version" != "$(cat VERSION 2>/dev/null)" ]; then
+  fail ".release-please-manifest.json: version $manifest_version, but VERSION says $(cat VERSION 2>/dev/null)"
+fi
+
 # CLAUDE.md is committed as a symlink to AGENTS.md. Reads the index, so Windows checkouts without symlinks agree.
 mode="$(git ls-files -s CLAUDE.md | cut -d' ' -f1)"
 if [ "$mode" != "120000" ] || [ "$(git cat-file blob :CLAUDE.md 2>/dev/null)" != "AGENTS.md" ]; then
