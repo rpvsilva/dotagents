@@ -43,7 +43,7 @@ The first time you open a PR from a fork, its workflows wait until the maintaine
 ## Open a pull request
 
 - Open the PR from your fork, as yourself.
-- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages, scoped by area when useful: `feat(skills): add renovate-prs`. Other types are `fix:`, `docs:` and `chore:`.
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages, scoped by area when useful: `feat(skills): add renovate-prs`. Other types are `fix:`, `docs:` and `chore:`. A PR merges as one squashed commit, so give its title the same form: it decides the next version (`feat:` minor, `fix:` patch, `!` major; see [docs/releases.md](docs/releases.md#how-a-version-is-picked)).
 - Fill in the PR template. `Testing`, `Risk` and `How to revert` are required: under `Testing`, write what you ran and its result. `TODO` or `N/A` counts as empty.
 
 ## Review and merge

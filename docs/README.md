@@ -14,6 +14,7 @@ These pages explain how it all works. You don't need to read them in order. Find
 | Change how a skill behaves (fewer agents, another tracker) | 🎛️ [Settings](settings.md) |
 | Find out why your agent was just blocked (or wasn't asked) | 🪝 [Hooks](hooks.md) |
 | Run subagents on a Kubernetes cluster, Docker or another machine | ☁️ [Remote subagents](remote.md) |
+| Install a specific version, or see what changed in one | 🏷️ [Releases](releases.md) |
 | Fork this repo without shipping someone else's values | 👤 [Personal values](personal.md) |
 
 ## 🤔 The "why" pages
@@ -32,6 +33,7 @@ Short pages on a decision and what led to it.
 |---|---|
 | Measuring whether a skill change made things better or worse | 🧪 [Evals](evals.md) |
 | Could APM replace `install.sh`? (The study and the decision) | 🧭 [APM study](apm.md) |
+| How commits set the version, and cutting a release | 🏷️ [Releases](releases.md) |
 | Which pins Renovate bumps, and which are bumped by hand | 📌 [Dependencies](dependencies.md) |
 | How the repo went public | 🌍 [Going public](going-public.md) |
 

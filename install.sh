@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Symlink this repo into each AI tool's config folders.
 # Usage: ./install.sh [all|shared|claude|codex|cursor] [<group>|<part>...]   (default: all tools, every part)
+#        ./install.sh --version   (this checkout's release, from VERSION; see docs/releases.md)
 # Words come in any order: a tool word picks the tools, every other word a group or part (scripts/parts.sh list,
 # groups.json). A selection installs those parts, core and every part they require, and nothing else; installs add up.
 # Existing real files are moved to ~/.dotagents-backup/<timestamp>/ before linking.
@@ -10,7 +11,20 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-usage() { echo "usage: $0 [all|shared|claude|codex|cursor] [<group>|<part>...]"; exit 1; }
+usage() { echo "usage: $0 [all|shared|claude|codex|cursor] [<group>|<part>...] | --version"; exit 1; }
+
+# The release this checkout is: VERSION, plus +<short sha> when HEAD is not that release's tag v<VERSION> (commits past
+# it, or no release yet: 0.0.0). A copy without git, such as a release's source archive, prints VERSION alone.
+if [ "${1:-}" = --version ]; then
+  [ $# -eq 1 ] || usage
+  version="$(tr -d '[:space:]' <"$REPO/VERSION")"
+  if head="$(git -C "$REPO" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null)" &&
+    [ "$(git -C "$REPO" rev-parse -q --verify "refs/tags/v$version^{commit}" 2>/dev/null)" != "$head" ]; then
+    version="$version+${head:0:7}"
+  fi
+  echo "dotagents $version"
+  exit 0
+fi
 
 # One tool word at most: a second would silently win over the first.
 target="" words=()
