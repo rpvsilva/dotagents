@@ -15,7 +15,7 @@
 # (hours, keep, ...) stay. REMOTE_* lines left in remote.env move to settings.json, unless the machine Level already
 # holds that Setting; remote.env keeps the token and its lines that are not Settings. Reads answers from stdin when
 # it is not a terminal (for tests). EOF or Ctrl-C before the end writes nothing: existing files stay as they were.
-# On a terminal with gum (https://github.com/charmbracelet/gum; install.sh installs it with brew) on PATH, the questions
+# On a terminal with gum (https://github.com/charmbracelet/gum; install.sh installs it: scripts/remote-gum.sh), the questions
 # are gum menus and inputs, a review of the answers asks before writing, and it offers to run `remote-agent check` at
 # the end; DOTAGENTS_PLAIN=1 keeps the plain prompts.
 set -euo pipefail
@@ -35,23 +35,29 @@ trap 'exit 143' TERM
 
 abort() { echo >&2; echo "remote-agent setup: stopped, nothing written" >&2; exit 1; }
 
-# gum draws the prompts only where a human answers them: stdin and stderr terminals. Without it there (an install from
-# before install.sh installed gum), it offers `brew install gum`, no by default, or says where to get it without brew.
+# gum draws the prompts only where a human answers them: stdin and stderr terminals. GUM is its path
+# (scripts/remote-gum.sh path: on PATH, else ~/.agents/bin/gum). Without it there (an install from before install.sh
+# installed gum), it offers to install it (scripts/remote-gum.sh install: brew, else the pinned release on Linux and
+# macOS), no by default; on Windows it names the command instead.
 GUM=""
 if [ -t 0 ] && [ -t 2 ] && [ -z "${DOTAGENTS_PLAIN:-}" ]; then
-  if command -v gum >/dev/null 2>&1; then
-    GUM=1
-  elif command -v brew >/dev/null 2>&1; then
-    printf 'Install gum for menus? (brew install gum) [y/N]: ' >&2
-    IFS= read -r reply || abort
-    case "$reply" in
-      y | Y | yes)
-        if brew install gum >&2 && command -v gum >/dev/null 2>&1; then GUM=1
-        else echo "  brew could not install gum: plain questions" >&2; fi
-        ;;
-    esac
-  else
-    echo "Tip: with gum (https://github.com/charmbracelet/gum) on PATH, these questions are menus." >&2
+  GUM="$("$REPO/scripts/remote-gum.sh" path)" || GUM=""
+  if [ -z "$GUM" ]; then
+    how=""
+    if command -v brew >/dev/null 2>&1; then how="brew install gum"
+    else case "$(uname -s)" in Linux | Darwin) how="download it to ~/.agents/bin" ;; esac; fi
+    if [ -n "$how" ]; then
+      printf 'Install gum for menus? (%s) [y/N]: ' "$how" >&2
+      IFS= read -r reply || abort
+      case "$reply" in
+        y | Y | yes)
+          "$REPO/scripts/remote-gum.sh" install >&2 || true
+          GUM="$("$REPO/scripts/remote-gum.sh" path)" || GUM=""
+          ;;
+      esac
+    else
+      echo "Tip: with gum (https://github.com/charmbracelet/gum#installation; on Windows \`winget install charmbracelet.gum\`), these questions are menus." >&2
+    fi
   fi
 fi
 
@@ -69,10 +75,10 @@ ask() {
   shift 2
   while :; do
     if [ -n "$GUM" ] && [ $# -gt 0 ]; then
-      if [ -n "$default" ]; then answer="$(gum choose --header "$question" --selected "$default" "$@")" || abort
-      else answer="$(gum choose --header "$question" "$@")" || abort; fi
+      if [ -n "$default" ]; then answer="$("$GUM" choose --header "$question" --selected "$default" "$@")" || abort
+      else answer="$("$GUM" choose --header "$question" "$@")" || abort; fi
     elif [ -n "$GUM" ]; then
-      answer="$(gum input --header "$question" --value "$default")" || abort
+      answer="$("$GUM" input --header "$question" --value "$default")" || abort
     else
       printf '%s%s: ' "$question" "${default:+ [$default]}" >&2
       IFS= read -r answer || abort
@@ -94,7 +100,7 @@ ask_secret() {
     if [ -n "$current" ]; then prompt="$1 (enter keeps the current one${optional:+, none drops it})"
     elif [ -n "$optional" ]; then prompt="$1 (enter: none)"; fi
     if [ -n "$GUM" ]; then
-      answer="$(gum input --password --header "$prompt")" || abort
+      answer="$("$GUM" input --password --header "$prompt")" || abort
     elif [ -t 0 ]; then
       printf '%s: ' "$prompt" >&2
       IFS= read -rs answer || abort
@@ -236,8 +242,8 @@ if [ -n "$GUM" ]; then
     printf '%-12s %s\n' secret "$credential in remote.env (mode 600)"
     [ -z "$password" ] || printf '%-12s %s\n' secret "SSH_PASSWORD in remote.env"
     [ -z "$passphrase" ] || printf '%-12s %s\n' secret "SSH_KEY_PASSPHRASE in remote.env")"
-  gum style --border rounded --padding "0 1" --margin "1 0" "$review" >&2
-  gum confirm "Write these?" || abort
+  "$GUM" style --border rounded --padding "0 1" --margin "1 0" "$review" >&2
+  "$GUM" confirm "Write these?" || abort
 fi
 
 # Every answer is in: from here on, write. First the Settings left in remote.env that it does not ask about.
@@ -276,7 +282,7 @@ mv -f "$tmp" "$FILE"
 
 echo "Wrote the remote Settings to $CONFIG/settings.json, and $FILE (mode 600)."
 if [ -n "$GUM" ]; then
-  gum confirm "Run remote-agent check now (a dry run against the backend)?" || exit 0
+  "$GUM" confirm "Run remote-agent check now (a dry run against the backend)?" || exit 0
   exec "$REPO/scripts/remote-agent.sh" check
 fi
 echo "Next: run \`remote-agent check\` to check the backend with a dry run."

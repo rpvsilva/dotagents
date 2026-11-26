@@ -288,18 +288,28 @@ uninstall_cursor() {
     'reduce $n[] as $k (.; del(.mcpServers[$k])) | if .mcpServers == {} then del(.mcpServers) else . end' "$file")"
 }
 
+# The gum scripts/remote-gum.sh downloaded for the remote part: a real file in ~/.agents/bin, which only dotagents
+# writes. A gum from brew stays.
+drop_gum() {
+  [ -f "$HOME/.agents/bin/gum" ] && [ ! -L "$HOME/.agents/bin/gum" ] || return 0
+  would "delete $HOME/.agents/bin/gum" && return 0
+  rm -f "$HOME/.agents/bin/gum"
+  echo "  deleted $HOME/.agents/bin/gum"
+}
+
 uninstall_shared() {
   echo "shared"
   unlink_parts "$SHARED_SKILLS" "" skill
   if [ ${#words[@]} -gt 0 ]; then
     # Core (the hooks library, settings, capped) stays: only the removed parts' links go.
     unlink_parts "$HOME/.agents/hooks" .sh hook
-    if gone remote; then unlink_ours "$HOME/.agents/bin/remote-agent"; fi
+    if gone remote; then unlink_ours "$HOME/.agents/bin/remote-agent"; drop_gum; fi
     return 0
   fi
   # ~/.agents/hooks holds one link per file; older installs made it one link to the repo folder.
   if [ -L "$HOME/.agents/hooks" ]; then unlink_ours "$HOME/.agents/hooks"; else unlink_in "$HOME/.agents/hooks"; fi
   unlink_in "$HOME/.agents/bin"
+  drop_gum
   if [ "$purge" -eq 1 ]; then
     local d
     for d in "$CONFIG" "$HOME/.agents/telemetry" "$HOME/.agents/runs"; do

@@ -75,7 +75,7 @@ Things that might surprise you:
 - Codex and Cursor are skipped when `~/.codex` or `~/.cursor` doesn't exist.
 - Codex ignores new or changed hooks until you trust them with `/hooks` in Codex.
 - Claude plugins and MCP servers are skipped when `claude` isn't on `PATH`, or when `DOTAGENTS_SKIP_PLUGINS` is set.
-- With the `remote` part, `install.sh` installs [gum](https://github.com/charmbracelet/gum) with `brew` when it is missing, for `remote-agent setup`'s menus. It skips gum without `brew`, or when `DOTAGENTS_SKIP_PLUGINS` is set.
+- With the `remote` part, `install.sh` installs [gum](https://github.com/charmbracelet/gum) when it is missing, for `remote-agent setup`'s menus: with `brew`, else on Linux and macOS a pinned, checksummed release into `~/.agents/bin`. On Windows it prints the `winget` command. `DOTAGENTS_SKIP_PLUGINS` skips it.
 - MCP credentials come from `~/.config/dotagents/mcp.env` (`KEY=value` lines). A server whose variable is unset is skipped, and `install.sh` names it.
 
 <a id="uninstall"></a>

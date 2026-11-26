@@ -90,25 +90,12 @@ link_each() {
 # Installs mcp/servers.json into tool $1's config.
 mcp() { "$REPO/scripts/mcp-servers.sh" "$1" "$REPO/mcp/servers.json" "$BACKUP" || failed=1; }
 
-# `remote-agent setup` draws its prompts with gum (https://github.com/charmbracelet/gum) when it is on PATH, and asks
-# plain questions without it. gum is installed with Homebrew when brew is on PATH; otherwise one line says how. Skipped
-# with DOTAGENTS_SKIP_PLUGINS, like the other installs outside $HOME. uninstall.sh leaves it: something else may use it.
+# `remote-agent setup` draws its prompts with gum when it can find it, and asks plain questions without it.
+# scripts/remote-gum.sh installs it: with brew, else on Linux and macOS the pinned release into ~/.agents/bin. Skipped
+# with DOTAGENTS_SKIP_PLUGINS, like the other installs outside the links. Never a failure: setup works without it.
 get_gum() {
-  local log
   if [ -n "${DOTAGENTS_SKIP_PLUGINS:-}" ]; then echo "  gum: skipped (DOTAGENTS_SKIP_PLUGINS)"; return; fi
-  if command -v gum >/dev/null 2>&1; then echo "  gum: already installed"; return; fi
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "  gum: not on PATH and no brew, skipped: remote-agent setup asks plain questions (install gum for menus)"
-    return
-  fi
-  log="$(mktemp)"
-  if brew install gum >"$log" 2>&1; then
-    echo "  gum: installed with brew"
-  else
-    echo "  gum: brew could not install it, remote-agent setup asks plain questions:"
-    tail -n 5 "$log" | sed 's/^/    /'
-  fi
-  rm -f "$log"
+  "$REPO/scripts/remote-gum.sh" install || true
 }
 
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
