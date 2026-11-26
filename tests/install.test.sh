@@ -419,6 +419,54 @@ grep -q "^usage: .*<group>" "$SANDBOX/badsel.out" || fail "install.sh with an un
 grep -q "^usage: " "$SANDBOX/twotools.out" || fail "install.sh with two tool words did not print the usage: $(cat "$SANDBOX/twotools.out")"
 [ ! -s "$SANDBOX/twotools.links" ] || fail "install.sh with two tool words linked something"
 
+# gum, for `remote-agent setup` (scripts/remote-gum.sh): installed with brew when the remote part is in, gum is
+# missing and brew is on PATH; without brew, the pinned release downloaded to ~/.agents/bin/gum, checked against its
+# sha256; with DOTAGENTS_SKIP_PLUGINS, never. PATH holds no real gum or brew; the stub brew logs its arguments and puts
+# a gum in $SANDBOX/brewgum, and the release is a local fixture (DOTAGENTS_GUM_URL, DOTAGENTS_GUM_PINS).
+nobrew=""
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do [ -x "$d/gum" ] || [ -x "$d/brew" ] || nobrew+="${nobrew:+:}$d"; done
+mkdir -p "$SANDBOX/brewbin" "$SANDBOX/brewgum" "$SANDBOX/release"
+printf '#!/bin/sh\necho "$*" >>"%s/brew.log"\nprintf "#!/bin/sh\\n" >"%s/brewgum/gum"\nchmod +x "%s/brewgum/gum"\n' \
+  "$SANDBOX" "$SANDBOX" "$SANDBOX" >"$SANDBOX/brewbin/brew"
+chmod +x "$SANDBOX/brewbin/brew"
+gum_run() { HOME="$1" PATH="$2" DOTAGENTS_PLAIN=1 "$REPO/install.sh" shared "${@:3}" 2>&1; }
+out="$(gum_run "$SANDBOX/gum1" "$SANDBOX/brewbin:$SANDBOX/brewgum:$nobrew" remote)"
+[ "$(cat "$SANDBOX/brew.log" 2>/dev/null)" = "install gum" ] || fail "install.sh remote without gum did not run brew install gum"
+grep -q "gum: installed with brew" <<<"$out" || fail "install.sh did not report gum installed with brew: $out"
+rm -f "$SANDBOX/brew.log" "$SANDBOX/brewgum/gum"
+gum_run "$SANDBOX/gum2" "$SANDBOX/brewbin:$nobrew" core >/dev/null
+[ ! -e "$SANDBOX/brew.log" ] || fail "install.sh core installed gum"
+out="$(DOTAGENTS_SKIP_PLUGINS=1 gum_run "$SANDBOX/gum3" "$SANDBOX/brewbin:$nobrew" remote)"
+[ ! -e "$SANDBOX/brew.log" ] || fail "install.sh with DOTAGENTS_SKIP_PLUGINS installed gum"
+grep -q "gum: skipped (DOTAGENTS_SKIP_PLUGINS)" <<<"$out" || fail "install.sh did not say gum was skipped: $out"
+# Without brew: a fixture release for this machine, pinned by its sha256.
+case "$(uname -s)" in Linux) os=Linux ;; Darwin) os=Darwin ;; *) os="" ;; esac
+case "$(uname -m)" in x86_64 | amd64) arch=x86_64 ;; aarch64 | arm64) arch=arm64 ;; *) arch="" ;; esac
+if [ -n "$os" ] && [ -n "$arch" ]; then
+  asset="gum_9.9.9_${os}_${arch}"
+  mkdir -p "$SANDBOX/release/$asset"
+  printf '#!/bin/sh\necho fixture gum\n' >"$SANDBOX/release/$asset/gum"
+  chmod +x "$SANDBOX/release/$asset/gum"
+  tar -czf "$SANDBOX/release/$asset.tar.gz" -C "$SANDBOX/release" "$asset/gum"
+  sum="$( (sha256sum "$SANDBOX/release/$asset.tar.gz" 2>/dev/null || shasum -a 256 "$SANDBOX/release/$asset.tar.gz") | cut -d' ' -f1)"
+  printf 'version 9.9.9\n%s.tar.gz %s\n' "$asset" "$sum" >"$SANDBOX/pins"
+  printf 'version 9.9.9\n%s.tar.gz %064d\n' "$asset" 0 >"$SANDBOX/badpins"
+  export DOTAGENTS_GUM_URL="file://$SANDBOX/release"
+  out="$(DOTAGENTS_GUM_PINS="$SANDBOX/pins" gum_run "$SANDBOX/gum4" "$nobrew" remote)"
+  grep -qF "gum: installed $SANDBOX/gum4/.agents/bin/gum (9.9.9)" <<<"$out" || fail "install.sh without brew did not download gum: $out"
+  [ "$("$SANDBOX/gum4/.agents/bin/gum" 2>/dev/null)" = "fixture gum" ] || fail "the downloaded gum is not the release's"
+  out="$(DOTAGENTS_GUM_PINS="$SANDBOX/pins" gum_run "$SANDBOX/gum4" "$nobrew" remote)"
+  grep -q "gum: already installed" <<<"$out" || fail "a second install.sh did not find the downloaded gum: $out"
+  out="$(DOTAGENTS_GUM_PINS="$SANDBOX/badpins" gum_run "$SANDBOX/gum5" "$nobrew" remote)"
+  grep -q "gum: not installed (.*sha256" <<<"$out" || fail "a release with the wrong sha256 was not refused: $out"
+  [ ! -e "$SANDBOX/gum5/.agents/bin/gum" ] || fail "a release with the wrong sha256 was installed"
+  # uninstall.sh removes the downloaded gum with the remote part.
+  HOME="$SANDBOX/gum4" PATH="$nobrew" DOTAGENTS_PLAIN=1 DOTAGENTS_SKIP_PLUGINS=1 "$REPO/uninstall.sh" remote >/dev/null 2>&1
+  [ ! -e "$SANDBOX/gum4/.agents/bin/gum" ] || fail "uninstall.sh remote left the downloaded gum"
+  unset DOTAGENTS_GUM_URL
+fi
+
 # Unknown target exits non-zero.
 [ ! -e "$SANDBOX/bad-exited-0" ] || fail "unknown target exited 0"
 

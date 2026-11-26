@@ -90,6 +90,14 @@ link_each() {
 # Installs mcp/servers.json into tool $1's config.
 mcp() { "$REPO/scripts/mcp-servers.sh" "$1" "$REPO/mcp/servers.json" "$BACKUP" || failed=1; }
 
+# `remote-agent setup` draws its prompts with gum when it can find it, and asks plain questions without it.
+# scripts/remote-gum.sh installs it: with brew, else on Linux and macOS the pinned release into ~/.agents/bin. Skipped
+# with DOTAGENTS_SKIP_PLUGINS, like the other installs outside the links. Never a failure: setup works without it.
+get_gum() {
+  if [ -n "${DOTAGENTS_SKIP_PLUGINS:-}" ]; then echo "  gum: skipped (DOTAGENTS_SKIP_PLUGINS)"; return; fi
+  "$REPO/scripts/remote-gum.sh" install || true
+}
+
 skills() { find "$REPO/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; ; }
 
 # Tool-neutral skills live in ~/.agents/skills, which several agents read directly.
@@ -136,7 +144,10 @@ install_shared() {
       link "$f" "$HOME/.agents/hooks/$n"
     fi
   done
-  if has remote; then link "$REPO/scripts/remote-agent.sh" "$HOME/.agents/bin/remote-agent"; fi
+  if has remote; then
+    link "$REPO/scripts/remote-agent.sh" "$HOME/.agents/bin/remote-agent"
+    get_gum
+  fi
   link "$REPO/scripts/settings.sh" "$HOME/.agents/bin/settings"
   link "$REPO/scripts/capped" "$HOME/.agents/bin/capped"
 }
